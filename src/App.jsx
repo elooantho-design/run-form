@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RotateCcw, Trash2, Info } from "lucide-react";
-
+import { supabase } from "@/lib/supabase";
 // --- Composants UI simples (remplacent ceux du canvas ChatGPT) ---
 const Card = ({children,className=""}) => <div className={`border rounded-xl bg-white/5 ${className}`}>{children}</div>;
 const CardHeader = ({children,className=""}) => <div className={`p-3 border-b ${className}`}>{children}</div>;
@@ -59,8 +59,8 @@ const DIRS = [
   { v: "O", label: "O" },
 ];
 
-const BASTION_BG_URL = "https://i.imgur.com/COaAm3p.jpeg";
-const TOUR_BG_URL = "https://i.imgur.com/PrufUJf.jpeg";
+const BASTION_BG_URL = "/maps-actuelles/bastion.png";
+const TOUR_BG_URL = "/maps-actuelles/tour.png";
 
 function makeRows(count) {
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
@@ -205,7 +205,7 @@ export default function PrototypeFormulaireRunGrille() {
 
   const gridSpec = useMemo(() => {
     if (mode === "bastion") {
-      return { rows: 8, cols: 10, bgUrl: BASTION_BG_URL, label: "Bastion" };
+      return { rows: 7, cols: 11, bgUrl: BASTION_BG_URL, label: "Bastion" };
     }
     return { rows: 7, cols: 10, bgUrl: TOUR_BG_URL, label: "Tour" };
   }, [mode]);
@@ -223,11 +223,21 @@ export default function PrototypeFormulaireRunGrille() {
 
   const activeSlot = activePos ? slotByPos.get(activePos) || null : null;
 
-  const filteredHeroes = useMemo(() => {
-    const q = norm(heroQuery);
-    if (!q) return heroPool.slice(0, 10);
-    return heroPool.filter((hero) => norm(hero).includes(q)).slice(0, 10);
-  }, [heroPool, heroQuery]);
+const filteredHeroes = useMemo(() => {
+  const q = norm(heroQuery);
+
+  const sortedPool = [...heroPool].sort((a, b) =>
+    norm(a).localeCompare(norm(b))
+  );
+
+  if (!q) return sortedPool.slice(0, 10);
+
+  const startsWithMatches = sortedPool.filter((hero) =>
+    norm(hero).startsWith(q)
+  );
+
+  return startsWithMatches.slice(0, 10);
+}, [heroPool, heroQuery]);
 
   const canAddMore = slots.length < MAX_SLOTS;
 
@@ -305,7 +315,20 @@ function resetAll() {
     if (!youtube.trim()) problems.push("Lien YouTube manquant.");
     if (slots.length !== MAX_SLOTS) problems.push(`Sélectionne ${MAX_SLOTS} cases (actuel: ${slots.length}).`);
 
-    const validPos = (p) => /^[A-H][1-8]$/.test(String(p || "").trim().toUpperCase());
+    const validPos = (p) => {
+    const pos = String(p || "").trim().toUpperCase();
+    const row = pos.slice(0, 1);
+    const col = Number(pos.slice(1));
+
+    const maxRows = mode === "bastion" ? 7 : 7;
+    const maxCols = mode === "bastion" ? 11 : 10;
+
+    return /^[A-Z]\d+$/.test(pos)
+      && row.charCodeAt(0) >= 65
+      && row.charCodeAt(0) < 65 + maxRows
+      && col >= 1
+      && col <= maxCols;
+  };
 
     for (const slot of slots) {
       if (!slot || typeof slot.id !== "string") continue;
@@ -419,39 +442,85 @@ async function submit() {
     setBgError(false);
   }, [mode]);
 
-  useEffect(() => {
-    let cancelled = false;
+useEffect(() => {
+  let cancelled = false;
 
-    async function loadAllChampions() {
-      if (!apiBase) {
-        setHeroesLoaded(false);
-        setHeroesLoading(false);
-        setHeroesError("Impossible de déterminer l’URL de l’API.");
-        return;
+  async function loadAllChampions() {
+    setHeroesLoading(true);
+    setHeroesError("");
+
+    try {
+      const { data, error } = await supabase
+        .from("champions")
+        .select("name")
+        .order("name", { ascending: true });
+
+      if (error) throw error;
+
+      const seen = new Set();
+      const uniq = [];
+
+      for (const row of data || []) {
+        const name = String(row?.name || "").trim();
+        if (!name) continue;
+
+        const normalized = norm(name);
+        if (!normalized || seen.has(normalized)) continue;
+
+        seen.add(normalized);
+        uniq.push(normalized);
       }
 
-      setHeroesLoading(true);
-      setHeroesError("");
+      if (!cancelled) {
+        setHeroPool(uniq.length ? uniq : HEROES_FALLBACK);
+        setHeroesLoaded(uniq.length > 0);
+      }
+    } catch (e) {
+      if (!cancelled) {
+        setHeroPool(HEROES_FALLBACK);
+        setHeroesLoaded(false);
+        setHeroesError(`Erreur Supabase: ${String(e?.message || e)}`);
+      }
+    } finally {
+      if (!cancelled) setHeroesLoading(false);
+    }
+  }
 
-      try {
-        const res = await fetch(`${apiBase}/api/champions`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  loadAllChampions();
 
-        const data = await res.json();
-        const list = Array.isArray(data) ? data : data?.champions;
-        if (!Array.isArray(list)) throw new Error("Bad payload");
+  return () => {
+    cancelled = true;
+  };
+}, []);
 
-        const seen = new Set();
-        const uniq = [];
+useEffect(() => {
+  let cancelled = false;
 
-        for (const x of list) {
-          const name = String(x || "").trim();
-          if (!name) continue;
-          const key = norm(name);
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          uniq.push(name);
-        }
+  async function loadAllChampions() {
+    setHeroesLoading(true);
+    setHeroesError("");
+
+    try {
+      const { data, error } = await supabase
+        .from("champions")
+        .select("name")
+        .order("name", { ascending: true });
+
+      if (error) throw error;
+
+      const seen = new Set();
+      const uniq = [];
+
+      for (const row of data || []) {
+        const name = String(row.name || "").trim();
+        if (!name) continue;
+
+        const normalized = norm(name);
+        if (!normalized || seen.has(normalized)) continue;
+
+        seen.add(normalized);
+        uniq.push(name.toLowerCase());
+      }
 
         if (!cancelled && uniq.length) {
           setHeroPool(uniq);
@@ -460,7 +529,7 @@ async function submit() {
       } catch (e) {
         if (!cancelled) {
           setHeroesLoaded(false);
-          setHeroesError(`Impossible de charger la liste officielle: ${String(e?.message || e)}`);
+          setHeroesError(`Erreur Supabase: ${String(e?.message || e)}`);
         }
       } finally {
         if (!cancelled) setHeroesLoading(false);
@@ -468,10 +537,11 @@ async function submit() {
     }
 
     loadAllChampions();
+
     return () => {
       cancelled = true;
     };
-  }, [apiBase]);
+  }, []);
 
   useEffect(() => {
   let cancelled = false;

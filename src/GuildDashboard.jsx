@@ -578,6 +578,16 @@ const [intersaisonMoveDialogOpen, setIntersaisonMoveDialogOpen] = useState(false
 const [intersaisonAssignmentToMove, setIntersaisonAssignmentToMove] = useState(null);
 const [selectedIntersaisonMoveDashboardId, setSelectedIntersaisonMoveDashboardId] = useState("");
 const [intersaisonTransferSummary, setIntersaisonTransferSummary] = useState("");
+const [testWishRow, setTestWishRow] = useState(null);
+const [testWishInput, setTestWishInput] = useState([]);
+const [highlightedIntersaisonRowId, setHighlightedIntersaisonRowId] = useState(null);
+const [intersaisonSourceFilter, setIntersaisonSourceFilter] = useState("Tous");
+const [intersaisonSourceMenuOpen, setIntersaisonSourceMenuOpen] = useState(false);
+
+const guildCodes = Array.from(
+  { length: intersaisonCampaign?.guild_count || 7 },
+  (_, i) => `G${i + 1}`
+);
 
 const selectedIntersaisonDashboard = useMemo(() => {
   return (
@@ -590,11 +600,21 @@ const selectedIntersaisonDashboard = useMemo(() => {
 const selectedIntersaisonRows = useMemo(() => {
   if (!selectedIntersaisonDashboardId) return [];
 
-  return intersaisonAssignments.filter(
-    (assignment) =>
-      String(assignment.dashboard_id) === String(selectedIntersaisonDashboardId)
-  );
-}, [intersaisonAssignments, selectedIntersaisonDashboardId]);
+  return intersaisonAssignments
+    .filter(
+      (assignment) =>
+        String(assignment.dashboard_id) === String(selectedIntersaisonDashboardId)
+    )
+    .filter((assignment) =>
+      intersaisonSourceFilter === "Tous"
+        ? true
+        : assignment.source_guild_code === intersaisonSourceFilter
+    );
+}, [
+  intersaisonAssignments,
+  selectedIntersaisonDashboardId,
+  intersaisonSourceFilter,
+]);
 
 const intersaisonSearchResults = useMemo(() => {
   const q = intersaisonSearchQuery.trim().toLowerCase();
@@ -1284,7 +1304,23 @@ useEffect(() => {
 
     const { data: assignments, error: assignmentsError } = await supabase
       .from("intersaison_assignments")
-      .select("*")
+      .select(`
+        id,
+        campaign_id,
+        dashboard_id,
+        member_id,
+        watcher_name,
+        discord_id_raw,
+        source_guild_code,
+        target_guild_code,
+        poll_choice,
+        assignment_source,
+        has_note,
+        created_at,
+        updated_at,
+        is_manually_confirmed,
+        wished_guild_codes
+      `)
       .eq("campaign_id", campaign.id)
       .order("created_at", { ascending: true });
 
@@ -3035,7 +3071,7 @@ try {
       })
     );
 
-    const res = await fetch("http://localhost:3222/api/discord/send-defense", {
+    const res = await fetch("/api/discord/send-defense", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -3118,7 +3154,7 @@ try {
   });
   setMessageDialogOpen(true);
 
-  const res = await fetch("http://localhost:3211/api/discord/send-awakening-request", {
+  const res = await fetch("/api/discord/send-awakening-request", {
 
       method: "POST",
       headers: {
@@ -3133,6 +3169,9 @@ try {
     });
 
     const data = await res.json().catch(() => null);
+
+    console.log("API Discord status =", res.status);
+console.log("API Discord response =", data);
 
 if (!res.ok) {
   throw new Error(data?.details || data?.error || "Erreur API Discord");
@@ -3640,6 +3679,36 @@ const openIntersaisonNoteDialog = (row) => {
   setSelectedIntersaisonNoteRow(row);
   setIntersaisonNoteInput(existingNote?.note || "");
   setIntersaisonNoteDialogOpen(true);
+};
+
+const saveTestWish = async () => {
+  if (!testWishRow?.id) return;
+
+  const cleaned = [...new Set(testWishInput)].sort((a, b) =>
+    a.localeCompare(b, "fr")
+  );
+
+  const { error } = await supabase
+    .from("intersaison_assignments")
+    .update({ wished_guild_codes: cleaned })
+    .eq("id", testWishRow.id);
+
+  if (error) {
+    console.error("Erreur sauvegarde souhait:", error);
+    alert(error.message || "Enregistrement impossible.");
+    return;
+  }
+
+  setIntersaisonAssignments((prev) =>
+    prev.map((assignment) =>
+      String(assignment.id) === String(testWishRow.id)
+        ? { ...assignment, wished_guild_codes: cleaned }
+        : assignment
+    )
+  );
+
+  setTestWishRow(null);
+  setTestWishInput([]);
 };
 
 const saveIntersaisonNote = async () => {
@@ -6150,7 +6219,7 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
                     </div>
                     {defense.image ? (
                       <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
-                        <img src={defense.image} alt={defense.name} className="h-40 w-full object-cover" />
+                        <img src={defense.image} alt={defense.name} className="h-40 w-full object-contain" />
                       </div>
                     ) : (
                       <div className="flex h-40 items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950 text-sm text-zinc-500">
@@ -6304,7 +6373,7 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
                       <img
                         src={defense.image}
                         alt={defense.name}
-                        className="h-40 w-full object-cover"
+                        className="h-40 w-full object-contain"
                       />
                     </div>
                   ) : (
@@ -8021,9 +8090,10 @@ await updatePbRaw(pbSlotToEdit.entryId, formatted);
                   key={row.id}
                   type="button"
                   onClick={() => {
-                    setSelectedIntersaisonDashboardId(String(row.dashboard_id));
-                    setIntersaisonSearchQuery("");
-                  }}
+                setSelectedIntersaisonDashboardId(String(row.dashboard_id));
+                setHighlightedIntersaisonRowId(String(row.id));
+                setIntersaisonSearchQuery("");
+              }}
                   className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 p-3 text-left hover:bg-zinc-800"
                 >
                   <div className="font-medium text-zinc-50">
@@ -8066,21 +8136,68 @@ await updatePbRaw(pbSlotToEdit.entryId, formatted);
 </div>
 
 <div className="rounded-2xl border border-zinc-800 bg-zinc-950">
-  <div className="grid grid-cols-[70px_minmax(220px,1fr)_160px_160px_120px_120px] items-center border-b border-zinc-800 bg-zinc-900/50 px-4 py-3 text-sm font-semibold text-zinc-300">
+  <div className="grid grid-cols-[70px_minmax(220px,1fr)_140px_140px_180px_120px_120px] items-center border-b border-zinc-800 bg-zinc-900/50 px-4 py-3 text-sm font-semibold text-zinc-300">
     <div>N°</div>
-    <div>Joueur</div>
-    <div className="text-center">Provenance</div>
-    <div className="text-center">Destination</div>
-    <div className="text-center">Validation</div>
-    <div className="text-center">Transfert</div>
+<div>Joueur</div>
+<div className="relative flex items-center justify-center gap-1 text-center">
+  <span>Provenance</span>
+  <button
+    type="button"
+    className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+    onClick={() => setIntersaisonSourceMenuOpen((prev) => !prev)}
+    title="Filtrer par provenance"
+  >
+    ▾
+  </button>
+
+  {intersaisonSourceMenuOpen && (
+    <div className="absolute left-1/2 top-full z-20 mt-2 w-36 -translate-x-1/2 rounded-2xl border border-zinc-800 bg-zinc-950 p-2 shadow-2xl">
+      <button
+        type="button"
+        className="block w-full rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+        onClick={() => {
+  setIntersaisonSourceFilter("Tous");
+  setIntersaisonSourceMenuOpen(false);
+}}
+      >
+        Tous
+      </button>
+
+      {guildCodes.map((code) => (
+        <button
+          key={code}
+          type="button"
+          className="block w-full rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+          onClick={() => {
+              setIntersaisonSourceFilter(code);
+              setIntersaisonSourceMenuOpen(false);
+            }}
+        >
+          {code}
+        </button>
+      ))}
+    </div>
+  )}
+</div>
+<div className="text-center">Destination</div>
+<div className="text-center">Souhait</div>
+<div className="text-center">Validation</div>
+<div className="text-center">Transfert</div>
   </div>
 
   {selectedIntersaisonRows.length > 0 ? (
     selectedIntersaisonRows.map((row, index) => (
       <div
         key={row.id}
-        className={`grid grid-cols-[70px_minmax(220px,1fr)_160px_160px_120px_120px] items-center border-b border-zinc-800 px-4 py-3 text-sm last:border-b-0 ${
-          row.is_manually_confirmed
+                onClick={() => {
+          if (String(highlightedIntersaisonRowId) === String(row.id)) {
+            setHighlightedIntersaisonRowId(null);
+          }
+        }}
+        className={`grid grid-cols-[70px_minmax(220px,1fr)_140px_140px_180px_120px_120px] items-center border-b border-zinc-800 px-4 py-3 text-sm last:border-b-0 ${
+          String(highlightedIntersaisonRowId) === String(row.id)
+            ? "bg-sky-500/20 ring-1 ring-sky-400"
+            : row.is_manually_confirmed
             ? "bg-emerald-500/10"
             : "bg-red-500/10"
         }`}
@@ -8117,7 +8234,29 @@ await updatePbRaw(pbSlotToEdit.entryId, formatted);
             {row.target_guild_code || "BROUILLON"}
           </div>
         </div>
-
+<div className="flex justify-center">
+  <button
+    type="button"
+    onClick={() => {
+  setTestWishRow(row);
+  setTestWishInput(row.wished_guild_codes || []);
+}}
+    className="flex min-h-[42px] min-w-[120px] flex-wrap items-center justify-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-900 px-3 py-2 hover:bg-zinc-800"
+  >
+    {(row.wished_guild_codes || []).length > 0 ? (
+      row.wished_guild_codes.map((code) => (
+        <Badge
+          key={`${row.id}-${code}`}
+          className="rounded-xl bg-sky-500/15 text-sky-300"
+        >
+          {code}
+        </Badge>
+      ))
+    ) : (
+      <span className="text-zinc-500">—</span>
+    )}
+  </button>
+</div>
 <div className="flex justify-center">
   <Button
     size="sm"
@@ -8160,6 +8299,58 @@ await updatePbRaw(pbSlotToEdit.entryId, formatted);
     </div>
   )}
 </div>
+{testWishRow && (
+  <div className="fixed bottom-4 right-4 z-50 rounded-xl bg-zinc-900 p-4 text-white shadow-xl">
+    <div className="text-sm text-zinc-400">Test souhait</div>
+    <div className="font-bold">{testWishRow.watcher_name}</div>
+<div className="mt-2 flex flex-wrap gap-2">
+  {guildCodes.map((code) => {
+    const active = testWishInput.includes(code);
+
+
+    return (
+      <button
+        key={code}
+        onClick={() => {
+          setTestWishInput((prev) =>
+            prev.includes(code)
+              ? prev.filter((c) => c !== code)
+              : [...prev, code]
+          );
+        }}
+        className={`rounded-lg px-3 py-1 text-sm ${
+          active
+            ? "bg-sky-500 text-white"
+            : "bg-zinc-700 text-zinc-200"
+        }`}
+      >
+        {code}
+      </button>
+    );
+  })}
+</div>
+
+<div className="mt-2 text-xs text-zinc-400">
+  sélection : {testWishInput.join(", ") || "aucun"}
+</div>
+
+<div className="mt-3 flex gap-2">
+  <button
+    className="rounded bg-emerald-600 px-3 py-1 text-xs text-white hover:bg-emerald-500"
+    onClick={saveTestWish}
+  >
+    enregistrer
+  </button>
+
+  <button
+    className="rounded bg-red-500 px-2 py-1 text-xs"
+    onClick={() => setTestWishRow(null)}
+  >
+    fermer
+  </button>
+</div>
+  </div>
+)}
               </>
             )}
           </CardContent>
