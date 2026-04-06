@@ -7,9 +7,18 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies / build
 node_modules
 dist
 dist-ssr
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Local config
+.vercel
 *.local
 
 # Editor directories and files
@@ -22,6 +31,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
-.vercel
-.env*.local
