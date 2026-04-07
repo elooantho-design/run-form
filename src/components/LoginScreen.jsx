@@ -19,7 +19,7 @@ export default function LoginScreen({ onLogin }) {
 
     const { data, error: dbError } = await supabase
       .from("guild_members")
-      .select("id, role, discord_id, watcher_name, password")
+      .select("id, role, discord_id, watcher_name, password, guild_code")
       .eq("discord_id", cleanDiscordId)
       .eq("password", cleanPassword)
       .maybeSingle();
@@ -42,6 +42,7 @@ export default function LoginScreen({ onLogin }) {
       discordId: data.discord_id,
       name: data.watcher_name,
       password: data.password,
+      guild_code: data.guild_code || null,
     });
   };
 

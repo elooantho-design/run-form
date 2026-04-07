@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import LoginScreen from "./components/LoginScreen";
+import RunSearchGrid from "./components/RunSearchGrid";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   Search,
@@ -1235,7 +1236,7 @@ const rows = (data || []).map((row) => ({
 }, [activeProfileView, soulStones]);
 
 const isAdmin = session?.role === "admin";
-
+const isExternal = !session?.guildCode;
 const isOwnProfile = selectedMember?.id === session?.memberId;
 
 const canEditAwakenings = isAdmin || isOwnProfile;
@@ -3141,60 +3142,76 @@ const requestAwakeningUpdate = async (memberId) => {
     )
   );
 
-try {
-  if (!member.discordId) {
-    console.warn("discordId manquant pour ce membre");
-    return;
-  }
+  try {
+    if (!member.discordId) {
+      console.warn("discordId manquant pour ce membre");
+      return;
+    }
 
-  setMessageDialogState({
-    status: "loading",
-    memberName: member.name,
-    discordId: member.discordId,
-  });
-  setMessageDialogOpen(true);
-
-  const res = await fetch("/api/discord/send-awakening-request", {
-
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    body: JSON.stringify({
-    discordId: member.discordId,
-    memberName: member.name,
-    profileLink: `https://unrepaid-maire-verbosely.ngrok-free.dev/dashboard/${activeGuildCode}`,
-    password: member.password,
-    }),
+    setMessageDialogState({
+      status: "loading",
+      memberName: member.name,
+      discordId: member.discordId,
     });
+    setMessageDialogOpen(true);
+
+    const discordApiBaseUrl =
+      import.meta.env.VITE_DISCORD_API_BASE_URL?.replace(/\/$/, "") || "";
+
+    if (!discordApiBaseUrl) {
+      throw new Error("VITE_DISCORD_API_BASE_URL manquante");
+    }
+
+    const dashboardBaseUrl = window.location.origin;
+    const dashboardPath =
+      activeGuildCode === "G1"
+        ? "/dashboard"
+        : `/dashboard/${activeGuildCode}`;
+
+    const res = await fetch(
+      `${discordApiBaseUrl}/api/discord/send-awakening-request`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          discordId: member.discordId,
+          memberName: member.name,
+          profileLink: `${dashboardBaseUrl}${dashboardPath}`,
+          password: member.password,
+          guildTag: activeGuildCode,
+        }),
+      }
+    );
 
     const data = await res.json().catch(() => null);
 
     console.log("API Discord status =", res.status);
-console.log("API Discord response =", data);
+    console.log("API Discord response =", data);
 
-if (!res.ok) {
-  throw new Error(data?.details || data?.error || "Erreur API Discord");
-}
+    if (!res.ok) {
+      throw new Error(data?.details || data?.error || "Erreur API Discord");
+    }
 
-        setMessageDialogState({
-        status: "success",
-        memberName: member.name,
-        discordId: member.discordId,
-        });
-        setMessageDialogOpen(true);
+    setMessageDialogState({
+      status: "success",
+      memberName: member.name,
+      discordId: member.discordId,
+    });
+    setMessageDialogOpen(true);
 
     console.log("MP envoyé via API");
   } catch (error) {
     console.error("Erreur appel API Discord :", error);
 
     setMessageDialogState({
-    status: "error",
-    memberName: member.name,
-    discordId: member.discordId,
+      status: "error",
+      memberName: member.name,
+      discordId: member.discordId,
     });
     setMessageDialogOpen(true);
-    }
+  }
 };
 
 const canDeleteDefense = (defense) => {
@@ -3280,11 +3297,16 @@ const deleteDefense = async (defense) => {
     };
 
 const handleLogin = (data) => {
-  localStorage.setItem("guildDashboardSession", JSON.stringify(data));
-  setSession(data);
-  setSelectedId(data?.memberId ?? null);
+  const nextSession = {
+    ...data,
+    guildCode: data?.guild_code || null,
+  };
 
-  const mustChangePassword = defaultPasswords.includes(data?.password || "");
+  localStorage.setItem("guildDashboardSession", JSON.stringify(nextSession));
+  setSession(nextSession);
+  setSelectedId(nextSession?.memberId ?? null);
+
+  const mustChangePassword = defaultPasswords.includes(nextSession?.password || "");
   setForcePasswordDialogOpen(mustChangePassword);
 };
 
@@ -4288,12 +4310,23 @@ if (!session) {
   return <LoginScreen onLogin={handleLogin} />;
 }
 
+if (isExternal) {
+  return (
+    <div className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
+      <div className="mx-auto max-w-7xl">
+        <RunSearchGrid />
+      </div>
+    </div>
+  );
+}
+
 const profileViewTabs = [
   { key: "defense", label: "Gestion défense" },
   { key: "awakening", label: "Éveils" },
   { key: "pb", label: "Tableur PB" },
   { key: "demon", label: "Monstre Démoniaque" },
   { key: "soulstones", label: "Pierre d’âme" },
+  { key: "run_search", label: "Recherche de run" },
   ...(isAdmin ? [{ key: "intersaison", label: "Intersaison" }] : []),
 ];
 
@@ -5260,6 +5293,9 @@ const changePassword = async () => {
           </Card>
         </div>
 )}
+
+{activeProfileView === "run_search" && <RunSearchGrid />}
+
 {activeProfileView === "awakening" && (
   <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
     <CardContent className="p-0">
