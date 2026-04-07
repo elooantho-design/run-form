@@ -397,7 +397,7 @@ function copyToClipboard(text) {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant="outline"
@@ -428,12 +428,12 @@ function copyToClipboard(text) {
           </div>
         </CardHeader>
 
-        <CardContent className="p-6">
+        <CardContent className="p-3 sm:p-4 md:p-6">
           <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_380px]">
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-2 sm:p-3">
               <div className="relative overflow-hidden rounded-2xl">
-                <div className="relative p-3 md:p-5">
+                <div className="relative p-2 sm:p-3 md:p-5">
                   <div className="relative">
                     {!bgError ? (
                       <img
@@ -441,15 +441,15 @@ function copyToClipboard(text) {
                         alt="Référence"
                         className="absolute"
                         style={{
-                          left: 36,
-                          top: 24,
-                          width: "calc(100% - 36px)",
-                          height: "calc(100% - 24px)",
-                          objectFit: "cover",
-                          objectPosition: gridSpec.bgObjectPosition,
-                          opacity: 0.75,
-                          borderRadius: 16,
-                          zIndex: 0,
+                        left: "clamp(20px, 4vw, 36px)",
+                        top: "clamp(16px, 3vw, 24px)",
+                        width: "calc(100% - clamp(20px, 4vw, 36px))",
+                        height: "calc(100% - clamp(16px, 3vw, 24px))",
+                        objectFit: "cover",
+                        objectPosition: gridSpec.bgObjectPosition,
+                        opacity: 0.75,
+                        borderRadius: 16,
+                        zIndex: 0,
                         }}
                         referrerPolicy="no-referrer"
                         onError={() => setBgError(true)}
@@ -459,12 +459,12 @@ function copyToClipboard(text) {
                       <div
                         className="absolute"
                         style={{
-                          left: 36,
-                          top: 24,
-                          width: "calc(100% - 36px)",
-                          height: "calc(100% - 24px)",
-                          borderRadius: 16,
-                          zIndex: 0,
+                        left: "clamp(20px, 4vw, 36px)",
+                        top: "clamp(16px, 3vw, 24px)",
+                        width: "calc(100% - clamp(20px, 4vw, 36px))",
+                        height: "calc(100% - clamp(16px, 3vw, 24px))",
+                        borderRadius: 16,
+                        zIndex: 0,
                           background:
                             mode === "tour"
                               ? "radial-gradient(circle at 20% 20%, rgba(0,0,0,0.10), transparent 45%), radial-gradient(circle at 80% 30%, rgba(0,0,0,0.12), transparent 45%), linear-gradient(135deg, rgba(0,0,0,0.06), transparent)"
@@ -477,8 +477,8 @@ function copyToClipboard(text) {
                     <div
                       className="grid relative"
                       style={{
-                        gridTemplateColumns: `36px repeat(${gridSpec.cols}, minmax(0, 1fr))`,
-                        gridTemplateRows: `24px repeat(${gridSpec.rows}, minmax(0, 1fr))`,
+                gridTemplateColumns: `clamp(20px, 4vw, 36px) repeat(${gridSpec.cols}, minmax(0, 1fr))`,
+                gridTemplateRows: `clamp(16px, 3vw, 24px) repeat(${gridSpec.rows}, minmax(0, 1fr))`,
                         zIndex: 1,
                       }}
                     >
