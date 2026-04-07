@@ -2450,14 +2450,76 @@ const confirmNoMoreAwakenings = async (memberId) => {
     );
     };
 
-    const addMember = async () => {
-    const cleanName = newMember.name.trim();
-    const cleanDiscordId = newMember.discordId.trim();
-    const cleanForumPostUrl = newMember.forumPostUrl.trim();
+const addMember = async () => {
+  const cleanName = newMember.name.trim();
+  const cleanDiscordId = newMember.discordId.trim();
+  const cleanForumPostUrl = newMember.forumPostUrl.trim();
 
   if (!cleanName || !cleanDiscordId) return;
 
-    const { data, error } = await supabase
+  const { data: existingMember, error: existingMemberError } = await supabase
+    .from("guild_members")
+    .select("id, watcher_name, guild_code")
+    .eq("discord_id", cleanDiscordId)
+    .maybeSingle();
+
+  if (existingMemberError) {
+    console.error("Erreur vérification membre existant:", existingMemberError);
+    alert(
+      `Vérification impossible : ${
+        existingMemberError.message || "erreur inconnue"
+      }`
+    );
+    return;
+  }
+
+  if (existingMember) {
+    if (existingMember.guild_code) {
+      alert("Ce joueur est déjà dans une guilde.");
+      return;
+    }
+
+    const confirmConvert = window.confirm(
+      `Ce joueur existe déjà en externe.\n\nVeux-tu le rattacher à la guilde ${activeGuildCode} ?`
+    );
+
+    if (!confirmConvert) return;
+
+    const { error: convertError } = await supabase
+      .from("guild_members")
+      .update({
+        watcher_name: cleanName,
+        personal_forum_post_url: cleanForumPostUrl || null,
+        guild_code: activeGuildCode,
+      })
+      .eq("id", existingMember.id);
+
+    if (convertError) {
+      console.error("Erreur transformation externe → membre:", convertError);
+      alert(
+        `Transformation impossible : ${
+          convertError.message || "erreur inconnue"
+        }`
+      );
+      return;
+    }
+
+    alert(
+      `${existingMember.watcher_name} a été rattaché à la guilde ${activeGuildCode}.`
+    );
+
+    setNewMember({
+      name: "",
+      discordId: "",
+      forumPostUrl: "",
+    });
+    setNewMemberOpen(false);
+
+    window.location.reload();
+    return;
+  }
+
+  const { data, error } = await supabase
       .from("guild_members")
 .insert([
   {
