@@ -501,6 +501,11 @@ const [clusterMemberSearchResults, setClusterMemberSearchResults] = useState([])
   const [heroSearch, setHeroSearch] = useState("");
   const [newDefenseOpen, setNewDefenseOpen] = useState(false);
   const [newMemberOpen, setNewMemberOpen] = useState(false);
+  const [newExternalOpen, setNewExternalOpen] = useState(false);
+  const [newExternalMember, setNewExternalMember] = useState({
+    name: "",
+    discordId: "",
+  });
   const [messageDialogOpen, setMessageDialogOpen] = useState(false);
   const [metaCounterDialogOpen, setMetaCounterDialogOpen] = useState(false);
   const [selectedMetaCounter, setSelectedMetaCounter] = useState(null);
@@ -2014,6 +2019,65 @@ const addSoulStone = async (type) => {
   } catch (error) {
     console.error("Erreur addSoulStone:", error);
   }
+};
+
+const addExternalMember = async () => {
+  const watcherName = String(newExternalMember.name || "").trim();
+  const discordId = String(newExternalMember.discordId || "").trim();
+
+  if (!watcherName || !discordId) {
+    alert("Le nom watcher et l’ID Discord sont obligatoires.");
+    return;
+  }
+
+  const { data: existingByDiscord, error: existingError } = await supabase
+    .from("guild_members")
+    .select("id, watcher_name, guild_code")
+    .eq("discord_id", discordId)
+    .maybeSingle();
+
+  if (existingError) {
+    console.error("Erreur vérification membre externe :", existingError);
+    alert("Impossible de vérifier si ce joueur existe déjà.");
+    return;
+  }
+
+  if (existingByDiscord) {
+    alert("Un compte avec cet ID Discord existe déjà.");
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .insert({
+      watcher_name: watcherName,
+      discord_id: discordId,
+      password: "motdepassemembre",
+      role: "member",
+      guild_code: null,
+      assignment: "Tour",
+      status: "À faire",
+      awakening_status: "En attente",
+      defense_1: "—",
+      defense_2: "—",
+      personal_forum_post_url: null,
+    })
+    .select("id, watcher_name, discord_id")
+    .single();
+
+  if (error) {
+    console.error("Erreur ajout membre externe :", error);
+    alert(`Ajout externe impossible : ${error.message || "erreur inconnue"}`);
+    return;
+  }
+
+  setNewExternalMember({
+    name: "",
+    discordId: "",
+  });
+  setNewExternalOpen(false);
+
+  alert(`Compte externe créé pour ${data.watcher_name}.`);
 };
 
 const removeLastSoulStone = async (type) => {
@@ -4310,15 +4374,6 @@ if (!session) {
   return <LoginScreen onLogin={handleLogin} />;
 }
 
-if (isExternal) {
-  return (
-    <div className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
-      <div className="mx-auto max-w-7xl">
-        <RunSearchGrid />
-      </div>
-    </div>
-  );
-}
 
 const profileViewTabs = [
   { key: "defense", label: "Gestion défense" },
@@ -4398,7 +4453,116 @@ const changePassword = async () => {
     setPasswordChangeLoading(false);
   }
 };
+if (isExternal) {
+  const externalTabs = [
+    { key: "run_search", label: "Recherche de run" },
+  ];
 
+  const externalActiveTab =
+    externalTabs.some((tab) => tab.key === activeProfileView)
+      ? activeProfileView
+      : "run_search";
+
+  return (
+    <div className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
+      <div className="mx-auto max-w-7xl space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-3">
+            {externalTabs.map((tab) => {
+              const isActive = externalActiveTab === tab.key;
+
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveProfileView(tab.key)}
+                  className={`rounded-2xl border px-5 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? "border-zinc-500 bg-zinc-100 text-zinc-950"
+                      : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-zinc-500 hover:bg-zinc-800"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleLogout}
+            className="rounded-2xl border-zinc-700 text-zinc-200"
+          >
+            Déconnexion
+          </Button>
+        </div>
+
+        {externalActiveTab === "run_search" && <RunSearchGrid />}
+
+        <Dialog open={forcePasswordDialogOpen}>
+          <DialogContent
+            className="max-w-md rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100"
+            onInteractOutside={(e) => e.preventDefault()}
+          >
+            <DialogHeader>
+              <DialogTitle>Changement de mot de passe requis</DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+                Pour plus de sécurité, tu dois remplacer ton mot de passe par défaut.
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm text-zinc-400">Mot de passe actuel</div>
+                <Input
+                  type="password"
+                  value={currentPasswordInput}
+                  onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                  placeholder="Mot de passe actuel"
+                  className="rounded-2xl border-zinc-700 bg-zinc-900"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm text-zinc-400">Nouveau mot de passe</div>
+                <Input
+                  type="password"
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  placeholder="Nouveau mot de passe"
+                  className="rounded-2xl border-zinc-700 bg-zinc-900"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-sm text-zinc-400">Confirmer le nouveau mot de passe</div>
+                <Input
+                  type="password"
+                  value={confirmNewPasswordInput}
+                  onChange={(e) => setConfirmNewPasswordInput(e.target.value)}
+                  placeholder="Confirmer le nouveau mot de passe"
+                  className="rounded-2xl border-zinc-700 bg-zinc-900"
+                />
+              </div>
+
+              <div className="flex justify-end">
+                <Button
+                  className="rounded-2xl"
+                  onClick={changePassword}
+                  disabled={passwordChangeLoading}
+                >
+                  {passwordChangeLoading ? "Enregistrement..." : "Changer mon mot de passe"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </div>
+  );
+}
   return (
     <div className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -4460,7 +4624,76 @@ const changePassword = async () => {
                           </div>
                         </DialogContent>
                       </Dialog>
+                  {isAdmin ? (
+                    <Dialog open={newExternalOpen} onOpenChange={setNewExternalOpen}>
+                      <DialogTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-2xl border-zinc-700 text-zinc-200"
+                        >
+                          Ajouter un externe
+                        </Button>
+                      </DialogTrigger>
 
+                      <DialogContent className="border-zinc-800 bg-zinc-950 text-zinc-100">
+                        <DialogHeader>
+                          <DialogTitle>Ajouter un membre externe</DialogTitle>
+                        </DialogHeader>
+
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <label className="text-sm text-zinc-300">Nom watcher</label>
+                            <Input
+                              value={newExternalMember.name}
+                              onChange={(e) =>
+                                setNewExternalMember((prev) => ({
+                                  ...prev,
+                                  name: e.target.value,
+                                }))
+                              }
+                              placeholder="Ex : Darius"
+                              className="rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-sm text-zinc-300">ID Discord</label>
+                            <Input
+                              value={newExternalMember.discordId}
+                              onChange={(e) =>
+                                setNewExternalMember((prev) => ({
+                                  ...prev,
+                                  discordId: e.target.value,
+                                }))
+                              }
+                              placeholder="Ex : 259417928569585665"
+                              className="rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100"
+                            />
+                          </div>
+
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => setNewExternalOpen(false)}
+                              className="rounded-2xl border-zinc-700 text-zinc-200"
+                            >
+                              Annuler
+                            </Button>
+
+                            <Button
+                              type="button"
+                              onClick={addExternalMember}
+                              className="rounded-2xl"
+                            >
+                              Créer le compte externe
+                            </Button>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+                  ) : null}
                       <Dialog open={metaDialogOpen} onOpenChange={setMetaDialogOpen}>
                         <DialogTrigger asChild>
                           <Button variant="outline" className="rounded-2xl border-zinc-700 bg-zinc-900" disabled={!isAdmin}>
