@@ -13,6 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import LoginScreen from "./components/LoginScreen";
 import RunSearchGrid from "./components/RunSearchGrid";
 import RunAddTab from "@/components/RunAddTab";
+import RunEditTab from "@/components/RunEditTab";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   Search,
@@ -4446,6 +4447,7 @@ const profileViewTabs = [
   { key: "soulstones", label: "Pierre d’âme" },
   { key: "run_search", label: "Recherche de run" },
   { key: "run_add", label: "Ajout de run", adminOnly: true },
+  { key: "run_edit", label: "Modification de run", adminOnly: true },
   ...(isAdmin ? [{ key: "intersaison", label: "Intersaison" }] : []),
 ];
 
@@ -4653,6 +4655,8 @@ if (isExternal) {
                             <div className="space-y-2">
                               <div className="text-sm text-zinc-400">Nom Watcheur du membre</div>
                               <Input
+
+                          
                                 value={newMember.name}
                                 onChange={(e) => setNewMember((prev) => ({ ...prev, name: e.target.value }))}
                                 placeholder="Ex: Elrion"
@@ -5600,6 +5604,7 @@ if (isExternal) {
 )}
 
 {activeProfileView === "run_add" && <RunAddTab />}
+{activeProfileView === "run_edit" && <RunEditTab />}
 
 {activeProfileView === "awakening" && (
   <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
