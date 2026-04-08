@@ -140,6 +140,7 @@ const [heroesError, setHeroesError] = useState("");
   const [heroQuery, setHeroQuery] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
 const [saveLoading, setSaveLoading] = useState(false);
+const [deleteLoading, setDeleteLoading] = useState(false);
 
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [attackCode, setAttackCode] = useState("");
@@ -300,6 +301,66 @@ if (!response.ok) {
     );
   } finally {
     setSaveLoading(false);
+  }
+}
+
+async function deleteRun() {
+  if (!runId.trim()) {
+    setSaveMessage("Indique un ID de run.");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Supprimer définitivement le run #${runId.trim()} ?`
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    setDeleteLoading(true);
+    setSaveMessage("");
+
+    const response = await fetch(`${apiBase}/api/run-delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        strat_id: runId.trim(),
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      console.error("Réponse non JSON api/run-delete:", rawText);
+      setSaveMessage(`Erreur suppression run : réponse non JSON (${response.status})`);
+      return;
+    }
+
+    if (!response.ok) {
+      console.error("Erreur api/run-delete:", data);
+      setSaveMessage(
+        `Erreur suppression run : ${data?.error || "erreur inconnue"}`
+      );
+      return;
+    }
+
+    resetAll();
+    setRunId("");
+    setSaveMessage(`Run #${data.strat_id} supprimé avec succès.`);
+  } catch (error) {
+    console.error("Erreur deleteRun:", error);
+    setSaveMessage(
+      `Erreur suppression : ${error?.message || "erreur inconnue"}`
+    );
+  } finally {
+    setDeleteLoading(false);
   }
 }
 
@@ -474,6 +535,15 @@ useEffect(() => {
   onClick={saveRun}
 >
   {saveLoading ? "Mise à jour..." : "Mettre à jour"}
+</Button>
+<Button
+  type="button"
+  variant="destructive"
+  className="rounded-2xl"
+  disabled={saveLoading || deleteLoading}
+  onClick={deleteRun}
+>
+  {deleteLoading ? "Suppression..." : "Supprimer"}
 </Button>
 {saveMessage ? (
   <div className="text-xs text-zinc-400">{saveMessage}</div>
