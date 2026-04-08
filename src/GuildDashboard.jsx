@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import LoginScreen from "./components/LoginScreen";
 import RunSearchGrid from "./components/RunSearchGrid";
+import RunAddTab from "@/components/RunAddTab";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   Search,
@@ -4444,6 +4445,7 @@ const profileViewTabs = [
   { key: "demon", label: "Monstre Démoniaque" },
   { key: "soulstones", label: "Pierre d’âme" },
   { key: "run_search", label: "Recherche de run" },
+  { key: "run_add", label: "Ajout de run", adminOnly: true },
   ...(isAdmin ? [{ key: "intersaison", label: "Intersaison" }] : []),
 ];
 
@@ -4988,7 +4990,9 @@ if (isExternal) {
                     </div>
                   </div>
 <div className="flex flex-wrap gap-3">
-  {profileViewTabs.map((tab) => {
+  {profileViewTabs
+  .filter((tab) => !tab.adminOnly || isAdmin)
+  .map((tab) => {
     const isActive = activeProfileView === tab.key;
 
     return (
@@ -5589,7 +5593,13 @@ if (isExternal) {
         </div>
 )}
 
-{activeProfileView === "run_search" && <RunSearchGrid />}
+{activeProfileView === "run_search" && (
+  <div className="p-4">
+    <RunSearchGrid />
+  </div>
+)}
+
+{activeProfileView === "run_add" && <RunAddTab />}
 
 {activeProfileView === "awakening" && (
   <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
