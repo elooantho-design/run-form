@@ -109,7 +109,7 @@ async function loadGvg(cancelled = false) {
     setMessage("");
 
     const response = await fetch(
-      `${apiBase}/api/gvg-list?guild=${encodeURIComponent(selectedGuild)}`
+      `${apiBase}/api/gvg-data?guild=${encodeURIComponent(selectedGuild)}`
     );
 
     const rawText = await response.text();
@@ -228,7 +228,7 @@ useEffect(() => {
 
 async function markDefenseAsRepro(defenseId) {
   try {
-    const response = await fetch(`${apiBase}/api/gvg-update`, {
+    const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -315,7 +315,7 @@ async function openReproView(defenseId) {
     setReproViewText("");
 
     const response = await fetch(
-      `${apiBase}/api/gvg-repro-get?gvgDefenseId=${encodeURIComponent(defenseId)}`
+      `${apiBase}/api/gvg-repro?gvgDefenseId=${encodeURIComponent(defenseId)}`
     );
 
     const rawText = await response.text();
@@ -363,16 +363,17 @@ async function openReproModal(defenseId) {
     setReproArtifact("");
     setReproHeroLines([]);
 
-    const response = await fetch(`${apiBase}/api/gvg-repro-template`, {
+    const response = await fetch(`${apiBase}/api/gvg-repro`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        gvgDefenseId: defenseId,
-        memberId: session?.memberId,
-        watcherName: currentWatcherName,
-      }),
+        body: JSON.stringify({
+          action: "template",
+          gvgDefenseId: defenseId,
+          memberId: session?.memberId,
+          watcherName: currentWatcherName,
+        }),
     });
 
     const rawText = await response.text();
@@ -403,7 +404,7 @@ async function openReproModal(defenseId) {
 
 async function cancelDefenseRepro(defenseId) {
   try {
-    const response = await fetch(`${apiBase}/api/gvg-update`, {
+    const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -440,14 +441,15 @@ setRefreshTick((prev) => prev + 1);
 
 async function markDefenseAsOpened(defenseId) {
   try {
-    const response = await fetch(`${apiBase}/api/gvg-delete`, {
+    const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        id: defenseId,
-      }),
+    body: JSON.stringify({
+      id: defenseId,
+      action: "delete",
+    }),
     });
 
     const rawText = await response.text();
@@ -875,12 +877,13 @@ async function markDefenseAsOpened(defenseId) {
         setReproSaving(true);
         setReproMessage("");
 
-        const response = await fetch(`${apiBase}/api/gvg-repro-save`, {
+        const response = await fetch(`${apiBase}/api/gvg-repro`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            action: "save",
             gvgDefenseId: reproDefenseId,
             memberId: session?.memberId || null,
             watcherName: reproWatcherName,
