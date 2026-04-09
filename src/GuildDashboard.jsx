@@ -1245,6 +1245,7 @@ const rows = (data || []).map((row) => ({
 
 const isAdmin = session?.role === "admin";
 const isExternal = !session?.guildCode;
+const isMember = session?.role === "member";
 const isOwnProfile = selectedMember?.id === session?.memberId;
 
 const canEditAwakenings = isAdmin || isOwnProfile;
@@ -4998,25 +4999,25 @@ if (isExternal) {
                   </div>
 <div className="flex flex-wrap gap-3">
   {profileViewTabs
-  .filter((tab) => !tab.adminOnly || isAdmin)
-  .map((tab) => {
-    const isActive = activeProfileView === tab.key;
+    .filter((tab) => !tab.adminOnly || isAdmin)
+    .map((tab) => {
+      const isActive = activeProfileView === tab.key;
 
-    return (
-      <button
-        key={tab.key}
-        type="button"
-        onClick={() => setActiveProfileView(tab.key)}
-        className={`rounded-2xl border px-5 py-2 text-sm font-medium transition ${
-          isActive
-            ? "border-zinc-500 bg-zinc-100 text-zinc-950"
-            : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-zinc-500 hover:bg-zinc-800"
-        }`}
-      >
-        {tab.label}
-      </button>
-    );
-  })}
+      return (
+        <button
+          key={tab.key}
+          type="button"
+          onClick={() => setActiveProfileView(tab.key)}
+          className={`rounded-2xl border px-5 py-2 text-sm font-medium transition ${
+            isActive
+              ? "border-zinc-500 bg-zinc-100 text-zinc-950"
+              : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-zinc-500 hover:bg-zinc-800"
+          }`}
+        >
+          {tab.label}
+        </button>
+      );
+    })}
 </div>
         {activeProfileView === "defense" && (
   <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
@@ -5169,7 +5170,6 @@ if (isExternal) {
                                 style={{ width: `${completion}%` }}
                             />
                             </div>
-
                             <span
                             className={
                                 completion === 100

@@ -31,55 +31,73 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { guild } = req.body || {};
+    const guild = String(req.body?.guild || "").toUpperCase();
 
-    if (!guild || !["G1", "G2"].includes(String(guild).toUpperCase())) {
+    if (!guild || !["G1", "G2"].includes(guild)) {
       return res.status(400).json({ error: "guild manquante ou invalide" });
     }
 
-    const normalizedGuild = String(guild).toUpperCase();
-
+    // 1) Lire les défenses AVANT suppression
     const { data: defenses, error: readError } = await supabase
       .from("gvg_defense")
       .select("id, image_url")
-      .eq("guild", normalizedGuild);
+      .eq("guild", guild);
 
     if (readError) {
       console.error("[gvg-reset] read error:", readError);
-      return res.status(500).json({ error: "read failed" });
+      return res.status(500).json({ error: "erreur lecture gvg" });
     }
 
+    const defenseIds = (defenses || []).map((row) => row.id).filter(Boolean);
+
+    // 2) Supprimer les fichiers liés
     const storagePaths = (defenses || [])
       .map((row) => extractStoragePathFromPublicUrl(row.image_url))
       .filter(Boolean);
 
-    if (storagePaths.length) {
+    if (storagePaths.length > 0) {
       const { error: storageError } = await supabase.storage
         .from("gvg-images")
         .remove(storagePaths);
 
       if (storageError) {
-        console.error("[gvg-reset] storage error:", storageError);
-        return res.status(500).json({ error: "storage reset failed" });
+        console.error("[gvg-reset] storage remove error:", storageError);
+        return res.status(500).json({ error: "suppression storage impossible" });
       }
     }
 
+    // 3) Supprimer les repro liées
+    if (defenseIds.length > 0) {
+      const { error: reproError } = await supabase
+        .from("gvg_repro")
+        .delete()
+        .in("gvg_defense_id", defenseIds);
+
+      if (reproError) {
+        console.error("[gvg-reset] repro delete error:", reproError);
+        return res.status(500).json({ error: "suppression repro impossible" });
+      }
+    }
+
+    // 4) Supprimer les défenses
     const { error: deleteError } = await supabase
       .from("gvg_defense")
       .delete()
-      .eq("guild", normalizedGuild);
+      .eq("guild", guild);
 
     if (deleteError) {
-      console.error("[gvg-reset] db delete error:", deleteError);
-      return res.status(500).json({ error: "erreur suppression gvg" });
+      console.error("[gvg-reset] defense delete error:", deleteError);
+      return res.status(500).json({ error: "suppression gvg impossible" });
     }
 
     return res.status(200).json({
       success: true,
-      guild: normalizedGuild,
+      guild,
+      deleted_defenses: defenseIds.length,
+      deleted_images: storagePaths.length,
     });
   } catch (err) {
-    console.error("[gvg-reset]", err);
-    return res.status(500).json({ error: "server error" });
+    console.error("[gvg-reset] server error:", err);
+    return res.status(500).json({ error: err?.message || "server error" });
   }
 }

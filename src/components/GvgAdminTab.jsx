@@ -211,38 +211,66 @@ onChange={async (e) => {
   const files = Array.from(e.target.files || []);
   if (!files.length) return;
 
+  const BATCH_SIZE = 8;
+
   try {
     setUploadingImages(true);
     setUploadResult(null);
 
-    const formData = new FormData();
-    formData.append("guild", guild);
+    const allResults = [];
+    let currentGuild = guild;
 
-    // ✅ Upload direct sans compression
-    files.forEach((file) => {
-      formData.append("files", file);
-    });
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      const batch = files.slice(i, i + BATCH_SIZE);
 
-    const response = await fetch(`${apiBase}/api/gvg-upload-images`, {
-      method: "POST",
-      body: formData,
-    });
+      const formData = new FormData();
+      formData.append("guild", currentGuild);
 
-    const rawText = await response.text();
-    let data = null;
-
-    try {
-      data = rawText ? JSON.parse(rawText) : null;
-    } catch {
-      setUploadResult({
-        error: `Réponse non JSON upload (${response.status})`,
-        rawText,
+      batch.forEach((file) => {
+        formData.append("files", file);
       });
-      return;
+
+      const response = await fetch(`${apiBase}/api/gvg-upload-images`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const rawText = await response.text();
+      let data = null;
+
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        setUploadResult({
+          error: `Réponse non JSON upload (${response.status})`,
+          rawText,
+          batchStart: i,
+          batchEnd: i + batch.length - 1,
+        });
+        return;
+      }
+
+      if (!response.ok) {
+        setUploadResult({
+          error: data?.error || `Erreur upload batch (${response.status})`,
+          details: data,
+          batchStart: i,
+          batchEnd: i + batch.length - 1,
+        });
+        return;
+      }
+
+      if (Array.isArray(data?.results)) {
+        allResults.push(...data.results);
+      }
     }
 
-    setUploadResult(data);
-
+    setUploadResult({
+      success: true,
+      guild: currentGuild,
+      totalFiles: files.length,
+      results: allResults,
+    });
   } catch (err) {
     console.error(err);
     setUploadResult({ error: err.message });

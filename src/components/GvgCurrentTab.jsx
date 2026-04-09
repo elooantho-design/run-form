@@ -80,6 +80,10 @@ const [refreshTick, setRefreshTick] = useState(0);
     const [stratModalLoading, setStratModalLoading] = useState(false);
     const [stratModalMessage, setStratModalMessage] = useState("");
     const [stratModalItems, setStratModalItems] = useState([]);
+    const [reproCandidates, setReproCandidates] = useState([]);
+    const [reproHeroes, setReproHeroes] = useState([]);
+    const [reproCandidatesModalOpen, setReproCandidatesModalOpen] = useState(false);
+
 
   const session = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -259,6 +263,34 @@ setRefreshTick((prev) => prev + 1);
   } catch (error) {
     console.error("markDefenseAsRepro error:", error);
     setMessage(`Erreur repro : ${error?.message || "erreur inconnue"}`);
+  }
+}
+
+async function openReproCandidates(defense) {
+  try {
+    // ferme le modal repro classique
+    setReproModalOpen(false);
+
+    const res = await fetch(`${apiBase}/api/gvg-data`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "repro_candidates",
+        defenseId: defense.id,
+      }),
+    });
+
+    const data = await res.json();
+
+    setReproCandidates(data.candidates || []);
+    setReproHeroes(data.heroes || []);
+
+    // ouvre le BON modal
+    setReproCandidatesModalOpen(true);
+  } catch (e) {
+    console.error(e);
   }
 }
 
@@ -736,22 +768,32 @@ async function markDefenseAsOpened(defenseId) {
                               📸
                             </button>
                           ) : null}
-                          {defense.status === "strat" ? (
-                            <button
-                              type="button"
-                              onClick={() => openStratView(defense.id)}
-                              className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25"
-                            >
-                              👀
-                            </button>
-                          ) : null}
-                            <button
-                              type="button"
-                              onClick={() => markDefenseAsOpened(defense.id)}
-                              className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25"
-                            >
-                              C’est ouvert
-                            </button>
+{defense.status === "strat" ? (
+  <button
+    type="button"
+    onClick={() => openStratView(defense.id)}
+    className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25"
+  >
+    👀
+  </button>
+) : null}
+
+<button
+  type="button"
+  onClick={() => openReproCandidates(defense)}
+  className="rounded-2xl border border-zinc-500/40 bg-zinc-500/15 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-500/25"
+  title="Qui peut repro"
+>
+  ❓
+</button>
+
+<button
+  type="button"
+  onClick={() => markDefenseAsOpened(defense.id)}
+  className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25"
+>
+  C’est ouvert
+</button>
                           </div>
                         </div>
                       ))
@@ -759,6 +801,7 @@ async function markDefenseAsOpened(defenseId) {
                   </div>
                 </div>
               ) : null}
+              
             </div>
           )}
         </CardContent>
@@ -1092,6 +1135,82 @@ async function markDefenseAsOpened(defenseId) {
     </div>
   </div>
 ) : null}
+
+{reproCandidatesModalOpen && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+    <div className="w-[700px] max-h-[80vh] overflow-y-auto rounded-2xl bg-zinc-900 p-6">
+      <div className="mb-4 text-lg font-bold text-zinc-50">
+        Qui peut repro cette défense
+      </div>
+
+      <div className="mb-4 flex gap-4 text-sm text-zinc-400">
+        {reproHeroes.map((h) => (
+          <div key={h.champion_id} className="w-[100px] text-center">
+            {h.champion_name}
+          </div>
+        ))}
+      </div>
+
+{[...reproCandidates]
+  .sort((a, b) => {
+    if (a.canRepro !== b.canRepro) {
+      return a.canRepro ? -1 : 1;
+    }
+
+    return String(a.name).localeCompare(String(b.name), "fr", {
+      sensitivity: "base",
+    });
+  })
+  .map((c) => (
+    <div
+      key={c.memberId}
+      className={`mb-2 rounded-xl border p-3 ${
+        c.canRepro
+          ? "border-emerald-500/30 bg-emerald-500/10"
+          : "border-red-500/30 bg-red-500/10"
+      }`}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="font-medium text-zinc-50">
+          {c.name}
+        </div>
+
+        <div
+          className={`rounded-xl px-2 py-1 text-xs font-semibold ${
+            c.canRepro
+              ? "bg-emerald-500/20 text-emerald-300"
+              : "bg-red-500/20 text-red-300"
+          }`}
+        >
+          {c.canRepro ? "✅ Peut repro" : "❌ Incomplet"}
+        </div>
+      </div>
+
+      <div className="flex gap-4 text-sm">
+        {c.heroes.map((h, i) => (
+          <div
+            key={i}
+            className={`w-[100px] text-center ${
+              h.awakening >= 0 ? "text-emerald-300" : "text-red-300"
+            }`}
+          >
+            {h.awakening >= 0 ? `A${h.awakening}` : "❌"}
+          </div>
+        ))}
+      </div>
+    </div>
+  ))}
+
+      <button
+        type="button"
+        onClick={() => setReproCandidatesModalOpen(false)}
+        className="mt-4 rounded-xl bg-zinc-700 px-4 py-2 hover:bg-zinc-600"
+      >
+        Fermer
+      </button>
+    </div>
+  </div>
+)}
     </div>
   );
 }
