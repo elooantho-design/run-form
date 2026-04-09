@@ -47,6 +47,28 @@ function buildDefenseTitle(defense) {
   return `Tour ${defense.tower} · Team ${defense.team}`;
 }
 
+function toGroupEmoji(value) {
+  if (value === null || value === undefined) return "";
+
+  const digitMap = {
+    "0": "0️⃣",
+    "1": "1️⃣",
+    "2": "2️⃣",
+    "3": "3️⃣",
+    "4": "4️⃣",
+    "5": "5️⃣",
+    "6": "6️⃣",
+    "7": "7️⃣",
+    "8": "8️⃣",
+    "9": "9️⃣",
+  };
+
+  return String(value)
+    .split("")
+    .map((char) => digitMap[char] || char)
+    .join("");
+}
+
 export default function GvgCurrentTab() {
   const apiBase = useMemo(() => getApiBase(), []);
 
@@ -714,22 +736,31 @@ async function markDefenseAsOpened(defenseId) {
                             defense.status
                           )}`}
                         >
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <div className="font-medium">
-                                {buildDefenseTitle(defense)}
-                              </div>
-                              <div className="mt-1 text-sm opacity-80">
-                                {getStatusLabel(defense.status, defense.repro_by)}
-                              </div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="font-medium">
+                              {buildDefenseTitle(defense)}
                             </div>
 
+                            <div className="mt-1 text-sm opacity-80">
+                              {getStatusLabel(defense.status, defense.repro_by)}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col items-end gap-2">
                             <div className="text-sm font-semibold">
                               {defense.type === "fortress"
                                 ? `Team ${defense.team}`
                                 : `T${defense.tower} · Team ${defense.team}`}
                             </div>
+
+                            {defense.group_num ? (
+<div className="rounded-2xl border border-zinc-600 bg-zinc-900/60 px-5 py-3 text-2xl font-bold text-zinc-100 shadow-sm leading-none">
+  {toGroupEmoji(defense.group_num)}
+</div>
+                            ) : null}
                           </div>
+                        </div>
 
                           <div className="mt-3 flex flex-wrap gap-2">
                         <button

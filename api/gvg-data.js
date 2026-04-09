@@ -26,22 +26,23 @@ async function handleList(req, res) {
 
   const { data, error } = await supabase
     .from("gvg_defense")
-    .select(`
-      id,
-      guild,
-      bastion,
-      type,
-      tower,
-      team,
-      defense_key,
-      raw_name,
-      heroes,
-      status,
-      repro_by,
-      image_url,
-      created_at,
-      updated_at
-    `)
+.select(`
+  id,
+  guild,
+  bastion,
+  type,
+  tower,
+  team,
+  defense_key,
+  raw_name,
+  heroes,
+  status,
+  repro_by,
+  group_num,
+  image_url,
+  created_at,
+  updated_at
+`)
     .eq("guild", guild)
     .order("bastion", { ascending: true })
     .order("type", { ascending: true })
@@ -156,6 +157,54 @@ async function handleDelete(req, res) {
   }
 
   return res.status(200).json({ success: true });
+}
+
+async function handleImportGroups(req, res) {
+  try {
+    const { guild, data } = req.body;
+
+    if (!guild || !data?.map) {
+      return res.status(400).json({ error: "data invalide" });
+    }
+
+    const entries = Object.entries(data.map);
+
+    for (const [key, value] of entries) {
+      const groupNum = value?.num;
+
+      if (!groupNum) continue;
+
+      const match = key.match(/^b(\d+)_(t(\d+)|fort)_team(\d)$/);
+      if (!match) continue;
+
+      const bastion = Number(match[1]);
+      const isFort = key.includes("fort");
+      const tower = isFort ? null : Number(match[3]);
+      const type = isFort ? "fortress" : "tower";
+      const team = Number(match[4]);
+
+      let query = supabase
+        .from("gvg_defense")
+        .update({ group_num: groupNum })
+        .eq("guild", guild)
+        .eq("bastion", bastion)
+        .eq("type", type)
+        .eq("team", team);
+
+      if (tower === null) {
+        query = query.is("tower", null);
+      } else {
+        query = query.eq("tower", tower);
+      }
+
+      await query;
+    }
+
+    return res.json({ success: true });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: e.message });
+  }
 }
 
 async function handleReproCandidates(req, res) {
@@ -333,6 +382,10 @@ if (req.method === "POST") {
 
   if (action === "repro_candidates") {
     return await handleReproCandidates(req, res);
+  }
+
+  if (action === "import_groups") {
+    return await handleImportGroups(req, res);
   }
 
   return res.status(400).json({ error: "action invalide" });

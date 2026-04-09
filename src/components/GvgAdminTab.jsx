@@ -25,6 +25,7 @@ export default function GvgAdminTab() {
   const [message, setMessage] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
+  const [groupJson, setGroupJson] = useState("");
 
   async function handleImport() {
     try {
@@ -202,7 +203,53 @@ export default function GvgAdminTab() {
   <div className="text-sm text-zinc-300">
     Upload des images GVG (multi-sélection)
   </div>
+<div className="mt-6 rounded-2xl border border-zinc-700 p-4">
+  <div className="mb-2 text-sm text-zinc-400">
+    Import groupes identiques (JSON groupes)
+  </div>
 
+  <textarea
+    value={groupJson}
+    onChange={(e) => setGroupJson(e.target.value)}
+    className="h-40 w-full rounded-xl border border-zinc-700 bg-zinc-900 p-2 text-xs text-zinc-200"
+    placeholder='Colle ici ton JSON "map" des groupes'
+  />
+
+  <button
+    onClick={async () => {
+      try {
+        const parsed = JSON.parse(groupJson);
+
+        const res = await fetch(`${apiBase}/api/gvg-data`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            action: "import_groups",
+            guild,
+            data: parsed,
+          }),
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+          alert("Erreur import");
+          console.error(data);
+          return;
+        }
+
+        alert("Groupes importés !");
+      } catch (e) {
+        alert("JSON invalide");
+      }
+    }}
+    className="mt-2 rounded-xl bg-zinc-700 px-4 py-2 hover:bg-zinc-600"
+  >
+    Import groupes
+  </button>
+</div>
   <input
     type="file"
     multiple
