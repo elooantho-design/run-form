@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import * as Sentry from "@sentry/react";
+import GvgCurrentTab from "@/components/GvgCurrentTab";
+import GvgAdminTab from "@/components/GvgAdminTab";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -4448,6 +4449,8 @@ const profileViewTabs = [
   { key: "run_search", label: "Recherche de run" },
   { key: "run_add", label: "Ajout de run", adminOnly: true },
   { key: "run_edit", label: "Modification de run", adminOnly: true },
+  { key: "gvg_current", label: "GVG en cours" },
+  { key: "gvg_admin", label: "Admin GVG", adminOnly: true },
   ...(isAdmin ? [{ key: "intersaison", label: "Intersaison" }] : []),
 ];
 
@@ -5605,6 +5608,8 @@ if (isExternal) {
 
 {activeProfileView === "run_add" && <RunAddTab />}
 {activeProfileView === "run_edit" && <RunEditTab />}
+{activeProfileView === "gvg_current" && <GvgCurrentTab />}
+{activeProfileView === "gvg_admin" && <GvgAdminTab />}
 
 {activeProfileView === "awakening" && (
   <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
