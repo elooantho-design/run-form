@@ -12,6 +12,69 @@ function getApiBase() {
   return "";
 }
 
+function parseYoutubeTimeToSeconds(value) {
+  if (!value) return 0;
+
+  const raw = String(value).trim().toLowerCase();
+
+  if (/^\d+$/.test(raw)) {
+    return Number(raw);
+  }
+
+  const match = raw.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  if (!match) return 0;
+
+  const hours = Number(match[1] || 0);
+  const minutes = Number(match[2] || 0);
+  const seconds = Number(match[3] || 0);
+
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function getYoutubeEmbedUrl(url) {
+  if (!url) return null;
+
+  try {
+    const parsed = new URL(url);
+
+    let videoId = null;
+    let startSeconds = 0;
+
+    if (parsed.hostname.includes("youtu.be")) {
+      videoId = parsed.pathname.replace("/", "").trim();
+
+      startSeconds =
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("t")) ||
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("start")) ||
+        parseYoutubeTimeToSeconds(parsed.hash.replace(/^#t=/, ""));
+    }
+
+    if (
+      parsed.hostname.includes("youtube.com") ||
+      parsed.hostname.includes("www.youtube.com")
+    ) {
+      videoId = parsed.searchParams.get("v");
+
+      startSeconds =
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("t")) ||
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("start")) ||
+        parseYoutubeTimeToSeconds(parsed.hash.replace(/^#t=/, ""));
+    }
+
+    if (!videoId) return null;
+
+    const embed = new URL(`https://www.youtube.com/embed/${videoId}`);
+
+    if (startSeconds > 0) {
+      embed.searchParams.set("start", String(startSeconds));
+    }
+
+    return embed.toString();
+  } catch {
+    return null;
+  }
+}
+
 export default function GvgPanelTab() {
   const apiBase = useMemo(() => getApiBase(), []);
 const [guild, setGuild] = useState("G1");
@@ -23,6 +86,9 @@ const [commentValue, setCommentValue] = useState("");
 const [attackModal, setAttackModal] = useState(null);
 const [attackValue, setAttackValue] = useState("");
 const [returnModal, setReturnModal] = useState(null);
+const [runsModal, setRunsModal] = useState(null);
+const [runs, setRuns] = useState([]);
+const [runsLoading, setRunsLoading] = useState(false);
 
   async function load() {
     try {
@@ -74,6 +140,27 @@ const [returnModal, setReturnModal] = useState(null);
 
     return `B${bastion}_T${tower}_T${team}`;
   }
+
+function getGroupEmoji(groupNum) {
+  const value = Number(groupNum);
+
+  if (!Number.isFinite(value) || value <= 0) return "";
+
+  const map = {
+    1: "1️⃣",
+    2: "2️⃣",
+    3: "3️⃣",
+    4: "4️⃣",
+    5: "5️⃣",
+    6: "6️⃣",
+    7: "7️⃣",
+    8: "8️⃣",
+    9: "9️⃣",
+    10: "🔟",
+  };
+
+  return map[value] || "🔢";
+}
 
   function getDefenseForSlot(bastion, type, tower, team) {
     return (
@@ -363,6 +450,63 @@ async function confirmReturnToCurrent() {
   }
 }
 
+async function openRuns(defense) {
+  if (!defense) return;
+
+  try {
+    setRunsLoading(true);
+    setRunsModal(defense);
+    setRuns([]);
+
+    const queryItems = Array.isArray(defense.heroes)
+      ? defense.heroes
+          .filter((hero) => hero?.champion)
+          .map((hero) => ({
+            champion: hero.champion,
+            position: hero.position,
+            direction: hero.direction,
+          }))
+      : [];
+
+    if (!queryItems.length) {
+      setRuns([]);
+      return;
+    }
+
+    const response = await fetch(`${apiBase}/api/run-search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ queryItems }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      console.error("Réponse non JSON run-search:", rawText);
+      setRuns([]);
+      return;
+    }
+
+    if (!response.ok) {
+      console.error("run-search error:", data);
+      setRuns([]);
+      return;
+    }
+
+    setRuns(Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.error("openRuns error:", e);
+    setRuns([]);
+  } finally {
+    setRunsLoading(false);
+  }
+}
+
   return (
     <div className="space-y-4">
 <div className="flex flex-wrap items-center gap-2">
@@ -450,19 +594,22 @@ async function confirmReturnToCurrent() {
                             }
                             `}
                     >
-                    <button
-                    type="button"
-                    onClick={() => defense && openReturnModal(defense)}
-                    className={`text-left text-xs ${
-                        defense
-                        ? "text-zinc-100 underline underline-offset-4 hover:text-white"
-                        : "text-zinc-200"
-                    }`}
-                    disabled={!defense}
-                    title={defense ? "Renvoyer dans GVG en cours" : ""}
-                    >
-                    {buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}
-                    </button>
+                            <button
+                            type="button"
+                            onClick={() => defense && openReturnModal(defense)}
+                            className={`flex items-center gap-2 text-left text-xs ${
+                                defense
+                                ? "text-zinc-100 underline underline-offset-4 hover:text-white"
+                                : "text-zinc-200"
+                            }`}
+                            disabled={!defense}
+                            title={defense ? "Renvoyer dans GVG en cours" : ""}
+                            >
+                            <span>{buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}</span>
+                            {defense?.group_num ? (
+                                <span className="no-underline">{getGroupEmoji(defense.group_num)}</span>
+                            ) : null}
+                            </button>
 
                 <div className="flex items-center gap-1 shrink-0">
                   {!defense ? (
@@ -525,13 +672,14 @@ async function confirmReturnToCurrent() {
 
 
 <button
-  type="button"
-  className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition cursor-default ${
+  onClick={() => openRuns(defense)}
+  className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
     defense.status === "strat" || defense.record_status === "push"
-      ? "border-green-500 bg-green-500/15"
-      : "border-red-500 bg-red-500/15"
+      ? "border-green-500 bg-green-500/15 hover:scale-110 cursor-pointer"
+      : "border-red-500 bg-red-500/15 opacity-50 cursor-not-allowed"
   }`}
-  title="Strat active ou en base"
+  disabled={!(defense.status === "strat" || defense.record_status === "push")}
+  title="Voir les runs"
 >
   👍
 </button>
@@ -660,6 +808,52 @@ async function confirmReturnToCurrent() {
           </div>
         </div>
       )}
+      {runsModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+    <div className="w-full max-w-4xl rounded-xl border border-zinc-700 bg-zinc-900 p-4">
+      <div className="mb-3 text-sm text-zinc-200">
+        Runs · {buildSlotLabel(
+          runsModal.bastion,
+          runsModal.type,
+          runsModal.tower,
+          runsModal.team
+        )}
+      </div>
+
+      {runsLoading ? (
+        <div className="text-zinc-400">Chargement...</div>
+      ) : runs.length === 0 ? (
+        <div className="text-zinc-500">Aucun run trouvé</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4">
+  {runs.map((run, i) => (
+    <div key={i} className="flex w-full justify-center">
+      <div className="w-full max-w-3xl aspect-video overflow-hidden rounded-xl border border-zinc-800">
+        <iframe
+          src={getYoutubeEmbedUrl(run.youtube_url)}
+          className="h-full w-full"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+          loading="lazy"
+          referrerPolicy="strict-origin-when-cross-origin"
+        />
+      </div>
+    </div>
+  ))}
+</div>
+      )}
+
+      <div className="mt-4 flex justify-end">
+        <button
+          onClick={() => setRunsModal(null)}
+          className="rounded bg-zinc-700 px-3 py-1 text-sm text-white"
+        >
+          Fermer
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }
