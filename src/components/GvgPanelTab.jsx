@@ -442,7 +442,13 @@ async function confirmReturnToCurrent() {
                   return (
                     <div
                       key={`${bastion}-${slot.type}-${slot.tower ?? "F"}-${slot.team}-${index}`}
-                      className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-950/60 px-3 py-2"
+                      className={`flex items-center justify-between rounded-xl border px-3 py-2 transition
+                            ${
+                                defense?.record_status === "push"
+                                ? "bg-purple-600/30 border-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.4)]"
+                                : "border-zinc-800 bg-zinc-950/60"
+                            }
+                            `}
                     >
                     <button
                     type="button"
@@ -517,17 +523,6 @@ async function confirmReturnToCurrent() {
     ✅
   </button>
 
-  <button
-    type="button"
-    className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition cursor-default ${
-      defense.record_status === "push"
-        ? "border-green-500 bg-green-500/15"
-        : "border-red-500 bg-red-500/15"
-    }`}
-    title="Statut push"
-  >
-    🏁
-  </button>
 
 <button
   type="button"
