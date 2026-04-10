@@ -174,26 +174,64 @@ async function loadGvg(cancelled = false) {
   }
 }
 
+function parseYoutubeTimeToSeconds(value) {
+  if (!value) return 0;
+
+  const raw = String(value).trim().toLowerCase();
+
+  if (/^\d+$/.test(raw)) {
+    return Number(raw);
+  }
+
+  const match = raw.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  if (!match) return 0;
+
+  const hours = Number(match[1] || 0);
+  const minutes = Number(match[2] || 0);
+  const seconds = Number(match[3] || 0);
+
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 function getYoutubeEmbedUrl(url) {
   if (!url) return null;
 
   try {
     const parsed = new URL(url);
 
+    let videoId = null;
+    let startSeconds = 0;
+
     if (parsed.hostname.includes("youtu.be")) {
-      const videoId = parsed.pathname.replace("/", "").trim();
-      return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+      videoId = parsed.pathname.replace("/", "").trim();
+
+      startSeconds =
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("t")) ||
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("start")) ||
+        parseYoutubeTimeToSeconds(parsed.hash.replace(/^#t=/, ""));
     }
 
     if (
       parsed.hostname.includes("youtube.com") ||
       parsed.hostname.includes("www.youtube.com")
     ) {
-      const videoId = parsed.searchParams.get("v");
-      return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+      videoId = parsed.searchParams.get("v");
+
+      startSeconds =
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("t")) ||
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("start")) ||
+        parseYoutubeTimeToSeconds(parsed.hash.replace(/^#t=/, ""));
     }
 
-    return null;
+    if (!videoId) return null;
+
+    const embed = new URL(`https://www.youtube.com/embed/${videoId}`);
+
+    if (startSeconds > 0) {
+      embed.searchParams.set("start", String(startSeconds));
+    }
+
+    return embed.toString();
   } catch {
     return null;
   }
@@ -223,16 +261,20 @@ useEffect(() => {
   };
 }, [apiBase, selectedGuild, refreshTick]);
 
-  const bastions = useMemo(() => {
-    return [1, 2, 3, 4].map((bastionId) => {
-      const items = defenses.filter((defense) => Number(defense.bastion) === bastionId);
+const bastions = useMemo(() => {
+  return [1, 2, 3, 4].map((bastionId) => {
+    const items = defenses.filter(
+      (defense) =>
+        Number(defense.bastion) === bastionId &&
+        (defense.record_status === null || defense.record_status === undefined)
+    );
 
-      return {
-        id: bastionId,
-        defenses: items,
-      };
-    });
-  }, [defenses]);
+    return {
+      id: bastionId,
+      defenses: items,
+    };
+  });
+}, [defenses]);
 
   const selectedBastion = useMemo(() => {
     return bastions.find((bastion) => bastion.id === selectedBastionId) || null;
@@ -500,10 +542,10 @@ async function markDefenseAsOpened(defenseId) {
       headers: {
         "Content-Type": "application/json",
       },
-    body: JSON.stringify({
-      id: defenseId,
-      action: "delete",
-    }),
+      body: JSON.stringify({
+        id: defenseId,
+        action: "panel_open",
+      }),
     });
 
     const rawText = await response.text();
@@ -512,19 +554,25 @@ async function markDefenseAsOpened(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      setMessage(`Réponse non JSON gvg-delete (${response.status})`);
+      setMessage(`Réponse non JSON gvg-panel-open (${response.status})`);
       return;
     }
 
     if (!response.ok) {
-      setMessage(`Erreur ouverture défense : ${data?.error || "erreur inconnue"}`);
+      setMessage(`Erreur ouverture panel : ${data?.error || "erreur inconnue"}`);
       return;
+    }
+
+    if (data?.already_open) {
+      setMessage("Cette défense est déjà ouverte dans le panel.");
+    } else {
+      setMessage("Défense envoyée dans le panel.");
     }
 
     setRefreshTick((prev) => prev + 1);
   } catch (error) {
     console.error("markDefenseAsOpened error:", error);
-    setMessage(`Erreur ouverture défense : ${error?.message || "erreur inconnue"}`);
+    setMessage(`Erreur ouverture panel : ${error?.message || "erreur inconnue"}`);
   }
 }
 

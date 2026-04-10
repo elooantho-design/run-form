@@ -82,26 +82,59 @@ function getApiBase() {
   return "";
 }
 
+function parseTimeToSeconds(value) {
+  if (!value) return 0;
+
+  const raw = String(value).trim().toLowerCase();
+
+  // format simple: t=123
+  if (/^\d+$/.test(raw)) return Number(raw);
+
+  // format: 1h2m3s
+  const match = raw.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  if (!match) return 0;
+
+  const h = Number(match[1] || 0);
+  const m = Number(match[2] || 0);
+  const s = Number(match[3] || 0);
+
+  return h * 3600 + m * 60 + s;
+}
+
 function getYoutubeEmbedUrl(url) {
   const value = String(url || "").trim();
   if (!value) return "";
 
-  const shortMatch = value.match(/youtu\.be\/([^?&]+)/i);
+  let videoId = null;
+  let start = 0;
+
+  // youtu.be
+  const shortMatch = value.match(/youtu\.be\/([^?&#]+)/i);
   if (shortMatch?.[1]) {
-    return `https://www.youtube.com/embed/${shortMatch[1]}`;
+    videoId = shortMatch[1];
+
+    const tMatch = value.match(/[?&#]t=([^&#]+)/i);
+    if (tMatch) start = parseTimeToSeconds(tMatch[1]);
   }
 
-  const watchMatch = value.match(/[?&]v=([^?&]+)/i);
+  // youtube.com/watch
+  const watchMatch = value.match(/[?&]v=([^?&#]+)/i);
   if (watchMatch?.[1]) {
-    return `https://www.youtube.com/embed/${watchMatch[1]}`;
+    videoId = watchMatch[1];
+
+    const tMatch = value.match(/[?&#]t=([^&#]+)/i);
+    if (tMatch) start = parseTimeToSeconds(tMatch[1]);
   }
 
-  const embedMatch = value.match(/youtube\.com\/embed\/([^?&]+)/i);
-  if (embedMatch?.[1]) {
-    return `https://www.youtube.com/embed/${embedMatch[1]}`;
+  if (!videoId) return "";
+
+  let embed = `https://www.youtube.com/embed/${videoId}`;
+
+  if (start > 0) {
+    embed += `?start=${start}`;
   }
 
-  return "";
+  return embed;
 }
 
 function getYoutubeThumbnail(url) {

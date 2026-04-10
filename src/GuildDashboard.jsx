@@ -15,6 +15,7 @@ import LoginScreen from "./components/LoginScreen";
 import RunSearchGrid from "./components/RunSearchGrid";
 import RunAddTab from "@/components/RunAddTab";
 import RunEditTab from "@/components/RunEditTab";
+import GvgPanelTab from "@/components/GvgPanelTab";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   Search,
@@ -592,6 +593,7 @@ const [testWishInput, setTestWishInput] = useState([]);
 const [highlightedIntersaisonRowId, setHighlightedIntersaisonRowId] = useState(null);
 const [intersaisonSourceFilter, setIntersaisonSourceFilter] = useState("Tous");
 const [intersaisonSourceMenuOpen, setIntersaisonSourceMenuOpen] = useState(false);
+
 
 const guildCodes = Array.from(
   { length: intersaisonCampaign?.guild_count || 7 },
@@ -4452,6 +4454,7 @@ const profileViewTabs = [
   { key: "run_edit", label: "Modification de run", adminOnly: true },
   { key: "gvg_current", label: "GVG en cours" },
   { key: "gvg_admin", label: "Admin GVG", adminOnly: true },
+    { key: "gvg_panel", label: "GVG Panel", adminOnly: true },
   ...(isAdmin ? [{ key: "intersaison", label: "Intersaison" }] : []),
 ];
 
@@ -5610,6 +5613,7 @@ if (isExternal) {
 {activeProfileView === "run_edit" && <RunEditTab />}
 {activeProfileView === "gvg_current" && <GvgCurrentTab />}
 {activeProfileView === "gvg_admin" && <GvgAdminTab />}
+{activeProfileView === "gvg_panel" && <GvgPanelTab />}
 
 {activeProfileView === "awakening" && (
   <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">

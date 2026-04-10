@@ -1,11 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
+import fs from "fs";
+import path from "path";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { persistSession: false } }
 );
-
+const UPLOADED_DIR =
+  process.env.YOUTUBE_UPLOADED_DIR ||
+  "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\discord_bot\\uploaded";
 function extractStoragePathFromPublicUrl(url) {
   if (!url) return null;
 
@@ -40,6 +44,10 @@ async function handleList(req, res) {
   repro_by,
   group_num,
   image_url,
+  record_status,
+  record_comment,
+  attack_code,
+  youtube_url,
   created_at,
   updated_at
 `)
@@ -355,6 +363,493 @@ const { data: awakenings, error: awakeningsError } = await supabase
   });
 }
 
+async function handlePanelOpen(req, res) {
+  const { id } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ error: "id manquant" });
+  }
+
+  const { data: defense, error: readError } = await supabase
+    .from("gvg_defense")
+    .select("id, record_status")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (readError) {
+    console.error("[gvg-data:panel_open] read error:", readError);
+    return res.status(500).json({ error: "read failed" });
+  }
+
+  if (!defense) {
+    return res.status(404).json({ error: "défense introuvable" });
+  }
+
+  if (defense.record_status) {
+    return res.status(200).json({
+      success: true,
+      item: defense,
+      already_open: true,
+    });
+  }
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .update({
+      record_status: "pas_record",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .select("id, record_status")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[gvg-data:panel_open] update error:", error);
+    return res.status(500).json({ error: "update failed" });
+  }
+
+  return res.status(200).json({
+    success: true,
+    item: data,
+  });
+}
+
+async function handleRecordToggle(req, res) {
+  const { id } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ error: "id manquant" });
+  }
+
+  const { data: defense, error: readError } = await supabase
+    .from("gvg_defense")
+    .select("id, record_status")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (readError) {
+    console.error("[gvg-data:record_toggle] read error:", readError);
+    return res.status(500).json({ error: "read failed" });
+  }
+
+  if (!defense) {
+    return res.status(404).json({ error: "défense introuvable" });
+  }
+
+  if (!defense.record_status) {
+    return res.status(400).json({ error: "défense non ouverte dans le panel" });
+  }
+
+  if (defense.record_status === "record" || defense.record_status === "push") {
+    return res.status(400).json({ error: "statut verrouillé" });
+  }
+
+  const nextStatus =
+    defense.record_status === "a_record" ? "pas_record" : "a_record";
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .update({
+      record_status: nextStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .select("id, record_status")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[gvg-data:record_toggle] update error:", error);
+    return res.status(500).json({ error: "update failed" });
+  }
+
+  return res.status(200).json({
+    success: true,
+    item: data,
+  });
+}
+
+async function handlePanelUpdateFields(req, res) {
+  const { id, record_comment, attack_code } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ error: "id manquant" });
+  }
+
+  const payload = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (record_comment !== undefined) {
+    payload.record_comment = String(record_comment || "").trim() || null;
+  }
+
+  if (attack_code !== undefined) {
+    payload.attack_code = String(attack_code || "").trim() || null;
+  }
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .update(payload)
+    .eq("id", id)
+    .select("id, record_comment, attack_code")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[gvg-data:panel_update_fields] update error:", error);
+    return res.status(500).json({ error: "update failed" });
+  }
+
+  if (!data) {
+    return res.status(404).json({ error: "défense introuvable" });
+  }
+
+  return res.status(200).json({
+    success: true,
+    item: data,
+  });
+}
+
+async function handleRecordOk(req, res) {
+  const { guild } = req.body || {};
+
+  if (!guild || !["G1", "G2"].includes(String(guild).toUpperCase())) {
+    return res.status(400).json({ error: "guild manquante ou invalide" });
+  }
+
+  const normalizedGuild = String(guild).toUpperCase();
+
+  let filenames = [];
+  try {
+    filenames = fs.readdirSync(UPLOADED_DIR).filter((name) => /\.mp4$/i.test(name));
+  } catch (error) {
+    console.error("[gvg-data:record_ok] read dir error:", error);
+    return res.status(500).json({ error: "impossible de lire le dossier uploaded" });
+  }
+
+  const { data: defenses, error: readError } = await supabase
+    .from("gvg_defense")
+    .select("id, guild, bastion, type, tower, team, record_status, youtube_url")
+    .eq("guild", normalizedGuild)
+    .in("record_status", ["pas_record", "a_record", "record"]);
+
+  if (readError) {
+    console.error("[gvg-data:record_ok] read defenses error:", readError);
+    return res.status(500).json({ error: "erreur lecture gvg_defense" });
+  }
+
+  const updates = [];
+
+  for (const defense of defenses || []) {
+    const defKey =
+      defense.type === "fortress"
+        ? `b${defense.bastion}_fort_team${defense.team}`
+        : `b${defense.bastion}_t${defense.tower}_team${defense.team}`;
+
+    const matchedFile = filenames.find((name) =>
+      name.toLowerCase().startsWith(`${defKey.toLowerCase()}__`)
+    );
+
+    if (!matchedFile) continue;
+
+    const match = matchedFile.match(/__(.+)\.mp4$/i);
+    if (!match) continue;
+
+    const videoId = String(match[1] || "").trim();
+    if (!videoId) continue;
+
+    updates.push({
+      id: defense.id,
+      youtube_url: `https://youtu.be/${videoId}`,
+      record_status: "record",
+      filename: matchedFile,
+    });
+  }
+
+  if (!updates.length) {
+    return res.status(200).json({
+      success: true,
+      updated: 0,
+      deleted: 0,
+      items: [],
+    });
+  }
+
+  const results = [];
+  let deletedCount = 0;
+
+  for (const item of updates) {
+    const { data, error } = await supabase
+      .from("gvg_defense")
+      .update({
+        youtube_url: item.youtube_url,
+        record_status: item.record_status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", item.id)
+      .select("id, youtube_url, record_status")
+      .maybeSingle();
+
+    if (error) {
+      console.error("[gvg-data:record_ok] update error:", error);
+      return res.status(500).json({ error: "erreur mise à jour record_ok" });
+    }
+
+    if (data) {
+      results.push(data);
+
+      const filePath = path.join(UPLOADED_DIR, item.filename);
+
+      try {
+        fs.unlinkSync(filePath);
+        deletedCount += 1;
+      } catch (deleteError) {
+        console.error("[gvg-data:record_ok] delete file error:", deleteError);
+      }
+    }
+  }
+
+  return res.status(200).json({
+    success: true,
+    updated: results.length,
+    deleted: deletedCount,
+    items: results,
+  });
+}
+
+
+function makeDefKey(defense) {
+  if (defense.type === "fortress") {
+    return `b${defense.bastion}_fort_team${defense.team}`;
+  }
+
+  return `b${defense.bastion}_t${defense.tower}_team${defense.team}`;
+}
+
+function makeStratName(defense) {
+  if (defense.type === "fortress") {
+    return `B${defense.bastion} Fort - Team ${defense.team}`;
+  }
+
+  return `B${defense.bastion} Tower ${defense.tower} - Team ${defense.team}`;
+}
+
+function normalizeChampionName(name) {
+  if (!name) return null;
+
+  return String(name)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .trim() || null;
+}
+
+function heroesToSlots(stratId, heroes) {
+  const arr = Array.isArray(heroes) ? heroes : [];
+
+  return arr
+    .map((hero) => {
+      if (!hero || typeof hero !== "object") return null;
+
+      const champion = normalizeChampionName(hero.champion || hero.name);
+      if (!champion) return null;
+
+      const position = hero.position ? String(hero.position).toUpperCase().trim() : null;
+      const direction = hero.direction ? String(hero.direction).toUpperCase().trim() : null;
+
+      if (!position || !direction) return null;
+
+      return {
+        strat_id: stratId,
+        champion,
+        position,
+        direction,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function handlePushToBase(req, res) {
+  const { guild } = req.body || {};
+
+  if (!guild || !["G1", "G2"].includes(String(guild).toUpperCase())) {
+    return res.status(400).json({ error: "guild manquante ou invalide" });
+  }
+
+  const normalizedGuild = String(guild).toUpperCase();
+
+  const { data: defenses, error: readError } = await supabase
+    .from("gvg_defense")
+    .select(`
+      id,
+      guild,
+      bastion,
+      type,
+      tower,
+      team,
+      heroes,
+      youtube_url,
+      record_comment,
+      attack_code,
+      record_status
+    `)
+    .eq("guild", normalizedGuild)
+    .eq("record_status", "record");
+
+  if (readError) {
+    console.error("[gvg-data:push_to_base] read defenses error:", readError);
+    return res.status(500).json({ error: "erreur lecture gvg_defense" });
+  }
+
+  if (!defenses?.length) {
+    return res.status(200).json({
+      success: true,
+      pushed: 0,
+      items: [],
+    });
+  }
+
+  const results = [];
+
+  for (const defense of defenses) {
+    if (!defense.youtube_url) {
+      continue;
+    }
+
+    const defKey = makeDefKey(defense);
+    const stratName = makeStratName(defense);
+
+    const { data: existingStrats, error: existingError } = await supabase
+      .from("defence_strat")
+      .select("id")
+      .eq("def_key", defKey)
+      .eq("youtube_url", defense.youtube_url)
+      .limit(1);
+
+    if (existingError) {
+      console.error("[gvg-data:push_to_base] read defence_strat error:", existingError);
+      return res.status(500).json({ error: "erreur lecture defence_strat" });
+    }
+
+    let stratId = existingStrats?.[0]?.id || null;
+
+    if (!stratId) {
+      const { data: insertedStrat, error: insertStratError } = await supabase
+        .from("defence_strat")
+        .insert({
+          name: stratName,
+          commentaire: defense.record_comment || null,
+          youtube_url: defense.youtube_url,
+          def_key: defKey,
+          attack_code: defense.attack_code || null,
+        })
+        .select("id")
+        .single();
+
+      if (insertStratError || !insertedStrat?.id) {
+        console.error("[gvg-data:push_to_base] insert defence_strat error:", insertStratError);
+        return res.status(500).json({ error: "erreur insertion defence_strat" });
+      }
+
+      stratId = insertedStrat.id;
+    } else {
+      const { error: updateStratError } = await supabase
+        .from("defence_strat")
+        .update({
+          name: stratName,
+          commentaire: defense.record_comment || null,
+          attack_code: defense.attack_code || null,
+        })
+        .eq("id", stratId);
+
+      if (updateStratError) {
+        console.error("[gvg-data:push_to_base] update defence_strat error:", updateStratError);
+        return res.status(500).json({ error: "erreur mise à jour defence_strat" });
+      }
+
+      const { error: deleteSlotsError } = await supabase
+        .from("defence_slot")
+        .delete()
+        .eq("strat_id", stratId);
+
+      if (deleteSlotsError) {
+        console.error("[gvg-data:push_to_base] delete defence_slot error:", deleteSlotsError);
+        return res.status(500).json({ error: "erreur suppression defence_slot" });
+      }
+    }
+
+    const slots = heroesToSlots(stratId, defense.heroes);
+
+    if (slots.length) {
+      const { error: insertSlotsError } = await supabase
+        .from("defence_slot")
+        .insert(slots);
+
+      if (insertSlotsError) {
+        console.error("[gvg-data:push_to_base] insert defence_slot error:", insertSlotsError);
+        return res.status(500).json({ error: "erreur insertion defence_slot" });
+      }
+    }
+
+    const { data: updatedDefense, error: updateDefenseError } = await supabase
+      .from("gvg_defense")
+      .update({
+        record_status: "push",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", defense.id)
+      .select("id, record_status, youtube_url")
+      .maybeSingle();
+
+    if (updateDefenseError) {
+      console.error("[gvg-data:push_to_base] update gvg_defense error:", updateDefenseError);
+      return res.status(500).json({ error: "erreur update gvg_defense" });
+    }
+
+    if (updatedDefense) {
+      results.push(updatedDefense);
+    }
+  }
+
+  return res.status(200).json({
+    success: true,
+    pushed: results.length,
+    items: results,
+  });
+}
+
+async function handlePanelReturn(req, res) {
+  const { id } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ error: "id manquant" });
+  }
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .update({
+      record_status: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .select("id, record_status")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[gvg-data:panel_return] update error:", error);
+    return res.status(500).json({ error: "erreur retour panel" });
+  }
+
+  if (!data) {
+    return res.status(404).json({ error: "défense introuvable" });
+  }
+
+  return res.status(200).json({
+    success: true,
+    item: data,
+  });
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -387,6 +882,30 @@ if (req.method === "POST") {
   if (action === "import_groups") {
     return await handleImportGroups(req, res);
   }
+
+  if (action === "panel_open") {
+    return await handlePanelOpen(req, res);
+  }
+
+  if (action === "record_toggle") {
+    return await handleRecordToggle(req, res);
+  }
+
+if (action === "panel_update_fields") {
+  return await handlePanelUpdateFields(req, res);
+}
+
+if (action === "record_ok") {
+  return await handleRecordOk(req, res);
+}
+
+if (action === "push_to_base") {
+  return await handlePushToBase(req, res);
+}
+
+if (action === "panel_return") {
+  return await handlePanelReturn(req, res);
+}
 
   return res.status(400).json({ error: "action invalide" });
 }
