@@ -507,6 +507,35 @@ async function openRuns(defense) {
   }
 }
 
+const handleDeleteStrat = async (run) => {
+  const stratId = run?.strat_id;
+
+  if (!stratId) {
+    console.error("Suppression impossible: strat_id manquant", run);
+    return;
+  }
+
+  const confirmDelete = window.confirm(
+    `Supprimer la strat #${stratId} ?`
+  );
+
+  if (!confirmDelete) return;
+
+  try {
+    await fetch(`${apiBase}/api/delete-strat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id: stratId }),
+    });
+
+    setRuns((prev) => prev.filter((r) => r.strat_id !== stratId));
+  } catch (err) {
+    console.error("Erreur suppression strat:", err);
+  }
+};
+
   return (
     <div className="space-y-4">
 <div className="flex flex-wrap items-center gap-2">
@@ -732,7 +761,7 @@ async function openRuns(defense) {
         </div>
       )}
 
-      {attackModal && (
+          {attackModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-4">
             <div className="mb-2 text-sm text-zinc-200">
@@ -808,52 +837,71 @@ async function openRuns(defense) {
           </div>
         </div>
       )}
+
       {runsModal && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
-    <div className="w-full max-w-4xl rounded-xl border border-zinc-700 bg-zinc-900 p-4">
-      <div className="mb-3 text-sm text-zinc-200">
-        Runs · {buildSlotLabel(
-          runsModal.bastion,
-          runsModal.type,
-          runsModal.tower,
-          runsModal.team
-        )}
-      </div>
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 p-4">
+          <div className="flex min-h-full items-start justify-center py-6">
+            <div className="w-full max-w-4xl rounded-xl border border-zinc-700 bg-zinc-900 p-4">
+              <div className="mb-3 text-sm text-zinc-200">
+                Runs · {buildSlotLabel(
+                  runsModal.bastion,
+                  runsModal.type,
+                  runsModal.tower,
+                  runsModal.team
+                )}
+              </div>
 
-      {runsLoading ? (
-        <div className="text-zinc-400">Chargement...</div>
-      ) : runs.length === 0 ? (
-        <div className="text-zinc-500">Aucun run trouvé</div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4">
-  {runs.map((run, i) => (
-    <div key={i} className="flex w-full justify-center">
-      <div className="w-full max-w-3xl aspect-video overflow-hidden rounded-xl border border-zinc-800">
-        <iframe
-          src={getYoutubeEmbedUrl(run.youtube_url)}
-          className="h-full w-full"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowFullScreen
-          loading="lazy"
-          referrerPolicy="strict-origin-when-cross-origin"
-        />
-      </div>
-    </div>
-  ))}
-</div>
+              {runsLoading ? (
+                <div className="text-zinc-400">Chargement...</div>
+              ) : runs.length === 0 ? (
+                <div className="text-zinc-500">Aucun run trouvé</div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4">
+                  {runs.map((run, i) => (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-zinc-700 bg-zinc-800/60 p-3"
+                    >
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-sm font-semibold text-white">
+                        Strat #{run.strat_id}
+                        </span>
+
+                        <button
+                          onClick={() => handleDeleteStrat(run)}
+                          className="rounded bg-red-600 px-2 py-1 text-xs hover:bg-red-700"
+                        >
+                          Supprimer
+                        </button>
+                      </div>
+
+                      <div className="w-full aspect-video overflow-hidden rounded-xl border border-zinc-800">
+                        <iframe
+                          src={getYoutubeEmbedUrl(run.youtube_url)}
+                          className="h-full w-full"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          allowFullScreen
+                          loading="lazy"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => setRunsModal(null)}
+                  className="rounded bg-zinc-700 px-3 py-1 text-sm text-white"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
-
-      <div className="mt-4 flex justify-end">
-        <button
-          onClick={() => setRunsModal(null)}
-          className="rounded bg-zinc-700 px-3 py-1 text-sm text-white"
-        >
-          Fermer
-        </button>
-      </div>
-    </div>
-  </div>
-)}
     </div>
   );
 }
