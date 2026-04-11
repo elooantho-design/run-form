@@ -6,6 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
 const MAX_SLOTS = 5;
 
 const HEROES_FALLBACK = ["laya"];
@@ -213,6 +221,22 @@ export default function RunSearchGrid() {
   const [loadingSearch, setLoadingSearch] = useState(false);
   const apiBase = useMemo(() => getApiBase(), []);
   const [activePos, setActivePos] = useState(null);
+    const [botCommand, setBotCommand] = useState("");
+  const [botModalOpen, setBotModalOpen] = useState(false);
+  const [botQueryItems, setBotQueryItems] = useState([]);
+    const specialDiscordId = "266913883170668545";
+
+  const session = useMemo(() => {
+    if (typeof window === "undefined") return null;
+
+    try {
+      return JSON.parse(localStorage.getItem("guildDashboardSession") || "null");
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const isSpecialExternal = String(session?.discordId || "") === String(specialDiscordId);
 
   const [heroPool, setHeroPool] = useState(HEROES_FALLBACK);
   const [heroesLoading, setHeroesLoading] = useState(false);
@@ -271,6 +295,54 @@ const gridSpec = useMemo(() => {
     setResults(data || []);
   } catch (e) {
     console.error("Erreur recherche :", e);
+  } finally {
+    setLoadingSearch(false);
+  }
+}
+
+function openBotCommandSearch() {
+  const parsed = parseBotCommand(botCommand);
+
+  if (!parsed.length) {
+    return;
+  }
+
+  setBotQueryItems(parsed);
+  setBotModalOpen(true);
+}
+
+async function runBotCommandSearch() {
+  const queryItems = botQueryItems
+    .map((item) => ({
+      champion: item.champion,
+      position: String(item.position || "").trim() || undefined,
+      direction: String(item.direction || "").trim().toUpperCase() || undefined,
+    }))
+    .filter((item) => item.champion);
+
+  if (!queryItems.length) return;
+
+  try {
+    setLoadingSearch(true);
+
+    const res = await fetch(`${apiBase}/api/run-search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ queryItems }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status} - ${text.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    setResults(data || []);
+    setBotModalOpen(false);
+  } catch (e) {
+    console.error("Erreur recherche bot :", e);
   } finally {
     setLoadingSearch(false);
   }
@@ -405,6 +477,37 @@ const gridSpec = useMemo(() => {
       setHeroQuery("");
     }
   }, [slots, activePos]);
+
+function parseBotCommand(input) {
+  const text = String(input || "").trim().toLowerCase();
+  const regex = /personnage_\d+\s*:\s*([a-z0-9_à-ÿ-]+)/gi;
+
+  const items = [];
+  let match;
+
+  while ((match = regex.exec(text))) {
+    const champion = String(match[1] || "").trim();
+    if (!champion) continue;
+
+    items.push({
+      champion,
+      position: "",
+      direction: "",
+    });
+  }
+
+  return items.slice(0, 5);
+}
+
+function updateBotQueryItem(index, patch) {
+  setBotQueryItems((prev) =>
+    prev.map((item, i) =>
+      i === index
+        ? { ...item, ...patch }
+        : item
+    )
+  );
+}
 
 function copyToClipboard(text) {
   if (!text) return;
@@ -769,6 +872,40 @@ function copyToClipboard(text) {
 
           <Card className="rounded-3xl border-zinc-800 bg-zinc-950/60">
             <CardHeader className="border-b border-zinc-800">
+                        {isSpecialExternal && (
+            <Card className="rounded-3xl border-zinc-800 bg-zinc-950/60">
+              <CardHeader className="border-b border-zinc-800">
+                <CardTitle className="text-base text-zinc-100">
+                  Recherche via commande bot
+                </CardTitle>
+              </CardHeader>
+
+              <CardContent className="p-4">
+                <div className="space-y-3">
+                  <div className="text-sm text-zinc-400">
+                    Colle la commande générée par son bot, puis affine si besoin.
+                  </div>
+
+                  <div className="flex flex-col gap-2 md:flex-row">
+                    <textarea
+                      value={botCommand}
+                      onChange={(e) => setBotCommand(e.target.value)}
+                      placeholder="Ex: recherche personnage_1:comtedracula personnage_2:nezha ..."
+                      className="min-h-[90px] flex-1 rounded-2xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none"
+                    />
+
+                    <Button
+                      type="button"
+                      onClick={openBotCommandSearch}
+                      className="rounded-2xl"
+                    >
+                      Lancer la recherche
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
               <CardTitle className="text-base text-zinc-100">Résultats</CardTitle>
             </CardHeader>
 
@@ -872,6 +1009,84 @@ function copyToClipboard(text) {
         </div>
         </CardContent>
       </Card>
+            {botModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-3xl rounded-3xl border border-zinc-800 bg-zinc-900 shadow-2xl">
+            <div className="border-b border-zinc-800 px-6 py-4">
+              <div className="text-lg font-semibold text-zinc-100">
+                Affiner la recherche
+              </div>
+              <div className="mt-1 text-sm text-zinc-400">
+                Tu peux laisser vide pour chercher uniquement par héros, ou préciser
+                certaines positions et directions.
+              </div>
+            </div>
+
+            <div className="space-y-3 px-6 py-4">
+              {botQueryItems.map((item, index) => (
+                <div
+                  key={`${item.champion}-${index}`}
+                  className="grid grid-cols-1 gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3 md:grid-cols-[180px_1fr_120px]"
+                >
+                  <div className="flex items-center text-sm font-medium text-zinc-100">
+                    {item.champion}
+                  </div>
+
+                  <Input
+                    value={item.position}
+                    onChange={(e) =>
+                      updateBotQueryItem(index, {
+                        position: e.target.value.toUpperCase(),
+                      })
+                    }
+                    placeholder="Position (ex: C4)"
+                    className="rounded-2xl border-zinc-700 bg-zinc-950 text-zinc-100"
+                  />
+
+                  <Select
+                    value={item.direction || "__empty__"}
+                    onValueChange={(value) =>
+                      updateBotQueryItem(index, {
+                        direction: value === "__empty__" ? "" : value,
+                      })
+                    }
+                  >
+                    <SelectTrigger className="rounded-2xl border-zinc-700 bg-zinc-950 text-zinc-100">
+                      <SelectValue placeholder="Direction" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__empty__">Aucune</SelectItem>
+                      <SelectItem value="N">N</SelectItem>
+                      <SelectItem value="S">S</SelectItem>
+                      <SelectItem value="E">E</SelectItem>
+                      <SelectItem value="O">O</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-zinc-800 px-6 py-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setBotModalOpen(false)}
+                className="rounded-2xl border-zinc-700 text-zinc-200"
+              >
+                Annuler
+              </Button>
+
+              <Button
+                type="button"
+                onClick={runBotCommandSearch}
+                className="rounded-2xl"
+              >
+                Rechercher
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
