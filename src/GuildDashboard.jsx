@@ -516,6 +516,7 @@ const [clusterMemberSearchResults, setClusterMemberSearchResults] = useState([])
   const [conditionDefenseId, setConditionDefenseId] = useState("");
   const [defenseTypeFilter, setDefenseTypeFilter] = useState("Tous");
   const [awakeningFactionFilter, setAwakeningFactionFilter] = useState("Tous");
+  const [awakeningRoleFilter, setAwakeningRoleFilter] = useState("Tous");
   const [selectedMetaDefenseForCompletion, setSelectedMetaDefenseForCompletion] = useState(null);
 const [reproHeroes, setReproHeroes] = useState(["", "", "", "", ""]);
 const [reproConditions, setReproConditions] = useState([0, 0, 0, 0, 0]);
@@ -901,7 +902,7 @@ useEffect(() => {
 
         const { data, error } = await supabase
         .from("champions")
-        .select("id, name, faction")
+        .select("id, name, faction, role")
         .order("name", { ascending: true });
 
       if (error) {
@@ -1722,22 +1723,46 @@ const openPbEditDialog = (slot, memberId) => {
     return allHeroes.filter((hero) => hero.toLowerCase().includes(q));
   }, [heroSearch, allHeroes]);
 
-  const filteredMetaHeroes = useMemo(() => {
-  if (awakeningFactionFilter === "Tous") {
-    return metaHeroes;
-  }
 
+
+const filteredMetaHeroes = useMemo(() => {
   return metaHeroes.filter((heroName) => {
     const champion = allHeroesData.find((item) => item.name === heroName);
 
-    if (!champion?.faction) return false;
+    if (!champion) return false;
 
-    return champion.faction
-      .split(",")
-      .map((f) => f.trim().toLowerCase())
-      .includes(awakeningFactionFilter.toLowerCase());
+    const factionMatch =
+      awakeningFactionFilter === "Tous"
+        ? true
+        : String(champion.faction || "")
+            .split(",")
+            .map((f) => f.trim().toLowerCase())
+            .includes(awakeningFactionFilter.toLowerCase());
+
+    const roleMatch =
+      awakeningRoleFilter === "Tous"
+        ? true
+        : String(champion.role || "").trim().toLowerCase() ===
+          awakeningRoleFilter.toLowerCase();
+
+    return factionMatch && roleMatch;
   });
-}, [metaHeroes, awakeningFactionFilter, allHeroesData]);
+}, [metaHeroes, awakeningFactionFilter, awakeningRoleFilter, allHeroesData]);
+
+const availableHeroRoles = useMemo(() => {
+  return [...new Set(
+    allHeroesData
+      .map((hero) => String(hero.role || "").trim())
+      .filter(Boolean)
+  )].sort((a, b) =>
+    a.localeCompare(b, "fr", { sensitivity: "base" })
+  );
+}, [allHeroesData]);
+
+function resetAwakeningFilters() {
+  setAwakeningFactionFilter("Tous");
+  setAwakeningRoleFilter("Tous");
+}
 
 const metaDefenseCounters = useMemo(
   () => getMetaDefenseCounters(defenses, members),
@@ -5632,34 +5657,88 @@ if (isExternal) {
               </div>
             </div>
 
-            <div className="space-y-3">
-              <button
-                type="button"
-                onClick={() => setAwakeningFactionFilter("Tous")}
-                className={`w-full rounded-2xl border px-4 py-3 text-left font-medium transition ${
-                  awakeningFactionFilter === "Tous"
-                    ? "border-yellow-500 bg-yellow-400 text-black"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
-                }`}
-              >
-                Tous
-              </button>
+<div className="space-y-4">
+  <div>
+    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+      Factions
+    </div>
 
-              {heroFaction.map((faction) => (
-                <button
-                  key={faction}
-                  type="button"
-                  onClick={() => setAwakeningFactionFilter(faction)}
-                  className={`w-full rounded-2xl border px-4 py-3 text-left font-medium transition ${
-                    awakeningFactionFilter === faction
-                      ? "border-yellow-500 bg-yellow-400 text-black"
-                      : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
-                  }`}
-                >
-                  {faction}
-                </button>
-              ))}
-            </div>
+    <div className="space-y-3">
+      <button
+        type="button"
+        onClick={() => setAwakeningFactionFilter("Tous")}
+        className={`w-full rounded-2xl border px-4 py-3 text-left font-medium transition ${
+          awakeningFactionFilter === "Tous"
+            ? "border-yellow-500 bg-yellow-400 text-black"
+            : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+        }`}
+      >
+        Toutes
+      </button>
+
+      {heroFaction.map((faction) => (
+        <button
+          key={faction}
+          type="button"
+          onClick={() => setAwakeningFactionFilter(faction)}
+          className={`w-full rounded-2xl border px-4 py-3 text-left font-medium capitalize transition ${
+            awakeningFactionFilter === faction
+              ? "border-yellow-500 bg-yellow-400 text-black"
+              : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+          }`}
+        >
+          {faction}
+        </button>
+      ))}
+    </div>
+  </div>
+
+  <div className="border-t border-zinc-800 pt-4">
+    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+      Rôles
+    </div>
+
+    <div className="space-y-3">
+      <button
+        type="button"
+        onClick={() => setAwakeningRoleFilter("Tous")}
+        className={`w-full rounded-2xl border px-4 py-3 text-left font-medium transition ${
+          awakeningRoleFilter === "Tous"
+            ? "border-cyan-500 bg-cyan-400 text-black"
+            : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+        }`}
+      >
+        Tous
+      </button>
+
+      {availableHeroRoles.map((role) => (
+        <button
+          key={role}
+          type="button"
+          onClick={() => setAwakeningRoleFilter(role)}
+          className={`w-full rounded-2xl border px-4 py-3 text-left font-medium capitalize transition ${
+            awakeningRoleFilter === role
+              ? "border-cyan-500 bg-cyan-400 text-black"
+              : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
+          }`}
+        >
+          {role}
+        </button>
+      ))}
+    </div>
+  </div>
+
+  <div className="border-t border-zinc-800 pt-4">
+    <Button
+      type="button"
+      variant="outline"
+      onClick={resetAwakeningFilters}
+      className="w-full rounded-2xl border-zinc-700 text-zinc-200"
+    >
+      Reset filtres
+    </Button>
+  </div>
+</div>
           </div>
 
           <div className="p-5">
