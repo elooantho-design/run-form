@@ -77,7 +77,22 @@ function getYoutubeEmbedUrl(url) {
 
 export default function GvgPanelTab() {
   const apiBase = useMemo(() => getApiBase(), []);
+  const allowedDiscordId = "931555574846484560";
+
+const session = useMemo(() => {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return JSON.parse(localStorage.getItem("guildDashboardSession") || "null");
+  } catch {
+    return null;
+  }
+}, []);
+
+const canUsePanelActions =
+  String(session?.discordId || "") === allowedDiscordId;
 const [guild, setGuild] = useState("G1");
+
 const [items, setItems] = useState([]);
 const [loading, setLoading] = useState(false);
 const [message, setMessage] = useState("");
@@ -301,6 +316,7 @@ async function saveAttackCode() {
 }
 
 function buildAhkCommand() {
+    if (!canUsePanelActions) return;
   const selected = items
     .filter((d) => d.record_status === "a_record")
     .sort((a, b) => {
@@ -334,6 +350,7 @@ function buildAhkCommand() {
 }
 
 async function markRecordOk() {
+    if (!canUsePanelActions) return;
   try {
     setMessage("");
 
@@ -372,6 +389,7 @@ async function markRecordOk() {
 }
 
 async function pushToBase() {
+    if (!canUsePanelActions) return;
   try {
     setMessage("");
 
@@ -557,26 +575,41 @@ const handleDeleteStrat = async (run) => {
     G2
   </button>
 
-  <button
-    onClick={buildAhkCommand}
-    className="rounded bg-green-600 px-3 py-1 text-sm text-white"
-  >
-    🎬 Record
-  </button>
+<button
+  onClick={buildAhkCommand}
+  disabled={!canUsePanelActions}
+  className={`rounded px-3 py-1 text-sm text-white ${
+    canUsePanelActions
+      ? "bg-green-600"
+      : "cursor-not-allowed bg-zinc-700 opacity-50"
+  }`}
+>
+  🎬 Record
+</button>
 
-  <button
-    onClick={markRecordOk}
-    className="rounded bg-blue-600 px-3 py-1 text-sm text-white"
-  >
-    ✅ Record OK
-  </button>
+<button
+  onClick={markRecordOk}
+  disabled={!canUsePanelActions}
+  className={`rounded px-3 py-1 text-sm text-white ${
+    canUsePanelActions
+      ? "bg-blue-600"
+      : "cursor-not-allowed bg-zinc-700 opacity-50"
+  }`}
+>
+  ✅ Record OK
+</button>
 
-  <button
-    onClick={pushToBase}
-    className="rounded bg-amber-600 px-3 py-1 text-sm text-white"
-  >
-    📦 Push en base
-  </button>
+<button
+  onClick={pushToBase}
+  disabled={!canUsePanelActions}
+  className={`rounded px-3 py-1 text-sm text-white ${
+    canUsePanelActions
+      ? "bg-amber-600"
+      : "cursor-not-allowed bg-zinc-700 opacity-50"
+  }`}
+>
+  📦 Push en base
+</button>
 </div>
 
       {message ? (
