@@ -465,6 +465,18 @@ function getDemonicMonsterImageUrl(slug) {
 
 const guildCodes = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const defaultPasswords = ["motdepassemembre", "motdepasseadmin"];
+
+function normalizeDefenseTier(tier) {
+  const value = String(tier || "").trim().toLowerCase();
+
+  if (value === "meta_s" || value === "meta s") return "meta_s";
+  if (value === "meta_a" || value === "meta a") return "meta_a";
+  if (value === "meta") return "meta";
+  if (value === "secondaire") return "secondaire";
+
+  return value;
+}
+
 export default function GuildDashboard() {
 function extractGuildCodeFromPath(pathname) {
   const parts = pathname.split("/").filter(Boolean).map((part) => part.toUpperCase());
@@ -594,6 +606,10 @@ const [testWishInput, setTestWishInput] = useState([]);
 const [highlightedIntersaisonRowId, setHighlightedIntersaisonRowId] = useState(null);
 const [intersaisonSourceFilter, setIntersaisonSourceFilter] = useState("Tous");
 const [intersaisonSourceMenuOpen, setIntersaisonSourceMenuOpen] = useState(false);
+const [renameDefenseDialogOpen, setRenameDefenseDialogOpen] = useState(false);
+const [renameDefenseTarget, setRenameDefenseTarget] = useState(null);
+const [renameDefenseName, setRenameDefenseName] = useState("");
+const [renameDefenseFaction, setRenameDefenseFaction] = useState("");
 
 
 const guildCodes = Array.from(
@@ -3377,6 +3393,49 @@ const canDeleteDefense = (defense) => {
   return defense.guildCode === activeGuildCode;
 };
 
+const saveDefenseIdentity = async () => {
+  if (!renameDefenseTarget?.id) return;
+
+  const nextName = String(renameDefenseName || "").trim();
+  const nextFaction = String(renameDefenseFaction || "").trim();
+
+  if (!nextName) {
+    alert("Le titre de la défense ne peut pas être vide.");
+    return;
+  }
+
+  const { error } = await supabase
+    .from("guild_defenses")
+    .update({
+      name: nextName,
+      faction: nextFaction || null,
+    })
+    .eq("id", renameDefenseTarget.id);
+
+  if (error) {
+    console.error("Erreur mise à jour titre/faction défense:", error);
+    alert(`Mise à jour impossible : ${error.message || "erreur inconnue"}`);
+    return;
+  }
+
+  setDefenses((prev) =>
+    prev.map((defense) =>
+      defense.id === renameDefenseTarget.id
+        ? {
+            ...defense,
+            name: nextName,
+            faction: nextFaction,
+          }
+        : defense
+    )
+  );
+
+  setRenameDefenseDialogOpen(false);
+  setRenameDefenseTarget(null);
+  setRenameDefenseName("");
+  setRenameDefenseFaction("");
+};
+
 const deleteDefense = async (defense) => {
   if (!defense?.id) return;
   if (!canDeleteDefense(defense)) return;
@@ -5121,30 +5180,29 @@ if (isExternal) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredMembers.map((member) => {
-                      const completion = trackedMetaDefense
-                        ? getMemberDefenseCompletion(member, trackedMetaDefense)
-                        : 0;
-                      return (
-<TableRow
-  key={member.id}
-  className={`cursor-pointer border-zinc-800 ${
-    memberLimitExceeded && latestMember?.id === member.id
-      ? "bg-red-500/20 hover:bg-red-500/25"
-      : selectedId === member.id
-      ? "bg-zinc-800/60"
-      : "hover:bg-zinc-900"
-  }`}
-  onClick={() => setSelectedId(member.id)}
-
-                        >
-                          <TableCell>
-                            <div className="flex items-center gap-3">
-                              <Avatar className="rounded-2xl">
-                                <AvatarFallback className="rounded-2xl bg-zinc-800 text-zinc-200">
-                                  {member.name.slice(0, 2).toUpperCase()}
-                                </AvatarFallback>
-                              </Avatar>
+{filteredMembers.map((member, index) => {
+  const completion = trackedMetaDefense
+    ? getMemberDefenseCompletion(member, trackedMetaDefense)
+    : 0;
+  return (
+    <TableRow
+      key={member.id}
+      className={`cursor-pointer border-zinc-800 ${
+        memberLimitExceeded && latestMember?.id === member.id
+          ? "bg-red-500/20 hover:bg-red-500/25"
+          : selectedId === member.id
+          ? "bg-zinc-800/60"
+          : "hover:bg-zinc-900"
+      }`}
+      onClick={() => setSelectedId(member.id)}
+    >
+      <TableCell>
+        <div className="flex items-center gap-3">
+          <Avatar className="rounded-2xl">
+            <AvatarFallback className="rounded-2xl bg-zinc-800 text-zinc-200">
+              {index + 1}
+            </AvatarFallback>
+          </Avatar>
                               <div>
                                 <div className="font-medium text-zinc-50">{member.name}</div>
                                 <div className="text-xs text-zinc-300">{member.defense1} / {member.defense2}</div>
@@ -5370,21 +5428,26 @@ if (isExternal) {
             
 
 <Dialog open={messageDialogOpen} onOpenChange={setMessageDialogOpen}>
+{false && (
   <Button
     className="w-fit rounded-2xl"
     onClick={() => requestAwakeningUpdate(selectedMember.id)}
     disabled={!isAdmin}
   >
     <Send className="mr-2 h-4 w-4" /> Demander les éveils
-            </Button>
-<Button
-  className="w-fit rounded-2xl"
-  onClick={() => sendDefenseToMember(selectedMember.id)}
-  disabled={!isAdmin || sendingDefense}
->
-  <Send className="mr-2 h-4 w-4" />
-  {sendingDefense ? "Envoi en cours..." : "Envoyer défense"}
-</Button>
+  </Button>
+)}
+
+{false && (
+  <Button
+    className="w-fit rounded-2xl"
+    onClick={() => sendDefenseToMember(selectedMember.id)}
+    disabled={!isAdmin || sendingDefense}
+  >
+    <Send className="mr-2 h-4 w-4" />
+    {sendingDefense ? "Envoi en cours..." : "Envoyer défense"}
+  </Button>
+)}
 
   <DialogContent className="max-w-lg rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
     <DialogHeader>
@@ -5567,17 +5630,21 @@ if (isExternal) {
                           </Badge>
                         </div>
 
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {defense.slots.map((slot) => (
-                            <Badge
-                              key={`${defense.id}-${slot}`}
-                              variant="outline"
-                              className="rounded-xl border-zinc-700 text-zinc-200"
-                            >
-                              {slot}
-                            </Badge>
-                          ))}
-                        </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {defense.slots.map((slot) => {
+                      const awakening = selectedMember?.awakenings?.[slot] ?? -1;
+
+                      return (
+                        <Badge
+                          key={`${defense.id}-${slot}`}
+                          variant="outline"
+                          className="rounded-xl border-zinc-700 text-zinc-200"
+                        >
+                          {slot} {awakening >= 0 ? `A${awakening}` : ""}
+                        </Badge>
+                      );
+                    })}
+                  </div>
 
                         {!defense.analysis.isCompatible && (
                           <div className="mt-3 space-y-2 text-sm">
@@ -6573,19 +6640,38 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
     </Select>
   </div>
 
-  <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              {defenses
-  .filter((defense) =>
-    defenseFactionFilter === "Tous"
-      ? true
-      : defense.faction === defenseFactionFilter
-  )
-  .map((defense) => (
-                <Card key={defense.id} className="rounded-3xl border-zinc-800 bg-zinc-900/70">
+<div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+  {defenses
+    .filter((defense) =>
+      defenseFactionFilter === "Tous"
+        ? true
+        : defense.faction === defenseFactionFilter
+    )
+    .map((defense) => (
+<Card
+  key={defense.id}
+  className={`rounded-3xl border shadow-2xl ${
+    normalizeDefenseTier(defense.tier) === "meta_s"
+      ? "border-blue-500 bg-blue-900/35"
+      : normalizeDefenseTier(defense.tier) === "meta_a"
+      ? "border-emerald-500 bg-emerald-900/35"
+      : "border-zinc-800 bg-zinc-900/70"
+  }`}
+>
                   <CardHeader>
                     <div className="flex items-start justify-between gap-3">
                     <div>
-<CardTitle className="text-lg text-zinc-50">{defense.name}</CardTitle>
+<CardTitle
+  className="cursor-pointer text-lg text-zinc-50 hover:text-emerald-300"
+  onClick={() => {
+    setRenameDefenseTarget(defense);
+    setRenameDefenseName(defense.name || "");
+    setRenameDefenseFaction(defense.faction || "");
+    setRenameDefenseDialogOpen(true);
+  }}
+>
+  {defense.name}
+</CardTitle>
 <CardDescription>
   {defense.tier} • {defense.type}
   {defense.faction ? ` • ${defense.faction}` : ""}
@@ -6637,9 +6723,42 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
     <Trash2 className="h-4 w-4" />
   </Button>
 
-  <Badge className={defense.tier === "Meta" ? "rounded-xl bg-emerald-500/15 text-emerald-300" : "rounded-xl bg-zinc-800 text-zinc-300"}>
-    {defense.tier}
-  </Badge>
+<Badge
+  onClick={async () => {
+    const currentTier = normalizeDefenseTier(defense.tier);
+    const nextTier =
+      currentTier === "meta_s"
+        ? "meta_a"
+        : currentTier === "meta_a"
+        ? "secondaire"
+        : "meta_s";
+
+    const { error } = await supabase
+      .from("guild_defenses")
+      .update({ tier: nextTier })
+      .eq("id", defense.id);
+
+    if (!error) {
+      setDefenses((prev) =>
+        prev.map((d) =>
+          d.id === defense.id ? { ...d, tier: nextTier } : d
+        )
+      );
+    }
+  }}
+  className={`cursor-pointer rounded-xl ${
+    normalizeDefenseTier(defense.tier) === "meta_s" ||
+    normalizeDefenseTier(defense.tier) === "meta_a"
+      ? "bg-yellow-500/15 text-yellow-300"
+      : "bg-zinc-800 text-zinc-300"
+  }`}
+>
+  {normalizeDefenseTier(defense.tier) === "meta_s"
+    ? "Meta S"
+    : normalizeDefenseTier(defense.tier) === "meta_a"
+    ? "Meta A"
+    : "Secondaire"}
+</Badge>
 </div>
                     </div>
                   </CardHeader>
@@ -6730,23 +6849,30 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
       sensitivity: "base",
     });
   })
-  .map((defense) => {
-            const alreadyImported = activeDashboardDefenseRootIds.has(
-              getDefenseRootId(defense)
-            );
+.map((defense) => {
+  const alreadyImported = activeDashboardDefenseRootIds.has(
+    getDefenseRootId(defense)
+  );
+  const normalizedTier = normalizeDefenseTier(defense.tier);
 
-            return (
-              <Card
-                key={`library-${defense.id}`}
-                className="rounded-3xl border-zinc-800 bg-zinc-900/70"
-              >
-                <CardHeader>
-<div className="flex items-start justify-between gap-3">
-  <div>
-    <div className="flex items-center gap-2">
-      <CardTitle className="text-lg text-zinc-50">
-        {defense.name}
-      </CardTitle>
+return (
+  <Card
+    key={`library-${defense.id}`}
+    className={`rounded-3xl border shadow-2xl ${
+      normalizedTier === "meta_s"
+        ? "border-blue-500 bg-blue-900/35"
+        : normalizedTier === "meta_a"
+        ? "border-emerald-500 bg-emerald-900/35"
+        : "border-zinc-800 bg-zinc-900/70"
+    }`}
+  >
+    <CardHeader>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <CardTitle className="text-lg text-zinc-50">
+              {defense.name}
+            </CardTitle>
 
       {(defenseLikesCountByRootId.get(getDefenseRootId(defense)) || 0) >= 5 && (
         <Badge className="rounded-xl bg-orange-500/15 text-orange-300">
@@ -7147,6 +7273,82 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
     </CardContent>
   </Card>
 </TabsContent>
+<Dialog
+  open={renameDefenseDialogOpen}
+  onOpenChange={(open) => {
+    setRenameDefenseDialogOpen(open);
+
+    if (!open) {
+      setRenameDefenseTarget(null);
+      setRenameDefenseName("");
+      setRenameDefenseFaction("");
+    }
+  }}
+>
+  <DialogContent className="max-w-md rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
+    <DialogHeader>
+      <DialogTitle>Modifier le titre de la défense</DialogTitle>
+    </DialogHeader>
+
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <div className="text-sm text-zinc-400">Titre</div>
+        <Input
+          value={renameDefenseName}
+          onChange={(e) => setRenameDefenseName(e.target.value)}
+          className="rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100"
+          placeholder="Nom de la défense"
+        />
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-sm text-zinc-400">Faction</div>
+        <Select
+          value={renameDefenseFaction || "none"}
+          onValueChange={(value) =>
+            setRenameDefenseFaction(value === "none" ? "" : value)
+          }
+        >
+          <SelectTrigger className="rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
+            <SelectValue placeholder="Choisir une faction" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Aucune faction</SelectItem>
+            <SelectItem value="nordiste">nordiste</SelectItem>
+            <SelectItem value="cauchemar">cauchemar</SelectItem>
+            <SelectItem value="sentinelle">sentinelle</SelectItem>
+            <SelectItem value="esoterique">esoterique</SelectItem>
+            <SelectItem value="perceur">perceur</SelectItem>
+            <SelectItem value="chaotique">chaotique</SelectItem>
+            <SelectItem value="cultiste">cultiste</SelectItem>
+            <SelectItem value="infernal">infernal</SelectItem>
+            <SelectItem value="innommable">innommable</SelectItem>
+            <SelectItem value="arbitre">arbitre</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          className="rounded-2xl border-zinc-700 bg-transparent text-zinc-200 hover:bg-zinc-800"
+          onClick={() => {
+            setRenameDefenseDialogOpen(false);
+            setRenameDefenseTarget(null);
+            setRenameDefenseName("");
+            setRenameDefenseFaction("");
+          }}
+        >
+          Annuler
+        </Button>
+
+        <Button className="rounded-2xl" onClick={saveDefenseIdentity}>
+          Enregistrer
+        </Button>
+      </div>
+    </div>
+  </DialogContent>
+</Dialog>
 {editorOpen && editingDefense && (
   <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
     <CardHeader>
