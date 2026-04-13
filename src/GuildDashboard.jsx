@@ -1964,6 +1964,13 @@ const visibleCompatibleDefenses = useMemo(() => {
 const defense1Tone = getAssignedDefenseTone(selectedDefense1, selectedMember);
 const defense2Tone = getAssignedDefenseTone(selectedDefense2, selectedMember);
 
+const openDefensePreview = (defense) => {
+  if (!defense?.image) return;
+
+  setPreviewImageUrl(defense.image);
+  setPreviewImageOpen(true);
+};
+
 const openDemonLevelDialog = (monster) => {
   if (!canEditDemonicMonsters) return;
 
@@ -5623,19 +5630,30 @@ if (isExternal) {
                             : "Aucune défense assignée"}
                         </div>
 
-                        {selectedDefense1 && (
-                            <div className="mt-4 flex justify-end">
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                className="rounded-xl border-zinc-700 bg-transparent"
-                                onClick={() => clearAssignedDefense(1)}
-                                disabled={!isAdmin}
-                            >
-                                Retirer
-                            </Button>
-                            </div>
-                        )}
+            {selectedDefense1 && (
+              <div className="mt-4 flex justify-between gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-xl border-zinc-700 bg-transparent"
+                  onClick={() => openDefensePreview(selectedDefense1)}
+                  disabled={!selectedDefense1?.image}
+                  title="Voir l’image complète"
+                >
+                  👀
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-xl border-zinc-700 bg-transparent"
+                  onClick={() => clearAssignedDefense(1)}
+                  disabled={!isAdmin}
+                >
+                  Retirer
+                </Button>
+              </div>
+)}
                         </div>
 
                     <div className={`rounded-2xl border p-4 ${defense2Tone.card}`}>
@@ -5656,19 +5674,30 @@ if (isExternal) {
                         : "Aucune défense assignée"}
                     </div>
 
-                    {selectedDefense2 && (
-                        <div className="mt-4 flex justify-end">
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            className="rounded-xl border-zinc-700 bg-transparent"
-                            onClick={() => clearAssignedDefense(2)}
-                            disabled={!isAdmin}
-                        >
-                            Retirer
-                        </Button>
-                        </div>
-                    )}
+{selectedDefense2 && (
+  <div className="mt-4 flex justify-between gap-2">
+    <Button
+      size="sm"
+      variant="outline"
+      className="rounded-xl border-zinc-700 bg-transparent"
+      onClick={() => openDefensePreview(selectedDefense2)}
+      disabled={!selectedDefense2?.image}
+      title="Voir l’image complète"
+    >
+      👀
+    </Button>
+
+    <Button
+      size="sm"
+      variant="outline"
+      className="rounded-xl border-zinc-700 bg-transparent"
+      onClick={() => clearAssignedDefense(2)}
+      disabled={!isAdmin}
+    >
+      Retirer
+    </Button>
+  </div>
+)}
                     </div>
                     </div>
 
@@ -5759,25 +5788,36 @@ if (isExternal) {
                             )}
                           </div>
                         )}
-                        <div className="mt-4 flex flex-wrap gap-2">
-                        <Button
-                            size="sm"
-                            className="rounded-xl bg-zinc-950 text-zinc-100 hover:bg-zinc-900"
-                            onClick={() => assignDefense(1, defense)}
-                            disabled={!isAdmin}
-                        >
-                            Mettre en Défense 1
-                        </Button>
+<div className="mt-4 flex flex-wrap items-center gap-2">
+  <Button
+    size="sm"
+    className="rounded-xl bg-zinc-950 text-zinc-100 hover:bg-zinc-900"
+    onClick={() => assignDefense(1, defense)}
+    disabled={!isAdmin}
+  >
+    Mettre en Défense 1
+  </Button>
 
-                        <Button
-                            size="sm"
-                            className="rounded-xl bg-zinc-950 text-zinc-100 hover:bg-zinc-900"
-                            onClick={() => assignDefense(2, defense)}
-                            disabled={!isAdmin}
-                        >
-                            Mettre en Défense 2
-                        </Button>
-                        </div>
+  <Button
+    size="sm"
+    className="rounded-xl bg-zinc-950 text-zinc-100 hover:bg-zinc-900"
+    onClick={() => assignDefense(2, defense)}
+    disabled={!isAdmin}
+  >
+    Mettre en Défense 2
+  </Button>
+
+  <Button
+    size="sm"
+    variant="outline"
+    className="rounded-xl border-zinc-700 bg-transparent"
+    onClick={() => openDefensePreview(defense)}
+    disabled={!defense?.image}
+    title="Voir l’image complète"
+  >
+    👀
+  </Button>
+</div>
                       </div>
                     ))}
                   </div>
