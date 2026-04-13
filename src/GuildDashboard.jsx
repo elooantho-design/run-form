@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { DndContext, closestCenter } from "@dnd-kit/core";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import GvgCurrentTab from "@/components/GvgCurrentTab";
 import GvgAdminTab from "@/components/GvgAdminTab";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -448,9 +455,17 @@ console.assert(
     "https://guild-box.local/profile/1"
   );
   console.assert(msg.includes("https://guild-box.local/profile/1"), "discord message should include profile link");
-  const counters = getMetaDefenseCounters(defensesSeed, membersSeed);
-  console.assert(counters.length === 2, "should expose one counter per meta defense");
-  console.assert(counters[0]?.label === "Def méta 1", "counter labels should be ordered");
+const counters = getMetaDefenseCounters(
+  [
+    { ...defensesSeed[0], tier: "meta_s" },
+    { ...defensesSeed[1], tier: "secondaire" },
+    { ...defensesSeed[2], tier: "meta_a" },
+  ],
+  membersSeed
+);
+
+console.assert(counters.length === 2, "should expose one counter per meta defense");
+console.assert(counters[0]?.label === "Def méta 1", "counter labels should be ordered");
 }
 
 runSanityChecks();
@@ -483,6 +498,27 @@ function normalizeDefenseTier(tier) {
   if (value === "secondaire") return "secondaire";
 
   return value;
+}
+
+function SortableDefenseCard({ defense, children }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id: defense.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      {children}
+    </div>
+  );
 }
 
 export default function GuildDashboard() {
@@ -971,6 +1007,7 @@ useEffect(() => {
   guild_code,
   is_global,
   source_defense_id,
+  sort_order,
   created_at,
   guild_defense_slots (
     slot_index,
@@ -1014,6 +1051,7 @@ return {
   guildCode: row.guild_code,
   isGlobal: row.is_global,
   sourceDefenseId: row.source_defense_id,
+  sort_order: row.sort_order ?? 9999,
   slots: orderedSlots,
   conditions,
   image: row.image_url,
@@ -1021,7 +1059,11 @@ return {
 };
     });
 
-    setDefenses(mapped);
+    const sorted = [...mapped].sort(
+  (a, b) => (a.sort_order ?? 9999) - (b.sort_order ?? 9999)
+);
+
+setDefenses(sorted);
   }
 
   loadDefenses();
@@ -2207,7 +2249,37 @@ const updatePbRaw = async (entryId, nextValue) => {
   );
 };
 
+const handleDragEnd = async (event) => {
+  const { active, over } = event;
+
+  if (!over || active.id === over.id) return;
+
+  const oldIndex = defenses.findIndex((d) => d.id === active.id);
+  const newIndex = defenses.findIndex((d) => d.id === over.id);
+
+  if (oldIndex === -1 || newIndex === -1) return;
+
+  const updated = [...defenses];
+  const [movedItem] = updated.splice(oldIndex, 1);
+  updated.splice(newIndex, 0, movedItem);
+
+  const reordered = updated.map((d, index) => ({
+    ...d,
+    sort_order: index,
+  }));
+
+  setDefenses(reordered);
+
+  for (const def of reordered) {
+    await supabase
+      .from("guild_defenses")
+      .update({ sort_order: def.sort_order })
+      .eq("id", def.id);
+  }
+};
+
 const assignDefense = async (slot, defense) => {
+  
   if (!selectedMember?.id || !defense?.name) return;
 
   const column = slot === 1 ? "defense_1" : "defense_2";
@@ -2231,6 +2303,8 @@ const assignDefense = async (slot, defense) => {
     )
   );
 };
+
+
 
 const clearAssignedDefense = async (slot) => {
   if (!selectedMember?.id) return;
@@ -6704,8 +6778,10 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
   </Select>
 </div>
 
-<div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-{defenses
+<DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+<SortableContext
+  items={[...defenses]
+  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
   .filter((defense) => {
     const factionOk =
       defenseFactionFilter === "Tous"
@@ -6724,17 +6800,42 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
 
     return factionOk && typeOk && tierOk;
   })
-  .map((defense) => (
-<Card
-  key={defense.id}
-  className={`rounded-3xl border shadow-2xl ${
-    normalizeDefenseTier(defense.tier) === "meta_s"
-      ? "border-blue-500 bg-blue-900/35"
-      : normalizeDefenseTier(defense.tier) === "meta_a"
-      ? "border-emerald-500 bg-emerald-900/35"
-      : "border-zinc-800 bg-zinc-900/70"
-  }`}
+  .map((d) => d.id)}
+  strategy={verticalListSortingStrategy}
 >
+<div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+{[...defenses]
+  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+  .filter((defense) => {
+    const factionOk =
+      defenseFactionFilter === "Tous"
+        ? true
+        : defense.faction === defenseFactionFilter;
+
+    const typeOk =
+      defenseTypeFilter === "Tous"
+        ? true
+        : defense.type === defenseTypeFilter;
+
+    const tierOk =
+      workspaceTierFilter === "Tous"
+        ? true
+        : normalizeDefenseTier(defense.tier) === workspaceTierFilter;
+
+    return factionOk && typeOk && tierOk;
+  })
+.map((defense) => (
+  <SortableDefenseCard key={defense.id} defense={defense}>
+    <Card
+      
+      className={`rounded-3xl border shadow-2xl ${
+        normalizeDefenseTier(defense.tier) === "meta_s"
+          ? "border-blue-500 bg-blue-900/35"
+          : normalizeDefenseTier(defense.tier) === "meta_a"
+          ? "border-emerald-500 bg-emerald-900/35"
+          : "border-zinc-800 bg-zinc-900/70"
+      }`}
+    >
                   <CardHeader>
                     <div className="flex items-start justify-between gap-3">
                     <div>
@@ -6866,8 +6967,13 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
                     </div>
                   </CardContent>
                 </Card>
-              ))}
-            </div>
+              </SortableDefenseCard>
+            ))}
+          </div>
+
+        </SortableContext>
+      </DndContext>
+            
           </TabsContent>
 <TabsContent value="library">
   <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
