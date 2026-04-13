@@ -234,27 +234,35 @@ function formatDefenseCounterLabel(index) {
   return `Def méta ${index + 1}`;
 }
 
-function getMetaDefenseCounters(defenses, members) {
+function getMetaDefenseCounters(defenses, members, metaFilter = "all") {
   const usageMap = new Map();
 
   (members || []).forEach((member) => {
     const assigned = [...new Set([member.defense1, member.defense2])].filter(
-    (name) => name && name !== "—"
+      (name) => name && name !== "—"
     );
 
     assigned.forEach((name) => {
-    usageMap.set(name, (usageMap.get(name) || 0) + 1);
+      usageMap.set(name, (usageMap.get(name) || 0) + 1);
     });
   });
 
   return defenses
-    .filter((defense) => defense.tier === "Meta")
+    .filter((defense) => {
+      const tier = normalizeDefenseTier(defense.tier);
+
+      if (metaFilter === "meta_s") return tier === "meta_s";
+      if (metaFilter === "meta_a") return tier === "meta_a";
+
+      return tier === "meta_s" || tier === "meta_a";
+    })
     .sort((a, b) => a.id - b.id)
     .map((defense, index) => ({
       id: defense.id,
       label: formatDefenseCounterLabel(index),
       name: defense.name,
       count: usageMap.get(defense.name) || 0,
+      tier: normalizeDefenseTier(defense.tier),
     }));
 }
 
@@ -610,6 +618,9 @@ const [renameDefenseDialogOpen, setRenameDefenseDialogOpen] = useState(false);
 const [renameDefenseTarget, setRenameDefenseTarget] = useState(null);
 const [renameDefenseName, setRenameDefenseName] = useState("");
 const [renameDefenseFaction, setRenameDefenseFaction] = useState("");
+const [metaCounterFilter, setMetaCounterFilter] = useState("all");
+const [workspaceTierFilter, setWorkspaceTierFilter] = useState("Tous");
+const [compatibleTierFilter, setCompatibleTierFilter] = useState("Tous");
 
 
 const guildCodes = Array.from(
@@ -1781,8 +1792,8 @@ function resetAwakeningFilters() {
 }
 
 const metaDefenseCounters = useMemo(
-  () => getMetaDefenseCounters(defenses, members),
-  [defenses, members]
+  () => getMetaDefenseCounters(defenses, members, metaCounterFilter),
+  [defenses, members, metaCounterFilter]
 );
 
 const activeDashboardDefenseRootIds = useMemo(() => {
@@ -1878,26 +1889,35 @@ const selectedDefense2 = useMemo(
   [defenses, selectedMember?.defense2]
 );
 
-    const visibleCompatibleDefenses = useMemo(() => {
-    return compatibleDefenses.filter((defense) => {
-        const isVisibleByConflict = canShowDefenseForMember(
-        defense,
-        selectedDefense1,
-        selectedDefense2
-        );
+const visibleCompatibleDefenses = useMemo(() => {
+  return compatibleDefenses.filter((defense) => {
+    const isVisibleByConflict = canShowDefenseForMember(
+      defense,
+      selectedDefense1,
+      selectedDefense2
+    );
 
-        if (!isVisibleByConflict) return false;
+    if (!isVisibleByConflict) return false;
 
-        if (defenseTypeFilter === "Tous") return true;
+    const typeOk =
+      defenseTypeFilter === "Tous"
+        ? true
+        : defense.type === defenseTypeFilter;
 
-        return defense.type === defenseTypeFilter;
-    });
-    }, [
-    compatibleDefenses,
-    selectedDefense1,
-    selectedDefense2,
-    defenseTypeFilter,
-    ]);
+    const tierOk =
+      compatibleTierFilter === "Tous"
+        ? true
+        : normalizeDefenseTier(defense.tier) === compatibleTierFilter;
+
+    return typeOk && tierOk;
+  });
+}, [
+  compatibleDefenses,
+  selectedDefense1,
+  selectedDefense2,
+  defenseTypeFilter,
+  compatibleTierFilter,
+]);
 
 const defense1Tone = getAssignedDefenseTone(selectedDefense1, selectedMember);
 const defense2Tone = getAssignedDefenseTone(selectedDefense2, selectedMember);
@@ -5588,16 +5608,17 @@ if (isExternal) {
                         </Badge>
                         </div>
 
-                        <Select value={defenseTypeFilter} onValueChange={setDefenseTypeFilter}>
-                        <SelectTrigger className="h-9 w-[160px] rounded-xl border-zinc-700 bg-zinc-900 text-zinc-100">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="Tous">Toutes les défenses</SelectItem>
-                            <SelectItem value="Tour">Tour</SelectItem>
-                            <SelectItem value="Bastion">Bastion</SelectItem>
-                        </SelectContent>
-                        </Select>
+<Select value={compatibleTierFilter} onValueChange={setCompatibleTierFilter}>
+  <SelectTrigger className="w-[180px] rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
+    <SelectValue placeholder="Filtrer par tier" />
+  </SelectTrigger>
+  <SelectContent>
+    <SelectItem value="Tous">Tous les tiers</SelectItem>
+    <SelectItem value="meta_s">Meta S</SelectItem>
+    <SelectItem value="meta_a">Meta A</SelectItem>
+    <SelectItem value="secondaire">Secondaire</SelectItem>
+  </SelectContent>
+</Select>
                     </div>
 
                 <ScrollArea className="flex-1 pr-3">
@@ -6556,10 +6577,38 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
 >
   Qui peut repro
 </TabsTrigger>
-            </TabsList>
-            <div className="flex flex-wrap gap-2">
-{metaDefenseCounters.length ? (
-  metaDefenseCounters.map((counter) => {
+</TabsList>
+
+{/* 🔥 FILTRE META */}
+<div className="mb-3 flex flex-wrap gap-2">
+  <Button
+    variant={metaCounterFilter === "all" ? "default" : "outline"}
+    className="rounded-2xl"
+    onClick={() => setMetaCounterFilter("all")}
+  >
+    Toutes
+  </Button>
+
+  <Button
+    variant={metaCounterFilter === "meta_s" ? "default" : "outline"}
+    className="rounded-2xl"
+    onClick={() => setMetaCounterFilter("meta_s")}
+  >
+    Meta S
+  </Button>
+
+  <Button
+    variant={metaCounterFilter === "meta_a" ? "default" : "outline"}
+    className="rounded-2xl"
+    onClick={() => setMetaCounterFilter("meta_a")}
+  >
+    Meta A
+  </Button>
+</div>
+
+<div className="flex flex-wrap gap-2">
+  {metaDefenseCounters.length ? (
+    metaDefenseCounters.map((counter) => {
     const isTracked =
       String(selectedMetaDefenseForCompletion) === String(counter.id);
 
@@ -6583,6 +6632,9 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
               {counter.count}
             </div>
             <div className="truncate text-xs text-zinc-400">{counter.name}</div>
+<div className="mt-1 text-[11px] text-zinc-500">
+  {counter.tier === "meta_s" ? "Meta S" : "Meta A"}
+</div>
           </button>
 
           <button
@@ -6619,35 +6671,60 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
 
 
   
-  <div className="mb-4 flex justify-end">
-    <Select value={defenseFactionFilter} onValueChange={setDefenseFactionFilter}>
-      <SelectTrigger className="w-[220px] rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
-        <SelectValue placeholder="Filtrer par faction" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="Tous">Toutes les factions</SelectItem>
-        <SelectItem value="nordiste">nordiste</SelectItem>
-        <SelectItem value="cauchemar">cauchemar</SelectItem>
-        <SelectItem value="sentinelle">sentinelle</SelectItem>
-        <SelectItem value="esoterique">esoterique</SelectItem>
-        <SelectItem value="perceur">perceur</SelectItem>
-        <SelectItem value="chaotique">chaotique</SelectItem>
-        <SelectItem value="cultiste">cultiste</SelectItem>
-        <SelectItem value="infernal">infernal</SelectItem>
-        <SelectItem value="innommable">innommable</SelectItem>
-        <SelectItem value="arbitre">arbitre</SelectItem>
-      </SelectContent>
-    </Select>
-  </div>
+<div className="mb-4 flex flex-wrap justify-end gap-3">
+  <Select value={defenseFactionFilter} onValueChange={setDefenseFactionFilter}>
+    <SelectTrigger className="w-[220px] rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
+      <SelectValue placeholder="Filtrer par faction" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="Tous">Toutes les factions</SelectItem>
+      <SelectItem value="nordiste">nordiste</SelectItem>
+      <SelectItem value="cauchemar">cauchemar</SelectItem>
+      <SelectItem value="sentinelle">sentinelle</SelectItem>
+      <SelectItem value="esoterique">esoterique</SelectItem>
+      <SelectItem value="perceur">perceur</SelectItem>
+      <SelectItem value="chaotique">chaotique</SelectItem>
+      <SelectItem value="cultiste">cultiste</SelectItem>
+      <SelectItem value="infernal">infernal</SelectItem>
+      <SelectItem value="innommable">innommable</SelectItem>
+      <SelectItem value="arbitre">arbitre</SelectItem>
+    </SelectContent>
+  </Select>
+
+  {/* 🔥 NOUVEAU FILTRE TYPE */}
+  <Select value={defenseTypeFilter} onValueChange={setDefenseTypeFilter}>
+    <SelectTrigger className="w-[180px] rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
+      <SelectValue placeholder="Filtrer par type" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="Tous">Tous les types</SelectItem>
+      <SelectItem value="Tour">Tour</SelectItem>
+      <SelectItem value="Bastion">Bastion</SelectItem>
+    </SelectContent>
+  </Select>
+</div>
 
 <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-  {defenses
-    .filter((defense) =>
+{defenses
+  .filter((defense) => {
+    const factionOk =
       defenseFactionFilter === "Tous"
         ? true
-        : defense.faction === defenseFactionFilter
-    )
-    .map((defense) => (
+        : defense.faction === defenseFactionFilter;
+
+    const typeOk =
+      defenseTypeFilter === "Tous"
+        ? true
+        : defense.type === defenseTypeFilter;
+
+    const tierOk =
+      workspaceTierFilter === "Tous"
+        ? true
+        : normalizeDefenseTier(defense.tier) === workspaceTierFilter;
+
+    return factionOk && typeOk && tierOk;
+  })
+  .map((defense) => (
 <Card
   key={defense.id}
   className={`rounded-3xl border shadow-2xl ${
@@ -6802,7 +6879,7 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
     </CardHeader>
 
     <CardContent>
-      <div className="mb-4 flex justify-end">
+<div className="mb-4 flex flex-wrap justify-end gap-3">
   <Select value={defenseFactionFilter} onValueChange={setDefenseFactionFilter}>
     <SelectTrigger className="w-[220px] rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
       <SelectValue placeholder="Filtrer par faction" />
@@ -6819,6 +6896,29 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
       <SelectItem value="infernal">infernal</SelectItem>
       <SelectItem value="innommable">innommable</SelectItem>
       <SelectItem value="arbitre">arbitre</SelectItem>
+    </SelectContent>
+  </Select>
+
+  <Select value={defenseTypeFilter} onValueChange={setDefenseTypeFilter}>
+    <SelectTrigger className="w-[180px] rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
+      <SelectValue placeholder="Filtrer par type" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="Tous">Tous les types</SelectItem>
+      <SelectItem value="Tour">Tour</SelectItem>
+      <SelectItem value="Bastion">Bastion</SelectItem>
+    </SelectContent>
+  </Select>
+
+  <Select value={workspaceTierFilter} onValueChange={setWorkspaceTierFilter}>
+    <SelectTrigger className="w-[180px] rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
+      <SelectValue placeholder="Filtrer par tier" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="Tous">Tous les tiers</SelectItem>
+      <SelectItem value="meta_s">Meta S</SelectItem>
+      <SelectItem value="meta_a">Meta A</SelectItem>
+      <SelectItem value="secondaire">Secondaire</SelectItem>
     </SelectContent>
   </Select>
 </div>
