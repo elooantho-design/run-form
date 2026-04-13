@@ -546,6 +546,7 @@ useEffect(() => {
   setActiveGuildCode(currentGuildCode);
 }, [currentGuildCode]);
   const [query, setQuery] = useState("");
+  const [memberAssignmentSortMode, setMemberAssignmentSortMode] = useState("alpha");
   const [clusterMemberSearchQuery, setClusterMemberSearchQuery] = useState("");
 const [clusterMemberSearchResults, setClusterMemberSearchResults] = useState([]);
   const [members, setMembers] = useState([]);
@@ -1521,17 +1522,52 @@ useEffect(() => {
   loadEditorBlocks();
 }, [editingDefense]);
 
+const cycleMemberAssignmentSortMode = () => {
+  setMemberAssignmentSortMode((prev) => {
+    if (prev === "alpha") return "tour_first";
+    if (prev === "tour_first") return "bastion_first";
+    return "alpha";
+  });
+};
+
 const filteredMembers = useMemo(() => {
   const q = query.trim().toLowerCase();
 
-  const list = !q
-      ? members
-      : members.filter((m) => m.name.toLowerCase().includes(q));
+  const textFiltered = !q
+    ? members
+    : members.filter((m) => m.name.toLowerCase().includes(q));
 
-  return [...list].sort((a, b) =>
-      a.name.localeCompare(b.name, "fr", { sensitivity: "base" })
-  );
-}, [members, query]);
+  const assignmentRank = (assignment) => {
+    const value = String(assignment || "").trim();
+
+    if (memberAssignmentSortMode === "tour_first") {
+      if (value === "Tour") return 0;
+      if (value === "Bastion") return 1;
+      if (value === "Bulle") return 2;
+      return 3;
+    }
+
+    if (memberAssignmentSortMode === "bastion_first") {
+      if (value === "Bastion") return 0;
+      if (value === "Tour") return 1;
+      if (value === "Bulle") return 2;
+      return 3;
+    }
+
+    return 0;
+  };
+
+  return [...textFiltered].sort((a, b) => {
+    if (memberAssignmentSortMode !== "alpha") {
+      const rankA = assignmentRank(a.assignment);
+      const rankB = assignmentRank(b.assignment);
+
+      if (rankA !== rankB) return rankA - rankB;
+    }
+
+    return a.name.localeCompare(b.name, "fr", { sensitivity: "base" });
+  });
+}, [members, query, memberAssignmentSortMode]);
 
 const memberLimitExceeded = members.length > 30;
 
@@ -5274,7 +5310,23 @@ if (isExternal) {
                   <TableHeader>
                     <TableRow className="border-zinc-800 hover:bg-transparent">
                     <TableHead className="text-zinc-300 font-semibold">Nom</TableHead>
-                    <TableHead className="text-zinc-300 font-semibold">Tour / Bastion</TableHead>
+<TableHead>
+  <button
+    type="button"
+    onClick={cycleMemberAssignmentSortMode}
+    className="flex items-center gap-2 font-semibold text-zinc-100 hover:text-emerald-300"
+    title="Cliquer pour changer l’ordre : alphabétique → tours d’abord → bastions d’abord"
+  >
+    <span>Tour / Bastion</span>
+    <Badge className="rounded-xl bg-zinc-800 text-zinc-300">
+      {memberAssignmentSortMode === "alpha"
+        ? "A → Z"
+        : memberAssignmentSortMode === "tour_first"
+        ? "Tours d’abord"
+        : "Bastions d’abord"}
+    </Badge>
+  </button>
+</TableHead>
                     <TableHead className="text-zinc-300 font-semibold">Statut</TableHead>
                     <TableHead className="text-zinc-300 font-semibold">Complétion</TableHead>
                     <TableHead className="w-[120px] text-left pl-2">Éveils</TableHead>
