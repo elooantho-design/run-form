@@ -207,6 +207,18 @@ function getMemberDefenseCompletion(member, defense) {
   return 100;
 }
 
+function getMemberTrackedDefenseScore(member, defense) {
+  if (!member || !defense) return null;
+
+  const completion = getMemberDefenseCompletion(member, defense);
+
+  if (completion === 0) {
+    return null;
+  }
+
+  return getDefenseAwakeningScore(member, defense);
+}
+
 function getDefenseAwakeningScore(member, defense) {
   if (!member || !defense) return 0;
 
@@ -577,6 +589,9 @@ const [clusterMemberSearchResults, setClusterMemberSearchResults] = useState([])
   const [selectedMetaDefenseForCompletion, setSelectedMetaDefenseForCompletion] = useState(null);
 const [reproHeroes, setReproHeroes] = useState(["", "", "", "", ""]);
 const [reproConditions, setReproConditions] = useState([0, 0, 0, 0, 0]);
+const [scoreDetailOpen, setScoreDetailOpen] = useState(false);
+const [scoreDetailMember, setScoreDetailMember] = useState(null);
+const [scoreDetailDefense, setScoreDetailDefense] = useState(null);
 const [reproResultOpen, setReproResultOpen] = useState(false);
 const [reproMatches, setReproMatches] = useState([]);
   const [editingDefense, setEditingDefense] = useState(null);
@@ -1915,6 +1930,15 @@ const trackedMetaDefense = useMemo(() => {
     ) ?? null
   );
 }, [defenses, selectedMetaDefenseForCompletion]);
+
+const scoreDetailRows = useMemo(() => {
+  if (!scoreDetailMember || !scoreDetailDefense) return [];
+
+  return (scoreDetailDefense.slots || []).map((hero) => ({
+    hero,
+    awakening: scoreDetailMember.awakenings?.[hero] ?? -1,
+  }));
+}, [scoreDetailMember, scoreDetailDefense]);
 
     const membersForSelectedMetaDefense = useMemo(() => {
     if (!selectedMetaCounter?.name) return [];
@@ -5309,26 +5333,27 @@ if (isExternal) {
     <Table>
                   <TableHeader>
                     <TableRow className="border-zinc-800 hover:bg-transparent">
-                    <TableHead className="text-zinc-300 font-semibold">Nom</TableHead>
-<TableHead>
+                    <TableHead className="text-zinc-300 font-semibold">
   <button
     type="button"
     onClick={cycleMemberAssignmentSortMode}
-    className="flex items-center gap-2 font-semibold text-zinc-100 hover:text-emerald-300"
-    title="Cliquer pour changer l’ordre : alphabétique → tours d’abord → bastions d’abord"
+    className="flex items-center gap-2 hover:text-emerald-300"
   >
-    <span>Tour / Bastion</span>
-    <Badge className="rounded-xl bg-zinc-800 text-zinc-300">
+    <span>Nom</span>
+
+    <Badge className="rounded-xl bg-zinc-800 text-zinc-300 text-xs">
       {memberAssignmentSortMode === "alpha"
         ? "A → Z"
         : memberAssignmentSortMode === "tour_first"
-        ? "Tours d’abord"
-        : "Bastions d’abord"}
+        ? "Tours"
+        : "Bastions"}
     </Badge>
   </button>
 </TableHead>
+
                     <TableHead className="text-zinc-300 font-semibold">Statut</TableHead>
                     <TableHead className="text-zinc-300 font-semibold">Complétion</TableHead>
+                    <TableHead>Score</TableHead>
                     <TableHead className="w-[120px] text-left pl-2">Éveils</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -5356,32 +5381,39 @@ if (isExternal) {
               {index + 1}
             </AvatarFallback>
           </Avatar>
-                              <div>
-                                <div className="font-medium text-zinc-50">{member.name}</div>
-                                <div className="text-xs text-zinc-300">{member.defense1} / {member.defense2}</div>
-                              </div>
+<div>
+  <div className="flex items-center gap-2">
+    <div className="font-medium text-zinc-50">
+      {member.name}
+    </div>
+
+    <Select
+      value={member.assignment || "Tour"}
+      onValueChange={(value) => setMemberAssignment(member.id, value)}
+      disabled={!isAdmin}
+    >
+      <SelectTrigger
+        className="h-6 w-[80px] rounded-lg border-zinc-700 bg-zinc-900 text-xs"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <SelectValue />
+      </SelectTrigger>
+
+      <SelectContent onClick={(e) => e.stopPropagation()}>
+        <SelectItem value="Tour">Tour</SelectItem>
+        <SelectItem value="Bastion">Bastion</SelectItem>
+        <SelectItem value="Bulle">Bulle</SelectItem>
+      </SelectContent>
+    </Select>
+  </div>
+
+  <div className="text-xs text-zinc-300">
+    {member.defense1} / {member.defense2}
+  </div>
+</div>
                             </div>
                           </TableCell>
-                          <TableCell>
-                                <Select
-                                value={member.assignment || "Tour"}
-                                onValueChange={(value) => setMemberAssignment(member.id, value)}
-                                disabled={!isAdmin}
-                                >
-                                <SelectTrigger
-                                className="h-9 w-[140px] rounded-xl border-zinc-700 bg-zinc-900 text-zinc-100"
-                                onClick={(e) => e.stopPropagation()}
-                                >
-                                <SelectValue />
-                                </SelectTrigger>
 
-                                <SelectContent onClick={(e) => e.stopPropagation()}>
-                                <SelectItem value="Tour">Tour</SelectItem>
-                                <SelectItem value="Bastion">Bastion</SelectItem>
-                                <SelectItem value="Bulle">Bulle</SelectItem>
-                                </SelectContent>
-                            </Select>
-                            </TableCell>
                           <TableCell>
                             <Badge
                             className={
@@ -5422,6 +5454,31 @@ if (isExternal) {
                             </span>
                         </div>
                         </TableCell>
+                        <TableCell>
+  {trackedMetaDefense ? (() => {
+    const score = getMemberTrackedDefenseScore(member, trackedMetaDefense);
+
+    if (score === null) {
+      return <span className="text-zinc-500">Null</span>;
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setScoreDetailMember(member);
+          setScoreDetailDefense(trackedMetaDefense);
+          setScoreDetailOpen(true);
+        }}
+        className="rounded-xl px-2 py-1 text-sm text-emerald-300 hover:bg-zinc-800"
+      >
+        {score}
+      </button>
+    );
+  })() : (
+    <span className="text-zinc-500">—</span>
+  )}
+</TableCell>
 <TableCell className="w-[120px] pl-2">
   <div className="relative flex items-center justify-start">
     <Badge
@@ -8053,6 +8110,59 @@ onClick={async () => {
     </DialogContent>
   </Dialog>
 )}
+<Dialog open={scoreDetailOpen} onOpenChange={setScoreDetailOpen}>
+  <DialogContent className="max-w-lg rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
+    <DialogHeader>
+      <DialogTitle>
+        Score éveil — {scoreDetailMember?.name}
+      </DialogTitle>
+    </DialogHeader>
+
+    <div className="space-y-4">
+      {scoreDetailDefense ? (
+        <>
+          <div className="text-sm text-zinc-400">
+            Défense : {scoreDetailDefense.name}
+          </div>
+
+          <div className="space-y-2">
+            {scoreDetailRows.map((row) => (
+              <div
+                key={row.hero}
+                className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2"
+              >
+                <div className="text-zinc-200">{row.hero}</div>
+
+                <div
+                  className={`rounded-lg px-2 py-1 text-sm ${
+                    row.awakening === -1
+                      ? "bg-red-500/20 text-red-300"
+                      : "bg-emerald-500/20 text-emerald-300"
+                  }`}
+                >
+                  {row.awakening === -1 ? "✖" : `A${row.awakening}`}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="text-sm text-zinc-500">
+          Aucune défense sélectionnée
+        </div>
+      )}
+
+      <div className="flex justify-end">
+        <Button
+          onClick={() => setScoreDetailOpen(false)}
+          className="rounded-2xl"
+        >
+          Fermer
+        </Button>
+      </div>
+    </div>
+  </DialogContent>
+</Dialog>
 <Dialog open={reproResultOpen} onOpenChange={setReproResultOpen}>
   <DialogContent className="max-w-2xl rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
     <DialogHeader>
@@ -8090,6 +8200,7 @@ onClick={async () => {
   </DialogContent>
 </Dialog>
 <Dialog
+
   open={transferDialogOpen}
   onOpenChange={(open) => {
     setTransferDialogOpen(open);
