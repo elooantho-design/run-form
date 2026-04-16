@@ -180,7 +180,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { guild, items } = req.body || {};
+    const { guild, items, is_ally } = req.body || {};
+    const isAlly = is_ally === true;
 
     if (!guild || !["G1", "G2"].includes(String(guild).toUpperCase())) {
       return res.status(400).json({ error: "guild manquante ou invalide" });
@@ -215,6 +216,8 @@ export default async function handler(req, res) {
         heroes,
         status: stratFound ? "strat" : "def",
         repro_by: null,
+        is_ally: isAlly,
+        record_status: isAlly ? "pas_record" : null,
       });
     }
 

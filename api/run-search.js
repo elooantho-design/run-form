@@ -126,7 +126,7 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
 async function searchDefenceStrict(
   supabaseClient,
   queryItems,
-  { limit = 10, maxCandidates = 800 } = {}
+  { limit = 10, maxCandidates = 50000 } = {}
 ) {
   if (!queryItems?.length) return [];
 

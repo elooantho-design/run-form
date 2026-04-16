@@ -75,6 +75,35 @@ function getYoutubeEmbedUrl(url) {
   }
 }
 
+function normalizeChampionName(name) {
+  if (!name) return null;
+
+  return String(name)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\d+$/, "");
+}
+
+function normalizePos(pos) {
+  if (!pos) return null;
+  return String(pos).trim().toUpperCase();
+}
+
+function normalizeDir(dir) {
+  if (!dir) return null;
+
+  const d = String(dir).trim().toUpperCase();
+
+  if (["N", "NORD", "NORTH", "↑"].includes(d)) return "N";
+  if (["S", "SUD", "SOUTH", "↓"].includes(d)) return "S";
+  if (["E", "EST", "EAST", "→"].includes(d)) return "E";
+  if (["O", "OUEST", "WEST", "W", "←"].includes(d)) return "O";
+
+  return d;
+}
+
 export default function GvgPanelTab() {
   const apiBase = useMemo(() => getApiBase(), []);
   const allowedDiscordId = "931555574846484560";
@@ -94,6 +123,15 @@ const canUsePanelActions =
 const [guild, setGuild] = useState("G1");
 
 const [items, setItems] = useState([]);
+const enemyItems = useMemo(
+  () => items.filter((d) => d.is_ally !== true),
+  [items]
+);
+
+const allyItems = useMemo(
+  () => items.filter((d) => d.is_ally === true),
+  [items]
+);
 const [loading, setLoading] = useState(false);
 const [message, setMessage] = useState("");
 const [commentModal, setCommentModal] = useState(null);
@@ -177,17 +215,17 @@ function getGroupEmoji(groupNum) {
   return map[value] || "🔢";
 }
 
-  function getDefenseForSlot(bastion, type, tower, team) {
-    return (
-      items.find(
-        (d) =>
-          Number(d.bastion) === Number(bastion) &&
-          d.type === type &&
-          Number(d.team) === Number(team) &&
-          (type === "fortress" || Number(d.tower) === Number(tower))
-      ) || null
-    );
-  }
+            function getDefenseForSlot(sourceItems, bastion, type, tower, team) {
+            return (
+                sourceItems.find(
+                (d) =>
+                    Number(d.bastion) === Number(bastion) &&
+                    d.type === type &&
+                    Number(d.team) === Number(team) &&
+                    (type === "fortress" || Number(d.tower) === Number(tower))
+                ) || null
+            );
+            }
   async function toggleRecord(defense) {
   try {
     const response = await fetch(`${apiBase}/api/gvg-data`, {
@@ -316,8 +354,9 @@ async function saveAttackCode() {
 }
 
 function buildAhkCommand() {
-    if (!canUsePanelActions) return;
-  const selected = items
+  if (!canUsePanelActions) return;
+
+  const selectedEnemy = enemyItems
     .filter((d) => d.record_status === "a_record")
     .sort((a, b) => {
       if (a.bastion !== b.bastion) return a.bastion - b.bastion;
@@ -326,24 +365,48 @@ function buildAhkCommand() {
       return a.team - b.team;
     });
 
-  if (!selected.length) {
+  const selectedAlly = allyItems
+    .filter((d) => d.record_status === "a_record")
+    .sort((a, b) => {
+      if (a.bastion !== b.bastion) return a.bastion - b.bastion;
+      if (a.type !== b.type) return a.type === "tower" ? -1 : 1;
+      if ((a.tower || 0) !== (b.tower || 0)) return (a.tower || 0) - (b.tower || 0);
+      return a.team - b.team;
+    });
+
+  if (!selectedEnemy.length && !selectedAlly.length) {
     setMessage("Aucune défense à record");
     return;
   }
 
-  const shots = selected
+  const enemyShots = selectedEnemy
     .map((d) => {
       if (d.type === "fortress") {
         return `b${d.bastion}_fort_team${d.team}`;
       }
-
       return `b${d.bastion}_t${d.tower}_team${d.team}`;
     })
     .join("|");
 
-  const command = `& "C:\\Program Files\\AutoHotkey\\v2\\AutoHotkey64.exe" \`
-  "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\Bot-Paladin\\record_run_with_req.ahk" \`
-  --shots "${shots}"`;
+  const allyShots = selectedAlly
+    .map((d) => {
+      if (d.type === "fortress") {
+        return `b${d.bastion}_fort_team${d.team}`;
+      }
+      return `b${d.bastion}_t${d.tower}_team${d.team}`;
+    })
+    .join("|");
+
+  let command = `& "C:\\Program Files\\AutoHotkey\\v2\\AutoHotkey64.exe" \`
+  "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\Bot-Paladin\\record_run_with_req.ahk"`;
+
+  if (enemyShots) {
+    command += ` \`\n  --shots "${enemyShots}"`;
+  }
+
+  if (allyShots) {
+    command += ` \`\n  --ally-shots "${allyShots}"`;
+  }
 
   navigator.clipboard.writeText(command);
   setMessage("Commande copiée !");
@@ -476,31 +539,36 @@ async function openRuns(defense) {
     setRunsModal(defense);
     setRuns([]);
 
-    const queryItems = Array.isArray(defense.heroes)
-      ? defense.heroes
-          .filter((hero) => hero?.champion)
-          .map((hero) => ({
-            champion: hero.champion,
-            position: hero.position,
-            direction: hero.direction,
-          }))
-      : [];
+const queryItems = Array.isArray(defense.heroes)
+  ? defense.heroes
+      .map((hero) => ({
+        champion: normalizeChampionName(hero?.champion),
+        position: normalizePos(hero?.position),
+        direction: normalizeDir(hero?.direction),
+      }))
+      .filter(
+        (item) => item.champion && item.position && item.direction
+      )
+  : [];
 
     if (!queryItems.length) {
       setRuns([]);
       return;
     }
 
-    const response = await fetch(`${apiBase}/api/run-search`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ queryItems }),
-    });
+const response = await fetch(`${apiBase}/api/run-search`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ queryItems }),
+});
 
-    const rawText = await response.text();
-    let data = null;
+const rawText = await response.text();
+let data = null;
+
+console.log("run-search status:", response.status);
+console.log("run-search rawText:", rawText);
 
     try {
       data = rawText ? JSON.parse(rawText) : null;
@@ -509,7 +577,7 @@ async function openRuns(defense) {
       setRuns([]);
       return;
     }
-
+console.log("run-search parsed data:", data);
     if (!response.ok) {
       console.error("run-search error:", data);
       setRuns([]);
@@ -553,6 +621,148 @@ const handleDeleteStrat = async (run) => {
     console.error("Erreur suppression strat:", err);
   }
 };
+
+function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
+  return (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
+      {[1, 2, 3, 4].map((bastion) => (
+        <div
+          key={`${panelKey}-${bastion}`}
+          className={wrapperClass}
+        >
+          <div className={`mb-3 text-sm font-semibold ${titleClass}`}>
+            Bastion {bastion}
+          </div>
+
+          <div className="space-y-2">
+            {[
+              { type: "fortress", tower: null, team: 1 },
+              { type: "fortress", tower: null, team: 2 },
+              ...[1, 2, 3, 4, 5].flatMap((tower) =>
+                [1, 2].map((team) => ({
+                  type: "tower",
+                  tower,
+                  team,
+                }))
+              ),
+            ].map((slot, index) => {
+              const defense = getDefenseForSlot(
+                sourceItems,
+                bastion,
+                slot.type,
+                slot.tower,
+                slot.team
+              );
+
+              return (
+                <div
+                  key={`${panelKey}-${bastion}-${slot.type}-${slot.tower ?? "F"}-${slot.team}-${index}`}
+                  className={`flex items-center justify-between rounded-xl border px-3 py-2 transition ${
+                    defense?.record_status === "push"
+                      ? "bg-purple-600/30 border-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.4)]"
+                      : "border-zinc-800 bg-zinc-950/60"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => defense && openReturnModal(defense)}
+                    className={`flex items-center gap-2 text-left text-xs ${
+                      defense
+                        ? "text-zinc-100 underline underline-offset-4 hover:text-white"
+                        : "text-zinc-200"
+                    }`}
+                    disabled={!defense}
+                    title={defense ? "Renvoyer dans GVG en cours" : ""}
+                  >
+                    <span>{buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}</span>
+                    {defense?.group_num ? (
+                      <span className="no-underline">{getGroupEmoji(defense.group_num)}</span>
+                    ) : null}
+                  </button>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    {!defense ? (
+                      <span className="text-xs text-zinc-600">—</span>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => toggleRecord(defense)}
+                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                            defense.record_status === "a_record"
+                              ? "border-green-500 bg-green-500/15"
+                              : defense.record_status === "pas_record"
+                              ? "border-red-500 bg-red-500/15"
+                              : "border-zinc-600 bg-zinc-800/40 cursor-not-allowed opacity-60"
+                          }`}
+                          disabled={
+                            defense.record_status === "record" ||
+                            defense.record_status === "push"
+                          }
+                          title="Toggle record"
+                        >
+                          📹
+                        </button>
+
+                        <button
+                          onClick={() => openCommentModal(defense)}
+                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                            defense.record_comment
+                              ? "border-green-500 bg-green-500/15"
+                              : "border-red-500 bg-red-500/15"
+                          }`}
+                          title="Commentaire"
+                        >
+                          💬
+                        </button>
+
+                        <button
+                          onClick={() => openAttackModal(defense)}
+                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                            defense.attack_code
+                              ? "border-green-500 bg-green-500/15"
+                              : "border-red-500 bg-red-500/15"
+                          }`}
+                          title="Code d'attaque"
+                        >
+                          ⚔️
+                        </button>
+
+                        <button
+                          type="button"
+                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition cursor-default ${
+                            defense.record_status === "record" || defense.record_status === "push"
+                              ? "border-green-500 bg-green-500/15"
+                              : "border-red-500 bg-red-500/15"
+                          }`}
+                          title="Statut record"
+                        >
+                          ✅
+                        </button>
+
+                        <button
+                          onClick={() => openRuns(defense)}
+                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                            defense.status === "strat" || defense.record_status === "push"
+                              ? "border-green-500 bg-green-500/15 hover:scale-110 cursor-pointer"
+                              : "border-red-500 bg-red-500/15 opacity-50 cursor-not-allowed"
+                          }`}
+                          disabled={!(defense.status === "strat" || defense.record_status === "push")}
+                          title="Voir les runs"
+                        >
+                          👍
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
   return (
     <div className="space-y-4">
@@ -618,144 +828,33 @@ const handleDeleteStrat = async (run) => {
 
       {loading && <div>Chargement…</div>}
 
-      {!loading && !message && (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
-          {[1, 2, 3, 4].map((bastion) => (
-            <div key={bastion} className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-              <div className="mb-3 text-sm font-semibold text-zinc-100">
-                Bastion {bastion}
-              </div>
+{!loading && !message && (
+  <>
+    <div className="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-400">
+      Défenses adverses
+    </div>
 
-              <div className="space-y-2">
-                {[
-                { type: "fortress", tower: null, team: 1 },
-                { type: "fortress", tower: null, team: 2 },
-                ...[1, 2, 3, 4, 5].flatMap((tower) =>
-                    [1, 2].map((team) => ({
-                    type: "tower",
-                    tower,
-                    team,
-                    }))
-                ),
-                ].map((slot, index) => {
-                  const defense = getDefenseForSlot(
-                    bastion,
-                    slot.type,
-                    slot.tower,
-                    slot.team
-                  );
+    {renderPanelGrid(
+      enemyItems,
+      "enemy",
+      "rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4",
+      "text-zinc-100"
+    )}
 
-                  return (
-                    <div
-                      key={`${bastion}-${slot.type}-${slot.tower ?? "F"}-${slot.team}-${index}`}
-                      className={`flex items-center justify-between rounded-xl border px-3 py-2 transition
-                            ${
-                                defense?.record_status === "push"
-                                ? "bg-purple-600/30 border-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.4)]"
-                                : "border-zinc-800 bg-zinc-950/60"
-                            }
-                            `}
-                    >
-                            <button
-                            type="button"
-                            onClick={() => defense && openReturnModal(defense)}
-                            className={`flex items-center gap-2 text-left text-xs ${
-                                defense
-                                ? "text-zinc-100 underline underline-offset-4 hover:text-white"
-                                : "text-zinc-200"
-                            }`}
-                            disabled={!defense}
-                            title={defense ? "Renvoyer dans GVG en cours" : ""}
-                            >
-                            <span>{buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}</span>
-                            {defense?.group_num ? (
-                                <span className="no-underline">{getGroupEmoji(defense.group_num)}</span>
-                            ) : null}
-                            </button>
+    <div className="mt-10 mb-4 rounded-2xl border-2 border-red-500 bg-red-500/5 p-4 text-center">
+      <div className="text-sm font-semibold uppercase tracking-[0.2em] text-red-400">
+        Défenses alliées
+      </div>
+    </div>
 
-                <div className="flex items-center gap-1 shrink-0">
-                  {!defense ? (
-                    <span className="text-xs text-zinc-600">—</span>
-                  ) : (
-<>
-  <button
-    onClick={() => toggleRecord(defense)}
-    className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
-      defense.record_status === "a_record"
-        ? "border-green-500 bg-green-500/15"
-        : defense.record_status === "pas_record"
-        ? "border-red-500 bg-red-500/15"
-        : "border-zinc-600 bg-zinc-800/40 cursor-not-allowed opacity-60"
-    }`}
-    disabled={
-      defense.record_status === "record" ||
-      defense.record_status === "push"
-    }
-    title="Toggle record"
-  >
-    📹
-  </button>
-
-  <button
-    onClick={() => openCommentModal(defense)}
-    className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
-      defense.record_comment
-        ? "border-green-500 bg-green-500/15"
-        : "border-red-500 bg-red-500/15"
-    }`}
-    title="Commentaire"
-  >
-    💬
-  </button>
-
-  <button
-    onClick={() => openAttackModal(defense)}
-    className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
-      defense.attack_code
-        ? "border-green-500 bg-green-500/15"
-        : "border-red-500 bg-red-500/15"
-    }`}
-    title="Code d'attaque"
-  >
-    ⚔️
-  </button>
-
-  <button
-    type="button"
-    className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition cursor-default ${
-      defense.record_status === "record" || defense.record_status === "push"
-        ? "border-green-500 bg-green-500/15"
-        : "border-red-500 bg-red-500/15"
-    }`}
-    title="Statut record"
-  >
-    ✅
-  </button>
-
-
-<button
-  onClick={() => openRuns(defense)}
-  className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
-    defense.status === "strat" || defense.record_status === "push"
-      ? "border-green-500 bg-green-500/15 hover:scale-110 cursor-pointer"
-      : "border-red-500 bg-red-500/15 opacity-50 cursor-not-allowed"
-  }`}
-  disabled={!(defense.status === "strat" || defense.record_status === "push")}
-  title="Voir les runs"
->
-  👍
-</button>
-</>
-                  )}
-                </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+    {renderPanelGrid(
+      allyItems,
+      "ally",
+      "rounded-2xl border border-red-500/30 bg-red-500/5 p-4",
+      "text-red-200"
+    )}
+  </>
+)}
       {commentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-4">

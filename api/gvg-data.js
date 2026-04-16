@@ -48,6 +48,7 @@ async function handleList(req, res) {
   record_comment,
   attack_code,
   youtube_url,
+  is_ally,
   created_at,
   updated_at
 `)
@@ -526,11 +527,11 @@ async function handleRecordOk(req, res) {
     return res.status(500).json({ error: "impossible de lire le dossier uploaded" });
   }
 
-  const { data: defenses, error: readError } = await supabase
-    .from("gvg_defense")
-    .select("id, guild, bastion, type, tower, team, record_status, youtube_url")
-    .eq("guild", normalizedGuild)
-    .in("record_status", ["pas_record", "a_record", "record"]);
+const { data: defenses, error: readError } = await supabase
+  .from("gvg_defense")
+  .select("id, guild, bastion, type, tower, team, record_status, youtube_url, is_ally")
+  .eq("guild", normalizedGuild)
+  .in("record_status", ["pas_record", "a_record", "record"]);
 
   if (readError) {
     console.error("[gvg-data:record_ok] read defenses error:", readError);
@@ -538,32 +539,43 @@ async function handleRecordOk(req, res) {
   }
 
   const updates = [];
+const usedFiles = new Set();
 
-  for (const defense of defenses || []) {
-    const defKey =
-      defense.type === "fortress"
-        ? `b${defense.bastion}_fort_team${defense.team}`
-        : `b${defense.bastion}_t${defense.tower}_team${defense.team}`;
+for (const defense of defenses || []) {
+  const defKey =
+    defense.type === "fortress"
+      ? `b${defense.bastion}_fort_team${defense.team}`
+      : `b${defense.bastion}_t${defense.tower}_team${defense.team}`;
 
-    const matchedFile = filenames.find((name) =>
-      name.toLowerCase().startsWith(`${defKey.toLowerCase()}__`)
-    );
+  const expectedPrefix = defense.is_ally
+    ? `${defKey.toLowerCase()}_ally__`
+    : `${defKey.toLowerCase()}__`;
 
-    if (!matchedFile) continue;
+  const matchedFile = filenames.find((name) => {
+    const lower = name.toLowerCase();
 
-    const match = matchedFile.match(/__(.+)\.mp4$/i);
-    if (!match) continue;
+    if (usedFiles.has(name)) return false;
 
-    const videoId = String(match[1] || "").trim();
-    if (!videoId) continue;
+    return lower.startsWith(expectedPrefix);
+  });
 
-    updates.push({
-      id: defense.id,
-      youtube_url: `https://youtu.be/${videoId}`,
-      record_status: "record",
-      filename: matchedFile,
-    });
-  }
+  if (!matchedFile) continue;
+
+  const match = matchedFile.match(/__(.+)\.mp4$/i);
+  if (!match) continue;
+
+  const videoId = String(match[1] || "").trim();
+  if (!videoId) continue;
+
+  usedFiles.add(matchedFile);
+
+  updates.push({
+    id: defense.id,
+    youtube_url: `https://youtu.be/${videoId}`,
+    record_status: "record",
+    filename: matchedFile,
+  });
+}
 
   if (!updates.length) {
     return res.status(200).json({
@@ -580,11 +592,11 @@ async function handleRecordOk(req, res) {
   for (const item of updates) {
     const { data, error } = await supabase
       .from("gvg_defense")
-      .update({
-        youtube_url: item.youtube_url,
-        record_status: item.record_status,
-        updated_at: new Date().toISOString(),
-      })
+ .update({
+  youtube_url: item.youtube_url,
+  record_status: item.record_status,
+  updated_at: new Date().toISOString(),
+})
       .eq("id", item.id)
       .select("id, youtube_url, record_status")
       .maybeSingle();

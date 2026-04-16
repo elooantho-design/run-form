@@ -20,6 +20,7 @@ export default function GvgAdminTab() {
 
   const [guild, setGuild] = useState("G1");
   const [jsonInput, setJsonInput] = useState("");
+  const [jsonInputAlly, setJsonInputAlly] = useState("");
   const [loadingImport, setLoadingImport] = useState(false);
   const [loadingReset, setLoadingReset] = useState(false);
   const [message, setMessage] = useState("");
@@ -82,6 +83,63 @@ export default function GvgAdminTab() {
       setLoadingImport(false);
     }
   }
+
+async function handleImportAlly() {
+  try {
+    setLoadingImport(true);
+    setMessage("");
+
+    let parsed = null;
+
+    try {
+      parsed = JSON.parse(jsonInputAlly);
+    } catch {
+      setMessage("JSON allié invalide.");
+      return;
+    }
+
+    if (!Array.isArray(parsed) || !parsed.length) {
+      setMessage("Le JSON allié doit être un tableau non vide.");
+      return;
+    }
+
+    const response = await fetch(`${apiBase}/api/gvg-import`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        guild,
+        items: parsed,
+        is_ally: true, // 🔥 IMPORTANT
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setMessage(`Réponse non JSON import allié (${response.status})`);
+      return;
+    }
+
+    if (!response.ok) {
+      setMessage(`Erreur import allié : ${data?.error || "erreur inconnue"}`);
+      return;
+    }
+
+    setMessage(
+      `Import ALLIÉ OK : ${data?.inserted || 0} défenses injectées pour ${data?.guild}.`
+    );
+  } catch (error) {
+    console.error("handleImportAlly error:", error);
+    setMessage(`Erreur import allié : ${error?.message || "erreur inconnue"}`);
+  } finally {
+    setLoadingImport(false);
+  }
+}
 
   async function handleReset() {
     const confirmed = window.confirm(
@@ -337,6 +395,37 @@ className="text-sm text-zinc-200"
     {JSON.stringify(uploadResult, null, 2)}
   </div>
 ) : null}
+</div>
+{/* 🔴 SÉPARATION MODE ALLIÉ */}
+<div className="mt-10 rounded-2xl border-2 border-red-500 bg-red-500/5 p-6 text-center">
+  <div className="text-red-400 text-sm font-semibold tracking-wide">
+    MODE ALLIÉ
+  </div>
+</div>
+
+{/* 🟢 BLOC IMPORT ALLIÉ */}
+<div className="rounded-2xl border border-red-500/40 bg-red-500/5 p-4">
+  <div className="text-sm text-red-300">
+    Colle ici le contenu du fichier detected DEF ALLIÉ
+  </div>
+
+  <textarea
+    value={jsonInputAlly}
+    onChange={(e) => setJsonInputAlly(e.target.value)}
+    placeholder='[ { "def": "...", "compo": [...] } ]'
+    className="mt-3 min-h-[280px] w-full rounded-2xl border border-red-500/40 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none"
+  />
+
+  <div className="mt-3">
+    <Button
+      type="button"
+      className="rounded-2xl bg-red-600 hover:bg-red-500"
+      disabled={loadingImport}
+      onClick={handleImportAlly}
+    >
+      {loadingImport ? "Import allié..." : `Importer ALLIÉ ${guild}`}
+    </Button>
+  </div>
 </div>
         </CardContent>
       </Card>
