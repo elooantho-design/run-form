@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
+import GestionDefenseTab from "./components/GestionDefenseTab";
+import AdminDefensesTab from "@/components/AdminDefensesTab";
+import MonSuiviTab from "./components/MonSuiviTab";
 import { supabase } from "@/lib/supabase";
 import { DndContext, closestCenter } from "@dnd-kit/core";
 import {
@@ -288,7 +291,14 @@ function getMetaDefenseCounters(defenses, members, metaFilter = "all") {
 function getDefenseConditionRequirements(defense) {
   return (defense.conditions || [])
     .map((condition) => {
-      const match = condition.match(/^(.+?) A(\d) minimum$/);
+      if (typeof condition === "object" && condition !== null) {
+        return {
+          hero: condition.label?.match(/^(.+?) A(\d) minimum$/)?.[1] || "",
+          minAwakening: Number(condition.minAwakening ?? 0),
+        };
+      }
+
+      const match = String(condition).match(/^(.+?) A(\d) minimum$/);
       if (!match) return null;
 
       return {
@@ -296,7 +306,7 @@ function getDefenseConditionRequirements(defense) {
         minAwakening: Number(match[2]),
       };
     })
-    .filter(Boolean);
+    .filter((condition) => condition && condition.hero);
 }
 
 function analyzeDefenseCompatibility(member, defense) {
@@ -603,7 +613,7 @@ const [messageDialogState, setMessageDialogState] = useState({
   memberName: "",
   discordId: "",
 });
-const [activeProfileView, setActiveProfileView] = useState("defense");
+const [activeProfileView, setActiveProfileView] = useState("gestion_guildes");
 const [pbSortMode, setPbSortMode] = useState("top3");
 const [pbEditDialogOpen, setPbEditDialogOpen] = useState(false);
 const [pbHeroSearch, setPbHeroSearch] = useState("");
@@ -673,6 +683,7 @@ const [renameDefenseFaction, setRenameDefenseFaction] = useState("");
 const [metaCounterFilter, setMetaCounterFilter] = useState("all");
 const [workspaceTierFilter, setWorkspaceTierFilter] = useState("Tous");
 const [compatibleTierFilter, setCompatibleTierFilter] = useState("Tous");
+const [conditionDialogOpen, setConditionDialogOpen] = useState(false);
 
 
 const guildCodes = Array.from(
@@ -735,7 +746,7 @@ const memberIdsForGuild = useMemo(() => {
   const [newDefense, setNewDefense] = useState({
     id: 0,
     name: "",
-    tier: "Meta",
+    tier: "meta_s",
     type: "Tour",
     faction: "",
     slots: ["", "", "", "", ""],
@@ -865,12 +876,14 @@ useEffect(() => {
             name
           )
         ),
-        guild_defense_conditions (
-          min_awakening,
-          champions (
-            name
-          )
-        )
+guild_defense_conditions (
+  id,
+  champion_id,
+  min_awakening,
+  champions (
+    name
+  )
+)
       `)
       .order("created_at", { ascending: true });
 
@@ -886,10 +899,12 @@ useEffect(() => {
         .sort((a, b) => a.slot_index - b.slot_index)
         .map((slot) => slot.champions?.name || "");
 
-      const conditions = (row.guild_defense_conditions || []).map(
-        (condition) =>
-          `${condition.champions?.name} A${condition.min_awakening} minimum`
-      );
+const conditions = (row.guild_defense_conditions || []).map((condition) => ({
+  id: condition.id,
+  championId: condition.champion_id,
+  minAwakening: condition.min_awakening,
+  label: `${condition.champions?.name} A${condition.min_awakening} minimum`,
+}));
 
       return {
         id: row.id,
@@ -933,9 +948,9 @@ useEffect(() => {
 
     setLikesLoading(true);
 
-    const { data, error } = await supabase
-      .from("cluster_defense_likes")
-      .select("id, defense_id, member_id, created_at");
+const { data, error } = await supabase
+  .from("cluster_defense_likes")
+  .select("id, defense_id, member_id, value, created_at");
 
     if (error) {
       console.error("Erreur chargement likes défenses cluster:", error);
@@ -944,12 +959,13 @@ useEffect(() => {
       return;
     }
 
-    const mapped = (data || []).map((row) => ({
-      id: row.id,
-      defenseId: row.defense_id,
-      memberId: row.member_id,
-      createdAt: row.created_at,
-    }));
+const mapped = (data || []).map((row) => ({
+  id: row.id,
+  defenseId: row.defense_id,
+  memberId: row.member_id,
+  value: row.value,
+  createdAt: row.created_at,
+}));
 
     setClusterDefenseLikes(mapped);
 
@@ -1032,12 +1048,14 @@ useEffect(() => {
       name
     )
   ),
-  guild_defense_conditions (
-    min_awakening,
-    champions (
-      name
-    )
+guild_defense_conditions (
+  id,
+  champion_id,
+  min_awakening,
+  champions (
+    name
   )
+)
 `)
       .or(`is_global.eq.true,guild_code.eq.${activeGuildCode}`)
       .order("created_at", { ascending: true });
@@ -1054,9 +1072,12 @@ useEffect(() => {
         .sort((a, b) => a.slot_index - b.slot_index)
         .map((slot) => slot.champions?.name || "");
 
-      const conditions = (row.guild_defense_conditions || []).map(
-        (condition) => `${condition.champions?.name} A${condition.min_awakening} minimum`
-      );
+const conditions = (row.guild_defense_conditions || []).map((condition) => ({
+  id: condition.id,
+  championId: condition.champion_id,
+  minAwakening: condition.min_awakening,
+  label: `${condition.champions?.name} A${condition.min_awakening} minimum`,
+}));
 
 return {
   id: row.id,
@@ -1902,23 +1923,39 @@ function getDefenseLikeTargetId(defense) {
 const defenseLikesCountByRootId = useMemo(() => {
   const counts = new Map();
 
-  clusterDefenseLikes.forEach((like) => {
-    const currentCount = counts.get(like.defenseId) || 0;
-    counts.set(like.defenseId, currentCount + 1);
+  clusterDefenseLikes.forEach((vote) => {
+    if (vote.value !== 1) return;
+    const currentCount = counts.get(vote.defenseId) || 0;
+    counts.set(vote.defenseId, currentCount + 1);
   });
 
   return counts;
 }, [clusterDefenseLikes]);
 
-const likedDefenseRootIds = useMemo(() => {
-  if (!session?.memberId) return new Set();
+const defenseDislikesCountByRootId = useMemo(() => {
+  const counts = new Map();
 
-  return new Set(
-    clusterDefenseLikes
-      .filter((like) => String(like.memberId) === String(session.memberId))
-      .map((like) => like.defenseId)
-      .filter(Boolean)
-  );
+  clusterDefenseLikes.forEach((vote) => {
+    if (vote.value !== -1) return;
+    const currentCount = counts.get(vote.defenseId) || 0;
+    counts.set(vote.defenseId, currentCount + 1);
+  });
+
+  return counts;
+}, [clusterDefenseLikes]);
+
+const defenseVoteByRootId = useMemo(() => {
+  if (!session?.memberId) return new Map();
+
+  const votes = new Map();
+
+  clusterDefenseLikes
+    .filter((vote) => String(vote.memberId) === String(session.memberId))
+    .forEach((vote) => {
+      votes.set(vote.defenseId, vote.value);
+    });
+
+  return votes;
 }, [clusterDefenseLikes, session?.memberId]);
 
 const trackedMetaDefense = useMemo(() => {
@@ -2345,9 +2382,8 @@ const handleDragEnd = async (event) => {
   }
 };
 
-const assignDefense = async (slot, defense) => {
-  
-  if (!selectedMember?.id || !defense?.name) return;
+const assignDefense = async (slot, defense, memberId) => {
+  if (!memberId || !defense?.name) return;
 
   const column = slot === 1 ? "defense_1" : "defense_2";
   const localKey = slot === 1 ? "defense1" : "defense2";
@@ -2355,7 +2391,7 @@ const assignDefense = async (slot, defense) => {
   const { error } = await supabase
     .from("guild_members")
     .update({ [column]: defense.name })
-    .eq("id", selectedMember.id);
+    .eq("id", memberId);
 
   if (error) {
     console.error("Erreur assignation défense:", error);
@@ -2364,7 +2400,7 @@ const assignDefense = async (slot, defense) => {
 
   setMembers((prev) =>
     prev.map((member) =>
-      member.id === selectedMember.id
+      member.id === memberId
         ? { ...member, [localKey]: defense.name }
         : member
     )
@@ -3148,19 +3184,31 @@ const confirmNewDefense = async () => {
 
 const isGlobalDefense = activeGuildCode === "G1";
 
-const { data: defenseData, error: defenseError } = await supabase
-  .from("guild_defenses")
-  .insert({
-    name: cleanName,
-    tier: newDefense.tier,
-    type: newDefense.type,
-    faction: newDefense.faction || null,
-    image_url: newDefense.image || null,
-    guild_code: activeGuildCode,
-    is_global: isGlobalDefense,
-  })
-  .select()
-  .single();
+const isEditMode =
+  newDefense.id &&
+  String(newDefense.id) !== "0";
+const defensePayload = {
+  name: cleanName,
+  tier: newDefense.tier,
+  type: newDefense.type,
+  faction: newDefense.faction || null,
+  image_url: newDefense.image || null,
+  guild_code: activeGuildCode,
+  is_global: isGlobalDefense,
+};
+
+const { data: defenseData, error: defenseError } = isEditMode
+  ? await supabase
+      .from("guild_defenses")
+      .update(defensePayload)
+      .eq("id", newDefense.id)
+      .select()
+      .single()
+  : await supabase
+      .from("guild_defenses")
+      .insert(defensePayload)
+      .select()
+      .single();
 
   if (defenseError) {
     console.error("Erreur création défense:", defenseError);
@@ -3173,8 +3221,22 @@ const { data: defenseData, error: defenseError } = await supabase
     slot_index: index + 1,
   }));
 
+
+
+  if (isEditMode) {
+  const { error: deleteSlotsError } = await supabase
+    .from("guild_defense_slots")
+    .delete()
+    .eq("defense_id", defenseData.id);
+
+  if (deleteSlotsError) {
+    console.error("Erreur suppression anciens slots défense:", deleteSlotsError);
+    return;
+  }
+}
   const { error: slotsError } = await supabase
     .from("guild_defense_slots")
+    
     .insert(slotsRows);
 
   if (slotsError) {
@@ -3196,13 +3258,21 @@ const created = {
   usageCount: 0,
 };
 
-  setDefenses((prev) => [...prev, created]);
+  setDefenses((prev) =>
+  isEditMode
+    ? prev.map((defense) =>
+        String(defense.id) === String(created.id) ? created : defense
+      )
+    : [...prev, created]
+);
+
+setConditionDefenseId(String(created.id));
   setConditionDefenseId(String(created.id));
 
 setNewDefense({
   id: 0,
   name: "",
-  tier: "Meta",
+  tier: "meta_s",
   type: "Tour",
   faction: "",
   slots: ["", "", "", "", ""],
@@ -3223,22 +3293,25 @@ const addCondition = async () => {
   );
 
   if (!defense) return;
-  if (!canDeleteDefense(defense)) return;
+  if (!isAdmin) return;
 
   if (!(defense.slots || []).includes(newCondition.hero)) {
     console.error("Le héros choisi n'appartient pas à cette défense.");
     return;
   }
 
-  const alreadyExists = (defense.conditions || []).some((condition) => {
-    const match = condition.match(/^(.+?) A(\d) minimum$/);
-    if (!match) return false;
+const alreadyExists = (defense.conditions || []).some((condition) => {
+  const label =
+    typeof condition === "string" ? condition : condition.label || "";
 
-    return (
-      match[1] === newCondition.hero &&
-      Number(match[2]) === Number(newCondition.minAwakening)
-    );
-  });
+  const match = label.match(/^(.+?) A(\d) minimum$/);
+  if (!match) return false;
+
+  return (
+    match[1] === newCondition.hero &&
+    Number(match[2]) === Number(newCondition.minAwakening)
+  );
+});
 
   if (alreadyExists) {
     console.error("Cette condition existe déjà.");
@@ -3263,13 +3336,14 @@ const addCondition = async () => {
       champion_id: champion.id,
       min_awakening: Number(newCondition.minAwakening),
     })
-    .select(`
-      id,
-      min_awakening,
-      champions (
-        name
-      )
-    `)
+.select(`
+  id,
+  champion_id,
+  min_awakening,
+  champions (
+    name
+  )
+`)
     .single();
 
   if (error) {
@@ -3284,7 +3358,12 @@ const addCondition = async () => {
             ...item,
             conditions: [
               ...(item.conditions || []),
-              `${data.champions?.name} A${data.min_awakening} minimum`,
+              {
+  id: data.id,
+  championId: data.champion_id,
+  minAwakening: data.min_awakening,
+  label: `${data.champions?.name} A${data.min_awakening} minimum`,
+},
             ],
           }
         : item
@@ -3601,6 +3680,11 @@ const deleteDefense = async (defense) => {
   if (!defense?.id) return;
   if (!canDeleteDefense(defense)) return;
 
+  const confirmDelete = window.confirm(
+    `Supprimer la défense "${defense.name}" ?`
+  );
+
+  if (!confirmDelete) return;
 
   try {
     const { data: blocks, error: blocksError } = await supabase
@@ -4515,81 +4599,119 @@ const importDefenseToActiveGuild = async (sourceDefense) => {
   }
 };
 
-const toggleDefenseLike = async (defense) => {
+const setDefenseVote = async (defense, value) => {
   if (!session?.memberId) return;
   if (!defense) return;
 
   const targetDefenseId = getDefenseLikeTargetId(defense);
   if (!targetDefenseId) return;
 
-  const existingLike = clusterDefenseLikes.find(
-    (like) =>
-      String(like.defenseId) === String(targetDefenseId) &&
-      String(like.memberId) === String(session.memberId)
+  const existingVote = clusterDefenseLikes.find(
+    (vote) =>
+      String(vote.defenseId) === String(targetDefenseId) &&
+      String(vote.memberId) === String(session.memberId)
   );
 
-  if (existingLike) {
-    const { error } = await supabase
-      .from("cluster_defense_likes")
-      .delete()
-      .eq("id", existingLike.id);
+  if (existingVote) {
+    if (existingVote.value === value) {
+      const { error } = await supabase
+        .from("cluster_defense_likes")
+        .delete()
+        .eq("id", existingVote.id);
 
-    if (error) {
-      console.error("Erreur suppression like défense:", error);
+      if (error) {
+        console.error("Erreur suppression vote défense:", error);
+        return;
+      }
+
+      let nextVotes = [];
+
+      setClusterDefenseLikes((prev) => {
+        nextVotes = prev.filter((vote) => vote.id !== existingVote.id);
+        return nextVotes;
+      });
+
+      setDashboardCache((prev) => ({
+        ...prev,
+        [cacheGuildKey]: {
+          ...prev[cacheGuildKey],
+          clusterDefenseLikes: nextVotes,
+        },
+      }));
+
       return;
     }
 
-    let nextLikes = [];
+    const { error } = await supabase
+      .from("cluster_defense_likes")
+      .update({ value })
+      .eq("id", existingVote.id);
+
+    if (error) {
+      console.error("Erreur mise à jour vote défense:", error);
+      return;
+    }
+
+    let nextVotes = [];
 
     setClusterDefenseLikes((prev) => {
-      nextLikes = prev.filter((like) => like.id !== existingLike.id);
-      return nextLikes;
+      nextVotes = prev.map((vote) =>
+        vote.id === existingVote.id ? { ...vote, value } : vote
+      );
+      return nextVotes;
     });
 
     setDashboardCache((prev) => ({
       ...prev,
       [cacheGuildKey]: {
         ...prev[cacheGuildKey],
-        clusterDefenseLikes: nextLikes,
+        clusterDefenseLikes: nextVotes,
       },
     }));
 
     return;
   }
 
-  const { data, error } = await supabase
-    .from("cluster_defense_likes")
-    .insert({
+const { data, error } = await supabase
+  .from("cluster_defense_likes")
+  .upsert(
+    {
       defense_id: targetDefenseId,
       member_id: session.memberId,
-    })
-    .select("id, defense_id, member_id, created_at")
-    .single();
+      value,
+    },
+    {
+      onConflict: "defense_id,member_id",
+    }
+  )
+  .select()
+  .single();
 
   if (error) {
-    console.error("Erreur ajout like défense:", error);
+    console.error("Erreur ajout vote défense:", error);
     return;
   }
 
-  const createdLike = {
+  const createdVote = {
     id: data.id,
     defenseId: data.defense_id,
     memberId: data.member_id,
+    value: data.value,
     createdAt: data.created_at,
   };
 
-  let nextLikes = [];
+  let nextVotes = [];
 
   setClusterDefenseLikes((prev) => {
-    nextLikes = [...prev, createdLike];
-    return nextLikes;
+    nextVotes = [...prev, createdVote];
+    return nextVotes;
   });
 
   setDashboardCache((prev) => ({
     ...prev,
     [cacheGuildKey]: {
       ...prev[cacheGuildKey],
-      clusterDefenseLikes: nextLikes,
+      clusterDefenseLikes: nextVotes,
     },
   }));
 };
@@ -4651,6 +4773,29 @@ function isPbOutdated(date) {
   return diffDays >= 30;
 }
 
+const removeConditionById = async (conditionId) => {
+  if (!conditionId) return;
+
+  const { error } = await supabase
+    .from("guild_defense_conditions")
+    .delete()
+    .eq("id", conditionId);
+
+  if (error) {
+    console.error("Erreur suppression condition:", error);
+    return;
+  }
+
+  setDefenses((prev) =>
+    prev.map((defense) => ({
+      ...defense,
+      conditions: (defense.conditions || []).filter(
+        (c) => String(c.id) !== String(conditionId)
+      ),
+    }))
+  );
+};
+
 function getDisplayedPbValue(slot, member) {
   if (!slot) return 0;
 
@@ -4689,7 +4834,10 @@ if (!session) {
 
 
 const profileViewTabs = [
-  { key: "defense", label: "Gestion défense" },
+  
+  { key: "admin_defenses", label: "Admin défenses", adminOnly: true },
+  { key: "gestion_guildes", label: "Gestion de guildes" },
+
   { key: "awakening", label: "Éveils" },
   { key: "pb", label: "Tableur PB" },
   { key: "demon", label: "Monstre Démoniaque" },
@@ -5115,10 +5263,11 @@ if (isExternal) {
                                 <SelectTrigger className="rounded-2xl border-zinc-700 bg-zinc-900">
                                   <SelectValue />
                                 </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="Meta">Meta</SelectItem>
-                                  <SelectItem value="Secondaire">Secondaire</SelectItem>
-                                </SelectContent>
+                          <SelectContent>
+                            <SelectItem value="meta_s">Meta S</SelectItem>
+                            <SelectItem value="meta_a">Meta A</SelectItem>
+                            <SelectItem value="secondaire">Secondaire</SelectItem>
+                          </SelectContent>
                               </Select>
                             </div>
                           </div>
@@ -5944,7 +6093,69 @@ if (isExternal) {
     <RunSearchGrid />
   </div>
 )}
-
+{activeProfileView === "gestion_guildes" && (
+<GestionDefenseTab
+  members={filteredMembers}
+  allMembers={members}
+  activeGuildCode={activeGuildCode}
+  trackedMetaDefense={trackedMetaDefense}
+  setTrackedMetaDefense={setSelectedMetaDefenseForCompletion}
+  metaDefenseCounters={metaDefenseCounters}
+  setTodoMember={setTodoMember}
+  setVerifyMember={setVerifyMember}
+  validateMember={validateMember}
+  openTransferDialog={openTransferDialog}
+  setTransferDialogOpen={setTransferDialogOpen}
+  setMemberToTransfer={setMemberToTransfer}
+  setTargetGuildCode={setTargetGuildCode}
+  setMemberAssignment={setMemberAssignment}
+  defenses={defenses}
+  clearAssignedDefense={clearAssignedDefense}
+  assignDefense={assignDefense}
+  setSelectedId={setSelectedId}
+  isAdmin={isAdmin}
+  setDefenseVote={setDefenseVote}
+defenseLikesCountByRootId={defenseLikesCountByRootId}
+defenseDislikesCountByRootId={defenseDislikesCountByRootId}
+defenseVoteByRootId={defenseVoteByRootId}
+getDefenseLikeTargetId={getDefenseLikeTargetId}
+/>
+)}
+{activeProfileView === "admin_defenses" && (
+<AdminDefensesTab
+  defenses={defenses}
+  onEdit={(defense) => {
+    setNewDefense({
+      ...defense,
+      slots: defense.slots || ["", "", "", "", ""],
+      conditions: defense.conditions || [],
+      image: defense.image || defense.image_url || "",
+    });
+    setNewDefenseOpen(true);
+  }}
+  onDelete={deleteDefense}
+  onAdd={() => {
+    setNewDefense({
+      id: 0,
+      name: "",
+      tier: "meta_s",
+      type: "Tour",
+      faction: "",
+      slots: ["", "", "", "", ""],
+      conditions: [],
+      image: "",
+    });
+    setNewDefenseOpen(true);
+  }}
+onAddCondition={(defense) => {
+  setConditionDefenseId(String(defense.id));
+  setConditionDialogOpen(true);
+}}
+/>
+)}
+{activeProfileView === "mon_suivi" && (
+  <MonSuiviTab selectedMember={selectedMember} defenses={defenses} />
+)}
 {activeProfileView === "run_add" && <RunAddTab />}
 {activeProfileView === "run_edit" && <RunEditTab />}
 {activeProfileView === "gvg_current" && <GvgCurrentTab />}
@@ -7006,18 +7217,45 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
                     </div>
 
 <div className="flex items-center gap-2">
-  <button
-    type="button"
-    onClick={() => toggleDefenseLike(defense)}
-    className={`rounded-xl border px-3 py-1 text-sm transition ${
-      likedDefenseRootIds.has(getDefenseLikeTargetId(defense))
-        ? "border-pink-500/40 bg-pink-500/15 text-pink-300"
-        : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
-    }`}
-    title="Liker cette défense"
-  >
-    ❤ {defenseLikesCountByRootId.get(getDefenseLikeTargetId(defense)) || 0}
-  </button>
+<div className="flex flex-col items-center gap-1">
+<button
+  type="button"
+  onPointerDown={(e) => {
+    e.stopPropagation();
+  }}
+  onClick={(e) => {
+    e.stopPropagation();
+    setDefenseVote(defense, 1);
+  }}
+  className={`rounded-lg border px-2 py-1 text-xs transition ${
+    defenseVoteByRootId.get(getDefenseLikeTargetId(defense)) === 1
+      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+      : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+  }`}
+  title="Liker cette défense"
+>
+  👍 {defenseLikesCountByRootId.get(getDefenseLikeTargetId(defense)) || 0}
+</button>
+
+<button
+  type="button"
+  onPointerDown={(e) => {
+    e.stopPropagation();
+  }}
+  onClick={(e) => {
+    e.stopPropagation();
+    setDefenseVote(defense, -1);
+  }}
+  className={`rounded-lg border px-2 py-1 text-xs transition ${
+    defenseVoteByRootId.get(getDefenseLikeTargetId(defense)) === -1
+      ? "border-red-500/40 bg-red-500/15 text-red-300"
+      : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+  }`}
+  title="Disliker cette défense"
+>
+  👎 {defenseDislikesCountByRootId.get(getDefenseLikeTargetId(defense)) || 0}
+</button>
+</div>
 
   <Button
     size="icon"
@@ -7107,12 +7345,15 @@ className={`grid grid-cols-[160px_repeat(5,132px)_72px_72px_72px_72px] cursor-po
                       </div>
                     )}
                     <div className="space-y-2">
-                      {defense.conditions.map((condition) => (
-                        <div key={condition} className="flex items-center gap-2 text-sm text-zinc-300">
-                          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                          {condition}
-                        </div>
-                      ))}
+{defense.conditions.map((condition, index) => (
+  <div
+    key={condition.id || condition.label || index}
+    className="flex items-center gap-2 text-sm text-zinc-300"
+  >
+    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+    {typeof condition === "string" ? condition : condition.label}
+  </div>
+))}
                     </div>
                   </CardContent>
                 </Card>
@@ -7255,17 +7496,6 @@ return (
     {alreadyImported ? "Déjà importée" : "Importable"}
   </Badge>
 
-  <button
-    type="button"
-    onClick={() => toggleDefenseLike(defense)}
-    className={`rounded-xl border px-3 py-1 text-sm transition ${
-      likedDefenseRootIds.has(getDefenseLikeTargetId(defense))
-        ? "border-pink-500/40 bg-pink-500/15 text-pink-300"
-        : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
-    }`}
-  >
-    ❤ {defenseLikesCountByRootId.get(getDefenseLikeTargetId(defense)) || 0}
-  </button>
 </div>
                   </div>
                 </CardHeader>
@@ -7298,15 +7528,15 @@ return (
                   )}
 
                   <div className="space-y-2">
-                    {(defense.conditions || []).map((condition) => (
-                      <div
-                        key={condition}
-                        className="flex items-center gap-2 text-sm text-zinc-300"
-                      >
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                        {condition}
-                      </div>
-                    ))}
+{(defense.conditions || []).map((condition, index) => (
+  <div
+    key={condition.id || condition.label || index}
+    className="flex items-center gap-2 text-sm text-zinc-300"
+  >
+    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+    {typeof condition === "string" ? condition : condition.label}
+  </div>
+))}
                   </div>
 
                   <div className="flex justify-end">
@@ -7417,14 +7647,15 @@ return (
 
             {(selectedConditionDefense.conditions || []).length > 0 ? (
               <div className="space-y-3">
-                {selectedConditionDefense.conditions.map((condition) => {
-                  const match = condition.match(/^(.+?) A(\d) minimum$/);
-                  const heroName = match?.[1] || condition;
-                  const awakeningValue = match?.[2];
+{selectedConditionDefense.conditions.map((condition, index) => {
+  const label = typeof condition === "string" ? condition : condition.label || "";
+  const match = label.match(/^(.+?) A(\d) minimum$/);
+  const heroName = match?.[1] || label;
+  const awakeningValue = match?.[2];
 
-                  return (
-                    <div
-                      key={condition}
+  return (
+    <div
+      key={condition.id || label || index}
                       className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 p-4 md:flex-row md:items-center md:justify-between"
                     >
                       <div className="flex flex-wrap items-center gap-2">
@@ -7442,9 +7673,11 @@ return (
   size="sm"
   variant="outline"
   className="rounded-xl border-red-500/30 bg-transparent text-red-300 hover:bg-red-500/10 disabled:opacity-40"
-  onClick={() =>
-    removeCondition(selectedConditionDefense.id, condition)
-  }
+onClick={() =>
+  condition.id
+    ? removeConditionById(condition.id)
+    : removeCondition(selectedConditionDefense.id, condition)
+}
   disabled={!canDeleteDefense(selectedConditionDefense)}
   title={
     canDeleteDefense(selectedConditionDefense)
@@ -8199,78 +8432,7 @@ onClick={async () => {
     </div>
   </DialogContent>
 </Dialog>
-<Dialog
 
-  open={transferDialogOpen}
-  onOpenChange={(open) => {
-    setTransferDialogOpen(open);
-
-    if (!open) {
-      setMemberToTransfer(null);
-      setTargetGuildCode("");
-    }
-  }}
->
-  <DialogContent className="max-w-md rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
-    <DialogHeader>
-      <DialogTitle>Transférer un joueur</DialogTitle>
-    </DialogHeader>
-
-    <div className="space-y-4">
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-        <div className="text-sm text-zinc-400">Joueur sélectionné</div>
-        <div className="mt-1 font-medium text-zinc-50">
-          {memberToTransfer?.name || "—"}
-        </div>
-        <div className="text-sm text-zinc-400">
-          Guilde actuelle : {activeGuildCode}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <div className="text-sm text-zinc-400">Nouvelle guilde</div>
-        <Select value={targetGuildCode} onValueChange={setTargetGuildCode}>
-          <SelectTrigger className="rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
-            <SelectValue placeholder="Choisir une guilde" />
-          </SelectTrigger>
-          <SelectContent>
-            {availableTransferGuilds.map((code) => (
-              <SelectItem key={code} value={code}>
-                {code}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-<div className="flex flex-col gap-3">
-  <Button
-    className="rounded-2xl"
-    onClick={transferMemberToGuild}
-    disabled={!targetGuildCode || targetGuildCode === activeGuildCode}
-  >
-    Confirmer le transfert
-  </Button>
-
-  <Button
-    variant="destructive"
-    className="rounded-2xl bg-red-700 text-white hover:bg-red-600"
-    onClick={removeMemberFromCluster}
-  >
-    Quitte le cluster
-  </Button>
-
-  <Button
-    variant="outline"
-    className="rounded-2xl border-zinc-700 bg-zinc-900"
-    onClick={() => setTransferDialogOpen(false)}
-  >
-    Annuler
-  </Button>
-</div>
-    </div>
-  </DialogContent>
-</Dialog>
 
 
 <Dialog open={deleteDefenseDialogOpen} onOpenChange={setDeleteDefenseDialogOpen}>
@@ -8443,6 +8605,78 @@ onClick={async () => {
 </Dialog>
         </Tabs>
       )}
+      <Dialog
+
+  open={transferDialogOpen}
+  onOpenChange={(open) => {
+    setTransferDialogOpen(open);
+
+    if (!open) {
+      setMemberToTransfer(null);
+      setTargetGuildCode("");
+    }
+  }}
+>
+  <DialogContent className="max-w-md rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
+    <DialogHeader>
+      <DialogTitle>Transférer un joueur</DialogTitle>
+    </DialogHeader>
+
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+        <div className="text-sm text-zinc-400">Joueur sélectionné</div>
+        <div className="mt-1 font-medium text-zinc-50">
+          {memberToTransfer?.name || "—"}
+        </div>
+        <div className="text-sm text-zinc-400">
+          Guilde actuelle : {activeGuildCode}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-sm text-zinc-400">Nouvelle guilde</div>
+        <Select value={targetGuildCode} onValueChange={setTargetGuildCode}>
+          <SelectTrigger className="rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100">
+            <SelectValue placeholder="Choisir une guilde" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableTransferGuilds.map((code) => (
+              <SelectItem key={code} value={code}>
+                {code}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+<div className="flex flex-col gap-3">
+  <Button
+    className="rounded-2xl"
+    onClick={transferMemberToGuild}
+    disabled={!targetGuildCode || targetGuildCode === activeGuildCode}
+  >
+    Confirmer le transfert
+  </Button>
+
+  <Button
+    variant="destructive"
+    className="rounded-2xl bg-red-700 text-white hover:bg-red-600"
+    onClick={removeMemberFromCluster}
+  >
+    Quitte le cluster
+  </Button>
+
+  <Button
+    variant="outline"
+    className="rounded-2xl border-zinc-700 bg-zinc-900"
+    onClick={() => setTransferDialogOpen(false)}
+  >
+    Annuler
+  </Button>
+</div>
+    </div>
+  </DialogContent>
+</Dialog>
 <Dialog open={demonLevelDialogOpen} onOpenChange={setDemonLevelDialogOpen}>
   <DialogContent className="max-w-md rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
     <DialogHeader>
@@ -9401,6 +9635,99 @@ await updatePbRaw(pbSlotToEdit.entryId, formatted);
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={conditionDialogOpen} onOpenChange={setConditionDialogOpen}>
+        <DialogContent className="max-w-xl border-zinc-800 bg-zinc-950 text-white">
+          <DialogHeader>
+            <DialogTitle>Gérer les conditions</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="text-sm text-zinc-400">
+              Défense sélectionnée :{" "}
+              <span className="font-semibold text-white">
+                {defenses.find((d) => String(d.id) === String(conditionDefenseId))
+                  ?.name || "Aucune"}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {(defenses.find((d) => String(d.id) === String(conditionDefenseId))
+                ?.conditions || []).length === 0 ? (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 text-sm text-zinc-500">
+                  Aucune condition pour cette défense.
+                </div>
+              ) : (
+                defenses
+                  .find((d) => String(d.id) === String(conditionDefenseId))
+                  ?.conditions?.map((condition) => (
+                    <div
+                      key={condition.id || condition.label}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 text-sm"
+                    >
+<span>{typeof condition === "string" ? condition : condition.label}</span>
+
+<button
+  type="button"
+  onClick={() => removeConditionById(condition.id)}
+                        className="rounded-lg border border-red-900/60 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40"
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  ))
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <select
+                value={newCondition.hero}
+                onChange={(e) =>
+                  setNewCondition((prev) => ({ ...prev, hero: e.target.value }))
+                }
+                className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white"
+              >
+                <option value="">Héros</option>
+                {(defenses.find((d) => String(d.id) === String(conditionDefenseId))
+                  ?.slots || [])
+                  .filter(Boolean)
+                  .map((hero) => (
+                    <option key={hero} value={hero}>
+                      {hero}
+                    </option>
+                  ))}
+              </select>
+
+              <select
+                value={newCondition.minAwakening}
+                onChange={(e) =>
+                  setNewCondition((prev) => ({
+                    ...prev,
+                    minAwakening: e.target.value,
+                  }))
+                }
+                className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-white"
+              >
+                <option value="">Éveil minimum</option>
+                {[0, 1, 2, 3, 4, 5].map((value) => (
+                  <option key={value} value={value}>
+                    A{value}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={addCondition}
+              className="w-full rounded-xl border border-emerald-700 bg-emerald-950/50 px-4 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-900/50"
+            >
+              Ajouter la condition
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       </div>
     </div>
   );
