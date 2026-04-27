@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 import { Shield, Plus, Pencil, Trash2 } from "lucide-react";
 
 export default function AdminDefensesTab({
@@ -8,7 +8,32 @@ export default function AdminDefensesTab({
   onAdd,
   onAddCondition,
 }) {
-  
+  const [typeFilter, setTypeFilter] = useState("all");
+
+  const displayedDefenses = useMemo(() => {
+    return [...defenses]
+      .filter((defense) => {
+        if (typeFilter === "all") return true;
+
+        return (
+          String(defense.type || "")
+            .trim()
+            .toLowerCase() === typeFilter
+        );
+      })
+      .sort((a, b) =>
+        String(a.name || "").localeCompare(String(b.name || ""), "fr", {
+          sensitivity: "base",
+        })
+      );
+  }, [defenses, typeFilter]);
+
+  const filterButtonClass = (value) =>
+    `rounded-xl border px-3 py-1.5 text-sm ${
+      typeFilter === value
+        ? "border-emerald-600 bg-emerald-950/50 text-emerald-200"
+        : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+    }`;
 
   return (
     <div className="space-y-4 p-4">
@@ -33,13 +58,39 @@ export default function AdminDefensesTab({
         </button>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setTypeFilter("all")}
+          className={filterButtonClass("all")}
+        >
+          Toutes
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTypeFilter("tour")}
+          className={filterButtonClass("tour")}
+        >
+          Tour
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTypeFilter("bastion")}
+          className={filterButtonClass("bastion")}
+        >
+          Bastion
+        </button>
+      </div>
+
       <div className="grid gap-3">
-        {defenses.length === 0 ? (
+        {displayedDefenses.length === 0 ? (
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
             Aucune défense chargée.
           </div>
         ) : (
-          defenses.map((defense) => (
+          displayedDefenses.map((defense) => (
             <div
               key={defense.id}
               className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4"
@@ -71,7 +122,7 @@ export default function AdminDefensesTab({
 
                   <button
                     type="button"
-onClick={() => onAddCondition?.(defense)}
+                    onClick={() => onAddCondition?.(defense)}
                     className="rounded-xl border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
                   >
                     + Condition
@@ -91,11 +142,11 @@ onClick={() => onAddCondition?.(defense)}
                   <span className="ml-2 text-zinc-500">Aucune</span>
                 ) : (
                   <ul className="mt-1 space-y-1">
-{defense.conditions.map((cond, i) => (
-  <li key={cond.id || i} className="text-xs text-zinc-300">
-    • {typeof cond === "string" ? cond : cond.label}
-  </li>
-))}
+                    {defense.conditions.map((cond, i) => (
+                      <li key={cond.id || i} className="text-xs text-zinc-300">
+                        • {typeof cond === "string" ? cond : cond.label}
+                      </li>
+                    ))}
                   </ul>
                 )}
               </div>
