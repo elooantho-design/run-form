@@ -80,8 +80,26 @@ const cycleRoleSortMode = () => {
   const selectedMember = allMembers.find((m) => m.id === selectedMemberId);
   const isDetailView = selectedMemberId && selectedMember;
 
+const getDefenseHeroes = (defense) =>
+  (defense?.slots || [])
+    .map((slot) => (typeof slot === "string" ? slot : slot?.hero || null))
+    .filter(Boolean);
+
+const selectedDefenseNames = [
+  selectedMember?.defense1,
+  selectedMember?.defense2,
+].filter((name) => name && name !== "--" && name !== "—");
+
+const selectedDefenseHeroes = defenses
+  .filter((defense) => selectedDefenseNames.includes(defense.name))
+  .flatMap(getDefenseHeroes);
+
+const selectedHeroSet = new Set(selectedDefenseHeroes);
+
 const availableDefenses = defenses
   .filter((defense) => {
+    if (selectedDefenseNames.includes(defense.name)) return false;
+
     if (defenseListFilter === "all") return true;
 
     if (defenseListFilter === "bastion") {
@@ -90,11 +108,31 @@ const availableDefenses = defenses
 
     return (defense.type || "").toLowerCase() === "tour";
   })
+  .map((defense) => {
+    const heroes = getDefenseHeroes(defense);
+    const duplicateHeroes = heroes.filter((hero) => selectedHeroSet.has(hero));
+
+    return {
+      ...defense,
+      duplicateHeroes,
+      duplicateCount: duplicateHeroes.length,
+    };
+  })
   .sort((a, b) => {
+    if (a.duplicateCount !== b.duplicateCount) {
+      return a.duplicateCount - b.duplicateCount;
+    }
+
     const scoreA = getMemberTrackedDefenseScore(selectedMember, a) ?? 0;
     const scoreB = getMemberTrackedDefenseScore(selectedMember, b) ?? 0;
 
-    return scoreB - scoreA;
+    if (scoreA !== scoreB) {
+      return scoreB - scoreA;
+    }
+
+    return String(a.name || "").localeCompare(String(b.name || ""), "fr", {
+      sensitivity: "base",
+    });
   });
 
 
@@ -487,7 +525,15 @@ const displayedMembers = [...members].sort((a, b) => {
       >
 <div className="mb-3 flex items-center justify-between">
   <div className="text-sm text-zinc-400">{defense.name}</div>
-
+{defense.duplicateCount > 0 ? (
+  <div className="mt-1 text-xs text-amber-300">
+    Doublon : {defense.duplicateHeroes.join(", ")}
+  </div>
+) : (
+  <div className="mt-1 text-xs text-emerald-300">
+    Aucun doublon héros
+  </div>
+)}
   <div className="flex items-center gap-2">
 
     {/* 👍 👎 */}

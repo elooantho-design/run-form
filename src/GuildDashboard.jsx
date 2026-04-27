@@ -3726,6 +3726,26 @@ const deleteDefense = async (defense) => {
       }
     }
 
+    const { error: membersDefense1Error } = await supabase
+      .from("guild_members")
+      .update({ defense_1: "—" })
+      .eq("defense_1", defense.name);
+
+    if (membersDefense1Error) {
+      console.error("Erreur reset defense_1 joueurs:", membersDefense1Error);
+      return;
+    }
+
+    const { error: membersDefense2Error } = await supabase
+      .from("guild_members")
+      .update({ defense_2: "—" })
+      .eq("defense_2", defense.name);
+
+    if (membersDefense2Error) {
+      console.error("Erreur reset defense_2 joueurs:", membersDefense2Error);
+      return;
+    }
+
     const { error: defenseError } = await supabase
       .from("guild_defenses")
       .delete()
@@ -3735,6 +3755,14 @@ const deleteDefense = async (defense) => {
       console.error("Erreur suppression défense:", defenseError);
       return;
     }
+
+    setMembers((prev) =>
+      prev.map((member) => ({
+        ...member,
+        defense1: member.defense1 === defense.name ? "—" : member.defense1,
+        defense2: member.defense2 === defense.name ? "—" : member.defense2,
+      }))
+    );
 
     setDefenses((prev) => prev.filter((d) => d.id !== defense.id));
 
