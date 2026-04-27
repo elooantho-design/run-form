@@ -35,6 +35,16 @@ export default function AdminDefensesTab({
         : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
     }`;
 
+const defenseCardClass = (tier) => {
+  const normalizedTier = String(tier || "").trim().toLowerCase();
+
+  if (normalizedTier === "meta_s") {
+    return "border-4 border-sky-400 bg-sky-500/35 shadow-[0_0_22px_rgba(56,189,248,0.45)]";
+  }
+
+  return "border-4 border-lime-300 bg-lime-500/35 shadow-[0_0_22px_rgba(163,230,53,0.45)]";
+};
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between gap-3">
@@ -96,34 +106,36 @@ export default function AdminDefensesTab({
             return (
               <div
                 key={defense.id}
-                className="grid min-h-[220px] grid-cols-[1fr_300px_auto] gap-5 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4"
+                className={`grid min-h-[220px] grid-cols-[1fr_300px_auto] gap-5 rounded-2xl p-4 ${defenseCardClass(
+                  defense.tier
+                )}`}
               >
                 <div className="flex flex-col">
                   <div>
                     <div className="font-semibold text-white">
                       {defense.name}
                     </div>
-                    <div className="mt-1 text-xs text-zinc-400">
+                    <div className="mt-1 text-xs text-zinc-300">
                       {defense.tier} · {defense.type}
                     </div>
                   </div>
 
-                  <div className="mt-3 text-sm text-zinc-300">
+                  <div className="mt-3 text-sm text-zinc-200">
                     Héros :{" "}
                     {(defense.slots || []).filter(Boolean).join(", ") ||
                       "Non renseigné"}
                   </div>
 
-                  <div className="mt-2 text-sm text-zinc-400">
+                  <div className="mt-2 text-sm text-zinc-300">
                     Conditions :
                     {(defense.conditions || []).length === 0 ? (
-                      <span className="ml-2 text-zinc-500">Aucune</span>
+                      <span className="ml-2 text-zinc-400">Aucune</span>
                     ) : (
                       <ul className="mt-1 space-y-1">
                         {defense.conditions.slice(0, 5).map((cond, i) => (
                           <li
                             key={cond.id || cond.label || i}
-                            className="text-xs text-zinc-300"
+                            className="text-xs text-zinc-200"
                           >
                             • {typeof cond === "string" ? cond : cond.label}
                           </li>
@@ -133,7 +145,7 @@ export default function AdminDefensesTab({
                   </div>
                 </div>
 
-                <div className="flex h-[180px] items-center justify-center overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+                <div className="flex h-[180px] items-center justify-center overflow-hidden rounded-xl border border-black/30 bg-zinc-950/80">
                   {imageSrc ? (
                     <img
                       src={imageSrc}
@@ -149,7 +161,7 @@ export default function AdminDefensesTab({
                   <button
                     type="button"
                     onClick={() => onEdit?.(defense)}
-                    className="rounded-xl border border-zinc-700 p-2 text-zinc-200 hover:bg-zinc-800"
+                    className="rounded-xl border border-zinc-700 bg-zinc-950/40 p-2 text-zinc-200 hover:bg-zinc-800"
                   >
                     <Pencil className="h-4 w-4" />
                   </button>
@@ -157,7 +169,7 @@ export default function AdminDefensesTab({
                   <button
                     type="button"
                     onClick={() => onDelete?.(defense)}
-                    className="rounded-xl border border-red-900/60 p-2 text-red-300 hover:bg-red-950/40"
+                    className="rounded-xl border border-red-900/60 bg-zinc-950/40 p-2 text-red-300 hover:bg-red-950/40"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -165,7 +177,7 @@ export default function AdminDefensesTab({
                   <button
                     type="button"
                     onClick={() => onAddCondition?.(defense)}
-                    className="rounded-xl border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+                    className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
                   >
                     + Condition
                   </button>
