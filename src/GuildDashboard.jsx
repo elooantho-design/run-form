@@ -3644,6 +3644,21 @@ const saveDefenseIdentity = async () => {
     return;
   }
 
+  // 🔥 1. récupérer le vrai ancien nom depuis la DB
+  const { data: existingDefense, error: fetchError } = await supabase
+    .from("guild_defenses")
+    .select("name")
+    .eq("id", renameDefenseTarget.id)
+    .single();
+
+  if (fetchError || !existingDefense) {
+    console.error("Erreur récupération ancienne défense:", fetchError);
+    return;
+  }
+
+  const oldName = existingDefense.name;
+
+  // 🔥 2. update la défense
   const { error } = await supabase
     .from("guild_defenses")
     .update({
@@ -3653,27 +3668,84 @@ const saveDefenseIdentity = async () => {
     .eq("id", renameDefenseTarget.id);
 
   if (error) {
-    console.error("Erreur mise à jour titre/faction défense:", error);
-    alert(`Mise à jour impossible : ${error.message || "erreur inconnue"}`);
+    console.error("Erreur update défense:", error);
     return;
   }
 
+  // 🔥 3. cascade propre
+  if (oldName !== nextName) {
+    const { error: e1 } = await supabase
+      .from("guild_members")
+      .update({ defense_1: nextName })
+      .eq("defense_1", oldName);
+
+    const { error: e2 } = await supabase
+      .from("guild_members")
+      .update({ defense_2: nextName })
+      .eq("defense_2", oldName);
+
+    if (e1 || e2) {
+      console.error("Erreur cascade rename:", e1 || e2);
+    }
+  }
+
+  // 🔥 4. sync front
   setDefenses((prev) =>
-    prev.map((defense) =>
-      defense.id === renameDefenseTarget.id
-        ? {
-            ...defense,
-            name: nextName,
-            faction: nextFaction,
-          }
-        : defense
+    prev.map((d) =>
+      d.id === renameDefenseTarget.id
+        ? { ...d, name: nextName, faction: nextFaction }
+        : d
     )
   );
 
+  setMembers((prev) =>
+    prev.map((m) => ({
+      ...m,
+      defense1: m.defense1 === oldName ? nextName : m.defense1,
+      defense2: m.defense2 === oldName ? nextName : m.defense2,
+    }))
+  );
+
+  // cleanup
   setRenameDefenseDialogOpen(false);
   setRenameDefenseTarget(null);
   setRenameDefenseName("");
   setRenameDefenseFaction("");
+};
+
+const cleanAssignedDefenses = async (memberId) => {
+  if (!memberId) return;
+
+  const confirmClean = window.confirm(
+    "Réinitialiser les 2 défenses assignées de ce joueur ?"
+  );
+
+  if (!confirmClean) return;
+
+  const { error } = await supabase
+    .from("guild_members")
+    .update({
+      defense_1: "—",
+      defense_2: "—",
+    })
+    .eq("id", memberId);
+
+  if (error) {
+    console.error("Erreur clean def:", error);
+    return;
+  }
+
+  setMembers((prev) =>
+    prev.map((member) =>
+      member.id === memberId
+        ? {
+            ...member,
+            defense1: "—",
+            defense2: "—",
+          }
+        : member
+    )
+  );
 };
 
 const deleteDefense = async (defense) => {
@@ -6139,6 +6211,7 @@ if (isExternal) {
   setMemberAssignment={setMemberAssignment}
   defenses={defenses}
   clearAssignedDefense={clearAssignedDefense}
+  cleanAssignedDefenses={cleanAssignedDefenses}
   assignDefense={assignDefense}
   setSelectedId={setSelectedId}
   isAdmin={isAdmin}

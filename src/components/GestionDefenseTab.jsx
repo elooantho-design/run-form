@@ -24,6 +24,7 @@ export default function GestionDefenseTab({
   setMemberAssignment,
   defenses = [],
   clearAssignedDefense,
+  cleanAssignedDefenses,
   assignDefense,
   setSelectedId,
   isAdmin = false,
@@ -79,6 +80,12 @@ const cycleRoleSortMode = () => {
 
   const selectedMember = allMembers.find((m) => m.id === selectedMemberId);
   const isDetailView = selectedMemberId && selectedMember;
+  const session = JSON.parse(
+  localStorage.getItem("guildDashboardSession") || "{}"
+);
+
+const canEditSelectedMember =
+  isAdmin || String(session?.memberId) === String(selectedMember?.id);
 
 const getDefenseHeroes = (defense) =>
   (defense?.slots || [])
@@ -155,51 +162,69 @@ const displayedMembers = [...members].sort((a, b) => {
   return 0;
 });
 
-
-
-  return (
-    <div className="space-y-6">
-      {isDetailView ? (
-        <div className="space-y-6 p-6">
-          <div className="flex items-center justify-between">
-            <div className="text-xl font-semibold text-white">
-              {selectedMember.name}
-            </div>
-
-            <button
-              onClick={() => {
-                setSelectedMemberId(null);
-                setMemberView("defenses");
-              }}
-              className="text-sm text-zinc-400 hover:text-white"
-            >
-              ← Retour
-            </button>
+return (
+  <div className="space-y-6">
+    {isDetailView ? (
+      <div className="space-y-6 p-6">
+        <div className="flex items-center justify-between">
+          <div className="text-xl font-semibold text-white">
+            {selectedMember.name}
           </div>
 
-          <div className="flex gap-4 border-b border-zinc-800 pb-2">
+          <button
+            onClick={() => {
+              setSelectedMemberId(null);
+              setMemberView("defenses");
+            }}
+            className="text-sm text-zinc-400 hover:text-white"
+          >
+            ← Retour
+          </button>
+        </div>
+
+        <div className="flex gap-4 border-b border-zinc-800 pb-2">
+          <button
+            onClick={() => setMemberView("defenses")}
+            className={
+              memberView === "defenses"
+                ? "border-b-2 border-white pb-1 text-white"
+                : "pb-1 text-zinc-400 hover:text-white"
+            }
+          >
+            Mes défenses
+          </button>
+
+          <button
+            onClick={() => setMemberView("followup")}
+            className={
+              memberView === "followup"
+                ? "border-b-2 border-white pb-1 text-white"
+                : "pb-1 text-zinc-400 hover:text-white"
+            }
+          >
+            Mon suivi
+          </button>
+        </div>
+
+        {memberView === "defenses" && canEditSelectedMember && (
+          <div className="flex gap-2">
             <button
-              onClick={() => setMemberView("defenses")}
-              className={
-                memberView === "defenses"
-                  ? "border-b-2 border-white pb-1 text-white"
-                  : "pb-1 text-zinc-400 hover:text-white"
-              }
+              type="button"
+              onClick={() => clearAssignedDefense(1)}
+              className="rounded-xl border border-red-700 bg-red-900/30 px-3 py-1 text-xs text-red-300 hover:bg-red-800/50"
             >
-              Mes défenses
+              Clean Def 1
             </button>
 
             <button
-              onClick={() => setMemberView("followup")}
-              className={
-                memberView === "followup"
-                  ? "border-b-2 border-white pb-1 text-white"
-                  : "pb-1 text-zinc-400 hover:text-white"
-              }
+              type="button"
+              onClick={() => clearAssignedDefense(2)}
+              className="rounded-xl border border-red-700 bg-red-900/30 px-3 py-1 text-xs text-red-300 hover:bg-red-800/50"
             >
-              Mon suivi
+              Clean Def 2
             </button>
           </div>
+        )}
 
           {memberView === "defenses" ? (
             <div className="space-y-6">
@@ -311,7 +336,7 @@ const displayedMembers = [...members].sort((a, b) => {
       {typeBadge}
     </div>
 
-{defense && isAdmin && (
+{defense && canEditSelectedMember && (
   <button
     type="button"
     onClick={(e) => {
