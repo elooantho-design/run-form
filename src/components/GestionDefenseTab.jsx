@@ -207,7 +207,7 @@ return (
         </div>
 
         {memberView === "defenses" && canEditSelectedMember && (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => clearAssignedDefense(1)}
@@ -228,7 +228,7 @@ return (
 
           {memberView === "defenses" ? (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                 {[selectedMember.defense1, selectedMember.defense2].map((defName, index) => {
                   const defense = defenses.find((d) => d.name === defName);
 
@@ -293,7 +293,7 @@ return (
     Défense {index + 1}
   </div>
 
-  <div className="flex items-center gap-2">
+  <div className="flex flex-wrap items-center gap-2">
 
 {defense && (
   <div className="flex items-center gap-1 mr-2">
@@ -361,13 +361,13 @@ return (
                         <>
                           <div className="mb-3 font-medium text-white">{defense.name}</div>
 
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="flex min-h-[180px] items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
                               {defense.image ? (
                                 <img
                                   src={defense.image}
                                   alt={defense.name}
-                                  className="h-full w-full object-contain"
+                                  className="w-full aspect-video object-contain"
                                 />
                               ) : (
                                 <div className="text-sm text-zinc-500">Aucune image</div>
@@ -453,7 +453,7 @@ return (
       Liste des défenses
     </div>
 
-    <div className="flex gap-2">
+    <div className="flex flex-wrap gap-2">
       <button
         type="button"
         onClick={() => setDefenseListFilter("tour")}
@@ -492,7 +492,7 @@ return (
     </div>
   </div>
 
-<div className="grid grid-cols-2 gap-6">
+<div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
   {availableDefenses.map((defense) => {
     const missingHeroes = (defense.slots || [])
       .map((slot) => (typeof slot === "string" ? slot : slot?.hero || null))
@@ -559,7 +559,7 @@ return (
     Aucun doublon héros
   </div>
 )}
-  <div className="flex items-center gap-2">
+  <div className="flex flex-wrap items-center gap-2">
 
     {/* 👍 👎 */}
     <div className="flex items-center gap-1 mr-2">
@@ -637,13 +637,13 @@ return (
 </div>
 
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="flex min-h-[180px] items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
             {defense.image ? (
               <img
                 src={defense.image}
                 alt={defense.name}
-                className="h-full w-full object-contain"
+                className="w-full aspect-video object-contain"
               />
             ) : (
               <div className="text-sm text-zinc-500">Aucune image</div>
@@ -942,7 +942,7 @@ onClick={() => {
   )}
 </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="h-2 w-full rounded-full bg-zinc-800">
             <div
               className={`h-2 rounded-full ${gaugeColor(completion)}`}
