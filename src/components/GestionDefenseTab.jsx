@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { supabase } from "@/lib/supabase";
 import MonSuiviTab from "./MonSuiviTab";
 import {
   getMemberDefenseCompletion,
@@ -38,6 +39,34 @@ export default function GestionDefenseTab({
   const [memberView, setMemberView] = useState("defenses");
   const [roleSortMode, setRoleSortMode] = useState("alpha");
   const [defenseListFilter, setDefenseListFilter] = useState("tour");
+
+  const [infoModalOpen, setInfoModalOpen] = useState(false);
+const [infoDefense, setInfoDefense] = useState(null);
+const [infoBlocks, setInfoBlocks] = useState([]);
+const [infoBlocksLoading, setInfoBlocksLoading] = useState(false);
+
+const openDefenseInfoModal = async (defense) => {
+  if (!defense?.id) return;
+
+  setInfoDefense(defense);
+  setInfoModalOpen(true);
+  setInfoBlocksLoading(true);
+
+  const { data, error } = await supabase
+    .from("guild_defense_blocks")
+    .select("id, block_type, content, sort_order")
+    .eq("defense_id", defense.id)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    console.error("Erreur chargement infos défense:", error);
+    setInfoBlocks([]);
+  } else {
+    setInfoBlocks(data || []);
+  }
+
+  setInfoBlocksLoading(false);
+};
 
 const metaSList = metaDefenseCounters.filter(
   (counter) => counter.tier === "meta_s"
@@ -359,7 +388,20 @@ return (
                         </div>
                       ) : (
                         <>
-                          <div className="mb-3 font-medium text-white">{defense.name}</div>
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+  <div className="font-medium text-white">{defense.name}</div>
+
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      openDefenseInfoModal(defense);
+    }}
+    className="rounded-lg border border-blue-700 bg-blue-900/30 px-2 py-1 text-xs text-blue-300 hover:bg-blue-800/50"
+  >
+    💬 Infos
+  </button>
+</div>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="flex min-h-[180px] items-center justify-center overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
@@ -1010,6 +1052,56 @@ onClick={() => {
           </div>
         </>
       )}
+      {infoModalOpen && infoDefense && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-lg font-bold">{infoDefense.name}</div>
+          <div className="text-sm text-zinc-400">Informations défense</div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setInfoModalOpen(false)}
+          className="rounded-xl border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
+        >
+          Fermer
+        </button>
+      </div>
+
+      <div className="min-h-0 overflow-y-auto rounded-xl bg-zinc-950 p-4">
+        {infoBlocksLoading ? (
+          <div className="text-sm text-zinc-400">Chargement...</div>
+        ) : infoBlocks.length === 0 ? (
+          <div className="text-sm text-zinc-500">
+            Aucune information disponible pour cette défense.
+          </div>
+        ) : (
+          <div className="space-y-5 leading-relaxed text-zinc-200">
+            {infoBlocks.map((block) =>
+              block.block_type === "image" ? (
+                <img
+                  key={block.id}
+                  src={block.content}
+                  alt="Info défense"
+                  className="mx-auto max-h-[420px] w-full rounded-xl object-contain"
+                />
+              ) : (
+                <div
+                  key={block.id}
+                  className="whitespace-pre-wrap text-sm md:text-base"
+                >
+                  {block.content}
+                </div>
+              )
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }
