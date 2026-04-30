@@ -5019,6 +5019,26 @@ const changePassword = async () => {
     setPasswordChangeLoading(false);
   }
 };
+
+const backgroundByTab = {
+  admin_defenses: "/backgrounds/bg-admin-defenses.webp",
+  gestion_guildes: "/backgrounds/bg-gestion-guildes.webp",
+  awakening: "/backgrounds/bg-eveils.webp",
+  pb: "/backgrounds/bg-tableur-pb.webp",
+  demon: "/backgrounds/bg-monstre-demoniaque.webp",
+  soulstones: "/backgrounds/bg-pierre-ame.webp",
+  run_search: "/backgrounds/bg-recherche-run.webp",
+  run_add: "/backgrounds/bg-ajout-run.webp",
+  run_edit: "/backgrounds/bg-modification-run.webp",
+  gvg_current: "/backgrounds/bg-gvg-en-cours.webp",
+  gvg_admin: "/backgrounds/bg-admin-gvg.webp",
+  gvg_panel: "/backgrounds/bg-gvg-panel.webp",
+  intersaison: "/backgrounds/bg-intersaison.webp",
+};
+
+const currentBackground =
+  backgroundByTab[activeProfileView] || "/backgrounds/paladin-bg.webp";
+
 if (isExternal) {
   const externalTabs = [
     { key: "run_search", label: "Recherche de run" },
@@ -5029,8 +5049,13 @@ if (isExternal) {
       ? activeProfileView
       : "run_search";
 
-  return (
-    <div className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
+return (
+  <div
+    className="min-h-screen bg-zinc-950 bg-cover bg-center bg-fixed p-6 text-zinc-100"
+    style={{
+      backgroundImage: `linear-gradient(rgba(5, 5, 8, 0.72), rgba(5, 5, 8, 0.88)), url('${currentBackground}')`,
+    }}
+  >
       <div className="mx-auto max-w-7xl space-y-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex flex-wrap gap-3">
@@ -5129,15 +5154,26 @@ if (isExternal) {
     </div>
   );
 }
-  return (
-    <div className="min-h-screen bg-zinc-950 p-6 text-zinc-100">
+return (
+  <div
+    className="min-h-screen bg-zinc-950 bg-cover bg-center bg-fixed p-6 text-zinc-100"
+style={{
+  backgroundImage: `
+    linear-gradient(
+      rgba(5, 5, 8, 0.45),
+      rgba(5, 5, 8, 0.65)
+    ),
+    url('${currentBackground}')
+  `,
+}}
+  >
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-zinc-50">Guild Box Manager</h1>
-            <p className="mt-1 text-zinc-400">
-              Prototype de base pour gérer les membres, leurs éveils et les héros méta.
-            </p>
+<h1 className="text-5xl font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-orange-500 to-red-600 drop-shadow-[0_0_20px_rgba(255,140,0,0.8)]">
+  DASHBOARD PALADIN
+</h1>
+          
           </div>
 
                     <div className="flex flex-wrap gap-2">
