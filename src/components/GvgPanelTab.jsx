@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 
+const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
+
 function getApiBase() {
   if (typeof window === "undefined") return "";
+
+  const configuredBase = import.meta.env?.VITE_API_BASE_URL;
+  if (configuredBase) return configuredBase.replace(/\/$/, "");
 
   const { hostname } = window.location;
 
@@ -767,23 +772,17 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
   return (
     <div className="space-y-4">
 <div className="flex flex-wrap items-center gap-2">
-  <button
-    onClick={() => setGuild("G1")}
-    className={`px-3 py-1 rounded ${
-      guild === "G1" ? "bg-white text-black" : "bg-zinc-800 text-white"
-    }`}
-  >
-    G1
-  </button>
-
-  <button
-    onClick={() => setGuild("G2")}
-    className={`px-3 py-1 rounded ${
-      guild === "G2" ? "bg-white text-black" : "bg-zinc-800 text-white"
-    }`}
-  >
-    G2
-  </button>
+  {GUILDS.map((item) => (
+    <button
+      key={item}
+      onClick={() => setGuild(item)}
+      className={`px-3 py-1 rounded ${
+        guild === item ? "bg-white text-black" : "bg-zinc-800 text-white"
+      }`}
+    >
+      {item}
+    </button>
+  ))}
 
 <button
   onClick={buildAhkCommand}

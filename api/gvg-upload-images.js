@@ -13,6 +13,10 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+function isValidGuild(value) {
+  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+}
+
 function parseFileName(fileName) {
   const clean = String(fileName || "").toLowerCase();
 
@@ -54,7 +58,7 @@ export default async function handler(req, res) {
       const guildRaw = Array.isArray(fields.guild) ? fields.guild[0] : fields.guild;
       const guild = String(guildRaw || "").toUpperCase();
 
-      if (!guild || !["G1", "G2"].includes(guild)) {
+      if (!isValidGuild(guild)) {
         return res.status(400).json({ error: "guild manquante ou invalide" });
       }
 

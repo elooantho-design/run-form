@@ -2,9 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
+const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
+
+  const configuredBase = import.meta.env?.VITE_API_BASE_URL;
+  if (configuredBase) return configuredBase.replace(/\/$/, "");
 
   const { hostname } = window.location;
 
@@ -240,7 +244,12 @@ function getYoutubeEmbedUrl(url) {
 function openDefenseImage(defense) {
   if (!defense?.image_url) return;
 
-  setImageModalUrl(defense.image_url);
+  const imageUrl =
+    defense.image_url.startsWith("/api/") && apiBase
+      ? `${apiBase}${defense.image_url}`
+      : defense.image_url;
+
+  setImageModalUrl(imageUrl);
   setImageModalTitle(buildDefenseTitle(defense));
   setImageModalOpen(true);
 }
@@ -603,27 +612,19 @@ async function markDefenseAsOpened(defenseId) {
               </div>
 
               <div className="flex flex-wrap gap-3">
-                <Button
-                  type="button"
-                  className="rounded-2xl"
-                  onClick={() => {
-                    localStorage.setItem("gvg_selected_guild", "G1");
-                    setSelectedGuild("G1");
-                  }}
-                >
-                  G1
-                </Button>
-
-                <Button
-                  type="button"
-                  className="rounded-2xl"
-                  onClick={() => {
-                    localStorage.setItem("gvg_selected_guild", "G2");
-                    setSelectedGuild("G2");
-                  }}
-                >
-                  G2
-                </Button>
+                {GUILDS.map((guild) => (
+                  <Button
+                    key={guild}
+                    type="button"
+                    className="rounded-2xl"
+                    onClick={() => {
+                      localStorage.setItem("gvg_selected_guild", guild);
+                      setSelectedGuild(guild);
+                    }}
+                  >
+                    {guild}
+                  </Button>
+                ))}
               </div>
             </div>
           ) : (

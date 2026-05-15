@@ -21,10 +21,14 @@ function extractStoragePathFromPublicUrl(url) {
   return String(url).slice(index + marker.length);
 }
 
+function isValidGuild(value) {
+  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+}
+
 async function handleList(req, res) {
   const guild = String(req.query?.guild || "").toUpperCase();
 
-  if (!guild || !["G1", "G2"].includes(guild)) {
+  if (!isValidGuild(guild)) {
     return res.status(400).json({ error: "guild manquante ou invalide" });
   }
 
@@ -513,7 +517,7 @@ async function handlePanelUpdateFields(req, res) {
 async function handleRecordOk(req, res) {
   const { guild } = req.body || {};
 
-  if (!guild || !["G1", "G2"].includes(String(guild).toUpperCase())) {
+  if (!isValidGuild(guild)) {
     return res.status(400).json({ error: "guild manquante ou invalide" });
   }
 
@@ -684,7 +688,7 @@ function heroesToSlots(stratId, heroes) {
 async function handlePushToBase(req, res) {
   const { guild } = req.body || {};
 
-  if (!guild || !["G1", "G2"].includes(String(guild).toUpperCase())) {
+  if (!isValidGuild(guild)) {
     return res.status(400).json({ error: "guild manquante ou invalide" });
   }
 

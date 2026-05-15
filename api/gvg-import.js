@@ -6,6 +6,10 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
+function isValidGuild(value) {
+  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+}
+
 function parseDefenseMeta(defName) {
   const value = String(defName || "").toLowerCase();
 
@@ -166,6 +170,76 @@ async function hasMatchingStrat(supabaseClient, heroes) {
   return false;
 }
 
+export async function importGvgItems({ guild, items, is_ally = false }) {
+  const isAlly = is_ally === true;
+
+  if (!isValidGuild(guild)) {
+    const error = new Error("guild manquante ou invalide");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!Array.isArray(items) || !items.length) {
+    const error = new Error("items manquants");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const normalizedGuild = String(guild).toUpperCase();
+  const rows = [];
+
+  for (const item of items) {
+    const meta = parseDefenseMeta(item?.def);
+
+    if (!meta.bastion || !meta.team || !meta.type) {
+      continue;
+    }
+
+    const heroes = Array.isArray(item?.compo) ? item.compo : [];
+    const stratFound = await hasMatchingStrat(supabase, heroes);
+
+    rows.push({
+      guild: normalizedGuild,
+      bastion: meta.bastion,
+      type: meta.type,
+      tower: meta.type === "tower" ? meta.tower : null,
+      team: meta.team,
+      defense_key: item?.def_key_sha1 || null,
+      raw_name: String(item?.def || ""),
+      heroes,
+      image_url: item?.image_url || null,
+      status: stratFound ? "strat" : "def",
+      repro_by: null,
+      is_ally: isAlly,
+      record_status: isAlly ? "pas_record" : null,
+    });
+  }
+
+  if (!rows.length) {
+    const error = new Error("aucune defense exploitable");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .insert(rows)
+    .select("id, guild, bastion, type, tower, team, status");
+
+  if (error) {
+    console.error("[api/gvg-import:helper] insert error:", error);
+    const wrapped = new Error(error.message || "erreur insertion gvg");
+    wrapped.statusCode = 500;
+    throw wrapped;
+  }
+
+  return {
+    success: true,
+    guild: normalizedGuild,
+    inserted: data?.length || 0,
+  };
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -183,7 +257,7 @@ export default async function handler(req, res) {
     const { guild, items, is_ally } = req.body || {};
     const isAlly = is_ally === true;
 
-    if (!guild || !["G1", "G2"].includes(String(guild).toUpperCase())) {
+    if (!isValidGuild(guild)) {
       return res.status(400).json({ error: "guild manquante ou invalide" });
     }
 
@@ -214,6 +288,7 @@ export default async function handler(req, res) {
         defense_key: item?.def_key_sha1 || null,
         raw_name: String(item?.def || ""),
         heroes,
+        image_url: item?.image_url || null,
         status: stratFound ? "strat" : "def",
         repro_by: null,
         is_ally: isAlly,

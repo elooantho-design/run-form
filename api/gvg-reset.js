@@ -6,6 +6,10 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
+function isValidGuild(value) {
+  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+}
+
 function extractStoragePathFromPublicUrl(url) {
   if (!url) return null;
 
@@ -33,7 +37,7 @@ export default async function handler(req, res) {
   try {
     const guild = String(req.body?.guild || "").toUpperCase();
 
-    if (!guild || !["G1", "G2"].includes(guild)) {
+    if (!isValidGuild(guild)) {
       return res.status(400).json({ error: "guild manquante ou invalide" });
     }
 

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import * as Sentry from '@sentry/react';
 import App from './App.jsx';
 import GuildDashboard from './GuildDashboard.jsx';
+import SaasPortal from './SaasPortal.jsx';
 import './index.css';
 
 Sentry.init({
@@ -25,13 +26,14 @@ if (path === '/dashboard/G1') {
 
 const finalPath = window.location.pathname;
 const isDashboard = finalPath === '/dashboard' || finalPath.startsWith('/dashboard/');
+const isPortal = finalPath === '/portal' || finalPath.startsWith('/portal/');
 
-if (isDashboard) {
+if (isDashboard || isPortal) {
   document.documentElement.classList.add('dark');
 } else {
   document.documentElement.classList.remove('dark');
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  isDashboard ? <GuildDashboard /> : <App />
+  isPortal ? <SaasPortal /> : isDashboard ? <GuildDashboard /> : <App />
 );
