@@ -129,6 +129,28 @@ const bastions = Array.from({ length: 4 }, (_, index) => ({
   status: index === 0 ? "pret" : index === 1 ? "controle" : "vide",
 }));
 
+const calquesBaseUrl = String(import.meta.env?.VITE_CALQUES_BASE_URL || "").replace(/\/$/, "");
+
+function isLocalHost() {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+}
+
+function calqueUrl(kind, fileName) {
+  const folders = {
+    hero: "hero-calques",
+    faction: "faction-calques",
+    role: "role-calques",
+  };
+  const folder = folders[kind];
+  const encodedFile = encodeURIComponent(fileName);
+
+  if (calquesBaseUrl) return `${calquesBaseUrl}/${folder}/${encodedFile}`;
+  if (isLocalHost()) return `/${folder}/${encodedFile}`;
+
+  return `/api/gvg-server?action=calque&kind=${kind}&file=${encodedFile}`;
+}
+
 const heroRarityOrder = ["legendary", "epic", "rare", "ordinary", "basic"];
 
 const heroRarityFilters = [
@@ -142,26 +164,26 @@ const heroRarityFilters = [
 
 const heroRoleFilters = [
   { id: "all", label: "Tous les roles" },
-  { id: "combattant", label: "Combattant", image: "/role-calques/Combattant.png" },
-  { id: "heal", label: "Heal", image: "/role-calques/Heal.png" },
-  { id: "mage", label: "Mage", image: "/role-calques/Mage.png" },
-  { id: "tacticien", label: "Tacticien", image: "/role-calques/Tacticien.png" },
-  { id: "tank", label: "Tank", image: "/role-calques/Tank.png" },
-  { id: "tireur", label: "Tireur", image: "/role-calques/Tireur.png" },
+  { id: "combattant", label: "Combattant", image: calqueUrl("role", "Combattant.png") },
+  { id: "heal", label: "Heal", image: calqueUrl("role", "Heal.png") },
+  { id: "mage", label: "Mage", image: calqueUrl("role", "Mage.png") },
+  { id: "tacticien", label: "Tacticien", image: calqueUrl("role", "Tacticien.png") },
+  { id: "tank", label: "Tank", image: calqueUrl("role", "Tank.png") },
+  { id: "tireur", label: "Tireur", image: calqueUrl("role", "Tireur.png") },
 ];
 
 const heroFactionFilters = [
   { id: "all", label: "Toutes les factions" },
-  { id: "arbitre", label: "Arbitre", image: "/faction-calques/Arbitre.png" },
-  { id: "cauchemar", label: "Cauchemar", image: "/faction-calques/Cauchemar.png" },
-  { id: "chaotique", label: "Chaotique", image: "/faction-calques/Chaotique.png" },
-  { id: "cultiste", label: "Cultiste", image: "/faction-calques/Cultiste.png" },
-  { id: "esoterique", label: "Esoterique", image: "/faction-calques/Esoterique.png" },
-  { id: "infernal", label: "Infernal", image: "/faction-calques/Infernal.png" },
-  { id: "innommable", label: "Innommable", image: "/faction-calques/Innommable.png" },
-  { id: "nordiste", label: "Nordiste", image: "/faction-calques/Nordiste.png" },
-  { id: "perceur", label: "Perceur", image: "/faction-calques/Perceur.png" },
-  { id: "sentinelle", label: "Sentinelle", image: "/faction-calques/Sentinelle.png" },
+  { id: "arbitre", label: "Arbitre", image: calqueUrl("faction", "Arbitre.png") },
+  { id: "cauchemar", label: "Cauchemar", image: calqueUrl("faction", "Cauchemar.png") },
+  { id: "chaotique", label: "Chaotique", image: calqueUrl("faction", "Chaotique.png") },
+  { id: "cultiste", label: "Cultiste", image: calqueUrl("faction", "Cultiste.png") },
+  { id: "esoterique", label: "Esoterique", image: calqueUrl("faction", "Esoterique.png") },
+  { id: "infernal", label: "Infernal", image: calqueUrl("faction", "Infernal.png") },
+  { id: "innommable", label: "Innommable", image: calqueUrl("faction", "Innommable.png") },
+  { id: "nordiste", label: "Nordiste", image: calqueUrl("faction", "Nordiste.png") },
+  { id: "perceur", label: "Perceur", image: calqueUrl("faction", "Perceur.png") },
+  { id: "sentinelle", label: "Sentinelle", image: calqueUrl("faction", "Sentinelle.png") },
 ];
 
 const heroLayerData = [
@@ -448,7 +470,7 @@ const heroLayerCards = [...heroLayerData]
       ...hero,
       id: name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       name,
-      image: `/hero-calques/${encodeURIComponent(hero.fileName)}`,
+      image: calqueUrl("hero", hero.fileName),
       roles: hero.roles || ["combattant"],
       owned,
       awakening: owned ? index % 6 : 0,

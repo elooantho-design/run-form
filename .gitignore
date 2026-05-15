@@ -12,6 +12,11 @@ node_modules
 dist
 dist-ssr
 
+# Heavy generated visual assets served from the VPS
+public/hero-calques/
+public/faction-calques/
+public/role-calques/
+
 # Local env / secrets
 .env
 .env.*

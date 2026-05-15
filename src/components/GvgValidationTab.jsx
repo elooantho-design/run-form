@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from "react";
-import { CheckCircle2, Edit3, RefreshCw, SearchCheck, Shield, UploadCloud } from "lucide-react";
+import { CheckCircle2, Edit3, RefreshCw, SearchCheck, Shield, Trash2, UploadCloud } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const DIRECTIONS = ["N", "S", "E", "O"];
+const JOB_STALE_MS = 48 * 60 * 60 * 1000;
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -47,18 +48,43 @@ function formatDate(value) {
 }
 
 function getJobGuildCode(job) {
-  return String(job?.mode || job?.guild || "").toUpperCase();
+  return String(job?.target_guild || job?.mode || job?.guild || "").toUpperCase();
 }
 
 function isJobForGuild(job, guild) {
   return getJobGuildCode(job) === guild;
 }
 
+function getJobSourceGuild(job) {
+  return String(job?.resolved_guild || job?.source_guild || job?.guild || "").trim();
+}
+
+function getJobId(job) {
+  return String(job?.resolved_job_id || job?.job_id || job?.id || "").trim();
+}
+
+function getJobTimestamp(job) {
+  const value = job?.updated_at || job?.created_at;
+  const timestamp = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isJobExpired(job) {
+  const timestamp = getJobTimestamp(job);
+  return timestamp !== null && Date.now() - timestamp > JOB_STALE_MS;
+}
+
+function getJobAgeLabel(job) {
+  const timestamp = getJobTimestamp(job);
+  if (timestamp === null) return "Age inconnu";
+  return isJobExpired(job) ? "Caduc +48h" : "Valide -48h";
+}
+
 function buildPreviewUrl(job, item) {
   if (!item?.preview_file) return item?.image_url || "";
 
-  return `/api/gvg-server?action=preview&guild=${encodeURIComponent(job.guild)}&jobId=${encodeURIComponent(
-    job.job_id
+  return `/api/gvg-server?action=preview&guild=${encodeURIComponent(getJobSourceGuild(job))}&jobId=${encodeURIComponent(
+    getJobId(job)
   )}&file=${encodeURIComponent(item.preview_file)}`;
 }
 
@@ -107,8 +133,9 @@ function getValidationTone(item) {
 }
 
 function getJobTone(job) {
-  if (job.state === "ready") return "border-emerald-500/35 bg-emerald-500/10";
   if (job.state === "error") return "border-red-500/35 bg-red-500/10";
+  if (isJobExpired(job)) return "border-red-500/45 bg-red-500/12";
+  if (job.state === "ready") return "border-emerald-500/35 bg-emerald-500/10";
   if (job.state === "processing") return "border-cyan-500/35 bg-cyan-500/10";
   return "border-zinc-800 bg-zinc-950/65";
 }
@@ -124,6 +151,7 @@ export default function GvgValidationTab() {
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [loadingPayload, setLoadingPayload] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [deletingJobId, setDeletingJobId] = useState(null);
   const [message, setMessage] = useState("");
 
   const visibleJobs = useMemo(
@@ -173,8 +201,8 @@ export default function GvgValidationTab() {
 
       const response = await fetch(
         `${apiBase}/api/gvg-server?action=payload&guild=${encodeURIComponent(
-          job.guild
-        )}&jobId=${encodeURIComponent(job.job_id)}`
+          getJobSourceGuild(job)
+        )}&jobId=${encodeURIComponent(getJobId(job))}`
       );
       const data = await readJsonResponse(response, "payload VPS");
 
@@ -191,6 +219,64 @@ export default function GvgValidationTab() {
       setMessage(`Erreur payload VPS : ${error?.message || "erreur inconnue"}`);
     } finally {
       setLoadingPayload(false);
+    }
+  }
+
+  async function deleteServerJob(job) {
+    const sourceGuild = getJobSourceGuild(job);
+    const jobId = getJobId(job);
+
+    if (!sourceGuild || !jobId) {
+      setMessage("Impossible de supprimer ce job : reference serveur invalide.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Supprimer definitivement le probe ${sourceGuild} / ${jobId} du serveur ?`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingJobId(jobId);
+      setMessage(`Suppression du probe ${sourceGuild} / ${jobId} en cours...`);
+
+      const response = await fetch(`${apiBase}/api/gvg-server`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "delete",
+          sourceGuild,
+          jobId,
+        }),
+      });
+      const data = await readJsonResponse(response, "suppression job VPS");
+
+      if (!response.ok) {
+        setMessage(`Erreur suppression VPS : ${data?.error || "erreur inconnue"}`);
+        return;
+      }
+
+      setJobs((current) =>
+        current.filter(
+          (item) => getJobSourceGuild(item) !== sourceGuild || getJobId(item) !== jobId
+        )
+      );
+
+      if (getJobId(selectedJob) === jobId) {
+        setSelectedJob(null);
+        setItems([]);
+        setSelectedIndex(0);
+      }
+
+      setMessage(`Probe supprime du serveur : ${sourceGuild} / ${jobId}.`);
+    } catch (error) {
+      console.error("deleteServerJob error:", error);
+      setMessage(`Erreur suppression VPS : ${error?.message || "erreur inconnue"}`);
+    } finally {
+      setDeletingJobId(null);
     }
   }
 
@@ -343,14 +429,22 @@ export default function GvgValidationTab() {
                 <div className="mt-4 space-y-3">
                   {visibleJobs.length ? (
                     visibleJobs.map((job) => (
-                      <button
-                        key={`${job.guild}-${job.job_id}`}
-                        type="button"
-                        disabled={job.state !== "ready" || !job.has_site_payload || loadingPayload}
-                        className={`w-full rounded-2xl border p-3 text-left transition hover:border-cyan-300/60 disabled:cursor-not-allowed disabled:opacity-50 ${getJobTone(job)} ${
-                          selectedJob?.job_id === job.job_id ? "ring-2 ring-cyan-300/70" : ""
+                      <div
+                        key={`${getJobSourceGuild(job)}-${getJobId(job)}`}
+                        role="button"
+                        tabIndex={job.state !== "ready" || !job.has_site_payload || loadingPayload ? -1 : 0}
+                        aria-disabled={job.state !== "ready" || !job.has_site_payload || loadingPayload}
+                        className={`relative w-full rounded-2xl border p-3 pr-12 text-left transition hover:border-cyan-300/60 ${
+                          job.state !== "ready" || !job.has_site_payload || loadingPayload
+                            ? "cursor-not-allowed opacity-50"
+                            : "cursor-pointer"
+                        } ${getJobTone(job)} ${
+                          getJobId(selectedJob) === getJobId(job) ? "ring-2 ring-cyan-300/70" : ""
                         }`}
-                        onClick={() => selectJob(job)}
+                        onClick={() => {
+                          if (job.state !== "ready" || !job.has_site_payload || loadingPayload) return;
+                          selectJob(job);
+                        }}
                       >
                         <div className="text-sm font-semibold text-zinc-100">
                           {job.guild} · {job.side || "-"} · {job.state}
@@ -358,8 +452,27 @@ export default function GvgValidationTab() {
                         <div className="mt-1 text-xs text-zinc-400">
                           {formatDate(job.created_at)} · {job.files_count || 0} captures · {job.size_mb || 0} Mo
                         </div>
-                        <div className="mt-1 truncate text-xs text-zinc-500">{job.job_id}</div>
-                      </button>
+                        <div className="mt-1 truncate text-xs text-zinc-500">{getJobId(job)}</div>
+                        <div className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${
+                          isJobExpired(job)
+                            ? "border-red-400/40 bg-red-500/15 text-red-200"
+                            : "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                        }`}>
+                          {getJobAgeLabel(job)}
+                        </div>
+                        <button
+                          type="button"
+                          className="absolute right-3 top-3 rounded-xl border border-red-500/40 bg-red-500/10 p-2 text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={deletingJobId === getJobId(job)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteServerJob(job);
+                          }}
+                          title="Supprimer ce probe du serveur"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
                     ))
                   ) : (
                     <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm text-zinc-400">

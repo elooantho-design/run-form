@@ -8,8 +8,7 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 const UPLOADED_DIR =
-  process.env.YOUTUBE_UPLOADED_DIR ||
-  "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\discord_bot\\uploaded";
+  process.env.YOUTUBE_UPLOADED_DIR || "";
 function extractStoragePathFromPublicUrl(url) {
   if (!url) return null;
 
@@ -522,6 +521,12 @@ async function handleRecordOk(req, res) {
   }
 
   const normalizedGuild = String(guild).toUpperCase();
+
+  if (!UPLOADED_DIR) {
+    return res.status(500).json({
+      error: "YOUTUBE_UPLOADED_DIR manquant cote serveur",
+    });
+  }
 
   let filenames = [];
   try {

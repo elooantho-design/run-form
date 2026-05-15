@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
+const JOB_STALE_MS = 48 * 60 * 60 * 1000;
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -43,21 +45,47 @@ function formatDate(value) {
   }
 }
 
-function getJobTone(job) {
-  if (job.state === "ready") return "border-emerald-500/35 bg-emerald-500/10";
-  if (job.state === "error") return "border-red-500/35 bg-red-500/10";
-  if (job.state === "processing") return "border-cyan-500/35 bg-cyan-500/10";
-  return "border-zinc-700 bg-zinc-950/55";
-}
-
 const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 
 function getJobGuildCode(job) {
-  return String(job?.mode || job?.guild || "").toUpperCase();
+  return String(job?.target_guild || job?.mode || job?.guild || "").toUpperCase();
 }
 
 function isJobForGuild(job, guild) {
   return getJobGuildCode(job) === guild;
+}
+
+function getJobSourceGuild(job) {
+  return String(job?.resolved_guild || job?.source_guild || job?.guild || "").trim();
+}
+
+function getJobId(job) {
+  return String(job?.resolved_job_id || job?.job_id || job?.id || "").trim();
+}
+
+function getJobTimestamp(job) {
+  const value = job?.updated_at || job?.created_at;
+  const timestamp = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isJobExpired(job) {
+  const timestamp = getJobTimestamp(job);
+  return timestamp !== null && Date.now() - timestamp > JOB_STALE_MS;
+}
+
+function getJobAgeLabel(job) {
+  const timestamp = getJobTimestamp(job);
+  if (timestamp === null) return "Age inconnu";
+  return isJobExpired(job) ? "Caduc +48h" : "Valide -48h";
+}
+
+function getJobTone(job) {
+  if (job.state === "error") return "border-red-500/35 bg-red-500/10";
+  if (isJobExpired(job)) return "border-red-500/45 bg-red-500/12";
+  if (job.state === "ready") return "border-emerald-500/35 bg-emerald-500/10";
+  if (job.state === "processing") return "border-cyan-500/35 bg-cyan-500/10";
+  return "border-zinc-700 bg-zinc-950/55";
 }
 
 export default function GvgAdminTab() {
@@ -75,6 +103,7 @@ export default function GvgAdminTab() {
   const [serverJobs, setServerJobs] = useState([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [jobImportingId, setJobImportingId] = useState(null);
+  const [jobDeletingId, setJobDeletingId] = useState(null);
   const visibleServerJobs = useMemo(
     () => serverJobs.filter((job) => isJobForGuild(job, guild)),
     [guild, serverJobs]
@@ -221,13 +250,13 @@ export default function GvgAdminTab() {
 
   async function importServerJob(job) {
     const confirmed = window.confirm(
-      `Importer le job ${job.guild} / ${job.job_id} dans ${guild} ?`
+      `Importer le job ${getJobSourceGuild(job)} / ${getJobId(job)} dans ${guild} ?`
     );
 
     if (!confirmed) return;
 
     try {
-      setJobImportingId(job.job_id);
+      setJobImportingId(getJobId(job));
       setMessage("");
 
       const response = await fetch(`${apiBase}/api/gvg-server`, {
@@ -238,8 +267,8 @@ export default function GvgAdminTab() {
         body: JSON.stringify({
           action: "import",
           targetGuild: guild,
-          sourceGuild: job.guild,
-          jobId: job.job_id,
+          sourceGuild: getJobSourceGuild(job),
+          jobId: getJobId(job),
           side: job.side,
         }),
       });
@@ -259,6 +288,58 @@ export default function GvgAdminTab() {
       setMessage(`Erreur import job VPS : ${error?.message || "erreur inconnue"}`);
     } finally {
       setJobImportingId(null);
+    }
+  }
+
+  async function deleteServerJob(job) {
+    const sourceGuild = getJobSourceGuild(job);
+    const jobId = getJobId(job);
+
+    if (!sourceGuild || !jobId) {
+      setMessage("Impossible de supprimer ce job : reference serveur invalide.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Supprimer definitivement le probe ${sourceGuild} / ${jobId} du serveur ?`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setJobDeletingId(jobId);
+      setMessage(`Suppression du probe ${sourceGuild} / ${jobId} en cours...`);
+
+      const response = await fetch(`${apiBase}/api/gvg-server`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "delete",
+          sourceGuild,
+          jobId,
+        }),
+      });
+
+      const data = await readJsonResponse(response, "suppression job VPS");
+
+      if (!response.ok) {
+        setMessage(`Erreur suppression VPS : ${data?.error || "erreur inconnue"}`);
+        return;
+      }
+
+      setServerJobs((current) =>
+        current.filter(
+          (item) => getJobSourceGuild(item) !== sourceGuild || getJobId(item) !== jobId
+        )
+      );
+      setMessage(`Probe supprime du serveur : ${sourceGuild} / ${jobId}.`);
+    } catch (error) {
+      console.error("deleteServerJob error:", error);
+      setMessage(`Erreur suppression VPS : ${error?.message || "erreur inconnue"}`);
+    } finally {
+      setJobDeletingId(null);
     }
   }
 
@@ -408,7 +489,7 @@ export default function GvgAdminTab() {
               {visibleServerJobs.length ? (
                 visibleServerJobs.map((job) => (
                   <div
-                    key={`${job.guild}-${job.job_id}`}
+                    key={`${getJobSourceGuild(job)}-${getJobId(job)}`}
                     className={`rounded-2xl border p-4 ${getJobTone(job)}`}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -425,6 +506,13 @@ export default function GvgAdminTab() {
                             ? ` · Reco OK : ${job.processing.summary.reco_ok}/${job.processing.summary.captures}`
                             : ""}
                         </div>
+                        <div className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${
+                          isJobExpired(job)
+                            ? "border-red-400/40 bg-red-500/15 text-red-200"
+                            : "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                        }`}>
+                          {getJobAgeLabel(job)}
+                        </div>
                       </div>
 
                       <Button
@@ -433,11 +521,22 @@ export default function GvgAdminTab() {
                         disabled={
                           job.state !== "ready" ||
                           !job.has_site_payload ||
-                          jobImportingId === job.job_id
+                          jobImportingId === getJobId(job)
                         }
                         onClick={() => importServerJob(job)}
                       >
-                        {jobImportingId === job.job_id ? "Import..." : `Importer dans ${guild}`}
+                        {jobImportingId === getJobId(job) ? "Import..." : `Importer dans ${guild}`}
+                      </Button>
+                      <Button
+                        type="button"
+                        className="rounded-2xl border-red-500/40 text-red-200"
+                        variant="outline"
+                        disabled={jobDeletingId === getJobId(job)}
+                        onClick={() => deleteServerJob(job)}
+                        title="Supprimer ce probe du serveur"
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {jobDeletingId === getJobId(job) ? "Suppression..." : "Supprimer"}
                       </Button>
                     </div>
                   </div>
