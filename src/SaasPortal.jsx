@@ -1468,15 +1468,24 @@ function LauncherView() {
             </p>
           </div>
 
-          <Button
-            type="button"
-            className="rounded-2xl bg-emerald-600 px-5 py-6 text-base text-white hover:bg-emerald-500"
-            disabled={launching}
-            onClick={launchCapture}
-          >
-            <Play className="mr-2 h-5 w-5" />
-            {launching ? "Ouverture..." : "Lancer la capture GVG"}
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="button"
+              className="rounded-2xl bg-emerald-600 px-5 py-6 text-base text-white hover:bg-emerald-500"
+              disabled={launching}
+              onClick={launchCapture}
+            >
+              <Play className="mr-2 h-5 w-5" />
+              {launching ? "Ouverture..." : "Lancer la capture GVG"}
+            </Button>
+            <a
+              href={`${apiBase}/api/gvg-server?action=launcher-download`}
+              className="inline-flex items-center rounded-2xl border border-zinc-700 bg-zinc-950/70 px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-cyan-300/60 hover:text-cyan-100"
+            >
+              <UploadCloud className="mr-2 h-4 w-4" />
+              Telecharger / reinstaller
+            </a>
+          </div>
         </div>
 
         <div className="mt-6 grid gap-3 md:grid-cols-[1fr_1fr_1.4fr]">
