@@ -1,11 +1,16 @@
-import React, { useMemo, useState } from "react";
-import { CheckCircle2, Edit3, RefreshCw, SearchCheck, Shield, Trash2, UploadCloud } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle2, Edit3, RefreshCw, SearchCheck, Shield, Trash2, UploadCloud } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
 
 const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const DIRECTIONS = ["N", "S", "E", "O"];
+const DEFENSE_SLOT_COUNT = 5;
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
+const POSITION_OPTIONS = ["A", "B", "C", "D", "E", "F", "G"].flatMap((row) =>
+  Array.from({ length: 7 }, (_, index) => `${row}${index + 1}`)
+);
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -102,14 +107,31 @@ function normalizePayloadItems(job, payload) {
       ? payload.payload.items
       : [];
 
-  return rawItems.map((item, index) => ({
-    ...item,
-    image_url: buildPreviewUrl(job, item),
-    compo: Array.isArray(item?.compo) ? item.compo : [],
-    _localId: `${item?.def || "def"}-${index}`,
-    _validated: false,
-    _edited: false,
-  }));
+  return rawItems.map((item, index) => {
+    const rawCompo = Array.isArray(item?.compo) ? item.compo : [];
+    const normalizedCompo = Array.from({ length: DEFENSE_SLOT_COUNT }, (_, heroIndex) => {
+      const hero = rawCompo[heroIndex] || {};
+      const hasHero = Boolean(hero?.champion || hero?.position || hero?.direction);
+
+      return {
+        champion: hero?.champion || "",
+        position: hero?.position || "",
+        direction: hero?.direction || "",
+        _missing: !hasHero,
+      };
+    });
+
+    return {
+      ...item,
+      image_url: buildPreviewUrl(job, item),
+      compo: normalizedCompo,
+      _recognizedCount: rawCompo.length,
+      _expectedCount: Number(item?.expected_heroes || DEFENSE_SLOT_COUNT),
+      _localId: `${item?.def || "def"}-${index}`,
+      _validated: false,
+      _edited: false,
+    };
+  });
 }
 
 function stripUiFields(item) {
@@ -118,6 +140,14 @@ function stripUiFields(item) {
   for (const [key, value] of Object.entries(item || {})) {
     if (!key.startsWith("_")) cleaned[key] = value;
   }
+
+  cleaned.compo = Array.isArray(item?.compo)
+    ? item.compo.map((hero) => ({
+        champion: String(hero?.champion || "").trim(),
+        position: String(hero?.position || "").trim(),
+        direction: String(hero?.direction || "").trim(),
+      }))
+    : [];
 
   return cleaned;
 }
@@ -129,7 +159,44 @@ function getDefenseLabel(item) {
 function getValidationTone(item) {
   if (item?._validated && item?._edited) return "border-amber-400/45 bg-amber-500/10";
   if (item?._validated) return "border-emerald-400/45 bg-emerald-500/10";
+  if (needsManualReview(item)) return "border-amber-400/70 bg-amber-500/12 shadow-[0_0_22px_rgba(245,158,11,0.14)]";
   return "border-zinc-800 bg-zinc-950/65";
+}
+
+function isItemSuspicious(item) {
+  if (!item) return false;
+  if (item.reco_ok === false) return true;
+  if (item.reco_issue) return true;
+  return Number(item.heroes_found ?? item._recognizedCount ?? 0) < Number(item.expected_heroes ?? item._expectedCount ?? DEFENSE_SLOT_COUNT);
+}
+
+function getItemIssueLabel(item) {
+  if (!isItemSuspicious(item)) return "";
+  const found = Number(item?.heroes_found ?? item?._recognizedCount ?? 0);
+  const expected = Number(item?.expected_heroes ?? item?._expectedCount ?? DEFENSE_SLOT_COUNT);
+  if (found < expected) return `${expected - found} slot(s) a completer`;
+  return "Reco a verifier";
+}
+
+function isHeroSlotComplete(hero) {
+  return Boolean(hero?.champion?.trim() && hero?.position?.trim() && hero?.direction?.trim());
+}
+
+function isItemComplete(item) {
+  return Array.isArray(item?.compo) && item.compo.length === DEFENSE_SLOT_COUNT && item.compo.every(isHeroSlotComplete);
+}
+
+function needsManualReview(item) {
+  return Boolean(item && !item._validated && (isItemSuspicious(item) || !isItemComplete(item)));
+}
+
+function getManualReviewLabel(item) {
+  if (!item) return "";
+  const missingSlots = Array.isArray(item.compo)
+    ? item.compo.filter((hero) => !isHeroSlotComplete(hero)).length
+    : DEFENSE_SLOT_COUNT;
+  if (missingSlots > 0) return `${missingSlots} slot(s) a completer`;
+  return getItemIssueLabel(item) || "Reco a verifier";
 }
 
 function getJobTone(job) {
@@ -153,6 +220,7 @@ export default function GvgValidationTab() {
   const [importing, setImporting] = useState(false);
   const [deletingJobId, setDeletingJobId] = useState(null);
   const [message, setMessage] = useState("");
+  const [championPool, setChampionPool] = useState([]);
 
   const visibleJobs = useMemo(
     () => jobs.filter((job) => isJobForGuild(job, guild)),
@@ -163,7 +231,51 @@ export default function GvgValidationTab() {
   const selectedItem = items[selectedIndex] || null;
   const validatedCount = items.filter((item) => item._validated).length;
   const editedCount = items.filter((item) => item._edited).length;
+  const suspiciousCount = items.filter(needsManualReview).length;
   const readyToImport = items.length > 0 && validatedCount === items.length;
+  const championOptions = useMemo(() => {
+    const values = new Set();
+
+    for (const champion of championPool) {
+      const value = String(champion || "").trim();
+      if (value) values.add(value);
+    }
+
+    for (const item of items) {
+      for (const hero of item.compo || []) {
+        const champion = String(hero?.champion || "").trim();
+        if (champion) values.add(champion);
+      }
+    }
+
+    return Array.from(values).sort((left, right) => left.localeCompare(right, "fr"));
+  }, [championPool, items]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadChampionPool() {
+      try {
+        const { data, error } = await supabase
+          .from("champions")
+          .select("name")
+          .order("name", { ascending: true });
+
+        if (error) throw error;
+        if (!cancelled) {
+          setChampionPool((data || []).map((row) => row.name).filter(Boolean));
+        }
+      } catch (error) {
+        console.warn("champions autocomplete unavailable:", error);
+      }
+    }
+
+    loadChampionPool();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function loadJobs() {
     try {
@@ -286,7 +398,7 @@ export default function GvgValidationTab() {
         if (itemIndex !== selectedIndex) return item;
 
         const nextCompo = item.compo.map((hero, heroIndex) =>
-          heroIndex === rowIndex ? { ...hero, [field]: value } : hero
+          heroIndex === rowIndex ? { ...hero, [field]: value, _missing: false } : hero
         );
 
         return {
@@ -301,20 +413,41 @@ export default function GvgValidationTab() {
   }
 
   function validateSelected() {
+    if (!selectedItem || !isItemComplete(selectedItem)) {
+      setMessage("Impossible de valider : la defense doit contenir 5 heros avec nom, position et direction.");
+      return;
+    }
+
     setItems((current) =>
       current.map((item, index) =>
         index === selectedIndex ? { ...item, _validated: true } : item
       )
     );
+    setMessage("Defense validee.");
   }
 
   function validateAll() {
-    setItems((current) => current.map((item) => ({ ...item, _validated: true })));
+    const incompleteCount = items.filter((item) => !isItemComplete(item)).length;
+
+    setItems((current) =>
+      current.map((item) => (isItemComplete(item) ? { ...item, _validated: true } : item))
+    );
+
+    setMessage(
+      incompleteCount
+        ? `${items.length - incompleteCount} defense(s) validee(s). ${incompleteCount} defense(s) restent a completer.`
+        : "Toutes les defenses sont validees."
+    );
   }
 
   async function importValidated() {
     if (!readyToImport || !selectedJob) {
       setMessage("Tout doit etre valide avant l'import.");
+      return;
+    }
+
+    if (items.some((item) => !isItemComplete(item))) {
+      setMessage("Import bloque : chaque defense doit contenir 5 heros complets.");
       return;
     }
 
@@ -489,6 +622,7 @@ export default function GvgValidationTab() {
                       <div className="text-sm font-semibold text-zinc-100">Controle des defenses</div>
                       <div className="text-xs text-zinc-500">
                         {validatedCount}/{items.length} validees · {editedCount} corrigee(s)
+                        {suspiciousCount ? ` · ${suspiciousCount} a verifier` : ""}
                       </div>
                     </div>
                     <CheckCircle2 className="h-5 w-5 text-emerald-300" />
@@ -505,15 +639,31 @@ export default function GvgValidationTab() {
                         onClick={() => setSelectedIndex(index)}
                       >
                         <div className="flex items-center justify-between gap-3">
-                          <span className="truncate text-sm font-semibold text-zinc-100">
-                            {getDefenseLabel(item)}
+                          <span className="flex min-w-0 items-center gap-2">
+                            {needsManualReview(item) ? (
+                              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+                            ) : null}
+                            <span className="truncate text-sm font-semibold text-zinc-100">
+                              {getDefenseLabel(item)}
+                            </span>
                           </span>
-                          <span className="text-xs text-zinc-400">
-                            {item._validated ? "OK" : "A verifier"}
+                          <span
+                            className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold ${
+                              item._validated
+                                ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+                                : needsManualReview(item)
+                                  ? "border-amber-400/45 bg-amber-500/15 text-amber-200"
+                                  : "border-zinc-700 bg-zinc-900 text-zinc-300"
+                            }`}
+                          >
+                            {item._validated ? "OK" : needsManualReview(item) ? "Doute" : "A verifier"}
                           </span>
                         </div>
                         <div className="mt-1 text-xs text-zinc-500">
-                          {item.compo.length} heros reconnus
+                          {Number(item.heroes_found ?? item._recognizedCount ?? 0)}/{Number(item.expected_heroes ?? item._expectedCount ?? DEFENSE_SLOT_COUNT)} heros reconnus
+                          {needsManualReview(item) ? (
+                            <span className="ml-2 text-amber-300">{getManualReviewLabel(item)}</span>
+                          ) : null}
                         </div>
                       </button>
                     ))}
@@ -548,6 +698,12 @@ export default function GvgValidationTab() {
                       <div className="mt-1 text-xs text-zinc-500">
                         Job {selectedJob.job_id} · {selectedJob.side || "-"} · {guild}
                       </div>
+                      {needsManualReview(selectedItem) ? (
+                        <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-400/40 bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-100">
+                          <AlertTriangle className="h-4 w-4" />
+                          {getManualReviewLabel(selectedItem)}
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="flex flex-wrap gap-2">
@@ -600,21 +756,51 @@ export default function GvgValidationTab() {
                         <div>
                           <div className="text-sm font-semibold text-zinc-100">Composition reconnue</div>
                           <div className="text-xs text-zinc-500">
-                            Modifier une ligne remet la defense en attente de validation.
+                            5 slots obligatoires. Modifier une ligne remet la defense en attente de validation.
                           </div>
                         </div>
                         <Edit3 className="h-5 w-5 text-zinc-500" />
                       </div>
 
+                      <datalist id="gvg-validation-heroes">
+                        {championOptions.map((champion) => (
+                          <option key={champion} value={champion} />
+                        ))}
+                      </datalist>
+                      <datalist id="gvg-validation-positions">
+                        {POSITION_OPTIONS.map((position) => (
+                          <option key={position} value={position} />
+                        ))}
+                      </datalist>
+
                       <div className="space-y-3">
                         {selectedItem.compo.map((hero, heroIndex) => (
                           <div
                             key={`${selectedItem._localId}-${heroIndex}`}
-                            className="grid gap-2 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-3"
+                            className={`grid gap-2 rounded-2xl border p-3 ${
+                              isHeroSlotComplete(hero)
+                                ? "border-zinc-800 bg-zinc-900/60"
+                                : "border-amber-400/40 bg-amber-500/10"
+                            }`}
                           >
+                            <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em]">
+                              <span className={isHeroSlotComplete(hero) ? "text-zinc-500" : "text-amber-200"}>
+                                Slot {heroIndex + 1}
+                              </span>
+                              {isHeroSlotComplete(hero) ? (
+                                <span className="text-emerald-300">Complet</span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-amber-200">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  A remplir
+                                </span>
+                              )}
+                            </div>
+
                             <input
                               value={hero.champion || ""}
                               onChange={(event) => updateHero(heroIndex, "champion", event.target.value)}
+                              list="gvg-validation-heroes"
                               className="rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-cyan-300/80"
                               placeholder="Nom du heros"
                             />
@@ -623,6 +809,7 @@ export default function GvgValidationTab() {
                               <input
                                 value={hero.position || ""}
                                 onChange={(event) => updateHero(heroIndex, "position", event.target.value)}
+                                list="gvg-validation-positions"
                                 className="rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-cyan-300/80"
                                 placeholder="Position"
                               />
