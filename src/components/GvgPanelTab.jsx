@@ -561,7 +561,7 @@ const queryItems = Array.isArray(defense.heroes)
       return;
     }
 
-const response = await fetch(`${apiBase}/api/run-search`, {
+const response = await fetch(`${apiBase}/api/run?action=search`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",

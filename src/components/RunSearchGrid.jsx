@@ -276,7 +276,7 @@ const gridSpec = useMemo(() => {
   try {
     setLoadingSearch(true);
 
-    const res = await fetch(`${apiBase}/api/run-search`, {
+    const res = await fetch(`${apiBase}/api/run?action=search`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -325,7 +325,7 @@ async function runBotCommandSearch() {
   try {
     setLoadingSearch(true);
 
-    const res = await fetch(`${apiBase}/api/run-search`, {
+    const res = await fetch(`${apiBase}/api/run?action=search`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -57,7 +57,7 @@ function isJobForGuild(job, guild) {
 function buildPreviewUrl(job, item) {
   if (!item?.preview_file) return item?.image_url || "";
 
-  return `/api/gvg-server-preview?guild=${encodeURIComponent(job.guild)}&jobId=${encodeURIComponent(
+  return `/api/gvg-server?action=preview&guild=${encodeURIComponent(job.guild)}&jobId=${encodeURIComponent(
     job.job_id
   )}&file=${encodeURIComponent(item.preview_file)}`;
 }
@@ -143,7 +143,7 @@ export default function GvgValidationTab() {
       setMessage("");
 
       const response = await fetch(
-        `${apiBase}/api/gvg-server-jobs?limit=100&guild=${encodeURIComponent(guild)}`
+        `${apiBase}/api/gvg-server?action=jobs&limit=100&guild=${encodeURIComponent(guild)}`
       );
       const data = await readJsonResponse(response, "jobs VPS");
 
@@ -172,7 +172,7 @@ export default function GvgValidationTab() {
       setSelectedIndex(0);
 
       const response = await fetch(
-        `${apiBase}/api/gvg-server-jobs?action=payload&guild=${encodeURIComponent(
+        `${apiBase}/api/gvg-server?action=payload&guild=${encodeURIComponent(
           job.guild
         )}&jobId=${encodeURIComponent(job.job_id)}`
       );

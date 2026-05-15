@@ -256,7 +256,7 @@ async function saveRun() {
     setSaveLoading(true);
     setSaveMessage("");
 
-    const response = await fetch(`${apiBase}/api/run-add`, {
+    const response = await fetch(`${apiBase}/api/run?action=add`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

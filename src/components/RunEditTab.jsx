@@ -258,7 +258,7 @@ async function saveRun() {
     setSaveLoading(true);
     setSaveMessage("");
 
-    const response = await fetch(`${apiBase}/api/run-update`, {
+    const response = await fetch(`${apiBase}/api/run?action=update`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -322,7 +322,7 @@ async function deleteRun() {
     setDeleteLoading(true);
     setSaveMessage("");
 
-    const response = await fetch(`${apiBase}/api/run-delete`, {
+    const response = await fetch(`${apiBase}/api/run?action=delete`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -375,7 +375,7 @@ async function loadRun() {
     setSaveMessage("");
 
     const response = await fetch(
-      `${apiBase}/api/run-get?id=${encodeURIComponent(runId.trim())}`
+      `${apiBase}/api/run?action=get&id=${encodeURIComponent(runId.trim())}`
     );
 
     const rawText = await response.text();

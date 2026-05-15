@@ -200,7 +200,7 @@ export default function GvgAdminTab() {
       setMessage("");
 
       const response = await fetch(
-        `${apiBase}/api/gvg-server-jobs?limit=25&guild=${encodeURIComponent(guild)}`
+        `${apiBase}/api/gvg-server?action=jobs&limit=25&guild=${encodeURIComponent(guild)}`
       );
       const data = await readJsonResponse(response, "jobs VPS");
 
@@ -230,12 +230,13 @@ export default function GvgAdminTab() {
       setJobImportingId(job.job_id);
       setMessage("");
 
-      const response = await fetch(`${apiBase}/api/gvg-server-import`, {
+      const response = await fetch(`${apiBase}/api/gvg-server`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          action: "import",
           targetGuild: guild,
           sourceGuild: job.guild,
           jobId: job.job_id,
