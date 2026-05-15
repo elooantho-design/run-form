@@ -9,6 +9,7 @@ const CALQUE_FOLDERS = {
   faction: "faction-calques",
   role: "role-calques",
 };
+const LAUNCHER_DOWNLOAD_FILE = "PaladinGVGLauncher.zip";
 
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -38,6 +39,10 @@ function normalizeTargetGuild(value) {
 
 function isValidJobRef(value) {
   return /^[A-Za-z0-9._-]{1,160}$/.test(String(value || ""));
+}
+
+function isValidSessionId(value) {
+  return /^[A-Za-z0-9_-]{12,96}$/.test(String(value || ""));
 }
 
 function isValidCalqueFile(value) {
@@ -410,6 +415,64 @@ async function handleCalque(req, res) {
   return res.status(200).send(fileResponse.buffer);
 }
 
+async function handleLauncherCreate(req, res) {
+  const body = req.body || {};
+  const sessionId = String(body.sessionId || body.session_id || "").trim();
+  const guild = normalizeTargetGuild(body.guild);
+  const side = String(body.side || "enemy").toLowerCase();
+  const mode = String(body.mode || guild || "").toLowerCase();
+
+  if (!isValidSessionId(sessionId) || !guild) {
+    return res.status(400).json({ error: "session ou guilde invalide" });
+  }
+
+  if (!["enemy", "ally"].includes(side)) {
+    return res.status(400).json({ error: "side invalide" });
+  }
+
+  const data = await requestVpsJson("/api/v1/launcher/sessions", {
+    method: "POST",
+    body: {
+      session_id: sessionId,
+      guild,
+      mode,
+      side,
+    },
+  });
+
+  return res.status(200).json(data);
+}
+
+async function handleLauncherStatus(req, res) {
+  const sessionId = String(req.query?.session || req.query?.sessionId || "").trim();
+
+  if (!isValidSessionId(sessionId)) {
+    return res.status(400).json({ error: "session invalide" });
+  }
+
+  const data = await requestVpsJson(
+    `/api/v1/launcher/sessions/${encodeURIComponent(sessionId)}`,
+    { timeoutMs: 5000 }
+  );
+
+  return res.status(200).json(data);
+}
+
+async function handleLauncherDownload(req, res) {
+  const fileResponse = await requestVpsFile(`/downloads/${LAUNCHER_DOWNLOAD_FILE}`, {
+    auth: false,
+    timeoutMs: 30000,
+  });
+
+  res.setHeader("Content-Type", fileResponse.contentType || "application/zip");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${LAUNCHER_DOWNLOAD_FILE}"`
+  );
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).send(fileResponse.buffer);
+}
+
 async function fetchPayload(sourceGuild, jobId) {
   if (!isValidJobRef(sourceGuild) || !isValidJobRef(jobId)) {
     const error = new Error("reference job invalide");
@@ -501,6 +564,8 @@ export default async function handler(req, res) {
       if (action === "payload") return await handlePayload(req, res);
       if (action === "preview") return await handlePreview(req, res);
       if (action === "calque") return await handleCalque(req, res);
+      if (action === "launcher-status") return await handleLauncherStatus(req, res);
+      if (action === "launcher-download") return await handleLauncherDownload(req, res);
 
       return res.status(400).json({ error: "action GET inconnue" });
     }
@@ -508,6 +573,7 @@ export default async function handler(req, res) {
     if (req.method === "POST") {
       if (action === "import") return await handleImport(req, res);
       if (action === "delete") return await handleDeleteJob(req, res);
+      if (action === "launcher-create") return await handleLauncherCreate(req, res);
 
       return res.status(400).json({ error: "action POST inconnue" });
     }

@@ -151,6 +151,15 @@ function calqueUrl(kind, fileName) {
   return `/api/gvg-server?action=calque&kind=${kind}&file=${encodedFile}`;
 }
 
+function getApiBase() {
+  if (typeof window === "undefined") return "";
+
+  const configuredBase = import.meta.env?.VITE_API_BASE_URL;
+  if (configuredBase) return configuredBase.replace(/\/$/, "");
+
+  return isLocalHost() ? "http://localhost:3000" : "";
+}
+
 const heroRarityOrder = ["legendary", "epic", "rare", "ordinary", "basic"];
 
 const heroRarityFilters = [
@@ -1301,51 +1310,337 @@ function GvgView() {
   );
 }
 
-function LauncherView() {
-  return (
-    <section className="grid gap-4 xl:grid-cols-[1fr_360px]">
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-xl font-semibold text-zinc-50">Agent Windows</h2>
-        <p className="mt-1 text-sm text-zinc-500">Etat du futur launcher local connecte au serveur.</p>
+function makeLauncherSessionId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID().replace(/-/g, "");
+  }
 
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
-          {[
-            ["Hors ligne", XCircle, "border-red-500/25 bg-red-500/10 text-red-300"],
-            ["Derniere calibration", Clock3, "border-amber-500/25 bg-amber-500/10 text-amber-300"],
-            ["Commandes temporaires", Shield, "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"],
-          ].map(([label, Icon, classes]) => (
-            <div key={label} className={`rounded-lg border p-4 ${classes}`}>
-              <Icon className="h-5 w-5" />
-              <div className="mt-3 font-medium">{label}</div>
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function launcherEventLabel(event) {
+  const labels = {
+    created: "Session creee",
+    launcher_started: "Launcher detecte",
+    waiting_f9: "Attente F9",
+    capture_started: "Capture en cours",
+    capture_progress: "Capture en cours",
+    uploading: "Upload en cours",
+    upload_done: "Upload termine",
+    received_by_vps: "Recu par le VPS",
+    recognition_processing: "Reconnaissance serveur",
+    ready: "Resultat disponible",
+    error: "Erreur",
+  };
+
+  return labels[event] || event;
+}
+
+function LauncherView() {
+  const apiBase = useMemo(() => getApiBase(), []);
+  const pollRef = useRef(null);
+  const detectionDeadlineRef = useRef(0);
+
+  const [guild, setGuild] = useState("G1");
+  const [side, setSide] = useState("enemy");
+  const [sessionId, setSessionId] = useState("");
+  const [session, setSession] = useState(null);
+  const [launching, setLaunching] = useState(false);
+  const [detected, setDetected] = useState(false);
+  const [installModalOpen, setInstallModalOpen] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const events = Array.isArray(session?.events) ? session.events : [];
+  const progress = session?.progress || {};
+  const state = session?.state || "idle";
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    };
+  }, []);
+
+  async function readJson(response, label) {
+    const text = await response.text();
+    try {
+      return text ? JSON.parse(text) : null;
+    } catch {
+      throw new Error(`Reponse non JSON ${label}`);
+    }
+  }
+
+  async function fetchSessionStatus(nextSessionId) {
+    const response = await fetch(
+      `${apiBase}/api/gvg-server?action=launcher-status&session=${encodeURIComponent(nextSessionId)}`
+    );
+    const data = await readJson(response, "session launcher");
+
+    if (!response.ok) {
+      throw new Error(data?.error || "Session launcher introuvable.");
+    }
+
+    const nextSession = data?.session || null;
+    setSession(nextSession);
+
+    const nextState = nextSession?.state || "created";
+    const hasStarted = nextState !== "created" || (nextSession?.events || []).some((item) => item.event === "launcher_started");
+
+    if (hasStarted) {
+      setDetected(true);
+      setInstallModalOpen(false);
+      setLaunching(false);
+      setMessage(nextSession?.message || "Launcher detecte, capture prete a demarrer.");
+    } else if (Date.now() > detectionDeadlineRef.current) {
+      setLaunching(false);
+      setDetected(false);
+      setInstallModalOpen(true);
+      setMessage("Launcher Paladin GVG non detecte sur ce PC.");
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    }
+
+    if (["ready", "error"].includes(nextState) && pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
+
+  function startPolling(nextSessionId) {
+    if (pollRef.current) window.clearInterval(pollRef.current);
+    detectionDeadlineRef.current = Date.now() + 8500;
+
+    pollRef.current = window.setInterval(() => {
+      fetchSessionStatus(nextSessionId).catch((error) => {
+        setMessage(error?.message || "Erreur suivi launcher.");
+      });
+    }, 1000);
+  }
+
+  async function launchCapture() {
+    const nextSessionId = makeLauncherSessionId();
+
+    try {
+      setLaunching(true);
+      setDetected(false);
+      setInstallModalOpen(false);
+      setSessionId(nextSessionId);
+      setSession(null);
+      setMessage("Ouverture du launcher Paladin GVG...");
+
+      const response = await fetch(`${apiBase}/api/gvg-server`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "launcher-create",
+          sessionId: nextSessionId,
+          guild,
+          mode: guild.toLowerCase(),
+          side,
+        }),
+      });
+      const data = await readJson(response, "creation session launcher");
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Impossible de creer la session launcher.");
+      }
+
+      setSession(data?.session || null);
+      startPolling(nextSessionId);
+      window.location.href = `paladin-gvg://start?guild=${encodeURIComponent(guild)}&mode=${encodeURIComponent(
+        guild.toLowerCase()
+      )}&side=${encodeURIComponent(side)}&session=${encodeURIComponent(nextSessionId)}`;
+    } catch (error) {
+      setLaunching(false);
+      setMessage(error?.message || "Erreur lancement launcher.");
+    }
+  }
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-3xl border border-violet-500/25 bg-[radial-gradient(circle_at_top_left,rgba(124,58,237,0.24),transparent_34%),linear-gradient(135deg,rgba(10,10,18,0.96),rgba(16,24,39,0.88))] p-5 shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100">
+              Capture GVG
             </div>
-          ))}
+            <h2 className="mt-4 text-2xl font-semibold text-zinc-50">Lancer la capture GVG</h2>
+            <p className="mt-2 max-w-2xl text-sm text-zinc-300">
+              Le site ouvre le launcher installe sur le PC, puis suit la capture jusqu'au resultat disponible dans Validation.
+            </p>
+          </div>
+
+          <Button
+            type="button"
+            className="rounded-2xl bg-emerald-600 px-5 py-6 text-base text-white hover:bg-emerald-500"
+            disabled={launching}
+            onClick={launchCapture}
+          >
+            <Play className="mr-2 h-5 w-5" />
+            {launching ? "Ouverture..." : "Lancer la capture GVG"}
+          </Button>
         </div>
 
-        <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="font-medium text-zinc-100">Mission test</div>
-              <div className="text-sm text-zinc-500">Calibration plein ecran puis retour serveur.</div>
+        <div className="mt-6 grid gap-3 md:grid-cols-[1fr_1fr_1.4fr]">
+          <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Guilde</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {["G1", "G2", "G3", "G4", "G5", "G6", "G7"].map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setGuild(item)}
+                  className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                    guild === item
+                      ? "border-cyan-300/70 bg-cyan-400/15 text-cyan-100"
+                      : "border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:border-zinc-500"
+                  }`}
+                >
+                  {item}
+                </button>
+              ))}
             </div>
-            <Button className="rounded-lg bg-emerald-600 text-white hover:bg-emerald-500">
-              <UploadCloud className="mr-2 h-4 w-4" />
-              Preparer
-            </Button>
+          </div>
+
+          <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Type</div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {[
+                ["enemy", "Ennemi"],
+                ["ally", "Allie"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setSide(value)}
+                  className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                    side === value
+                      ? "border-violet-300/70 bg-violet-400/15 text-violet-100"
+                      : "border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:border-zinc-500"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Etat</div>
+                <div className="mt-2 font-semibold text-zinc-100">
+                  {detected ? "Launcher detecte" : launching ? "Detection en cours" : launcherEventLabel(state)}
+                </div>
+              </div>
+              {detected ? (
+                <CheckCircle2 className="h-7 w-7 text-emerald-300" />
+              ) : launching ? (
+                <Clock3 className="h-7 w-7 text-amber-300" />
+              ) : (
+                <XCircle className="h-7 w-7 text-zinc-500" />
+              )}
+            </div>
+            <div className="mt-3 text-sm text-zinc-400">
+              {message || "Pret a lancer une session de capture."}
+            </div>
+            {sessionId ? (
+              <div className="mt-2 truncate text-xs text-zinc-600">Session {sessionId}</div>
+            ) : null}
           </div>
         </div>
       </div>
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-lg font-semibold text-zinc-50">Regles de securite</h2>
-        <div className="mt-4 space-y-3 text-sm text-zinc-400">
-          {["Fenetre du jeu au premier plan", "Arret si la souris bouge", "Session expiree apres mission", "Aucune logique complete stockee"].map((item) => (
-            <div key={item} className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-300" />
-              <span>{item}</span>
+      <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+        <div className="rounded-3xl border border-zinc-800 bg-zinc-950/75 p-5">
+          <h3 className="text-lg font-semibold text-zinc-100">Etapes joueur</h3>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {[
+              "Ouvre Watcher of Realms.",
+              "Va sur l'ecran GVG.",
+              "Quand tu es pret, appuie sur F9.",
+              "Ne touche plus a la souris ni au clavier pendant la capture.",
+            ].map((item, index) => (
+              <div key={item} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+                <div className="text-xs text-zinc-500">Etape {index + 1}</div>
+                <div className="mt-2 text-sm font-medium text-zinc-100">{item}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-zinc-800 bg-zinc-950/75 p-5">
+          <h3 className="text-lg font-semibold text-zinc-100">Suivi session</h3>
+          <div className="mt-4 space-y-3">
+            {events.length ? (
+              events.slice(-8).reverse().map((event, index) => (
+                <div key={`${event.event}-${event.at}-${index}`} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-medium text-zinc-100">{launcherEventLabel(event.event)}</div>
+                    <div className="text-xs text-zinc-500">
+                      {event.at ? new Date(event.at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : ""}
+                    </div>
+                  </div>
+                  {event.message ? <div className="mt-1 text-sm text-zinc-400">{event.message}</div> : null}
+                </div>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-500">
+                Les statuts apparaitront ici des que le launcher repondra.
+              </div>
+            )}
+          </div>
+
+          {progress.total ? (
+            <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-zinc-400">Progression capture</span>
+                <span className="font-semibold text-zinc-100">
+                  {progress.current || 0} / {progress.total || 48}
+                </span>
+              </div>
+              <div className="mt-3 h-2 rounded-full bg-zinc-800">
+                <div
+                  className="h-full rounded-full bg-cyan-300 transition-all"
+                  style={{ width: `${Math.min(100, ((progress.current || 0) / (progress.total || 48)) * 100)}%` }}
+                />
+              </div>
             </div>
-          ))}
+          ) : null}
         </div>
       </div>
+
+      {installModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-lg rounded-3xl border border-violet-400/30 bg-zinc-950 p-6 shadow-[0_0_80px_rgba(124,58,237,0.35)]">
+            <div className="flex items-start gap-3">
+              <XCircle className="mt-1 h-6 w-6 text-amber-300" />
+              <div>
+                <h3 className="text-xl font-semibold text-zinc-50">Launcher Paladin GVG non detecte sur votre PC.</h3>
+                <p className="mt-3 text-sm text-zinc-300">
+                  Vous devez l'installer une seule fois pour pouvoir lancer les captures depuis le site.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <a
+                href={`${apiBase}/api/gvg-server?action=launcher-download`}
+                className="inline-flex items-center rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
+              >
+                <UploadCloud className="mr-2 h-4 w-4" />
+                Telecharger et installer le launcher
+              </a>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-2xl border-zinc-700 text-zinc-200"
+                onClick={() => setInstallModalOpen(false)}
+              >
+                Fermer
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
