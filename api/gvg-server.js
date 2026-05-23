@@ -10,6 +10,7 @@ const CALQUE_FOLDERS = {
   role: "role-calques",
 };
 const LAUNCHER_DOWNLOAD_FILE = "PaladinGVGLauncher.zip";
+const RECORD_LAUNCHER_DOWNLOAD_FILE = "PaladinGVGRecordLauncher.zip";
 
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -28,13 +29,17 @@ function getServerConfig() {
   return { serverUrl, token };
 }
 
+function normalizeGuildCode(value) {
+  const code = String(value || "").trim().toUpperCase();
+  return /^[A-Z0-9_-]{2,24}$/.test(code) ? code : null;
+}
+
 function isValidGuild(value) {
-  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+  return normalizeGuildCode(value) !== null;
 }
 
 function normalizeTargetGuild(value) {
-  const code = String(value || "").toUpperCase();
-  return isValidGuild(code) ? code : null;
+  return normalizeGuildCode(value);
 }
 
 function isValidJobRef(value) {
@@ -473,6 +478,21 @@ async function handleLauncherDownload(req, res) {
   return res.status(200).send(fileResponse.buffer);
 }
 
+async function handleRecordLauncherDownload(req, res) {
+  const fileResponse = await requestVpsFile(`/downloads/${RECORD_LAUNCHER_DOWNLOAD_FILE}`, {
+    auth: false,
+    timeoutMs: 30000,
+  });
+
+  res.setHeader("Content-Type", fileResponse.contentType || "application/zip");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${RECORD_LAUNCHER_DOWNLOAD_FILE}"`
+  );
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).send(fileResponse.buffer);
+}
+
 async function fetchPayload(sourceGuild, jobId) {
   if (!isValidJobRef(sourceGuild) || !isValidJobRef(jobId)) {
     const error = new Error("reference job invalide");
@@ -566,6 +586,7 @@ export default async function handler(req, res) {
       if (action === "calque") return await handleCalque(req, res);
       if (action === "launcher-status") return await handleLauncherStatus(req, res);
       if (action === "launcher-download") return await handleLauncherDownload(req, res);
+      if (action === "record-launcher-download") return await handleRecordLauncherDownload(req, res);
 
       return res.status(400).json({ error: "action GET inconnue" });
     }

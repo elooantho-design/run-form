@@ -9,6 +9,66 @@ const supabase = createClient(
 );
 const UPLOADED_DIR =
   process.env.YOUTUBE_UPLOADED_DIR || "";
+const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
+
+function normalizeGuildCode(value) {
+  const code = String(value || "").trim().toUpperCase();
+  return /^[A-Z0-9_-]{2,24}$/.test(code) ? code : null;
+}
+
+function normalizeRecordScope(value) {
+  const scope = String(value || "").trim().toLowerCase();
+  return ["enemy", "ally", "both"].includes(scope) ? scope : null;
+}
+
+function getGvgServerConfig() {
+  const serverUrl = String(
+    process.env.GVG_SERVER_URL ||
+      process.env.GVG_VPS_URL ||
+      DEFAULT_GVG_SERVER_URL
+  ).replace(/\/$/, "");
+  const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
+
+  return { serverUrl, token };
+}
+
+async function requestGvgVps(pathname, options = {}) {
+  const { serverUrl, token } = getGvgServerConfig();
+
+  if (!token) {
+    const error = new Error("GVG_API_TOKEN manquant cote serveur");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const response = await fetch(new URL(pathname, serverUrl).toString(), {
+    method: options.method || "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "X-GVG-Token": token,
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const text = await response.text();
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    const error = new Error(data?.detail || data?.error || `Erreur VPS ${response.status}`);
+    error.statusCode = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
+}
+
 function extractStoragePathFromPublicUrl(url) {
   if (!url) return null;
 
@@ -21,13 +81,13 @@ function extractStoragePathFromPublicUrl(url) {
 }
 
 function isValidGuild(value) {
-  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+  return normalizeGuildCode(value) !== null;
 }
 
 async function handleList(req, res) {
-  const guild = String(req.query?.guild || "").toUpperCase();
+  const guild = normalizeGuildCode(req.query?.guild);
 
-  if (!isValidGuild(guild)) {
+  if (!guild) {
     return res.status(400).json({ error: "guild manquante ou invalide" });
   }
 
@@ -513,6 +573,124 @@ async function handlePanelUpdateFields(req, res) {
   });
 }
 
+function makeRecordPlanItem(defense) {
+  const defKey = makeDefKey(defense);
+  const side = defense.is_ally === true ? "ally" : "enemy";
+
+  return {
+    id: String(defense.id),
+    key: side === "ally" ? `${defKey}_ally` : defKey,
+    def_key: defKey,
+    side,
+    guild: normalizeGuildCode(defense.guild) || String(defense.guild || "").toUpperCase(),
+    bastion: Number(defense.bastion),
+    type: String(defense.type || ""),
+    tower: defense.tower === null || defense.tower === undefined ? null : Number(defense.tower),
+    team: Number(defense.team),
+    attack_code: defense.attack_code || null,
+    record_comment: defense.record_comment || null,
+  };
+}
+
+async function handleCreateRecordSession(req, res) {
+  const body = req.body || {};
+  const guild = normalizeGuildCode(body.guild);
+  const scope = normalizeRecordScope(body.scope || body.side);
+  const sessionId = String(body.session_id || body.sessionId || "").trim();
+  const source = String(body.source || "panel").trim() || "panel";
+
+  if (!guild) {
+    return res.status(400).json({ error: "guild invalide" });
+  }
+
+  if (!scope) {
+    return res.status(400).json({ error: "scope invalide: enemy, ally ou both attendu" });
+  }
+
+  if (!/^[A-Za-z0-9_-]{12,96}$/.test(sessionId)) {
+    return res.status(400).json({ error: "session_id invalide" });
+  }
+
+  let query = supabase
+    .from("gvg_defense")
+    .select(`
+      id,
+      guild,
+      bastion,
+      type,
+      tower,
+      team,
+      is_ally,
+      record_status,
+      record_comment,
+      attack_code
+    `)
+    .eq("guild", guild)
+    .eq("record_status", "a_record");
+
+  if (scope === "ally") {
+    query = query.eq("is_ally", true);
+  } else if (scope === "enemy") {
+    query = query.or("is_ally.is.false,is_ally.is.null");
+  }
+
+  const { data, error } = await query
+    .order("is_ally", { ascending: true })
+    .order("bastion", { ascending: true })
+    .order("type", { ascending: true })
+    .order("tower", { ascending: true, nullsFirst: true })
+    .order("team", { ascending: true });
+
+  if (error) {
+    console.error("[gvg-data:record_session_create] supabase error:", error);
+    return res.status(500).json({ error: "lecture gvg_defense impossible" });
+  }
+
+  const items = (data || []).map(makeRecordPlanItem);
+
+  if (!items.length) {
+    return res.status(200).json({
+      success: true,
+      session_id: sessionId,
+      guild,
+      scope,
+      count: 0,
+      items: [],
+      message: "Aucune defense a record pour cette selection.",
+    });
+  }
+
+  try {
+    const vps = await requestGvgVps("/api/v1/record/sessions", {
+      method: "POST",
+      body: {
+        session_id: sessionId,
+        guild,
+        side: scope,
+        source,
+        items,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      session_id: sessionId,
+      guild,
+      scope,
+      count: items.length,
+      items,
+      protocol_url: `paladin-gvg-record://start?guild=${encodeURIComponent(guild)}&side=${encodeURIComponent(scope)}&session=${encodeURIComponent(sessionId)}`,
+      vps,
+    });
+  } catch (error) {
+    console.error("[gvg-data:record_session_create] VPS error:", error);
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "creation session record VPS impossible",
+      details: error.data || undefined,
+    });
+  }
+}
+
 async function handleRecordOk(req, res) {
   const { guild } = req.body || {};
 
@@ -910,6 +1088,10 @@ if (req.method === "POST") {
 
   if (action === "record_toggle") {
     return await handleRecordToggle(req, res);
+  }
+
+  if (action === "record_session_create") {
+    return await handleCreateRecordSession(req, res);
   }
 
 if (action === "panel_update_fields") {

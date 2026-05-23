@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
+const DEFAULT_GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
+
+function normalizeGuildInput(value) {
+  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24);
+}
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -126,6 +130,9 @@ const session = useMemo(() => {
 const canUsePanelActions =
   String(session?.discordId || "") === allowedDiscordId;
 const [guild, setGuild] = useState("G1");
+const [recordModalOpen, setRecordModalOpen] = useState(false);
+const [recordCreating, setRecordCreating] = useState(false);
+const [recordSession, setRecordSession] = useState(null);
 
 const [items, setItems] = useState([]);
 const enemyItems = useMemo(
@@ -147,6 +154,14 @@ const [returnModal, setReturnModal] = useState(null);
 const [runsModal, setRunsModal] = useState(null);
 const [runs, setRuns] = useState([]);
 const [runsLoading, setRunsLoading] = useState(false);
+
+const recordCounts = useMemo(
+  () => ({
+    enemy: enemyItems.filter((d) => d.record_status === "a_record").length,
+    ally: allyItems.filter((d) => d.record_status === "a_record").length,
+  }),
+  [enemyItems, allyItems]
+);
 
   async function load() {
     try {
@@ -191,6 +206,88 @@ const [runsLoading, setRunsLoading] = useState(false);
   useEffect(() => {
     load();
   }, [guild]);
+
+function makeRecordSessionId() {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `record_${Date.now()}_${random}`;
+}
+
+function getRecordScopeCount(scope) {
+  if (scope === "enemy") return recordCounts.enemy;
+  if (scope === "ally") return recordCounts.ally;
+  return recordCounts.enemy + recordCounts.ally;
+}
+
+function getRecordScopeLabel(scope) {
+  if (scope === "enemy") return "defenses ennemies";
+  if (scope === "ally") return "defenses alliees";
+  return "defenses ennemies + alliees";
+}
+
+async function createRecordLauncherSession(scope) {
+  if (!canUsePanelActions || recordCreating) return;
+
+  const count = getRecordScopeCount(scope);
+  if (!count) {
+    setRecordSession(null);
+    setMessage(`Aucune defense a record pour ${getRecordScopeLabel(scope)}.`);
+    return;
+  }
+
+  try {
+    setRecordCreating(true);
+    setRecordSession(null);
+    setMessage("");
+
+    const sessionId = makeRecordSessionId();
+    const response = await fetch(`${apiBase}/api/gvg-data`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "record_session_create",
+        guild,
+        scope,
+        session_id: sessionId,
+        source: typeof window !== "undefined" && window.location?.pathname?.includes("portal")
+          ? "portal"
+          : "dashboard",
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setMessage(`Reponse non JSON session record (${response.status})`);
+      return;
+    }
+
+    if (!response.ok) {
+      setMessage(data?.error || "Erreur creation session record");
+      return;
+    }
+
+    if (!data?.count) {
+      setMessage(data?.message || "Aucune defense a record pour cette selection.");
+      return;
+    }
+
+    setRecordSession(data);
+    setMessage(`Session record prete: ${data.count} defense(s) pour ${getRecordScopeLabel(scope)}.`);
+  } catch (error) {
+    console.error("createRecordLauncherSession error:", error);
+    setMessage(`Erreur session record : ${error?.message || "erreur inconnue"}`);
+  } finally {
+    setRecordCreating(false);
+  }
+}
+
+function launchRecordProtocol() {
+  if (!recordSession?.protocol_url) return;
+  window.location.href = recordSession.protocol_url;
+}
   function buildSlotLabel(bastion, type, tower, team) {
     if (type === "fortress") {
       return `B${bastion}_F_T${team}`;
@@ -772,7 +869,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
   return (
     <div className="space-y-4">
 <div className="flex flex-wrap items-center gap-2">
-  {GUILDS.map((item) => (
+  {DEFAULT_GUILDS.map((item) => (
     <button
       key={item}
       onClick={() => setGuild(item)}
@@ -784,6 +881,29 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
     </button>
   ))}
 
+  <input
+    value={guild}
+    onChange={(event) => setGuild(normalizeGuildInput(event.target.value))}
+    className="w-24 rounded border border-zinc-700 bg-zinc-950 px-3 py-1 text-sm uppercase text-white outline-none focus:border-cyan-400"
+    placeholder="MAD"
+    title="Code guilde"
+  />
+
+<button
+  onClick={() => {
+    setRecordSession(null);
+    setRecordModalOpen(true);
+  }}
+  disabled={!canUsePanelActions}
+  className={`rounded px-3 py-1 text-sm text-white ${
+    canUsePanelActions
+      ? "bg-cyan-600 hover:bg-cyan-500"
+      : "cursor-not-allowed bg-zinc-700 opacity-50"
+  }`}
+>
+  Lancer record
+</button>
+
 <button
   onClick={buildAhkCommand}
   disabled={!canUsePanelActions}
@@ -793,7 +913,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       : "cursor-not-allowed bg-zinc-700 opacity-50"
   }`}
 >
-  🎬 Record
+  Cmd record locale
 </button>
 
 <button
@@ -854,6 +974,82 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
     )}
   </>
 )}
+      {recordModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-cyan-500/40 bg-zinc-950 p-5 shadow-[0_0_30px_rgba(34,211,238,0.18)]">
+            <div className="mb-1 text-lg font-semibold text-white">Lancer un record GVG</div>
+            <div className="mb-4 text-sm text-zinc-400">
+              Guilde {guild}. Le plan sera limite a cette guilde et aux defenses marquees a record.
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              {[
+                ["enemy", "Ennemies", recordCounts.enemy],
+                ["ally", "Alliees", recordCounts.ally],
+                ["both", "Les deux", recordCounts.enemy + recordCounts.ally],
+              ].map(([scope, label, count]) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => createRecordLauncherSession(scope)}
+                  disabled={!canUsePanelActions || recordCreating || count === 0}
+                  className={`rounded-xl border px-4 py-3 text-left transition ${
+                    count > 0 && canUsePanelActions
+                      ? "border-cyan-500/40 bg-cyan-500/10 hover:border-cyan-300"
+                      : "border-zinc-800 bg-zinc-900/70 opacity-50"
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-white">{label}</div>
+                  <div className="text-xs text-zinc-400">{count} defense(s) a record</div>
+                </button>
+              ))}
+            </div>
+
+            {recordCreating ? (
+              <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-sm text-zinc-300">
+                Creation de la session record sur le VPS...
+              </div>
+            ) : null}
+
+            {recordSession ? (
+              <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                <div className="font-semibold">Session creee</div>
+                <div>{recordSession.count} defense(s) dans le plan {recordSession.scope}.</div>
+                <div className="mt-1 break-all text-xs text-emerald-200/80">{recordSession.session_id}</div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={launchRecordProtocol}
+                    className="rounded bg-emerald-600 px-3 py-1 text-sm text-white hover:bg-emerald-500"
+                  >
+                    Ouvrir le launcher record
+                  </button>
+                  <a
+                    href={`${apiBase}/api/gvg-server?action=record-launcher-download`}
+                    className="rounded border border-emerald-500/40 px-3 py-1 text-sm text-emerald-100 hover:border-emerald-300"
+                  >
+                    Telecharger / installer
+                  </a>
+                </div>
+                <div className="mt-2 text-xs text-emerald-200/70">
+                  Si rien ne s'ouvre, installe le launcher record une fois, puis reclique sur ouvrir.
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRecordModalOpen(false)}
+                className="rounded bg-zinc-800 px-3 py-1 text-sm text-white hover:bg-zinc-700"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {commentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-4">
