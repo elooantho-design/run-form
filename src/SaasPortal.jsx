@@ -161,6 +161,32 @@ function getApiBase() {
 }
 
 const heroRarityOrder = ["legendary", "epic", "rare", "ordinary", "basic"];
+const latestHeroReleaseLimit = 6;
+const latestHeroReleaseNames = [
+  "Janus",
+  "Solaris",
+  "Oren",
+  "Dame Mina",
+  "Glacius",
+  "Barbe-Grise",
+  "Dame Alexendra",
+  "Guan Yu",
+  "Rivenhald",
+  "Valara",
+  "Vlad Draculea",
+];
+
+function heroNameFromFile(fileName) {
+  return fileName.replace(/\.[^.]+$/, "");
+}
+
+function normalizeHeroKey(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
 
 const heroRarityFilters = [
   { id: "all", label: "Toutes", color: "#facc15" },
@@ -465,6 +491,12 @@ const heroLayerData = [
     { fileName: "Josh.png", rarity: "basic", factions: [], roles: ["tireur"] },
 ];
 
+const heroLayerKeySet = new Set(heroLayerData.map((hero) => normalizeHeroKey(heroNameFromFile(hero.fileName))));
+const activeLatestHeroKeys = latestHeroReleaseNames
+  .map(normalizeHeroKey)
+  .filter((key) => heroLayerKeySet.has(key))
+  .slice(0, latestHeroReleaseLimit);
+
 const heroLayerCards = [...heroLayerData]
   .sort((left, right) => {
     const rarityDiff = heroRarityOrder.indexOf(left.rarity) - heroRarityOrder.indexOf(right.rarity);
@@ -472,7 +504,8 @@ const heroLayerCards = [...heroLayerData]
     return left.fileName.localeCompare(right.fileName, "fr", { sensitivity: "base" });
   })
   .map((hero, index) => {
-    const name = hero.fileName.replace(/\.[^.]+$/, "");
+    const name = heroNameFromFile(hero.fileName);
+    const latestReleaseIndex = activeLatestHeroKeys.indexOf(normalizeHeroKey(name));
     const owned = index % 5 !== 0;
 
     return {
@@ -481,6 +514,8 @@ const heroLayerCards = [...heroLayerData]
       name,
       image: calqueUrl("hero", hero.fileName),
       roles: hero.roles || ["combattant"],
+      isLatestRelease: latestReleaseIndex !== -1,
+      latestReleaseRank: latestReleaseIndex === -1 ? null : latestReleaseIndex + 1,
       owned,
       awakening: owned ? index % 6 : 0,
     };
@@ -1049,6 +1084,7 @@ function HeroBoxView() {
   const [rarityFilter, setRarityFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
   const [factionFilter, setFactionFilter] = useState("all");
+  const [latestOnly, setLatestOnly] = useState(false);
   const [heroStates, setHeroStates] = useState(() =>
     Object.fromEntries(heroLayerCards.map((hero) => [hero.id, { owned: hero.owned, awakening: hero.awakening }])),
   );
@@ -1056,20 +1092,26 @@ function HeroBoxView() {
   const visibleHeroes = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    return heroLayerCards.filter((hero) => {
-      const state = heroStates[hero.id] || { owned: false, awakening: 0 };
-      const matchesQuery = normalizedQuery.length === 0 || hero.name.toLowerCase().includes(normalizedQuery);
-      const matchesState =
-        ownedFilter === "all" ||
-        (ownedFilter === "owned" && state.owned) ||
-        (ownedFilter === "locked" && !state.owned);
-      const matchesRarity = rarityFilter === "all" || hero.rarity === rarityFilter;
-      const matchesRole = roleFilter === "all" || hero.roles.includes(roleFilter);
-      const matchesFaction = factionFilter === "all" || hero.factions.includes(factionFilter);
+    return heroLayerCards
+      .filter((hero) => {
+        const state = heroStates[hero.id] || { owned: false, awakening: 0 };
+        const matchesQuery = normalizedQuery.length === 0 || hero.name.toLowerCase().includes(normalizedQuery);
+        const matchesState =
+          ownedFilter === "all" ||
+          (ownedFilter === "owned" && state.owned) ||
+          (ownedFilter === "locked" && !state.owned);
+        const matchesRarity = rarityFilter === "all" || hero.rarity === rarityFilter;
+        const matchesRole = roleFilter === "all" || hero.roles.includes(roleFilter);
+        const matchesFaction = factionFilter === "all" || hero.factions.includes(factionFilter);
+        const matchesLatest = !latestOnly || hero.isLatestRelease;
 
-      return matchesQuery && matchesState && matchesRarity && matchesRole && matchesFaction;
-    });
-  }, [factionFilter, heroStates, ownedFilter, query, rarityFilter, roleFilter]);
+        return matchesQuery && matchesState && matchesRarity && matchesRole && matchesFaction && matchesLatest;
+      })
+      .sort((left, right) => {
+        if (!latestOnly) return 0;
+        return (left.latestReleaseRank || 999) - (right.latestReleaseRank || 999);
+      });
+  }, [factionFilter, heroStates, latestOnly, ownedFilter, query, rarityFilter, roleFilter]);
 
   const stats = useMemo(() => {
     const values = Object.values(heroStates);
@@ -1164,6 +1206,17 @@ function HeroBoxView() {
         </div>
 
         <div className="hero-box-filter-row" aria-label="Filtres de rarete">
+          <button
+            type="button"
+            className="hero-rarity-filter hero-box-latest-filter"
+            style={{ "--rarity-color": "#38bdf8" }}
+            aria-pressed={latestOnly}
+            onClick={() => setLatestOnly((value) => !value)}
+            title="Afficher les dernieres sorties ingame"
+          >
+            <Clock3 className="h-4 w-4" />
+            Dernieres sorties
+          </button>
           {heroRarityFilters.map((filter) => (
             <button
               key={filter.id}
@@ -1215,6 +1268,7 @@ function HeroBoxView() {
 
         <div className="hero-box-result-count">
           {visibleHeroes.length} heros affiches
+          {latestOnly ? <span>Dernieres sorties ingame</span> : null}
         </div>
 
         <div className="hero-layer-grid">

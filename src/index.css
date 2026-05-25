@@ -471,6 +471,19 @@ body {
   box-shadow: 0 0 20px color-mix(in srgb, var(--rarity-color) 28%, transparent);
 }
 
+.hero-rarity-filter.hero-box-latest-filter {
+  border-color: rgba(56, 189, 248, 0.34);
+  color: #bae6fd;
+}
+
+.hero-rarity-filter.hero-box-latest-filter[aria-pressed="true"] {
+  border-color: rgba(56, 189, 248, 0.78);
+  background:
+    radial-gradient(circle at 24% 20%, rgba(56, 189, 248, 0.34), transparent 52%),
+    rgba(56, 189, 248, 0.14);
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.22);
+}
+
 .hero-rarity-dot {
   width: 10px;
   aspect-ratio: 1;
@@ -537,6 +550,20 @@ body {
   font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.hero-box-result-count span {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 4px 10px;
+  color: #bae6fd;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
