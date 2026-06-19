@@ -750,7 +750,7 @@ async function markRecordOk() {
       body: JSON.stringify({
         action: "record_youtube_upload",
         guild,
-        limit: 8,
+        limit: 50,
       }),
     });
 
