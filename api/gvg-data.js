@@ -707,16 +707,123 @@ async function handleRecordSessions(req, res) {
       limit: String(limit),
     });
     const vps = await requestGvgVps(`/api/v1/record/sessions?${params.toString()}`);
+    const sessions = vps?.sessions || [];
+    const syncedYoutube = await syncRecordYoutubeLinksFromSessions(guild, sessions);
 
     return res.status(200).json({
       success: true,
       guild,
-      sessions: vps?.sessions || [],
+      sessions,
+      synced_youtube: syncedYoutube,
     });
   } catch (error) {
     console.error("[gvg-data:record_sessions] VPS error:", error);
     return res.status(error.statusCode || 500).json({
       error: error.message || "lecture sessions record VPS impossible",
+      details: error.data || undefined,
+    });
+  }
+}
+
+async function syncRecordYoutubeLinksFromSessions(guild, sessions) {
+  const normalizedGuild = normalizeGuildCode(guild);
+  if (!normalizedGuild) {
+    return { updated: 0, candidates: 0, items: [] };
+  }
+
+  const candidatesById = new Map();
+
+  for (const session of sessions || []) {
+    for (const item of session?.items || []) {
+      const id = String(item?.id || item?.defense_id || "").trim();
+      const youtubeUrl = String(item?.youtube_url || "").trim();
+
+      if (!id || !youtubeUrl) {
+        continue;
+      }
+
+      candidatesById.set(id, {
+        id,
+        youtube_url: youtubeUrl,
+        session_id: session?.session_id || null,
+        item_key: item?.key || null,
+      });
+    }
+  }
+
+  const results = [];
+
+  for (const item of candidatesById.values()) {
+    const { data, error } = await supabase
+      .from("gvg_defense")
+      .update({
+        youtube_url: item.youtube_url,
+        record_status: "record",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", item.id)
+      .eq("guild", normalizedGuild)
+      .neq("record_status", "push")
+      .select("id, youtube_url, record_status")
+      .maybeSingle();
+
+    if (error) {
+      console.error("[gvg-data:record_youtube_sync] update error:", error);
+      throw new Error("erreur synchronisation YouTube");
+    }
+
+    if (data) {
+      results.push(data);
+    }
+  }
+
+  return {
+    updated: results.length,
+    candidates: candidatesById.size,
+    items: results,
+  };
+}
+
+async function handleRecordYoutubeUpload(req, res) {
+  const body = req.body || {};
+  const guild = normalizeGuildCode(body.guild);
+  const sessionId = String(body.session_id || body.sessionId || "").trim() || null;
+  const rawLimit = Number(body.limit || 8);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 50)) : 8;
+
+  if (!guild) {
+    return res.status(400).json({ error: "guild invalide" });
+  }
+
+  try {
+    const vps = await requestGvgVps("/api/v1/record/youtube/upload", {
+      method: "POST",
+      body: {
+        guild,
+        session_id: sessionId,
+        limit,
+      },
+    });
+
+    const params = new URLSearchParams({
+      guild,
+      limit: "100",
+    });
+    const sessionsResponse = await requestGvgVps(`/api/v1/record/sessions?${params.toString()}`);
+    const sessions = sessionsResponse?.sessions || [];
+    const syncedYoutube = await syncRecordYoutubeLinksFromSessions(guild, sessions);
+
+    return res.status(200).json({
+      success: true,
+      guild,
+      vps,
+      sessions,
+      synced_youtube: syncedYoutube,
+    });
+  } catch (error) {
+    console.error("[gvg-data:record_youtube_upload] VPS error:", error);
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "upload YouTube VPS impossible",
       details: error.data || undefined,
     });
   }
@@ -1135,6 +1242,10 @@ if (action === "panel_update_fields") {
 
 if (action === "record_ok") {
   return await handleRecordOk(req, res);
+}
+
+if (action === "record_youtube_upload") {
+  return await handleRecordYoutubeUpload(req, res);
 }
 
 if (action === "push_to_base") {

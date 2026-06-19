@@ -398,10 +398,20 @@ function getDefenseRecordUpload(defense) {
   return recordUploadsByKey.get(`id:${defenseId}`) || null;
 }
 
+function isRecordVideoReceived(upload) {
+  const item = upload?.item;
+  const status = item?.status;
+
+  return Boolean(
+    item?.video_file ||
+      ["uploaded", "youtube_uploading", "youtube_uploaded", "youtube_error"].includes(status)
+  );
+}
+
 const recordFlowStats = useMemo(() => {
   const toRecord = items.filter((defense) => defense.record_status === "a_record");
-  const uploaded = toRecord.filter(
-    (defense) => getDefenseRecordUpload(defense)?.item?.status === "uploaded"
+  const uploaded = toRecord.filter((defense) =>
+    isRecordVideoReceived(getDefenseRecordUpload(defense))
   ).length;
   const youtube = items.filter(
     (defense) => defense.record_status === "record" && defense.youtube_url
@@ -419,6 +429,7 @@ function getDefenseRecordState(defense) {
   if (!defense) return null;
 
   const upload = getDefenseRecordUpload(defense);
+  const uploadStatus = upload?.item?.status;
 
   if (defense.record_status === "push") {
     return {
@@ -438,7 +449,34 @@ function getDefenseRecordState(defense) {
     };
   }
 
-  if (defense.record_status === "a_record" && upload?.item?.status === "uploaded") {
+  if (defense.record_status === "a_record" && uploadStatus === "youtube_error") {
+    return {
+      label: "Erreur YouTube",
+      title: upload?.item?.youtube_error || "Upload YouTube en erreur.",
+      badgeClass: "border-red-400 bg-red-500/15 text-red-100",
+      cardClass: "border-red-500/70 bg-red-500/10",
+    };
+  }
+
+  if (defense.record_status === "a_record" && uploadStatus === "youtube_uploading") {
+    return {
+      label: "Upload YouTube...",
+      title: "La video est en cours d'envoi sur YouTube.",
+      badgeClass: "border-blue-400 bg-blue-500/15 text-blue-100",
+      cardClass: "border-blue-500/70 bg-blue-500/10",
+    };
+  }
+
+  if (defense.record_status === "a_record" && uploadStatus === "youtube_uploaded") {
+    return {
+      label: "YouTube VPS OK",
+      title: "Le VPS a recu le lien YouTube; rafraichis pour synchroniser Supabase.",
+      badgeClass: "border-emerald-400 bg-emerald-500/15 text-emerald-100",
+      cardClass: "border-emerald-500/70 bg-emerald-500/10",
+    };
+  }
+
+  if (defense.record_status === "a_record" && isRecordVideoReceived(upload)) {
     return {
       label: "Video VPS recue",
       title: `Video recue par le VPS (${upload.session?.session_id || "session record"}).`,
@@ -700,9 +738,60 @@ function buildAhkCommand() {
 
 async function markRecordOk() {
   if (!canUsePanelActions) return;
-  setMessage(
-    "Upload YouTube VPS pas encore branche ici. Les videos VPS recues sont visibles; l'etape YouTube doit etre connectee au worker serveur avant validation."
-  );
+
+  try {
+    setMessage("Upload YouTube lance sur le VPS. Reste sur le panel et rafraichis le suivi dans quelques instants.");
+
+    const response = await fetch(`${apiBase}/api/gvg-data`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "record_youtube_upload",
+        guild,
+        limit: 8,
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setMessage(`Reponse non JSON Upload YouTube (${response.status})`);
+      return;
+    }
+
+    if (!response.ok) {
+      setMessage(data?.error || "Erreur Upload YouTube VPS");
+      return;
+    }
+
+    if (Array.isArray(data?.sessions)) {
+      setRecordSessions(data.sessions);
+    }
+
+    const queued = Number(data?.vps?.queued || 0);
+    const synced = Number(data?.synced_youtube?.updated || 0);
+
+    if (data?.vps?.already_running) {
+      setMessage("Upload YouTube deja en cours sur le VPS. Rafraichis le suivi dans quelques instants.");
+    } else if (queued > 0) {
+      setMessage(`Upload YouTube lance : ${queued} video(s) en file. Deja synchronisees : ${synced}.`);
+    } else if (synced > 0) {
+      setMessage(`${synced} lien(s) YouTube synchronise(s) dans la GVG en cours.`);
+    } else {
+      setMessage(data?.vps?.message || "Aucune nouvelle video VPS a envoyer sur YouTube.");
+    }
+
+    await loadRecordSessions({ silent: true });
+    await load();
+  } catch (error) {
+    console.error("markRecordOk error:", error);
+    setMessage(`Erreur Upload YouTube : ${error?.message || "erreur inconnue"}`);
+  }
 }
 
 async function pushToBase() {
