@@ -691,6 +691,37 @@ async function handleCreateRecordSession(req, res) {
   }
 }
 
+async function handleRecordSessions(req, res) {
+  const body = req.body || {};
+  const guild = normalizeGuildCode(body.guild || req.query?.guild);
+  const rawLimit = Number(body.limit || req.query?.limit || 20);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 100)) : 20;
+
+  if (!guild) {
+    return res.status(400).json({ error: "guild invalide" });
+  }
+
+  try {
+    const params = new URLSearchParams({
+      guild,
+      limit: String(limit),
+    });
+    const vps = await requestGvgVps(`/api/v1/record/sessions?${params.toString()}`);
+
+    return res.status(200).json({
+      success: true,
+      guild,
+      sessions: vps?.sessions || [],
+    });
+  } catch (error) {
+    console.error("[gvg-data:record_sessions] VPS error:", error);
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "lecture sessions record VPS impossible",
+      details: error.data || undefined,
+    });
+  }
+}
+
 async function handleRecordOk(req, res) {
   const { guild } = req.body || {};
 
@@ -1092,6 +1123,10 @@ if (req.method === "POST") {
 
   if (action === "record_session_create") {
     return await handleCreateRecordSession(req, res);
+  }
+
+  if (action === "record_sessions") {
+    return await handleRecordSessions(req, res);
   }
 
 if (action === "panel_update_fields") {

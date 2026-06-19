@@ -133,6 +133,9 @@ const [guild, setGuild] = useState("G1");
 const [recordModalOpen, setRecordModalOpen] = useState(false);
 const [recordCreating, setRecordCreating] = useState(false);
 const [recordSession, setRecordSession] = useState(null);
+const [recordSessions, setRecordSessions] = useState([]);
+const [recordSessionsLoading, setRecordSessionsLoading] = useState(false);
+const [recordSessionsMessage, setRecordSessionsMessage] = useState("");
 
 const [items, setItems] = useState([]);
 const enemyItems = useMemo(
@@ -203,8 +206,54 @@ const recordCounts = useMemo(
     }
   }
 
+  async function loadRecordSessions({ silent = false } = {}) {
+    try {
+      setRecordSessionsLoading(true);
+      if (!silent) setRecordSessionsMessage("");
+
+      const response = await fetch(`${apiBase}/api/gvg-data`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "record_sessions",
+          guild,
+          limit: 12,
+        }),
+      });
+
+      const rawText = await response.text();
+      let data = null;
+
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        setRecordSessionsMessage(`Reponse non JSON records VPS (${response.status})`);
+        setRecordSessions([]);
+        return;
+      }
+
+      if (!response.ok) {
+        setRecordSessionsMessage(data?.error || "Erreur suivi records VPS");
+        setRecordSessions([]);
+        return;
+      }
+
+      setRecordSessions(data?.sessions || []);
+      if (!silent) {
+        setRecordSessionsMessage(`Suivi record VPS a jour pour ${guild}.`);
+      }
+    } catch (error) {
+      console.error("loadRecordSessions error:", error);
+      setRecordSessionsMessage(`Erreur suivi records VPS : ${error?.message || "erreur inconnue"}`);
+      setRecordSessions([]);
+    } finally {
+      setRecordSessionsLoading(false);
+    }
+  }
+
   useEffect(() => {
     load();
+    loadRecordSessions({ silent: true });
   }, [guild]);
 
 function makeRecordSessionId() {
@@ -276,6 +325,7 @@ async function createRecordLauncherSession(scope) {
 
     setRecordSession(data);
     setMessage(`Session record prete: ${data.count} defense(s) pour ${getRecordScopeLabel(scope)}.`);
+    loadRecordSessions({ silent: true });
   } catch (error) {
     console.error("createRecordLauncherSession error:", error);
     setMessage(`Erreur session record : ${error?.message || "erreur inconnue"}`);
@@ -287,6 +337,127 @@ async function createRecordLauncherSession(scope) {
 function launchRecordProtocol() {
   if (!recordSession?.protocol_url) return;
   window.location.href = recordSession.protocol_url;
+}
+
+function makeDefenseRecordKey(defense) {
+  if (!defense) return "";
+
+  const base =
+    defense.type === "fortress"
+      ? `b${defense.bastion}_fort_team${defense.team}`
+      : `b${defense.bastion}_t${defense.tower}_team${defense.team}`;
+
+  return defense.is_ally === true ? `${base}_ally` : base;
+}
+
+const recordUploadsByKey = useMemo(() => {
+  const map = new Map();
+
+  for (const session of recordSessions || []) {
+    const sessionTime = Date.parse(session?.updated_at || session?.created_at || "") || 0;
+
+    for (const item of session?.items || []) {
+      const key = String(item?.key || item?.def_key || "").toLowerCase();
+      const defenseId = String(item?.id || item?.defense_id || "").toLowerCase();
+      if (!key && !defenseId) continue;
+
+      const itemTime =
+        Date.parse(item?.uploaded_at || session?.updated_at || session?.created_at || "") ||
+        sessionTime;
+      const mapKeys = [
+        defenseId ? `id:${defenseId}` : "",
+        key ? `key:${key}` : "",
+      ].filter(Boolean);
+
+      for (const mapKey of mapKeys) {
+        const current = map.get(mapKey);
+
+        if (!current || itemTime >= current.time) {
+          map.set(mapKey, { item, session, time: itemTime });
+        }
+      }
+    }
+  }
+
+  return map;
+}, [recordSessions]);
+
+const recordVpsStats = useMemo(() => {
+  const sessions = recordSessions || [];
+  let total = 0;
+  let uploaded = 0;
+  let pending = 0;
+
+  for (const session of sessions) {
+    const counts = session?.counts || {};
+    total += Number(counts.total || 0);
+    uploaded += Number(counts.uploaded || 0);
+    pending += Number(counts.pending || 0);
+  }
+
+  return { sessions: sessions.length, total, uploaded, pending };
+}, [recordSessions]);
+
+function getDefenseRecordState(defense) {
+  if (!defense) return null;
+
+  const key = makeDefenseRecordKey(defense).toLowerCase();
+  const defenseId = String(defense.id || "").toLowerCase();
+  const upload =
+    (defenseId ? recordUploadsByKey.get(`id:${defenseId}`) : null) ||
+    recordUploadsByKey.get(`key:${key}`);
+
+  if (defense.record_status === "push") {
+    return {
+      label: "Push base",
+      title: "La defense a ete envoyee dans la base definitive.",
+      badgeClass: "border-purple-400 bg-purple-500/15 text-purple-100",
+      cardClass: "border-purple-400/70 bg-purple-500/10",
+    };
+  }
+
+  if (defense.record_status === "record") {
+    return {
+      label: "Lien YouTube OK",
+      title: "La video est liee a la defense.",
+      badgeClass: "border-emerald-400 bg-emerald-500/15 text-emerald-100",
+      cardClass: "border-emerald-500/70 bg-emerald-500/10",
+    };
+  }
+
+  if (defense.record_status === "a_record" && upload?.item?.status === "uploaded") {
+    return {
+      label: "Video VPS recue",
+      title: `Video recue par le VPS (${upload.session?.session_id || "session record"}).`,
+      badgeClass: "border-cyan-400 bg-cyan-500/15 text-cyan-100",
+      cardClass: "border-cyan-400/70 bg-cyan-500/10",
+    };
+  }
+
+  if (defense.record_status === "a_record") {
+    return {
+      label: "A record",
+      title: "Cette defense est dans le prochain plan record.",
+      badgeClass: "border-amber-400 bg-amber-500/15 text-amber-100",
+      cardClass: "border-amber-500/60 bg-amber-500/10",
+    };
+  }
+
+  if (defense.record_status === "pas_record") {
+    return {
+      label: "Pas record",
+      title: "Cette defense est ouverte dans le panel mais pas demandee en record.",
+      badgeClass: "border-zinc-600 bg-zinc-800/60 text-zinc-300",
+      cardClass: "border-zinc-800 bg-zinc-950/60",
+    };
+  }
+
+  return {
+    label: "A ouvrir",
+    title: "Clique la ligne pour ouvrir cette defense dans le panel.",
+    badgeClass: "border-zinc-700 bg-zinc-900/60 text-zinc-400",
+    cardClass: "border-zinc-800 bg-zinc-950/60",
+  };
 }
   function buildSlotLabel(bastion, type, tower, team) {
     if (type === "fortress") {
@@ -755,20 +926,19 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                 slot.tower,
                 slot.team
               );
+              const recordState = getDefenseRecordState(defense);
 
               return (
                 <div
                   key={`${panelKey}-${bastion}-${slot.type}-${slot.tower ?? "F"}-${slot.team}-${index}`}
                   className={`flex items-center justify-between rounded-xl border px-3 py-2 transition ${
-                    defense?.record_status === "push"
-                      ? "bg-purple-600/30 border-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.4)]"
-                      : "border-zinc-800 bg-zinc-950/60"
+                    recordState?.cardClass || "border-zinc-800 bg-zinc-950/60"
                   }`}
                 >
                   <button
                     type="button"
                     onClick={() => defense && openReturnModal(defense)}
-                    className={`flex items-center gap-2 text-left text-xs ${
+                    className={`flex min-w-0 flex-col items-start gap-1 text-left text-xs ${
                       defense
                         ? "text-zinc-100 underline underline-offset-4 hover:text-white"
                         : "text-zinc-200"
@@ -776,9 +946,19 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                     disabled={!defense}
                     title={defense ? "Renvoyer dans GVG en cours" : ""}
                   >
-                    <span>{buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}</span>
-                    {defense?.group_num ? (
-                      <span className="no-underline">{getGroupEmoji(defense.group_num)}</span>
+                    <span className="flex items-center gap-2">
+                      <span>{buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}</span>
+                      {defense?.group_num ? (
+                        <span className="no-underline">{getGroupEmoji(defense.group_num)}</span>
+                      ) : null}
+                    </span>
+                    {defense && recordState ? (
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide no-underline ${recordState.badgeClass}`}
+                        title={recordState.title}
+                      >
+                        {recordState.label}
+                      </span>
                     ) : null}
                   </button>
 
@@ -789,7 +969,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                       <>
                         <button
                           onClick={() => toggleRecord(defense)}
-                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                          className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition ${
                             defense.record_status === "a_record"
                               ? "border-green-500 bg-green-500/15"
                               : defense.record_status === "pas_record"
@@ -800,14 +980,14 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                             defense.record_status === "record" ||
                             defense.record_status === "push"
                           }
-                          title="Toggle record"
+                          title="Basculer a record / pas record"
                         >
                           📹
                         </button>
 
                         <button
                           onClick={() => openCommentModal(defense)}
-                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                          className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition ${
                             defense.record_comment
                               ? "border-green-500 bg-green-500/15"
                               : "border-red-500 bg-red-500/15"
@@ -819,7 +999,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 
                         <button
                           onClick={() => openAttackModal(defense)}
-                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                          className={`flex h-7 min-w-10 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition ${
                             defense.attack_code
                               ? "border-green-500 bg-green-500/15"
                               : "border-red-500 bg-red-500/15"
@@ -831,7 +1011,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 
                         <button
                           type="button"
-                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition cursor-default ${
+                          className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition cursor-default ${
                             defense.record_status === "record" || defense.record_status === "push"
                               ? "border-green-500 bg-green-500/15"
                               : "border-red-500 bg-red-500/15"
@@ -843,7 +1023,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 
                         <button
                           onClick={() => openRuns(defense)}
-                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs transition ${
+                          className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition ${
                             defense.status === "strat" || defense.record_status === "push"
                               ? "border-green-500 bg-green-500/15 hover:scale-110 cursor-pointer"
                               : "border-red-500 bg-red-500/15 opacity-50 cursor-not-allowed"
@@ -947,6 +1127,70 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 
       {loading && <div>Chargement…</div>}
 
+      <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold uppercase tracking-wide text-cyan-100">
+              Suivi record VPS
+            </div>
+            <div className="mt-1 text-xs text-zinc-400">
+              Parcours normal : marque les defenses en A record, lance le record, attends le message de fin,
+              puis rafraichis ce suivi.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => loadRecordSessions()}
+            disabled={recordSessionsLoading}
+            className="rounded-lg border border-cyan-500/40 px-3 py-1 text-xs font-semibold text-cyan-100 hover:border-cyan-300 disabled:opacity-50"
+          >
+            {recordSessionsLoading ? "Rafraichissement..." : "Rafraichir records VPS"}
+          </button>
+        </div>
+
+        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-4">
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="text-zinc-500">A record</div>
+            <div className="text-lg font-semibold text-amber-200">
+              {recordCounts.enemy + recordCounts.ally}
+            </div>
+          </div>
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="text-zinc-500">Sessions VPS</div>
+            <div className="text-lg font-semibold text-cyan-100">{recordVpsStats.sessions}</div>
+          </div>
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="text-zinc-500">Videos recues</div>
+            <div className="text-lg font-semibold text-emerald-200">
+              {recordVpsStats.uploaded}/{recordVpsStats.total}
+            </div>
+          </div>
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="text-zinc-500">Encore attendues</div>
+            <div className="text-lg font-semibold text-zinc-200">{recordVpsStats.pending}</div>
+          </div>
+        </div>
+
+        {recordSessionsMessage ? (
+          <div className="mt-2 text-xs text-cyan-200">{recordSessionsMessage}</div>
+        ) : null}
+
+        {recordSessions.length ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {recordSessions.slice(0, 4).map((session) => (
+              <div
+                key={session.session_id}
+                className="rounded-full border border-zinc-700 bg-zinc-950/70 px-3 py-1 text-xs text-zinc-300"
+                title={session.session_id}
+              >
+                {session.side || "record"} - {session.counts?.uploaded || 0}/{session.counts?.total || 0} videos
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
 {!loading && !message && (
   <>
     <div className="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-400">
@@ -980,6 +1224,18 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
             <div className="mb-1 text-lg font-semibold text-white">Lancer un record GVG</div>
             <div className="mb-4 text-sm text-zinc-400">
               Guilde {guild}. Le plan sera limite a cette guilde et aux defenses marquees a record.
+            </div>
+
+            <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 text-xs text-zinc-300">
+              <div className="mb-2 font-semibold uppercase tracking-wide text-cyan-100">
+                Ce que le joueur doit faire
+              </div>
+              <ol className="list-decimal space-y-1 pl-4">
+                <li>Choisir Ennemies, Alliees ou Les deux selon le record demande.</li>
+                <li>Cliquer sur Ouvrir le launcher record et accepter l'autorisation Windows.</li>
+                <li>Ne pas toucher a la souris pendant le record.</li>
+                <li>Quand le launcher annonce la fin, revenir ici et cliquer sur Rafraichir records VPS.</li>
+              </ol>
             </div>
 
             <div className="grid gap-3 md:grid-cols-3">
@@ -1033,6 +1289,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                 </div>
                 <div className="mt-2 text-xs text-emerald-200/70">
                   Si rien ne s'ouvre, installe le launcher record une fois, puis reclique sur ouvrir.
+                  A la fin du record, ferme le message du launcher et clique sur Rafraichir records VPS dans le panel.
                 </div>
               </div>
             ) : null}
