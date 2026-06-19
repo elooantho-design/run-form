@@ -229,23 +229,26 @@ const recordCounts = useMemo(
       } catch {
         setRecordSessionsMessage(`Reponse non JSON records VPS (${response.status})`);
         setRecordSessions([]);
-        return;
+        return [];
       }
 
       if (!response.ok) {
         setRecordSessionsMessage(data?.error || "Erreur suivi records VPS");
         setRecordSessions([]);
-        return;
+        return [];
       }
 
-      setRecordSessions(data?.sessions || []);
+      const sessions = data?.sessions || [];
+      setRecordSessions(sessions);
       if (!silent) {
-        setRecordSessionsMessage(`Suivi record VPS a jour pour ${guild}.`);
+        setRecordSessionsMessage("Suivi record VPS rafraichi.");
       }
+      return sessions;
     } catch (error) {
       console.error("loadRecordSessions error:", error);
       setRecordSessionsMessage(`Erreur suivi records VPS : ${error?.message || "erreur inconnue"}`);
       setRecordSessions([]);
+      return [];
     } finally {
       setRecordSessionsLoading(false);
     }
@@ -339,6 +342,12 @@ function launchRecordProtocol() {
   window.location.href = recordSession.protocol_url;
 }
 
+async function refreshRecordTracking() {
+  await loadRecordSessions({ silent: true });
+  await load();
+  setRecordSessionsMessage("Suivi VPS recalcule sur les defenses actuellement a record.");
+}
+
 function makeDefenseRecordKey(defense) {
   if (!defense) return "";
 
@@ -382,30 +391,34 @@ const recordUploadsByKey = useMemo(() => {
   return map;
 }, [recordSessions]);
 
-const recordVpsStats = useMemo(() => {
-  const sessions = recordSessions || [];
-  let total = 0;
-  let uploaded = 0;
-  let pending = 0;
+function getDefenseRecordUpload(defense) {
+  if (!defense?.id) return null;
 
-  for (const session of sessions) {
-    const counts = session?.counts || {};
-    total += Number(counts.total || 0);
-    uploaded += Number(counts.uploaded || 0);
-    pending += Number(counts.pending || 0);
-  }
+  const defenseId = String(defense.id || "").toLowerCase();
+  return recordUploadsByKey.get(`id:${defenseId}`) || null;
+}
 
-  return { sessions: sessions.length, total, uploaded, pending };
-}, [recordSessions]);
+const recordFlowStats = useMemo(() => {
+  const toRecord = items.filter((defense) => defense.record_status === "a_record");
+  const uploaded = toRecord.filter(
+    (defense) => getDefenseRecordUpload(defense)?.item?.status === "uploaded"
+  ).length;
+  const youtube = items.filter(
+    (defense) => defense.record_status === "record" && defense.youtube_url
+  ).length;
+
+  return {
+    toRecord: toRecord.length,
+    uploaded,
+    pending: Math.max(0, toRecord.length - uploaded),
+    youtube,
+  };
+}, [items, recordUploadsByKey]);
 
 function getDefenseRecordState(defense) {
   if (!defense) return null;
 
-  const key = makeDefenseRecordKey(defense).toLowerCase();
-  const defenseId = String(defense.id || "").toLowerCase();
-  const upload =
-    (defenseId ? recordUploadsByKey.get(`id:${defenseId}`) : null) ||
-    recordUploadsByKey.get(`key:${key}`);
+  const upload = getDefenseRecordUpload(defense);
 
   if (defense.record_status === "push") {
     return {
@@ -418,8 +431,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "record") {
     return {
-      label: "Lien YouTube OK",
-      title: "La video est liee a la defense.",
+      label: "YouTube OK",
+      title: "La video YouTube est liee a cette defense.",
       badgeClass: "border-emerald-400 bg-emerald-500/15 text-emerald-100",
       cardClass: "border-emerald-500/70 bg-emerald-500/10",
     };
@@ -686,42 +699,10 @@ function buildAhkCommand() {
 }
 
 async function markRecordOk() {
-    if (!canUsePanelActions) return;
-  try {
-    setMessage("");
-
-    const response = await fetch(`${apiBase}/api/gvg-data`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        action: "record_ok",
-        guild,
-      }),
-    });
-
-    const rawText = await response.text();
-    let data = null;
-
-    try {
-      data = rawText ? JSON.parse(rawText) : null;
-    } catch {
-      setMessage(`Réponse non JSON record_ok (${response.status})`);
-      return;
-    }
-
-    if (!response.ok) {
-      setMessage(data?.error || "Erreur Record OK");
-      return;
-    }
-
-    setMessage(`${data?.updated || 0} défense(s) passée(s) en record`);
-    load();
-  } catch (error) {
-    console.error("markRecordOk error:", error);
-    setMessage(`Erreur Record OK : ${error?.message || "erreur inconnue"}`);
-  }
+  if (!canUsePanelActions) return;
+  setMessage(
+    "Upload YouTube VPS pas encore branche ici. Les videos VPS recues sont visibles; l'etape YouTube doit etre connectee au worker serveur avant validation."
+  );
 }
 
 async function pushToBase() {
@@ -1105,7 +1086,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       : "cursor-not-allowed bg-zinc-700 opacity-50"
   }`}
 >
-  ✅ Record OK
+  Upload YouTube
 </button>
 
 <button
@@ -1134,14 +1115,14 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
               Suivi record VPS
             </div>
             <div className="mt-1 text-xs text-zinc-400">
-              Parcours normal : marque les defenses en A record, lance le record, attends le message de fin,
-              puis rafraichis ce suivi.
+              Plan actif seulement : marque les defenses en A record, lance le record, attends le message de fin,
+              puis rafraichis. Le reset GVG nettoie les videos VPS de cette guilde.
             </div>
           </div>
 
           <button
             type="button"
-            onClick={() => loadRecordSessions()}
+            onClick={refreshRecordTracking}
             disabled={recordSessionsLoading}
             className="rounded-lg border border-cyan-500/40 px-3 py-1 text-xs font-semibold text-cyan-100 hover:border-cyan-300 disabled:opacity-50"
           >
@@ -1153,22 +1134,24 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
             <div className="text-zinc-500">A record</div>
             <div className="text-lg font-semibold text-amber-200">
-              {recordCounts.enemy + recordCounts.ally}
+              {recordFlowStats.toRecord}
             </div>
           </div>
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-            <div className="text-zinc-500">Sessions VPS</div>
-            <div className="text-lg font-semibold text-cyan-100">{recordVpsStats.sessions}</div>
-          </div>
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-            <div className="text-zinc-500">Videos recues</div>
-            <div className="text-lg font-semibold text-emerald-200">
-              {recordVpsStats.uploaded}/{recordVpsStats.total}
+            <div className="text-zinc-500">Videos VPS recues</div>
+            <div className="text-lg font-semibold text-cyan-100">
+              {recordFlowStats.uploaded}/{recordFlowStats.toRecord}
             </div>
           </div>
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
             <div className="text-zinc-500">Encore attendues</div>
-            <div className="text-lg font-semibold text-zinc-200">{recordVpsStats.pending}</div>
+            <div className="text-lg font-semibold text-emerald-200">
+              {recordFlowStats.pending}
+            </div>
+          </div>
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="text-zinc-500">YouTube OK</div>
+            <div className="text-lg font-semibold text-zinc-200">{recordFlowStats.youtube}</div>
           </div>
         </div>
 
@@ -1176,19 +1159,6 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
           <div className="mt-2 text-xs text-cyan-200">{recordSessionsMessage}</div>
         ) : null}
 
-        {recordSessions.length ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {recordSessions.slice(0, 4).map((session) => (
-              <div
-                key={session.session_id}
-                className="rounded-full border border-zinc-700 bg-zinc-950/70 px-3 py-1 text-xs text-zinc-300"
-                title={session.session_id}
-              >
-                {session.side || "record"} - {session.counts?.uploaded || 0}/{session.counts?.total || 0} videos
-              </div>
-            ))}
-          </div>
-        ) : null}
       </div>
 
 {!loading && !message && (

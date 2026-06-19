@@ -6,8 +6,58 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
+const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
+
 function isValidGuild(value) {
   return /^G[1-7]$/.test(String(value || "").toUpperCase());
+}
+
+function getGvgServerConfig() {
+  const serverUrl = String(
+    process.env.GVG_SERVER_URL ||
+      process.env.GVG_VPS_URL ||
+      DEFAULT_GVG_SERVER_URL
+  ).replace(/\/$/, "");
+  const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
+
+  return { serverUrl, token };
+}
+
+async function requestGvgVps(pathname, options = {}) {
+  const { serverUrl, token } = getGvgServerConfig();
+
+  if (!token) {
+    const error = new Error("GVG_API_TOKEN manquant cote serveur");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const response = await fetch(new URL(pathname, `${serverUrl}/`).toString(), {
+    method: options.method || "GET",
+    headers: {
+      "X-GVG-Token": token,
+      "Content-Type": "application/json",
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const text = await response.text();
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    const error = new Error(data?.detail || data?.error || `Erreur VPS ${response.status}`);
+    error.statusCode = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
 }
 
 function extractStoragePathFromPublicUrl(url) {
@@ -94,11 +144,27 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "suppression gvg impossible" });
     }
 
+    let recordServerReset = null;
+    let recordServerWarning = null;
+
+    try {
+      recordServerReset = await requestGvgVps(
+        `/api/v1/record/sessions/${encodeURIComponent(guild)}`,
+        { method: "DELETE" }
+      );
+    } catch (recordResetError) {
+      console.error("[gvg-reset] record server reset error:", recordResetError);
+      recordServerWarning =
+        recordResetError?.message || "nettoyage records VPS impossible";
+    }
+
     return res.status(200).json({
       success: true,
       guild,
       deleted_defenses: defenseIds.length,
       deleted_images: storagePaths.length,
+      record_server_reset: recordServerReset,
+      record_server_warning: recordServerWarning,
     });
   } catch (err) {
     console.error("[gvg-reset] server error:", err);
