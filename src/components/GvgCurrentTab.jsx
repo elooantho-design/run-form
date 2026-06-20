@@ -803,11 +803,25 @@ async function markDefenseAsOpened(defenseId) {
                                 : `T${defense.tower} · Team ${defense.team}`}
                             </div>
 
-                            {defense.group_num ? (
-<div className="rounded-2xl border border-zinc-600 bg-zinc-900/60 px-5 py-3 text-2xl font-bold text-zinc-100 shadow-sm leading-none">
-  {toGroupEmoji(defense.group_num)}
-</div>
-                            ) : null}
+                            <div className="flex flex-wrap justify-end gap-2">
+                              {defense.group_num ? (
+                                <div
+                                  className="rounded-2xl border border-zinc-600 bg-zinc-900/60 px-5 py-3 text-2xl font-bold leading-none text-zinc-100 shadow-sm"
+                                  title="Groupe de defenses ennemies identiques"
+                                >
+                                  {toGroupEmoji(defense.group_num)}
+                                </div>
+                              ) : null}
+
+                              {defense.mirror_group_num ? (
+                                <div
+                                  className="rounded-2xl border border-emerald-400/70 bg-emerald-500/15 px-5 py-3 text-2xl font-bold leading-none text-emerald-100 shadow-sm shadow-emerald-500/20"
+                                  title="Composition aussi presente cote allie : eviter en debut de GVG"
+                                >
+                                  {toGroupEmoji(defense.mirror_group_num)}
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
 
