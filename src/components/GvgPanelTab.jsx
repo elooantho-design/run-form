@@ -754,6 +754,30 @@ async function saveAttackCode() {
 function buildAhkCommand() {
   if (!canUsePanelActions) return;
 
+  const repairCommand = `$ErrorActionPreference = "Stop"
+$base = Join-Path $env:LOCALAPPDATA "PaladinGVGRecordLauncher"
+$currentFile = Join-Path $base "CURRENT_PATH.txt"
+if (!(Test-Path -LiteralPath $currentFile)) { throw "Launcher record non installe. Reinstalle depuis Portal." }
+$root = (Get-Content -Raw -LiteralPath $currentFile).Trim()
+$ahk = Join-Path $root "runtime\\autohotkey\\AutoHotkey64.exe"
+$script = Join-Path $root "PaladinGVGRecord.ahk"
+if (!(Test-Path -LiteralPath $ahk)) { throw "AutoHotkey record introuvable: $ahk" }
+if (!(Test-Path -LiteralPath $script)) { throw "Script record introuvable: $script" }
+$protocolRoot = "HKCU:\\Software\\Classes\\paladin-gvg-record"
+$commandRoot = Join-Path $protocolRoot "shell\\open\\command"
+New-Item -Force -Path $protocolRoot | Out-Null
+Set-Item -Path $protocolRoot -Value "URL:Paladin GVG Record Launcher"
+New-ItemProperty -Force -Path $protocolRoot -Name "URL Protocol" -Value "" | Out-Null
+New-Item -Force -Path $commandRoot | Out-Null
+Set-Item -Path $commandRoot -Value "\`"$ahk\`" \`"$script\`" \`"%1\`""
+Write-Host "Protocole record repare."
+Write-Host ((Get-Item $commandRoot).GetValue(""))
+Pause`;
+
+  navigator.clipboard.writeText(repairCommand);
+  setMessage("Commande de reparation du protocole record copiee.");
+  return;
+
   const selectedEnemy = enemyItems
     .filter((d) => d.record_status === "a_record")
     .sort((a, b) => {
@@ -1251,7 +1275,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       : "cursor-not-allowed bg-zinc-700 opacity-50"
   }`}
 >
-  Cmd record locale
+  Reparer record
 </button>
 
 <button
