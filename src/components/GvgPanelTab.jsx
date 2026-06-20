@@ -115,20 +115,25 @@ function normalizeDir(dir) {
 
 export default function GvgPanelTab() {
   const apiBase = useMemo(() => getApiBase(), []);
-  const allowedDiscordId = "931555574846484560";
+  const session = useMemo(() => {
+    if (typeof window === "undefined") return null;
 
-const session = useMemo(() => {
-  if (typeof window === "undefined") return null;
+    try {
+      return JSON.parse(localStorage.getItem("guildDashboardSession") || "null");
+    } catch {
+      return null;
+    }
+  }, []);
 
-  try {
-    return JSON.parse(localStorage.getItem("guildDashboardSession") || "null");
-  } catch {
-    return null;
-  }
-}, []);
-
-const canUsePanelActions =
-  String(session?.discordId || "") === allowedDiscordId;
+  const sessionRole = String(session?.role || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const canUsePanelActions =
+    session?.isAdmin === true ||
+    session?.admin === true ||
+    sessionRole.includes("admin") ||
+    sessionRole.includes("administrateur");
 const [guild, setGuild] = useState("G1");
 const [recordModalOpen, setRecordModalOpen] = useState(false);
 const [recordCreating, setRecordCreating] = useState(false);
