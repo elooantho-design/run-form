@@ -10,6 +10,60 @@ const supabase = createClient(
 const UPLOADED_DIR =
   process.env.YOUTUBE_UPLOADED_DIR || "";
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
+const GVG_DEFENSE_LIST_SELECT_BASE = `
+  id,
+  guild,
+  bastion,
+  type,
+  tower,
+  team,
+  defense_key,
+  raw_name,
+  heroes,
+  status,
+  repro_by,
+  group_num,
+  image_url,
+  record_status,
+  record_comment,
+  attack_code,
+  youtube_url,
+  is_ally,
+  created_at,
+  updated_at
+`;
+const GVG_DEFENSE_LIST_SELECT_WITH_MIRROR = `
+  id,
+  guild,
+  bastion,
+  type,
+  tower,
+  team,
+  defense_key,
+  raw_name,
+  heroes,
+  status,
+  repro_by,
+  group_num,
+  mirror_group_num,
+  image_url,
+  record_status,
+  record_comment,
+  attack_code,
+  youtube_url,
+  is_ally,
+  created_at,
+  updated_at
+`;
+
+function isMissingMirrorGroupColumn(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`;
+  return (
+    error?.code === "42703" ||
+    error?.code === "PGRST204" ||
+    message.toLowerCase().includes("mirror_group_num")
+  );
+}
 
 function normalizeGuildCode(value) {
   const code = String(value || "").trim().toUpperCase();
@@ -84,6 +138,18 @@ function isValidGuild(value) {
   return normalizeGuildCode(value) !== null;
 }
 
+function buildGvgDefenseListQuery(selectColumns, guild) {
+  return supabase
+    .from("gvg_defense")
+    .select(selectColumns)
+    .eq("guild", guild)
+    .order("bastion", { ascending: true })
+    .order("type", { ascending: true })
+    .order("tower", { ascending: true, nullsFirst: true })
+    .order("team", { ascending: true })
+    .order("created_at", { ascending: true });
+}
+
 async function handleList(req, res) {
   const guild = normalizeGuildCode(req.query?.guild);
 
@@ -91,36 +157,18 @@ async function handleList(req, res) {
     return res.status(400).json({ error: "guild manquante ou invalide" });
   }
 
-  const { data, error } = await supabase
-    .from("gvg_defense")
-.select(`
-  id,
-  guild,
-  bastion,
-  type,
-  tower,
-  team,
-  defense_key,
-  raw_name,
-  heroes,
-  status,
-  repro_by,
-  group_num,
-  image_url,
-  record_status,
-  record_comment,
-  attack_code,
-  youtube_url,
-  is_ally,
-  created_at,
-  updated_at
-`)
-    .eq("guild", guild)
-    .order("bastion", { ascending: true })
-    .order("type", { ascending: true })
-    .order("tower", { ascending: true, nullsFirst: true })
-    .order("team", { ascending: true })
-    .order("created_at", { ascending: true });
+  let mirrorGroupSchemaReady = true;
+  let { data, error } = await buildGvgDefenseListQuery(
+    GVG_DEFENSE_LIST_SELECT_WITH_MIRROR,
+    guild
+  );
+
+  if (error && isMissingMirrorGroupColumn(error)) {
+    mirrorGroupSchemaReady = false;
+    const fallback = await buildGvgDefenseListQuery(GVG_DEFENSE_LIST_SELECT_BASE, guild);
+    data = fallback.data?.map((item) => ({ ...item, mirror_group_num: null })) || null;
+    error = fallback.error;
+  }
 
   if (error) {
     console.error("[gvg-data:list] select error:", error);
@@ -131,6 +179,10 @@ async function handleList(req, res) {
     success: true,
     guild,
     items: data || [],
+    mirror_group_schema_ready: mirrorGroupSchemaReady,
+    schema_warning: mirrorGroupSchemaReady
+      ? null
+      : "Colonne mirror_group_num absente sur gvg_defense.",
   });
 }
 
@@ -412,10 +464,24 @@ async function handleCalculateGroups(req, res) {
       nextMirrorGroup += 1;
     }
 
-    const { error: clearError } = await supabase
+    const updatedAt = new Date().toISOString();
+    let mirrorGroupSchemaReady = true;
+    let clearError = null;
+
+    const clearWithMirror = await supabase
       .from("gvg_defense")
-      .update({ group_num: null, updated_at: new Date().toISOString() })
+      .update({ group_num: null, mirror_group_num: null, updated_at: updatedAt })
       .eq("guild", guild);
+    clearError = clearWithMirror.error;
+
+    if (clearError && isMissingMirrorGroupColumn(clearError)) {
+      mirrorGroupSchemaReady = false;
+      const clearWithoutMirror = await supabase
+        .from("gvg_defense")
+        .update({ group_num: null, updated_at: updatedAt })
+        .eq("guild", guild);
+      clearError = clearWithoutMirror.error;
+    }
 
     if (clearError) {
       console.error("[gvg-data:calculate_groups] clear error:", clearError);
@@ -425,12 +491,27 @@ async function handleCalculateGroups(req, res) {
     for (const group of enemyGroups) {
       const { error: updateError } = await supabase
         .from("gvg_defense")
-        .update({ group_num: group.num, updated_at: new Date().toISOString() })
+        .update({ group_num: group.num, updated_at: updatedAt })
         .in("id", group.ids);
 
       if (updateError) {
         console.error("[gvg-data:calculate_groups] update error:", updateError);
         return res.status(500).json({ error: "erreur mise a jour groupes" });
+      }
+    }
+
+    if (mirrorGroupSchemaReady) {
+      for (const group of mirrorGroups) {
+        const ids = [...group.enemy_ids, ...group.ally_ids];
+        const { error: updateMirrorError } = await supabase
+          .from("gvg_defense")
+          .update({ mirror_group_num: group.num, updated_at: updatedAt })
+          .in("id", ids);
+
+        if (updateMirrorError) {
+          console.error("[gvg-data:calculate_groups] mirror update error:", updateMirrorError);
+          return res.status(500).json({ error: "erreur mise a jour groupes allie/ennemi" });
+        }
       }
     }
 
@@ -442,6 +523,10 @@ async function handleCalculateGroups(req, res) {
       mirror_map: mirrorMap,
       updated_enemy_groups: enemyGroups.length,
       matched_mirror_groups: mirrorGroups.length,
+      mirror_group_schema_ready: mirrorGroupSchemaReady,
+      schema_warning: mirrorGroupSchemaReady
+        ? null
+        : "Colonne mirror_group_num absente sur gvg_defense : badge vert non persistant.",
     });
   } catch (error) {
     console.error("[gvg-data:calculate_groups] error:", error);

@@ -389,8 +389,9 @@ async function calculateGroups() {
 
     const enemyCount = Number(data?.updated_enemy_groups || 0);
     const mirrorCount = Number(data?.matched_mirror_groups || 0);
+    const warning = data?.schema_warning ? ` ${data.schema_warning}` : "";
     setMessage(
-      `Calcul groupes termine : ${enemyCount} groupe(s) ennemi(s), ${mirrorCount} correspondance(s) ennemi/allie.`
+      `Calcul groupes termine : ${enemyCount} groupe(s) ennemi(s), ${mirrorCount} correspondance(s) ennemi/allie.${warning}`
     );
   } catch (error) {
     console.error("calculateGroups error:", error);
@@ -597,6 +598,12 @@ function getGroupLabel(groupNum) {
 }
 
 function getMirrorGroup(defense) {
+  const persistedNum = Number(defense?.mirror_group_num);
+
+  if (Number.isFinite(persistedNum) && persistedNum > 0) {
+    return { num: persistedNum };
+  }
+
   if (!defense?.id || !groupCalc?.mirror_map) return null;
   return groupCalc.mirror_map[String(defense.id)] || null;
 }
