@@ -1085,6 +1085,8 @@ function HeroBoxView() {
   const [roleFilter, setRoleFilter] = useState("all");
   const [factionFilter, setFactionFilter] = useState("all");
   const [latestOnly, setLatestOnly] = useState(false);
+  const [loadedHeroImages, setLoadedHeroImages] = useState(() => new Set());
+  const preloadingHeroImagesRef = useRef(new Set());
   const [heroStates, setHeroStates] = useState(() =>
     Object.fromEntries(heroLayerCards.map((hero) => [hero.id, { owned: hero.owned, awakening: hero.awakening }])),
   );
@@ -1112,6 +1114,49 @@ function HeroBoxView() {
         return (left.latestReleaseRank || 999) - (right.latestReleaseRank || 999);
       });
   }, [factionFilter, heroStates, latestOnly, ownedFilter, query, rarityFilter, roleFilter]);
+
+  const priorityHeroes = useMemo(() => visibleHeroes.slice(0, 24), [visibleHeroes]);
+  const priorityHeroImageCount = priorityHeroes.length;
+  const loadedPriorityHeroImageCount = priorityHeroes.filter((hero) => loadedHeroImages.has(hero.id)).length;
+  const heroImagesAreWarming =
+    priorityHeroImageCount > 0 && loadedPriorityHeroImageCount < Math.min(priorityHeroImageCount, 12);
+  const heroImageWarmProgress =
+    priorityHeroImageCount > 0 ? Math.round((loadedPriorityHeroImageCount / priorityHeroImageCount) * 100) : 100;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    priorityHeroes.forEach((hero) => {
+      if (loadedHeroImages.has(hero.id) || preloadingHeroImagesRef.current.has(hero.id)) return;
+
+      preloadingHeroImagesRef.current.add(hero.id);
+      const image = new Image();
+      image.decoding = "async";
+
+      const markReady = () => {
+        preloadingHeroImagesRef.current.delete(hero.id);
+        if (cancelled) return;
+        setLoadedHeroImages((current) => {
+          if (current.has(hero.id)) return current;
+          const next = new Set(current);
+          next.add(hero.id);
+          return next;
+        });
+      };
+
+      image.onload = markReady;
+      image.onerror = markReady;
+      image.src = hero.image;
+
+      if (image.decode) {
+        image.decode().then(markReady).catch(markReady);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadedHeroImages, priorityHeroes]);
 
   const stats = useMemo(() => {
     const values = Object.values(heroStates);
@@ -1144,6 +1189,15 @@ function HeroBoxView() {
           awakening: nextAwakening,
         },
       };
+    });
+  }
+
+  function markHeroImageReady(heroId) {
+    setLoadedHeroImages((current) => {
+      if (current.has(heroId)) return current;
+      const next = new Set(current);
+      next.add(heroId);
+      return next;
     });
   }
 
@@ -1271,14 +1325,29 @@ function HeroBoxView() {
           {latestOnly ? <span>Dernieres sorties ingame</span> : null}
         </div>
 
+        {heroImagesAreWarming ? (
+          <div className="hero-box-image-loader" role="status" aria-live="polite">
+            <div>
+              <strong>Chargement des vignettes</strong>
+              <span>{loadedPriorityHeroImageCount}/{priorityHeroImageCount}</span>
+            </div>
+            <div className="hero-box-image-loader-bar" aria-hidden="true">
+              <i style={{ width: `${heroImageWarmProgress}%` }} />
+            </div>
+          </div>
+        ) : null}
+
         <div className="hero-layer-grid">
-          {visibleHeroes.map((hero) => (
+          {visibleHeroes.map((hero, index) => (
             <HeroLayerCard
               key={hero.id}
               hero={hero}
               state={heroStates[hero.id] || { owned: false, awakening: 0 }}
               onUnlock={unlockHero}
               onAwakening={setAwakening}
+              priority={index < 24}
+              imageReady={loadedHeroImages.has(hero.id)}
+              onImageReady={markHeroImageReady}
             />
           ))}
         </div>
@@ -1287,10 +1356,37 @@ function HeroBoxView() {
   );
 }
 
-function HeroLayerCard({ hero, state, onUnlock, onAwakening }) {
+function HeroLayerCard({ hero, state, onUnlock, onAwakening, priority = false, imageReady = false, onImageReady }) {
+  const [cardImageReady, setCardImageReady] = useState(imageReady);
+
+  useEffect(() => {
+    setCardImageReady(imageReady);
+  }, [hero.image, imageReady]);
+
+  function handleImageReady() {
+    setCardImageReady(true);
+    onImageReady?.(hero.id);
+  }
+
+  const isImageReady = cardImageReady || imageReady;
+
   return (
-    <article className={`hero-layer-card ${state.owned ? "is-owned" : "is-locked"}`}>
-      <img src={hero.image} alt={hero.name} loading="lazy" decoding="async" draggable="false" />
+    <article
+      className={`hero-layer-card ${state.owned ? "is-owned" : "is-locked"} ${
+        isImageReady ? "is-image-ready" : "is-image-loading"
+      }`}
+    >
+      <div className="hero-layer-skeleton" aria-hidden="true" />
+      <img
+        src={hero.image}
+        alt={hero.name}
+        loading={priority ? "eager" : "lazy"}
+        decoding="async"
+        fetchPriority={priority ? "high" : "auto"}
+        draggable="false"
+        onLoad={handleImageReady}
+        onError={handleImageReady}
+      />
 
       {!state.owned ? (
         <button
