@@ -279,6 +279,176 @@ async function handleImportGroups(req, res) {
   }
 }
 
+function normalizeGroupChampionName(name) {
+  if (!name) return null;
+
+  return String(name)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\d+$/, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim() || null;
+}
+
+function normalizeGroupPosition(position) {
+  return String(position || "").trim().toUpperCase() || null;
+}
+
+function normalizeGroupDirection(direction) {
+  const value = String(direction || "").trim().toUpperCase();
+
+  if (["N", "NORD", "NORTH", "UP"].includes(value)) return "N";
+  if (["S", "SUD", "SOUTH", "DOWN"].includes(value)) return "S";
+  if (["E", "EST", "EAST", "RIGHT"].includes(value)) return "E";
+  if (["O", "OUEST", "W", "WEST", "LEFT"].includes(value)) return "O";
+
+  return value || null;
+}
+
+function makeGroupDefenseKey(defense) {
+  if (defense.type === "fortress") {
+    return `b${defense.bastion}_fort_team${defense.team}`;
+  }
+
+  return `b${defense.bastion}_t${defense.tower}_team${defense.team}`;
+}
+
+function makeDefenseSignature(defense) {
+  const heroes = Array.isArray(defense?.heroes) ? defense.heroes : [];
+
+  const slots = heroes
+    .map((hero) => {
+      const champion = normalizeGroupChampionName(hero?.champion || hero?.name);
+      const position = normalizeGroupPosition(hero?.position);
+      const direction = normalizeGroupDirection(hero?.direction);
+
+      if (!champion || !position || !direction) return null;
+
+      return `${position}:${direction}:${champion}`;
+    })
+    .filter(Boolean)
+    .sort();
+
+  if (slots.length !== 5) return null;
+
+  return slots.join("|");
+}
+
+function buildGroupEntry(num, signature, defenses) {
+  return {
+    num,
+    signature,
+    ids: defenses.map((item) => item.id),
+    keys: defenses.map((item) => makeGroupDefenseKey(item)),
+  };
+}
+
+async function handleCalculateGroups(req, res) {
+  try {
+    const guild = normalizeGuildCode(req.body?.guild);
+
+    if (!guild) {
+      return res.status(400).json({ error: "guild manquante ou invalide" });
+    }
+
+    const { data: defenses, error: readError } = await supabase
+      .from("gvg_defense")
+      .select("id, guild, bastion, type, tower, team, heroes, is_ally")
+      .eq("guild", guild);
+
+    if (readError) {
+      console.error("[gvg-data:calculate_groups] read error:", readError);
+      return res.status(500).json({ error: "erreur lecture groupes" });
+    }
+
+    const enemyBySignature = new Map();
+    const allyBySignature = new Map();
+
+    for (const defense of defenses || []) {
+      const signature = makeDefenseSignature(defense);
+      if (!signature) continue;
+
+      const target = defense.is_ally === true ? allyBySignature : enemyBySignature;
+      if (!target.has(signature)) target.set(signature, []);
+      target.get(signature).push(defense);
+    }
+
+    const enemyGroups = [];
+    let nextEnemyGroup = 1;
+
+    for (const [signature, groupDefenses] of enemyBySignature.entries()) {
+      if (groupDefenses.length < 2) continue;
+      enemyGroups.push(buildGroupEntry(nextEnemyGroup, signature, groupDefenses));
+      nextEnemyGroup += 1;
+    }
+
+    const mirrorGroups = [];
+    const mirrorMap = {};
+    let nextMirrorGroup = 1;
+
+    for (const [signature, enemyDefenses] of enemyBySignature.entries()) {
+      const allyDefenses = allyBySignature.get(signature) || [];
+      if (!enemyDefenses.length || !allyDefenses.length) continue;
+
+      const group = {
+        num: nextMirrorGroup,
+        signature,
+        enemy_ids: enemyDefenses.map((item) => item.id),
+        enemy_keys: enemyDefenses.map((item) => makeGroupDefenseKey(item)),
+        ally_ids: allyDefenses.map((item) => item.id),
+        ally_keys: allyDefenses.map((item) => makeGroupDefenseKey(item)),
+      };
+
+      for (const id of [...group.enemy_ids, ...group.ally_ids]) {
+        mirrorMap[String(id)] = {
+          num: group.num,
+          enemy_keys: group.enemy_keys,
+          ally_keys: group.ally_keys,
+        };
+      }
+
+      mirrorGroups.push(group);
+      nextMirrorGroup += 1;
+    }
+
+    const { error: clearError } = await supabase
+      .from("gvg_defense")
+      .update({ group_num: null, updated_at: new Date().toISOString() })
+      .eq("guild", guild);
+
+    if (clearError) {
+      console.error("[gvg-data:calculate_groups] clear error:", clearError);
+      return res.status(500).json({ error: "erreur reset groupes" });
+    }
+
+    for (const group of enemyGroups) {
+      const { error: updateError } = await supabase
+        .from("gvg_defense")
+        .update({ group_num: group.num, updated_at: new Date().toISOString() })
+        .in("id", group.ids);
+
+      if (updateError) {
+        console.error("[gvg-data:calculate_groups] update error:", updateError);
+        return res.status(500).json({ error: "erreur mise a jour groupes" });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      guild,
+      enemy_groups: enemyGroups,
+      mirror_groups: mirrorGroups,
+      mirror_map: mirrorMap,
+      updated_enemy_groups: enemyGroups.length,
+      matched_mirror_groups: mirrorGroups.length,
+    });
+  } catch (error) {
+    console.error("[gvg-data:calculate_groups] error:", error);
+    return res.status(500).json({ error: error?.message || "erreur calcul groupes" });
+  }
+}
+
 async function handleReproCandidates(req, res) {
   const { defenseId } = req.body || {};
 
@@ -1218,6 +1388,10 @@ if (req.method === "POST") {
 
   if (action === "import_groups") {
     return await handleImportGroups(req, res);
+  }
+
+  if (action === "calculate_groups") {
+    return await handleCalculateGroups(req, res);
   }
 
   if (action === "panel_open") {

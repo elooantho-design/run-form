@@ -136,6 +136,8 @@ const [recordSession, setRecordSession] = useState(null);
 const [recordSessions, setRecordSessions] = useState([]);
 const [recordSessionsLoading, setRecordSessionsLoading] = useState(false);
 const [recordSessionsMessage, setRecordSessionsMessage] = useState("");
+const [groupCalc, setGroupCalc] = useState(null);
+const [groupCalculating, setGroupCalculating] = useState(false);
 
 const [items, setItems] = useState([]);
 const enemyItems = useMemo(
@@ -255,6 +257,7 @@ const recordCounts = useMemo(
   }
 
   useEffect(() => {
+    setGroupCalc(null);
     load();
     loadRecordSessions({ silent: true });
   }, [guild]);
@@ -346,6 +349,55 @@ async function refreshRecordTracking() {
   await loadRecordSessions({ silent: true });
   await load();
   setRecordSessionsMessage("Suivi VPS recalcule sur les defenses actuellement a record.");
+}
+
+async function calculateGroups() {
+  if (!canUsePanelActions || groupCalculating) return;
+
+  try {
+    setGroupCalculating(true);
+    setMessage("Calcul des groupes en cours...");
+
+    const response = await fetch(`${apiBase}/api/gvg-data`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "calculate_groups",
+        guild,
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setMessage(`Reponse non JSON calcul groupes (${response.status})`);
+      return;
+    }
+
+    if (!response.ok || !data?.success) {
+      setMessage(data?.error || "Erreur calcul groupes");
+      return;
+    }
+
+    setGroupCalc(data);
+    await load();
+
+    const enemyCount = Number(data?.updated_enemy_groups || 0);
+    const mirrorCount = Number(data?.matched_mirror_groups || 0);
+    setMessage(
+      `Calcul groupes termine : ${enemyCount} groupe(s) ennemi(s), ${mirrorCount} correspondance(s) ennemi/allie.`
+    );
+  } catch (error) {
+    console.error("calculateGroups error:", error);
+    setMessage(`Erreur calcul groupes : ${error?.message || "erreur inconnue"}`);
+  } finally {
+    setGroupCalculating(false);
+  }
 }
 
 function makeDefenseRecordKey(defense) {
@@ -537,6 +589,16 @@ function getGroupEmoji(groupNum) {
   };
 
   return map[value] || "🔢";
+}
+
+function getGroupLabel(groupNum) {
+  const value = Number(groupNum);
+  return Number.isFinite(value) && value > 0 ? String(value) : "";
+}
+
+function getMirrorGroup(defense) {
+  if (!defense?.id || !groupCalc?.mirror_map) return null;
+  return groupCalc.mirror_map[String(defense.id)] || null;
 }
 
             function getDefenseForSlot(sourceItems, bastion, type, tower, team) {
@@ -997,6 +1059,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                 slot.team
               );
               const recordState = getDefenseRecordState(defense);
+              const mirrorGroup = getMirrorGroup(defense);
 
               return (
                 <div
@@ -1019,7 +1082,20 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                     <span className="flex items-center gap-2">
                       <span>{buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}</span>
                       {defense?.group_num ? (
-                        <span className="no-underline">{getGroupEmoji(defense.group_num)}</span>
+                        <span
+                          className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-sky-300/70 bg-sky-500/25 px-1.5 text-[10px] font-bold text-sky-100 no-underline"
+                          title="Groupe de defenses ennemies identiques"
+                        >
+                          {getGroupLabel(defense.group_num)}
+                        </span>
+                      ) : null}
+                      {mirrorGroup?.num ? (
+                        <span
+                          className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-emerald-300/70 bg-emerald-500/25 px-1.5 text-[10px] font-bold text-emerald-100 no-underline"
+                          title="Composition presente aussi entre ennemi et allie"
+                        >
+                          {getGroupLabel(mirrorGroup.num)}
+                        </span>
                       ) : null}
                     </span>
                     {defense && recordState ? (
@@ -1164,6 +1240,18 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
   }`}
 >
   Cmd record locale
+</button>
+
+<button
+  onClick={calculateGroups}
+  disabled={!canUsePanelActions || groupCalculating}
+  className={`rounded px-3 py-1 text-sm text-white ${
+    canUsePanelActions && !groupCalculating
+      ? "bg-indigo-600 hover:bg-indigo-500"
+      : "cursor-not-allowed bg-zinc-700 opacity-50"
+  }`}
+>
+  {groupCalculating ? "Calcul..." : "Calcul groupes"}
 </button>
 
 <button
