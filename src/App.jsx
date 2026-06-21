@@ -714,7 +714,7 @@ useEffect(() => {
     width: "calc(100% - 36px)",
     height: "calc(100% - 24px)",
     objectFit: "cover",
-    objectPosition: mode === "bastion" ? "center 55%" : "center",
+    objectPosition: "center",
     opacity: 0.75,
     borderRadius: 16,
     zIndex: 0,

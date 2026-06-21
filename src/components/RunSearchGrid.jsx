@@ -40,7 +40,7 @@ const RUN_GRID_MODES = {
     rows: 7,
     cols: 11,
     bgUrl: "/maps-actuelles/bastion.png",
-    bgObjectPosition: "center 55%",
+    bgObjectPosition: "center",
   },
 };
 
