@@ -205,9 +205,9 @@ export default function PrototypeFormulaireRunGrille() {
 
   const gridSpec = useMemo(() => {
     if (mode === "bastion") {
-      return { rows: 7, cols: 11, bgUrl: BASTION_BG_URL, label: "Bastion", bgObjectFit: "fill" };
+      return { rows: 7, cols: 11, bgUrl: BASTION_BG_URL, label: "Bastion" };
     }
-    return { rows: 7, cols: 10, bgUrl: TOUR_BG_URL, label: "Tour", bgObjectFit: "fill" };
+    return { rows: 7, cols: 10, bgUrl: TOUR_BG_URL, label: "Tour" };
   }, [mode]);
 
   const ROWS = useMemo(() => makeRows(gridSpec.rows).reverse(), [gridSpec.rows]);
@@ -713,7 +713,7 @@ useEffect(() => {
     top: 24,
     width: "calc(100% - 36px)",
     height: "calc(100% - 24px)",
-    objectFit: gridSpec.bgObjectFit || "cover",
+    objectFit: "cover",
     objectPosition: "center",
     opacity: 0.75,
     borderRadius: 16,

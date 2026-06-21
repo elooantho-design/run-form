@@ -25,7 +25,6 @@ const RUN_GRID_MODES = {
     cols: 10,
     bgUrl: "/maps-actuelles/tour.png",
     bgObjectPosition: "center",
-    bgObjectFit: "fill",
   },
   bastion: {
     key: "bastion",
@@ -34,7 +33,6 @@ const RUN_GRID_MODES = {
     cols: 11,
     bgUrl: "/maps-actuelles/bastion.png",
     bgObjectPosition: "center",
-    bgObjectFit: "fill",
   },
 };
 
@@ -583,7 +581,7 @@ useEffect(() => {
                             top: "clamp(16px, 3vw, 24px)",
                             width: "calc(100% - clamp(20px, 4vw, 36px))",
                             height: "calc(100% - clamp(16px, 3vw, 24px))",
-                            objectFit: gridSpec.bgObjectFit || "cover",
+                            objectFit: "cover",
                             objectPosition: gridSpec.bgObjectPosition,
                             opacity: 0.75,
                             borderRadius: 16,
