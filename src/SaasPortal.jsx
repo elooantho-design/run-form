@@ -39,6 +39,7 @@ import GvgCurrentTab from "@/components/GvgCurrentTab";
 import GvgPanelTab from "@/components/GvgPanelTab";
 import GvgAdminTab from "@/components/GvgAdminTab";
 import GvgValidationTab from "@/components/GvgValidationTab";
+import { supabase } from "@/lib/supabase";
 
 const navigation = [
   { id: "home", label: "Accueil", icon: LayoutDashboard },
@@ -158,6 +159,75 @@ function getApiBase() {
   if (configuredBase) return configuredBase.replace(/\/$/, "");
 
   return isLocalHost() ? "http://localhost:3000" : "";
+}
+
+const PORTAL_SESSION_STORAGE_KEY = "paladinPortalSession";
+const DASHBOARD_SESSION_STORAGE_KEY = "guildDashboardSession";
+
+function isAdminRole(role) {
+  return ["admin", "administrateur", "leader", "officier"].includes(
+    String(role || "").trim().toLowerCase(),
+  );
+}
+
+function buildPortalSession(member) {
+  const watcherName = member?.watcher_name || member?.discord_id || "Joueur";
+  const guildCode = member?.guild_code || "G1";
+  const role = member?.role || "Joueur";
+  const admin = isAdminRole(role);
+
+  return {
+    memberId: member?.id || null,
+    id: member?.id || null,
+    discordId: member?.discord_id || "",
+    discord_id: member?.discord_id || "",
+    name: watcherName,
+    watcherName,
+    memberName: watcherName,
+    role,
+    guild: guildCode,
+    guildCode,
+    guild_code: guildCode,
+    isAdmin: admin,
+    admin,
+  };
+}
+
+function readJsonStorage(key, storage) {
+  try {
+    const raw = storage?.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredPortalSession() {
+  if (typeof window === "undefined") return null;
+  return (
+    readJsonStorage(PORTAL_SESSION_STORAGE_KEY, window.sessionStorage) ||
+    readJsonStorage(PORTAL_SESSION_STORAGE_KEY, window.localStorage)
+  );
+}
+
+function persistPortalSession(session, remember) {
+  if (typeof window === "undefined") return;
+  const serialized = JSON.stringify(session);
+  window.sessionStorage.setItem(PORTAL_SESSION_STORAGE_KEY, serialized);
+  window.localStorage.setItem(DASHBOARD_SESSION_STORAGE_KEY, serialized);
+
+  if (remember) {
+    window.localStorage.setItem(PORTAL_SESSION_STORAGE_KEY, serialized);
+  } else {
+    window.localStorage.removeItem(PORTAL_SESSION_STORAGE_KEY);
+  }
+}
+
+function clearPortalSession() {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(PORTAL_SESSION_STORAGE_KEY);
+  window.localStorage.removeItem(PORTAL_SESSION_STORAGE_KEY);
+  window.localStorage.removeItem(DASHBOARD_SESSION_STORAGE_KEY);
 }
 
 const heroRarityOrder = ["legendary", "epic", "rare", "ordinary", "basic"];
@@ -555,6 +625,8 @@ function LoginPanel({ onLogin }) {
   const [remember, setRemember] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [viewport, setViewport] = useState(LOGIN_IMAGE_SIZE);
   const scrollRef = useRef(null);
 
@@ -615,15 +687,43 @@ function LoginPanel({ onLogin }) {
     ].join(" ");
   }
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
-    onLogin({
-      name: "Arkhaos",
-      watcherName: "Arkhaos",
-      discordId: identifier.trim(),
-      role: "Administrateur",
-      guild: "Paladin",
-    });
+    if (isSubmitting) return;
+
+    const cleanDiscordId = identifier.trim();
+    const cleanPassword = password.trim();
+
+    if (!cleanDiscordId || !cleanPassword) {
+      setErrorMessage("Renseigne ton ID Discord et ton mot de passe.");
+      return;
+    }
+
+    setErrorMessage("");
+    setIsSubmitting(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("guild_members")
+        .select("id, role, discord_id, watcher_name, guild_code")
+        .eq("discord_id", cleanDiscordId)
+        .eq("password", cleanPassword)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) {
+        setErrorMessage("Identifiant Discord ou mot de passe incorrect.");
+        return;
+      }
+
+      onLogin(buildPortalSession(data), { remember });
+    } catch (error) {
+      console.error("[portal-login]", error);
+      setErrorMessage("Connexion impossible. Reessaie ou contacte un admin.");
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -736,11 +836,30 @@ function LoginPanel({ onLogin }) {
         </button>
         <button
           type="submit"
-          className="absolute cursor-pointer bg-transparent outline-none transition focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/80"
+          disabled={isSubmitting}
+          className="absolute cursor-pointer bg-transparent outline-none transition focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/80 disabled:cursor-wait"
           style={hotspotStyle(LOGIN_HOTSPOTS.submit)}
         >
           <span className="sr-only">Se connecter</span>
         </button>
+        {(errorMessage || isSubmitting) && (
+          <div
+            role="status"
+            className={`absolute rounded-xl border px-3 py-2 text-center font-semibold shadow-lg backdrop-blur-md ${
+              errorMessage
+                ? "border-red-400/45 bg-red-950/75 text-red-100"
+                : "border-emerald-300/40 bg-emerald-950/65 text-emerald-100"
+            }`}
+            style={{
+              left: `${LOGIN_HOTSPOTS.submit.x * imageScale}px`,
+              top: `${(LOGIN_HOTSPOTS.submit.y + LOGIN_HOTSPOTS.submit.h + 12) * imageScale}px`,
+              width: `${LOGIN_HOTSPOTS.submit.w * imageScale}px`,
+              fontSize: `${Math.max(11, 14 * imageScale)}px`,
+            }}
+          >
+            {isSubmitting ? "Connexion..." : errorMessage}
+          </div>
+        )}
       </form>
         </div>
       </div>
@@ -1961,11 +2080,21 @@ function SettingsView() {
 }
 
 export default function SaasPortal() {
-  const [session, setSession] = useState(null);
+  const [session, setSession] = useState(() => readStoredPortalSession());
 
-  if (!session) {
-    return <LoginPanel onLogin={setSession} />;
+  function handleLogin(nextSession, options = {}) {
+    persistPortalSession(nextSession, Boolean(options.remember));
+    setSession(nextSession);
   }
 
-  return <PortalShell session={session} onLogout={() => setSession(null)} />;
+  function handleLogout() {
+    clearPortalSession();
+    setSession(null);
+  }
+
+  if (!session) {
+    return <LoginPanel onLogin={handleLogin} />;
+  }
+
+  return <PortalShell session={session} onLogout={handleLogout} />;
 }
