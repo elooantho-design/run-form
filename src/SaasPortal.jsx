@@ -161,19 +161,17 @@ function getApiBase() {
 }
 
 const heroRarityOrder = ["legendary", "epic", "rare", "ordinary", "basic"];
-const latestHeroReleaseLimit = 6;
-const latestHeroReleaseNames = [
-  "Janus",
-  "Solaris",
-  "Oren",
-  "Dame Mina",
-  "Glacius",
-  "Barbe-Grise",
-  "Dame Alexendra",
-  "Guan Yu",
-  "Rivenhald",
-  "Valara",
-  "Vlad Draculea",
+const latestHeroReleaseWindowDays = 30;
+const latestHeroReleases = [
+  { name: "Clarissa", releasedAt: "2026-06-21" },
+  { name: "Gu Shi", releasedAt: "2026-06-21" },
+  { name: "Janus", releasedAt: "2026-06-21" },
+  { name: "Lulu", releasedAt: "2026-06-21" },
+  { name: "Oren", releasedAt: "2026-06-21" },
+  { name: "Solaris", releasedAt: "2026-06-21" },
+  { name: "Su Yue", releasedAt: "2026-06-21" },
+  { name: "Varro Draccus", releasedAt: "2026-06-21" },
+  { name: "Xasny", releasedAt: "2026-06-21" },
 ];
 
 function heroNameFromFile(fileName) {
@@ -222,6 +220,15 @@ const heroFactionFilters = [
 ];
 
 const heroLayerData = [
+    { fileName: "Clarissa.png", rarity: "legendary", factions: ["esoterique"], roles: ["combattant"] },
+    { fileName: "Gu Shi.png", rarity: "legendary", factions: ["perceur", "infernal"], roles: ["tireur"] },
+    { fileName: "Janus.png", rarity: "legendary", factions: ["infernal"], roles: ["mage"] },
+    { fileName: "Lulu.png", rarity: "legendary", factions: ["nordiste"], roles: ["tacticien"] },
+    { fileName: "Oren.png", rarity: "legendary", factions: ["arbitre"], roles: ["combattant"] },
+    { fileName: "Solaris.png", rarity: "legendary", factions: ["nordiste"], roles: ["mage"] },
+    { fileName: "Su Yue.png", rarity: "legendary", factions: ["arbitre", "nordiste"], roles: ["tacticien"] },
+    { fileName: "Varro Draccus.png", rarity: "legendary", factions: ["chaotique", "esoterique"], roles: ["mage"] },
+    { fileName: "Xasny.png", rarity: "epic", factions: ["esoterique"], roles: ["combattant"] },
     { fileName: "Abomination.png", rarity: "legendary", factions: ["cauchemar"] },
     { fileName: "Aedrin.png", rarity: "legendary", factions: ["nordiste"] },
     { fileName: "Aeris.png", rarity: "legendary", factions: ["sentinelle", "esoterique"] },
@@ -492,10 +499,14 @@ const heroLayerData = [
 ];
 
 const heroLayerKeySet = new Set(heroLayerData.map((hero) => normalizeHeroKey(heroNameFromFile(hero.fileName))));
-const activeLatestHeroKeys = latestHeroReleaseNames
-  .map(normalizeHeroKey)
-  .filter((key) => heroLayerKeySet.has(key))
-  .slice(0, latestHeroReleaseLimit);
+const latestHeroReleaseWindowMs = latestHeroReleaseWindowDays * 24 * 60 * 60 * 1000;
+const activeLatestHeroKeys = latestHeroReleases
+  .filter((release) => {
+    const releasedAt = Date.parse(`${release.releasedAt}T00:00:00`);
+    return Number.isFinite(releasedAt) && Date.now() - releasedAt < latestHeroReleaseWindowMs;
+  })
+  .map((release) => normalizeHeroKey(release.name))
+  .filter((key) => heroLayerKeySet.has(key));
 
 const heroLayerCards = [...heroLayerData]
   .sort((left, right) => {
