@@ -250,10 +250,67 @@ function heroNameFromFile(fileName) {
 
 function normalizeHeroKey(value) {
   return String(value || "")
+    .replace(/Ã©/g, "é")
+    .replace(/Ã¨/g, "è")
+    .replace(/Ãª/g, "ê")
+    .replace(/Ã«/g, "ë")
+    .replace(/Ã /g, "à")
+    .replace(/Ã¢/g, "â")
+    .replace(/Ã¤/g, "ä")
+    .replace(/Ã¹/g, "ù")
+    .replace(/Ã»/g, "û")
+    .replace(/Ã¼/g, "ü")
+    .replace(/Ã´/g, "ô")
+    .replace(/Ã¶/g, "ö")
+    .replace(/Ã®/g, "î")
+    .replace(/Ã¯/g, "ï")
+    .replace(/Ã§/g, "ç")
+    .replace(/Ã‰/g, "É")
+    .replace(/Ãˆ/g, "È")
+    .replace(/ÃŠ/g, "Ê")
+    .replace(/Ã‡/g, "Ç")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
+}
+
+const heroChampionAliasGroups = [
+  ["Amiral", "Amiral Griffe", "Admiral Claw"],
+  ["Dame Alexendra", "Dame Alexandra", "Lady Alexandra"],
+  ["Gu Shi", "Gushi", "Gucci"],
+  ["Su Yue", "Suyu", "Suyue"],
+  ["Varro Draccus", "Varrodraccus", "Varro Dracus", "Varrodracus"],
+  ["Xasny", "Xaxniz", "Xasniz"],
+  ["Cerbeus", "Cerberus"],
+  ["Brokkir", "Brokir"],
+  ["Roi Harz", "King Harz"],
+  ["Dr Van Helsing", "Dr. Van Helsing", "Docteur Van Helsing"],
+  ["Captain Reve", "Captain Rêve", "Capitaine Reve", "Capitaine Rêve"],
+];
+
+const heroChampionAliasesByKey = new Map();
+
+heroChampionAliasGroups.forEach((group) => {
+  const keys = group.map(normalizeHeroKey).filter(Boolean);
+  keys.forEach((key) => {
+    const aliases = heroChampionAliasesByKey.get(key) || new Set();
+    keys.forEach((alias) => aliases.add(alias));
+    heroChampionAliasesByKey.set(key, aliases);
+  });
+});
+
+function expandHeroChampionKeys(keys) {
+  const expanded = new Set();
+
+  (keys || []).forEach((key) => {
+    const normalizedKey = normalizeHeroKey(key);
+    if (!normalizedKey) return;
+    expanded.add(normalizedKey);
+    (heroChampionAliasesByKey.get(normalizedKey) || []).forEach((alias) => expanded.add(alias));
+  });
+
+  return Array.from(expanded);
 }
 
 const heroRarityFilters = [
@@ -610,13 +667,7 @@ function clampAwakeningLevel(value) {
 }
 
 function getHeroChampionKeys(hero) {
-  return Array.from(
-    new Set(
-      [hero.name, hero.fileName, String(hero.fileName || "").replace(/\.[^.]+$/, "")]
-        .map(normalizeHeroKey)
-        .filter(Boolean),
-    ),
-  );
+  return expandHeroChampionKeys([hero.name, hero.fileName, String(hero.fileName || "").replace(/\.[^.]+$/, "")]);
 }
 
 function getMemberDisplayName(member) {
@@ -652,7 +703,7 @@ function buildChampionIdByHeroId(champions) {
   const championIdByKey = new Map();
 
   (champions || []).forEach((champion) => {
-    getChampionCandidateKeys(champion).forEach((key) => {
+    expandHeroChampionKeys(getChampionCandidateKeys(champion)).forEach((key) => {
       if (!championIdByKey.has(key)) championIdByKey.set(key, champion.id);
     });
   });
