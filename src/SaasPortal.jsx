@@ -266,6 +266,7 @@ const heroFactionMeta = {
 
 const heroRoleOrder = Object.keys(heroRoleMeta);
 const heroFactionOrder = Object.keys(heroFactionMeta);
+const bulkAwakeningRarities = new Set(["epic", "rare", "ordinary", "basic"]);
 
 function decodeLegacyMojibake(value) {
   let text = String(value || "");
@@ -349,9 +350,9 @@ function sortHeroValues(left, right, order) {
 function getChampionPortalName(champion) {
   return String(
     getChampionField(champion, [
-      "portal_name",
       "PortalName",
       "portalName",
+      "portal_name",
       "portalname",
       "display_name",
       "displayName",
@@ -385,18 +386,22 @@ function getChampionHeroImageFile(champion, portalName) {
     "image_file",
     "imageFile",
     "ImageFile",
-    "file_name",
-    "fileName",
-    "filename",
-    "Filename",
     "calque_file",
     "CalqueFile",
-    "image",
-    "Image",
   ]);
   const imageFile = normalizeHeroImageFile(configuredFile);
 
   return imageFile || normalizeHeroImageFile(portalName);
+}
+
+function buildHeroImageCandidates(champion, portalName) {
+  const candidates = [
+    getChampionHeroImageFile(champion, portalName),
+    normalizeHeroImageFile(portalName),
+    normalizeHeroImageFile(formatHeroFilterLabel(portalName)),
+  ].filter(Boolean);
+
+  return [...new Set(candidates)];
 }
 
 function getChampionReleaseTime(champion) {
@@ -427,7 +432,8 @@ function buildPortalHeroCards(champions) {
       const championId = champion?.id;
       if (!portalName || championId === null || championId === undefined) return null;
 
-      const imageFile = getChampionHeroImageFile(champion, portalName);
+      const imageFiles = buildHeroImageCandidates(champion, portalName);
+      const imageFile = imageFiles[0] || "";
       const releaseTime = getChampionReleaseTime(champion);
       const isRecentRelease = releaseTime !== null && Date.now() - releaseTime < latestReleaseWindowMs;
       const isLatestRelease = isChampionMarkedLatest(champion) || isRecentRelease;
@@ -443,6 +449,7 @@ function buildPortalHeroCards(champions) {
         roles: splitChampionValues(getChampionField(champion, ["role", "Role", "roles", "Roles"])),
         imageFile,
         image: imageFile ? calqueUrl("hero", imageFile) : "",
+        fallbackImages: imageFiles.slice(1).map((fileName) => calqueUrl("hero", fileName)),
         isLatestRelease,
         latestReleaseRank: releaseTime === null ? null : -releaseTime,
       };
@@ -1133,6 +1140,7 @@ function HeroBoxView({ session }) {
   const [heroBoxLoading, setHeroBoxLoading] = useState(false);
   const [heroBoxError, setHeroBoxError] = useState("");
   const [savingHeroId, setSavingHeroId] = useState("");
+  const [bulkSavingRarity, setBulkSavingRarity] = useState("");
   const [heroStates, setHeroStates] = useState({});
 
   const connectedPlayerId = session?.memberId || session?.id || "";
@@ -1160,6 +1168,25 @@ function HeroBoxView({ session }) {
     [heroCards],
   );
   const hasLatestHeroes = useMemo(() => heroCards.some((hero) => hero.isLatestRelease), [heroCards]);
+  const selectedRarityFilter = useMemo(
+    () => heroRarityFilters.find((filter) => filter.id === rarityFilter) || null,
+    [heroRarityFilters, rarityFilter],
+  );
+  const bulkAwakeningHeroes = useMemo(() => {
+    if (!bulkAwakeningRarities.has(rarityFilter)) return [];
+    return heroCards.filter((hero) => hero.rarity === rarityFilter && championIdByHeroId[hero.id]);
+  }, [championIdByHeroId, heroCards, rarityFilter]);
+  const bulkAwakeningPendingCount = useMemo(
+    () => bulkAwakeningHeroes.filter((hero) => (heroStates[hero.id] || { awakening: -1 }).awakening !== 5).length,
+    [bulkAwakeningHeroes, heroStates],
+  );
+  const canBulkAwaken =
+    canEdit &&
+    selectedPlayerKey &&
+    bulkAwakeningHeroes.length > 0 &&
+    bulkAwakeningPendingCount > 0 &&
+    !heroBoxLoading &&
+    !bulkSavingRarity;
 
   const selectedPlayer = useMemo(
     () => members.find((member) => String(member.id) === selectedPlayerKey) || null,
@@ -1414,6 +1441,43 @@ function HeroBoxView({ session }) {
     }
   }
 
+  async function setBulkAwakeningToA5() {
+    if (!canBulkAwaken) return;
+
+    const targetHeroes = bulkAwakeningHeroes;
+    const previousStates = Object.fromEntries(
+      targetHeroes.map((hero) => [hero.id, heroStates[hero.id] || { owned: false, awakening: -1 }]),
+    );
+
+    setBulkSavingRarity(rarityFilter);
+    setHeroBoxError("");
+    setHeroStates((current) => ({
+      ...current,
+      ...Object.fromEntries(targetHeroes.map((hero) => [hero.id, { owned: true, awakening: 5 }])),
+    }));
+
+    try {
+      const { error } = await supabase.from("member_awakenings").upsert(
+        targetHeroes.map((hero) => ({
+          member_id: selectedPlayerKey,
+          champion_id: championIdByHeroId[hero.id],
+          awakening_level: 5,
+        })),
+        { onConflict: "member_id,champion_id" },
+      );
+
+      if (error) throw error;
+    } catch (error) {
+      setHeroStates((current) => ({
+        ...current,
+        ...previousStates,
+      }));
+      setHeroBoxError(error?.message || "Mise a jour groupee des eveils impossible.");
+    } finally {
+      setBulkSavingRarity("");
+    }
+  }
+
   function unlockHero(heroId) {
     saveHeroAwakening(heroId, 0);
   }
@@ -1570,6 +1634,30 @@ function HeroBoxView({ session }) {
           ))}
         </div>
 
+        {bulkAwakeningRarities.has(rarityFilter) && bulkAwakeningHeroes.length > 0 ? (
+          <div className="hero-box-bulk-actions">
+            <button
+              type="button"
+              className="hero-box-bulk-awakening"
+              disabled={!canBulkAwaken}
+              onClick={setBulkAwakeningToA5}
+              title={
+                bulkAwakeningPendingCount > 0
+                  ? `Passer les ${selectedRarityFilter?.label || "heros"} en A5`
+                  : `Tous les ${selectedRarityFilter?.label || "heros"} sont deja A5`
+              }
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {bulkSavingRarity === rarityFilter
+                ? "Mise a jour A5..."
+                : bulkAwakeningPendingCount > 0
+                  ? "Tout ce filtre A5"
+                  : "Filtre deja A5"}
+              <span>{bulkAwakeningHeroes.length}</span>
+            </button>
+          </div>
+        ) : null}
+
         <div className="hero-box-icon-filter-grid">
           <div className="hero-box-icon-filters" aria-label="Filtres de roles">
             {heroRoleFilters.map((filter) => (
@@ -1641,7 +1729,7 @@ function HeroBoxView({ session }) {
               imageReady={loadedHeroImages.has(hero.id)}
               onImageReady={markHeroImageReady}
               canEdit={canEdit}
-              saving={savingHeroId === hero.id}
+              saving={savingHeroId === hero.id || bulkSavingRarity === hero.rarity}
             />
           ))}
         </div>
@@ -1661,8 +1749,21 @@ function HeroLayerCard({
   canEdit = false,
   saving = false,
 }) {
+  const [fallbackImageIndex, setFallbackImageIndex] = useState(-1);
+  const imageSrc = fallbackImageIndex === -1 ? hero.image : hero.fallbackImages?.[fallbackImageIndex] || hero.image;
+
   function handleImageReady() {
     onImageReady?.(hero.id);
+  }
+
+  function handleImageError() {
+    const nextFallbackImageIndex = fallbackImageIndex + 1;
+    if (hero.fallbackImages?.[nextFallbackImageIndex]) {
+      setFallbackImageIndex(nextFallbackImageIndex);
+      return;
+    }
+
+    handleImageReady();
   }
 
   return (
@@ -1673,14 +1774,14 @@ function HeroLayerCard({
     >
       <div className="hero-layer-skeleton" aria-hidden="true" />
       <img
-        src={hero.image}
+        src={imageSrc}
         alt={hero.name}
         loading={priority ? "eager" : "lazy"}
         decoding="async"
         fetchPriority={priority ? "high" : "auto"}
         draggable="false"
         onLoad={handleImageReady}
-        onError={handleImageReady}
+        onError={handleImageError}
       />
 
       {!state.owned ? (
