@@ -510,6 +510,12 @@ function getDemonicMonsterImageUrl(slug) {
 
 const guildCodes = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const defaultPasswords = ["motdepassemembre", "motdepasseadmin"];
+const temporaryPasswordPrefix = "TMP-";
+
+function isForcedDashboardPassword(password) {
+  const cleanPassword = String(password || "").trim();
+  return defaultPasswords.includes(cleanPassword) || cleanPassword.startsWith(temporaryPasswordPrefix);
+}
 
 function normalizeDefenseTier(tier) {
   const value = String(tier || "").trim().toLowerCase();
@@ -986,7 +992,7 @@ const mapped = (data || []).map((row) => ({
 useEffect(() => {
   if (!session) return;
 
-  const mustChangePassword = defaultPasswords.includes(session.password || "");
+  const mustChangePassword = isForcedDashboardPassword(session.password);
   setForcePasswordDialogOpen(mustChangePassword);
 }, [session]);
 
@@ -3867,7 +3873,7 @@ const handleLogin = (data) => {
   setSession(nextSession);
   setSelectedId(nextSession?.memberId ?? null);
 
-  const mustChangePassword = defaultPasswords.includes(nextSession?.password || "");
+  const mustChangePassword = isForcedDashboardPassword(nextSession?.password);
   setForcePasswordDialogOpen(mustChangePassword);
 };
 
@@ -4979,8 +4985,8 @@ const changePassword = async () => {
     return;
   }
 
-  if (defaultPasswords.includes(newPasswordInput)) {
-    alert("Tu ne peux pas garder un mot de passe par défaut.");
+  if (isForcedDashboardPassword(newPasswordInput)) {
+    alert("Tu ne peux pas garder un mot de passe par defaut ou temporaire.");
     return;
   }
 
@@ -5102,7 +5108,7 @@ return (
 
             <div className="space-y-4">
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
-                Pour plus de sécurité, tu dois remplacer ton mot de passe par défaut.
+                Pour plus de securite, tu dois remplacer ton mot de passe par defaut ou temporaire.
               </div>
 
               <div className="space-y-2">
@@ -8692,7 +8698,7 @@ onClick={async () => {
 
     <div className="space-y-4">
       <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
-        Pour plus de sécurité, tu dois remplacer ton mot de passe par défaut.
+        Pour plus de securite, tu dois remplacer ton mot de passe par defaut ou temporaire.
       </div>
 
       <div className="space-y-2">
