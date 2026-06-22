@@ -12,7 +12,6 @@ import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   getDefenseConditionRequirements,
@@ -33,10 +32,6 @@ function normalizeText(value) {
 
 function getSessionGuildCode(session) {
   return session?.guildCode || session?.guild_code || "G1";
-}
-
-function getSessionRole(session) {
-  return normalizeText(session?.role || "");
 }
 
 function isEmptyDefenseName(value) {
@@ -123,7 +118,10 @@ function getCompatibilityState(member, defense) {
 }
 
 export default function MyDefensesTab({ session }) {
-  const [member, setMember] = useState(null);
+  const [members, setMembers] = useState([]);
+  const [selectedMemberId, setSelectedMemberId] = useState(session?.memberId || session?.id || "");
+  const [memberQuery, setMemberQuery] = useState("");
+  const [memberAwakeningsByMemberId, setMemberAwakeningsByMemberId] = useState({});
   const [defenses, setDefenses] = useState([]);
   const [defenseVotes, setDefenseVotes] = useState([]);
   const [defenseQuery, setDefenseQuery] = useState("");
@@ -132,21 +130,47 @@ export default function MyDefensesTab({ session }) {
   const [savingSlot, setSavingSlot] = useState("");
   const [voteSavingId, setVoteSavingId] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [infoDefense, setInfoDefense] = useState(null);
-  const [infoBlocks, setInfoBlocks] = useState([]);
-  const [infoLoading, setInfoLoading] = useState(false);
 
   const guildCode = getSessionGuildCode(session);
+  const connectedMemberId = session?.memberId || session?.id || "";
 
-  const isAdmin = useMemo(() => {
-    const role = getSessionRole(session);
-    return role.includes("admin") || role.includes("administrateur");
-  }, [session]);
+  const selectedMemberBase = useMemo(() => {
+    return members.find((item) => String(item.id) === String(selectedMemberId)) || members[0] || null;
+  }, [members, selectedMemberId]);
+
+  const member = useMemo(() => {
+    if (!selectedMemberBase) return null;
+    return {
+      ...selectedMemberBase,
+      awakenings: memberAwakeningsByMemberId[String(selectedMemberBase.id)] || {},
+    };
+  }, [memberAwakeningsByMemberId, selectedMemberBase]);
+
+  const memberSuggestions = useMemo(() => {
+    const search = normalizeText(memberQuery);
+
+    return members
+      .filter((item) => {
+        if (!search) return true;
+        return normalizeText(`${item.name} ${item.discordId} ${item.guildCode}`).includes(search);
+      })
+      .slice(0, 8);
+  }, [memberQuery, members]);
 
   const canEdit = useMemo(() => {
-    if (!member?.id) return false;
-    return isAdmin || String(member.id) === String(session?.memberId);
-  }, [isAdmin, member?.id, session?.memberId]);
+    return Boolean(member?.id);
+  }, [member?.id]);
+
+  const memberDefenses = useMemo(() => {
+    const memberGuildCode = member?.guildCode || guildCode;
+
+    return defenses.filter(
+      (defense) =>
+        defense.isGlobal ||
+        !defense.guildCode ||
+        String(defense.guildCode) === String(memberGuildCode)
+    );
+  }, [defenses, guildCode, member?.guildCode]);
 
   const selectedDefenseNames = useMemo(() => {
     return [member?.defense1, member?.defense2].filter((name) => !isEmptyDefenseName(name));
@@ -154,11 +178,11 @@ export default function MyDefensesTab({ session }) {
 
   const selectedHeroSet = useMemo(() => {
     return new Set(
-      defenses
+      memberDefenses
         .filter((defense) => selectedDefenseNames.includes(defense.name))
         .flatMap((defense) => (defense.slots || []).map(getSlotHeroName).filter(Boolean))
     );
-  }, [defenses, selectedDefenseNames]);
+  }, [memberDefenses, selectedDefenseNames]);
 
   const defenseLikesCountByRootId = useMemo(() => {
     const counts = new Map();
@@ -183,31 +207,31 @@ export default function MyDefensesTab({ session }) {
   }, [defenseVotes]);
 
   const defenseVoteByRootId = useMemo(() => {
-    if (!session?.memberId) return new Map();
+    if (!connectedMemberId) return new Map();
 
     const votes = new Map();
 
     defenseVotes
-      .filter((vote) => String(vote.memberId) === String(session.memberId))
+      .filter((vote) => String(vote.memberId) === String(connectedMemberId))
       .forEach((vote) => {
         votes.set(vote.defenseId, vote.value);
       });
 
     return votes;
-  }, [defenseVotes, session?.memberId]);
+  }, [connectedMemberId, defenseVotes]);
 
   const assignedDefenses = useMemo(() => {
     return [member?.defense1, member?.defense2].map((defenseName, index) => ({
       slot: index + 1,
       defenseName,
-      defense: defenses.find((item) => item.name === defenseName) || null,
+      defense: memberDefenses.find((item) => item.name === defenseName) || null,
     }));
-  }, [defenses, member?.defense1, member?.defense2]);
+  }, [member?.defense1, member?.defense2, memberDefenses]);
 
   const availableDefenses = useMemo(() => {
     const search = normalizeText(defenseQuery);
 
-    return defenses
+    return memberDefenses
       .filter((defense) => !selectedDefenseNames.includes(defense.name))
       .filter((defense) => {
         if (defenseTypeFilter === "all") return true;
@@ -239,7 +263,7 @@ export default function MyDefensesTab({ session }) {
         if (a.score !== b.score) return b.score - a.score;
         return String(a.name || "").localeCompare(String(b.name || ""), "fr", { sensitivity: "base" });
       });
-  }, [defenseQuery, defenseTypeFilter, defenses, member, selectedDefenseNames, selectedHeroSet]);
+  }, [defenseQuery, defenseTypeFilter, member, memberDefenses, selectedDefenseNames, selectedHeroSet]);
 
   const summary = useMemo(() => {
     const filledSlots = assignedDefenses.filter((slot) => slot.defense).length;
@@ -262,45 +286,11 @@ export default function MyDefensesTab({ session }) {
       setErrorMessage("");
       const sessionWatcherName = session?.watcherName || session?.name || "";
 
-      const memberQuery = supabase
-        .from("guild_members")
-        .select(`
-          id,
-          watcher_name,
-          discord_id,
-          guild_code,
-          assignment,
-          status,
-          defense_1,
-          defense_2,
-          member_awakenings (
-            awakening_level,
-            champion_id,
-            champions (
-              name
-            )
-          )
-        `);
-
-      let memberPromise;
-
-      if (session?.memberId) {
-        memberPromise = memberQuery.eq("id", session.memberId).maybeSingle();
-      } else if (sessionWatcherName) {
-        memberPromise = memberQuery
-          .eq("guild_code", guildCode)
-          .eq("watcher_name", sessionWatcherName)
-          .maybeSingle();
-      } else {
-        memberPromise = memberQuery
-          .eq("guild_code", guildCode)
-          .order("watcher_name", { ascending: true })
-          .limit(1)
-          .maybeSingle();
-      }
-
-      const [memberResult, defensesResult, votesResult] = await Promise.all([
-        memberPromise,
+      const [membersResult, defensesResult, votesResult] = await Promise.all([
+        supabase
+          .from("guild_members")
+          .select("id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2")
+          .order("watcher_name", { ascending: true }),
         supabase
           .from("guild_defenses")
           .select(`
@@ -331,56 +321,76 @@ export default function MyDefensesTab({ session }) {
               )
             )
           `)
-          .or(`is_global.eq.true,guild_code.eq.${guildCode}`)
           .order("created_at", { ascending: true }),
         supabase.from("cluster_defense_likes").select("id, defense_id, member_id, value, created_at"),
       ]);
 
       if (cancelled) return;
 
-      if (memberResult.error || defensesResult.error || votesResult.error) {
+      if (membersResult.error || defensesResult.error || votesResult.error) {
         console.error(
           "Erreur chargement mes defenses:",
-          memberResult.error || defensesResult.error || votesResult.error
+          membersResult.error || defensesResult.error || votesResult.error
         );
         setErrorMessage("Impossible de charger tes defenses pour le moment.");
         setLoading(false);
         return;
       }
 
-      const memberRow = memberResult.data;
+      const defenseRows = defensesResult.data || [];
+      const defenseIds = defenseRows.map((row) => row.id).filter(Boolean);
+      let blocksByDefenseId = new Map();
 
-      if (!memberRow) {
-        setMember(null);
+      if (defenseIds.length > 0) {
+        const { data: blockRows, error: blocksError } = await supabase
+          .from("guild_defense_blocks")
+          .select("id, defense_id, block_type, content, sort_order")
+          .in("defense_id", defenseIds)
+          .order("sort_order", { ascending: true });
+
+        if (cancelled) return;
+
+        if (blocksError) {
+          console.error("Erreur chargement infos defenses:", blocksError);
+        } else {
+          blocksByDefenseId = (blockRows || []).reduce((grouped, block) => {
+            const defenseId = String(block.defense_id);
+            const previous = grouped.get(defenseId) || [];
+            grouped.set(defenseId, [
+              ...previous,
+              {
+                id: block.id,
+                blockType: block.block_type,
+                content: block.content,
+                sortOrder: block.sort_order ?? 9999,
+              },
+            ]);
+            return grouped;
+          }, new Map());
+        }
+      }
+
+      const mappedMembers = (membersResult.data || []).map((row) => ({
+        id: row.id,
+        name: row.watcher_name || "Joueur",
+        discordId: row.discord_id || "",
+        guildCode: row.guild_code || "",
+        assignment: row.assignment || "Tour",
+        status: row.status || "A faire",
+        defense1: row.defense_1 || EMPTY_DEFENSE,
+        defense2: row.defense_2 || EMPTY_DEFENSE,
+      }));
+
+      if (mappedMembers.length === 0) {
+        setMembers([]);
         setDefenses([]);
         setDefenseVotes([]);
-        setErrorMessage("Aucun profil joueur trouve pour cette session.");
+        setErrorMessage("Aucun profil joueur trouve dans le cluster.");
         setLoading(false);
         return;
       }
 
-      const awakenings = {};
-
-      (memberRow.member_awakenings || []).forEach((entry) => {
-        const heroName = entry.champions?.name;
-        if (heroName) {
-          awakenings[heroName] = entry.awakening_level;
-        }
-      });
-
-      const mappedMember = {
-        id: memberRow.id,
-        name: memberRow.watcher_name || "Joueur",
-        discordId: memberRow.discord_id || "",
-        guildCode: memberRow.guild_code || guildCode,
-        assignment: memberRow.assignment || "Tour",
-        status: memberRow.status || "A faire",
-        defense1: memberRow.defense_1 || EMPTY_DEFENSE,
-        defense2: memberRow.defense_2 || EMPTY_DEFENSE,
-        awakenings,
-      };
-
-      const mappedDefenses = (defensesResult.data || [])
+      const mappedDefenses = defenseRows
         .map((row) => {
           const slots = [...(row.guild_defense_slots || [])]
             .sort((a, b) => a.slot_index - b.slot_index)
@@ -406,6 +416,7 @@ export default function MyDefensesTab({ session }) {
             sortOrder: row.sort_order ?? 9999,
             slots,
             conditions,
+            infoBlocks: blocksByDefenseId.get(String(row.id)) || [],
             image: row.image_url,
           };
         })
@@ -425,10 +436,18 @@ export default function MyDefensesTab({ session }) {
         createdAt: row.created_at,
       }));
 
-      setMember(mappedMember);
+      setMembers(mappedMembers);
       setDefenses(mappedDefenses);
       setDefenseVotes(mappedVotes);
-      setDefenseTypeFilter(normalizeText(mappedMember.assignment).includes("bastion") ? "bastion" : "tour");
+      const normalizedSessionName = normalizeText(sessionWatcherName);
+      const selectedMember =
+        mappedMembers.find((item) => String(item.id) === String(connectedMemberId)) ||
+        mappedMembers.find((item) => normalizedSessionName && normalizeText(item.name) === normalizedSessionName) ||
+        mappedMembers[0] ||
+        null;
+
+      setSelectedMemberId(selectedMember?.id || "");
+      setDefenseTypeFilter(normalizeText(selectedMember?.assignment).includes("bastion") ? "bastion" : "tour");
       setLoading(false);
     }
 
@@ -437,7 +456,59 @@ export default function MyDefensesTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [guildCode, session?.memberId]);
+  }, [connectedMemberId, session?.name, session?.watcherName]);
+
+  useEffect(() => {
+    if (!selectedMemberBase?.id) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSelectedMemberAwakenings() {
+      const { data, error } = await supabase
+        .from("member_awakenings")
+        .select(`
+          awakening_level,
+          champion_id,
+          champions (
+            name
+          )
+        `)
+        .eq("member_id", selectedMemberBase.id);
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Erreur chargement eveils defenses:", error);
+        setMemberAwakeningsByMemberId((previous) => ({
+          ...previous,
+          [String(selectedMemberBase.id)]: {},
+        }));
+        return;
+      }
+
+      const awakenings = {};
+
+      (data || []).forEach((entry) => {
+        const heroName = entry.champions?.name;
+        if (heroName) {
+          awakenings[heroName] = entry.awakening_level;
+        }
+      });
+
+      setMemberAwakeningsByMemberId((previous) => ({
+        ...previous,
+        [String(selectedMemberBase.id)]: awakenings,
+      }));
+    }
+
+    loadSelectedMemberAwakenings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMemberBase?.id]);
 
   async function assignDefense(slot, defense) {
     if (!member?.id || !defense?.name || !canEdit) return;
@@ -445,6 +516,7 @@ export default function MyDefensesTab({ session }) {
     const column = slot === 1 ? "defense_1" : "defense_2";
     const localKey = slot === 1 ? "defense1" : "defense2";
     setSavingSlot(`${slot}-${defense.id}`);
+    setErrorMessage("");
 
     const { error } = await supabase
       .from("guild_members")
@@ -459,7 +531,9 @@ export default function MyDefensesTab({ session }) {
       return;
     }
 
-    setMember((previous) => (previous ? { ...previous, [localKey]: defense.name } : previous));
+    setMembers((previous) =>
+      previous.map((item) => (String(item.id) === String(member.id) ? { ...item, [localKey]: defense.name } : item))
+    );
   }
 
   async function clearAssignedDefense(slot) {
@@ -468,6 +542,7 @@ export default function MyDefensesTab({ session }) {
     const column = slot === 1 ? "defense_1" : "defense_2";
     const localKey = slot === 1 ? "defense1" : "defense2";
     setSavingSlot(`clear-${slot}`);
+    setErrorMessage("");
 
     const { error } = await supabase
       .from("guild_members")
@@ -482,11 +557,13 @@ export default function MyDefensesTab({ session }) {
       return;
     }
 
-    setMember((previous) => (previous ? { ...previous, [localKey]: EMPTY_DEFENSE } : previous));
+    setMembers((previous) =>
+      previous.map((item) => (String(item.id) === String(member.id) ? { ...item, [localKey]: EMPTY_DEFENSE } : item))
+    );
   }
 
   async function setDefenseVote(defense, value) {
-    if (!session?.memberId || !defense) return;
+    if (!connectedMemberId || !defense) return;
 
     const targetDefenseId = getDefenseLikeTargetId(defense);
     if (!targetDefenseId) return;
@@ -494,7 +571,7 @@ export default function MyDefensesTab({ session }) {
     const existingVote = defenseVotes.find(
       (vote) =>
         String(vote.defenseId) === String(targetDefenseId) &&
-        String(vote.memberId) === String(session.memberId)
+        String(vote.memberId) === String(connectedMemberId)
     );
 
     setVoteSavingId(`${targetDefenseId}-${value}`);
@@ -537,7 +614,7 @@ export default function MyDefensesTab({ session }) {
       .upsert(
         {
           defense_id: targetDefenseId,
-          member_id: session.memberId,
+          member_id: connectedMemberId,
           value,
         },
         { onConflict: "defense_id,member_id" }
@@ -562,29 +639,6 @@ export default function MyDefensesTab({ session }) {
         createdAt: data.created_at,
       },
     ]);
-  }
-
-  async function openDefenseInfo(defense) {
-    if (!defense?.id) return;
-
-    setInfoDefense(defense);
-    setInfoBlocks([]);
-    setInfoLoading(true);
-
-    const { data, error } = await supabase
-      .from("guild_defense_blocks")
-      .select("id, block_type, content, sort_order")
-      .eq("defense_id", defense.id)
-      .order("sort_order", { ascending: true });
-
-    if (error) {
-      console.error("Erreur infos defense:", error);
-      setInfoBlocks([]);
-    } else {
-      setInfoBlocks(data || []);
-    }
-
-    setInfoLoading(false);
   }
 
   function assignToFirstFreeSlot(defense) {
@@ -670,16 +724,66 @@ export default function MyDefensesTab({ session }) {
         <>
           <Card className="rounded-[1.1rem] border-zinc-800 bg-zinc-950/86 shadow-2xl">
             <CardHeader className="border-b border-zinc-800">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div>
                   <div className="text-2xl font-semibold text-zinc-50">{member.name}</div>
                   <div className="mt-1 text-sm text-zinc-500">
-                    {member.assignment || "Tour"} - {canEdit ? "Edition autorisee" : "Lecture seule"}
+                    {member.assignment || "Tour"} - edition ouverte
+                  </div>
+                  <Badge className="mt-3 w-fit rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
+                    {member.guildCode || guildCode}
+                  </Badge>
+                </div>
+
+                <div className="w-full max-w-xl">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="defense-member-search">
+                    Joueur
+                  </label>
+                  <div className="mt-2 flex h-10 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 ring-pink-400/25 transition focus-within:border-pink-400/60 focus-within:ring-2">
+                    <Search className="h-4 w-4 shrink-0 text-zinc-500" />
+                    <input
+                      id="defense-member-search"
+                      type="search"
+                      value={memberQuery}
+                      onChange={(event) => setMemberQuery(event.target.value)}
+                      placeholder="Rechercher un joueur"
+                      className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+                    />
+                  </div>
+                  <div className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/80 p-2">
+                    {memberSuggestions.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-zinc-500">Aucun joueur trouve.</div>
+                    ) : (
+                      memberSuggestions.map((suggestion) => {
+                        const selected = String(suggestion.id) === String(member.id);
+
+                        return (
+                          <button
+                            key={suggestion.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedMemberId(suggestion.id);
+                              setMemberQuery(suggestion.name);
+                              setDefenseTypeFilter(
+                                normalizeText(suggestion.assignment).includes("bastion") ? "bastion" : "tour"
+                              );
+                            }}
+                            className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                              selected
+                                ? "border-pink-300/55 bg-pink-500/10 text-white"
+                                : "border-transparent bg-zinc-900/70 text-zinc-300 hover:border-pink-400/35 hover:bg-zinc-900"
+                            }`}
+                          >
+                            <span className="block truncate text-sm font-semibold">{suggestion.name}</span>
+                            <span className="mt-0.5 block truncate text-xs text-zinc-500">
+                              {suggestion.guildCode || "Cluster"} {suggestion.discordId ? `- ${suggestion.discordId}` : ""}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
-                <Badge className="w-fit rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
-                  {guildCode}
-                </Badge>
               </div>
             </CardHeader>
             <CardContent className="space-y-5 p-5">
@@ -694,7 +798,6 @@ export default function MyDefensesTab({ session }) {
                     canEdit={canEdit}
                     saving={savingSlot === `clear-${slot}`}
                     onClear={() => clearAssignedDefense(slot)}
-                    onInfo={() => openDefenseInfo(defense)}
                     voteProps={voteProps}
                   />
                 ))}
@@ -755,7 +858,6 @@ export default function MyDefensesTab({ session }) {
                     canEdit={canEdit}
                     saving={savingSlot === `1-${defense.id}` || savingSlot === `2-${defense.id}`}
                     onAssign={() => assignToFirstFreeSlot(defense)}
-                    onInfo={() => openDefenseInfo(defense)}
                     voteProps={voteProps}
                   />
                 ))}
@@ -765,37 +867,6 @@ export default function MyDefensesTab({ session }) {
         </>
       )}
 
-      <Dialog open={Boolean(infoDefense)} onOpenChange={(open) => !open && setInfoDefense(null)}>
-        <DialogContent className="max-h-[86vh] max-w-3xl overflow-hidden border-zinc-800 bg-zinc-950 text-zinc-100">
-          <DialogHeader>
-            <DialogTitle>{infoDefense?.name || "Informations defense"}</DialogTitle>
-          </DialogHeader>
-          <div className="max-h-[68vh] overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-            {infoLoading ? (
-              <div className="text-sm text-zinc-400">Chargement...</div>
-            ) : infoBlocks.length === 0 ? (
-              <div className="text-sm text-zinc-500">Aucune information disponible pour cette defense.</div>
-            ) : (
-              <div className="space-y-5 text-sm leading-6 text-zinc-200">
-                {infoBlocks.map((block) =>
-                  block.block_type === "image" ? (
-                    <img
-                      key={block.id}
-                      src={block.content}
-                      alt="Info defense"
-                      className="mx-auto max-h-[420px] w-full rounded-lg object-contain"
-                    />
-                  ) : (
-                    <div key={block.id} className="whitespace-pre-wrap">
-                      {block.content}
-                    </div>
-                  )
-                )}
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -808,7 +879,6 @@ function AssignedDefenseCard({
   canEdit,
   saving,
   onClear,
-  onInfo,
   voteProps,
 }) {
   if (!defense) {
@@ -833,15 +903,6 @@ function AssignedDefenseCard({
           <div className="mt-1 text-xl font-semibold text-white">{defense.name}</div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onInfo}
-            className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
-          >
-            <Info className="h-4 w-4" />
-          </Button>
           {canEdit ? (
             <Button
               type="button"
@@ -861,7 +922,7 @@ function AssignedDefenseCard({
   );
 }
 
-function AvailableDefenseCard({ defense, member, canEdit, saving, onAssign, onInfo, voteProps }) {
+function AvailableDefenseCard({ defense, member, canEdit, saving, onAssign, voteProps }) {
   return (
     <DefenseCardShell defense={defense} member={member} voteProps={voteProps}>
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -876,15 +937,6 @@ function AvailableDefenseCard({ defense, member, canEdit, saving, onAssign, onIn
           )}
         </div>
         <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onInfo}
-            className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
-          >
-            <Info className="h-4 w-4" />
-          </Button>
           {canEdit ? (
             <Button
               type="button"
@@ -924,6 +976,33 @@ function DefenseCardShell({ defense, member, voteProps, children }) {
         <VoteControls defense={defense} voteProps={voteProps} />
       </div>
       {children}
+      <DefenseInfoBlocks blocks={defense.infoBlocks} />
+    </div>
+  );
+}
+
+function DefenseInfoBlocks({ blocks }) {
+  if (!blocks?.length) return null;
+
+  return (
+    <div className="mt-4 space-y-3 rounded-lg border border-pink-300/20 bg-pink-500/8 p-3">
+      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-pink-200">Infos defense</div>
+      <div className="space-y-3 text-sm leading-6 text-zinc-200">
+        {blocks.map((block) =>
+          block.blockType === "image" ? (
+            <img
+              key={block.id}
+              src={block.content}
+              alt="Info defense"
+              className="mx-auto max-h-[180px] w-full rounded-md object-contain"
+            />
+          ) : (
+            <div key={block.id} className="whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950/70 p-3">
+              {block.content}
+            </div>
+          )
+        )}
+      </div>
     </div>
   );
 }
