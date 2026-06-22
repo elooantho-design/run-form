@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Crown, Gem, History, Minus, Plus, Shield, Sparkles, Trophy } from "lucide-react";
+import { Crown, Gem, History, Minus, Plus, Search, Shield, Trophy } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,10 +16,6 @@ function normalizeText(value) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
-}
-
-function getSessionGuildCode(session) {
-  return session?.guildCode || session?.guild_code || "G1";
 }
 
 function getSessionRole(session) {
@@ -112,6 +108,7 @@ function SoulStoneCounterCard({
 export default function SoulStonesTab({ session }) {
   const [members, setMembers] = useState([]);
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [memberQuery, setMemberQuery] = useState("");
   const [soulStones, setSoulStones] = useState([]);
   const [soulStonesLoading, setSoulStonesLoading] = useState(false);
   const [soulStoneView, setSoulStoneView] = useState("mes-pierres");
@@ -119,11 +116,20 @@ export default function SoulStonesTab({ session }) {
   const [clusterSoulStonesLoading, setClusterSoulStonesLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const guildCode = getSessionGuildCode(session);
-
   const selectedMember = useMemo(() => {
     return members.find((member) => String(member.id) === String(selectedMemberId)) || members[0] || null;
   }, [members, selectedMemberId]);
+
+  const memberSuggestions = useMemo(() => {
+    const normalizedQuery = normalizeText(memberQuery);
+
+    return members
+      .filter((member) => {
+        if (!normalizedQuery) return true;
+        return normalizeText(`${member.name} ${member.discordId} ${member.guildCode}`).includes(normalizedQuery);
+      })
+      .slice(0, 8);
+  }, [memberQuery, members]);
 
   const canEditSoulStones = useMemo(() => {
     const role = getSessionRole(session);
@@ -134,7 +140,7 @@ export default function SoulStonesTab({ session }) {
         : true;
 
     return isAdmin || isOwnProfile;
-  }, [selectedMember?.id, session]);
+  }, [selectedMember, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,14 +149,13 @@ export default function SoulStonesTab({ session }) {
       const { data, error } = await supabase
         .from("guild_members")
         .select("id, watcher_name, discord_id, guild_code")
-        .eq("guild_code", guildCode)
         .order("watcher_name", { ascending: true });
 
       if (cancelled) return;
 
       if (error) {
         console.error("Erreur chargement membres pierres d'ame:", error);
-        setErrorMessage("Impossible de charger les membres de guilde.");
+        setErrorMessage("Impossible de charger les membres du cluster.");
         return;
       }
 
@@ -158,7 +163,7 @@ export default function SoulStonesTab({ session }) {
         id: row.id,
         name: row.watcher_name || "Joueur",
         discordId: row.discord_id || "",
-        guildCode: row.guild_code || guildCode,
+        guildCode: row.guild_code || "",
       }));
 
       setMembers(mapped);
@@ -183,7 +188,7 @@ export default function SoulStonesTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [guildCode, session?.memberId, session?.name, session?.watcherName]);
+  }, [session?.memberId, session?.name, session?.watcherName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -426,24 +431,50 @@ export default function SoulStonesTab({ session }) {
 
               <div className="mt-6 space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="soul-member">
-                  Joueur
+                  Joueur du cluster
                 </label>
-                <select
-                  id="soul-member"
-                  value={selectedMemberId}
-                  onChange={(event) => setSelectedMemberId(event.target.value)}
-                  className="h-10 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none ring-white/20 transition focus:border-white/50 focus:ring-2"
-                >
-                  {members.length === 0 ? (
-                    <option value="">Aucun membre</option>
+                <div className="flex h-10 items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 ring-white/20 transition focus-within:border-white/50 focus-within:ring-2">
+                  <Search className="h-4 w-4 shrink-0 text-zinc-500" />
+                  <input
+                    id="soul-member"
+                    type="search"
+                    value={memberQuery}
+                    onChange={(event) => setMemberQuery(event.target.value)}
+                    placeholder="Rechercher un joueur"
+                    className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+                  />
+                </div>
+
+                <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/80 p-2">
+                  {memberSuggestions.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-zinc-500">Aucun joueur trouve.</div>
                   ) : (
-                    members.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))
+                    memberSuggestions.map((member) => {
+                      const selected = String(member.id) === String(selectedMemberId);
+
+                      return (
+                        <button
+                          key={member.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedMemberId(member.id);
+                            setMemberQuery(member.name);
+                          }}
+                          className={`w-full rounded-xl border px-3 py-2 text-left transition ${
+                            selected
+                              ? "border-white/60 bg-white/10 text-white"
+                              : "border-transparent bg-zinc-900/70 text-zinc-300 hover:border-white/25 hover:bg-zinc-900"
+                          }`}
+                        >
+                          <span className="block truncate text-sm font-semibold">{member.name}</span>
+                          <span className="mt-0.5 block truncate text-xs text-zinc-500">
+                            {member.guildCode || "Cluster"} {member.discordId ? `- ${member.discordId}` : ""}
+                          </span>
+                        </button>
+                      );
+                    })
                   )}
-                </select>
+                </div>
               </div>
 
               <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-5 text-amber-100">
@@ -456,6 +487,7 @@ export default function SoulStonesTab({ session }) {
                   <Shield className="h-4 w-4 text-zinc-100" />
                   {selectedMember?.name || "Aucun membre"}
                 </div>
+                <div className="mt-1 text-xs text-zinc-500">{selectedMember?.guildCode || "Cluster"}</div>
                 <p className="mt-2 leading-5">
                   Les boutons + et - ajoutent une entree ou retirent la derniere entree du type choisi.
                 </p>
