@@ -1393,12 +1393,18 @@ function HeroBoxView({ session }) {
 
   const stats = useMemo(() => {
     const values = Object.values(heroStates);
+    const legendaryValues = heroCards
+      .filter((hero) => hero.rarity === "legendary")
+      .map((hero) => heroStates[hero.id] || { owned: false, awakening: -1 });
     const owned = values.filter((state) => state.owned).length;
-    const a5 = values.filter((state) => state.owned && state.awakening === 5).length;
-    const awakening = values.reduce((total, state) => total + (state.owned ? state.awakening : 0), 0);
+    const legendaryA5 = legendaryValues.filter((state) => state.owned && state.awakening === 5).length;
+    const legendaryAwakening = legendaryValues.reduce(
+      (total, state) => total + (state.owned ? state.awakening : 0),
+      0,
+    );
 
-    return { owned, a5, awakening };
-  }, [heroStates]);
+    return { owned, a5: legendaryA5, awakening: legendaryAwakening };
+  }, [heroCards, heroStates]);
 
   async function saveHeroAwakening(heroId, nextLevel) {
     if (!canEdit || !selectedPlayerKey) return;
@@ -1515,11 +1521,11 @@ function HeroBoxView({ session }) {
               <strong>{stats.owned}/{heroCards.length}</strong>
             </div>
             <div>
-              <span>Eveils</span>
+              <span>Eveils leg.</span>
               <strong>{stats.awakening}</strong>
             </div>
             <div>
-              <span>A5</span>
+              <span>A5 leg.</span>
               <strong>{stats.a5}</strong>
             </div>
           </div>
