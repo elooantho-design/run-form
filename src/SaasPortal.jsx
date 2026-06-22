@@ -584,10 +584,9 @@ const heroLayerCards = [...heroLayerData]
     if (rarityDiff !== 0) return rarityDiff;
     return left.fileName.localeCompare(right.fileName, "fr", { sensitivity: "base" });
   })
-  .map((hero, index) => {
+  .map((hero) => {
     const name = heroNameFromFile(hero.fileName);
     const latestReleaseIndex = activeLatestHeroKeys.indexOf(normalizeHeroKey(name));
-    const owned = index % 5 !== 0;
 
     return {
       ...hero,
@@ -597,10 +596,77 @@ const heroLayerCards = [...heroLayerData]
       roles: hero.roles || ["combattant"],
       isLatestRelease: latestReleaseIndex !== -1,
       latestReleaseRank: latestReleaseIndex === -1 ? null : latestReleaseIndex + 1,
-      owned,
-      awakening: owned ? index % 6 : 0,
     };
   });
+
+function createEmptyHeroStateMap() {
+  return Object.fromEntries(heroLayerCards.map((hero) => [hero.id, { owned: false, awakening: -1 }]));
+}
+
+function clampAwakeningLevel(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return -1;
+  return Math.max(-1, Math.min(5, Math.trunc(numeric)));
+}
+
+function getHeroChampionKeys(hero) {
+  return Array.from(
+    new Set(
+      [hero.name, hero.fileName, String(hero.fileName || "").replace(/\.[^.]+$/, "")]
+        .map(normalizeHeroKey)
+        .filter(Boolean),
+    ),
+  );
+}
+
+function getMemberDisplayName(member) {
+  return member?.watcher_name || member?.discord_id || (member?.id ? `Joueur ${member.id}` : "Joueur");
+}
+
+function getMemberGuildLabel(member) {
+  return member?.guild_code || "Sans guilde";
+}
+
+function getChampionCandidateKeys(champion) {
+  return Array.from(
+    new Set(
+      [
+        champion?.name,
+        champion?.nom,
+        champion?.hero_name,
+        champion?.champion_name,
+        champion?.slug,
+        champion?.code,
+        champion?.template_key,
+        champion?.file_name,
+        champion?.filename,
+        champion?.image,
+      ]
+        .map((value) => normalizeHeroKey(value))
+        .filter(Boolean),
+    ),
+  );
+}
+
+function buildChampionIdByHeroId(champions) {
+  const championIdByKey = new Map();
+
+  (champions || []).forEach((champion) => {
+    getChampionCandidateKeys(champion).forEach((key) => {
+      if (!championIdByKey.has(key)) championIdByKey.set(key, champion.id);
+    });
+  });
+
+  return Object.fromEntries(
+    heroLayerCards.map((hero) => {
+      const championId = getHeroChampionKeys(hero)
+        .map((key) => championIdByKey.get(key))
+        .find(Boolean);
+
+      return [hero.id, championId || ""];
+    }),
+  );
+}
 
 function statusClass(status) {
   if (status === "pret" || status === "Actif") return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
@@ -1014,7 +1080,7 @@ function PortalShell({ session, onLogout }) {
 
         <main className="space-y-6 px-4 py-6 md:px-6">
           {active === "home" ? <HomeView session={session} setActive={setActive} /> : null}
-          {active === "hero-box" ? <HeroBoxView /> : null}
+          {active === "hero-box" ? <HeroBoxView session={session} /> : null}
           {active === "soul-stones" ? <SoulStonesTab session={session} /> : null}
           {active === "demon-monsters" ? <DemonMonstersTab session={session} /> : null}
           {active === "personal-best" ? <PersonalBestTab session={session} /> : null}
@@ -1208,8 +1274,9 @@ function HomeView({ session, setActive }) {
   );
 }
 
-function HeroBoxView() {
+function HeroBoxView({ session }) {
   const [query, setQuery] = useState("");
+  const [playerQuery, setPlayerQuery] = useState("");
   const [ownedFilter, setOwnedFilter] = useState("all");
   const [rarityFilter, setRarityFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
@@ -1217,16 +1284,143 @@ function HeroBoxView() {
   const [latestOnly, setLatestOnly] = useState(false);
   const [loadedHeroImages, setLoadedHeroImages] = useState(() => new Set());
   const preloadingHeroImagesRef = useRef(new Set());
-  const [heroStates, setHeroStates] = useState(() =>
-    Object.fromEntries(heroLayerCards.map((hero) => [hero.id, { owned: hero.owned, awakening: hero.awakening }])),
+  const [members, setMembers] = useState([]);
+  const [selectedPlayerId, setSelectedPlayerId] = useState(session?.memberId || session?.id || "");
+  const [championIdByHeroId, setChampionIdByHeroId] = useState({});
+  const [heroBoxLoading, setHeroBoxLoading] = useState(false);
+  const [heroBoxError, setHeroBoxError] = useState("");
+  const [savingHeroId, setSavingHeroId] = useState("");
+  const [heroStates, setHeroStates] = useState(() => createEmptyHeroStateMap());
+
+  const connectedPlayerId = session?.memberId || session?.id || "";
+  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const connectedPlayerKey = connectedPlayerId ? String(connectedPlayerId) : "";
+  const selectedPlayerKey = selectedPlayerId ? String(selectedPlayerId) : "";
+  const canEdit = Boolean(isAdminUser || (selectedPlayerKey && selectedPlayerKey === connectedPlayerKey));
+
+  const selectedPlayer = useMemo(
+    () => members.find((member) => String(member.id) === selectedPlayerKey) || null,
+    [members, selectedPlayerKey],
   );
+
+  const playerSuggestions = useMemo(() => {
+    const normalizedPlayerQuery = normalizeHeroKey(playerQuery);
+
+    return members
+      .filter((member) => {
+        if (!normalizedPlayerQuery) return true;
+        return normalizeHeroKey(`${getMemberDisplayName(member)} ${getMemberGuildLabel(member)}`).includes(
+          normalizedPlayerQuery,
+        );
+      })
+      .slice(0, 8);
+  }, [members, playerQuery]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadHeroBoxBaseData() {
+      setHeroBoxLoading(true);
+      setHeroBoxError("");
+
+      try {
+        const [membersResult, championsResult] = await Promise.all([
+          supabase
+            .from("guild_members")
+            .select("id, role, discord_id, watcher_name, guild_code")
+            .order("watcher_name", { ascending: true }),
+          supabase.from("champions").select("*"),
+        ]);
+
+        if (membersResult.error) throw membersResult.error;
+        if (championsResult.error) throw championsResult.error;
+        if (cancelled) return;
+
+        const nextMembers = membersResult.data || [];
+        setMembers(nextMembers);
+        setChampionIdByHeroId(buildChampionIdByHeroId(championsResult.data || []));
+        setSelectedPlayerId((current) => current || connectedPlayerKey || String(nextMembers[0]?.id || ""));
+      } catch (error) {
+        if (!cancelled) setHeroBoxError(error?.message || "Impossible de charger les joueurs et champions.");
+      } finally {
+        if (!cancelled) setHeroBoxLoading(false);
+      }
+    }
+
+    loadHeroBoxBaseData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connectedPlayerKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPlayerAwakenings() {
+      if (!selectedPlayerKey) {
+        setHeroStates(createEmptyHeroStateMap());
+        return;
+      }
+
+      const championIds = Object.values(championIdByHeroId).filter(Boolean);
+      if (championIds.length === 0) {
+        setHeroStates(createEmptyHeroStateMap());
+        return;
+      }
+
+      setHeroBoxLoading(true);
+      setHeroBoxError("");
+
+      try {
+        const { data, error } = await supabase
+          .from("member_awakenings")
+          .select("champion_id, awakening_level")
+          .eq("member_id", selectedPlayerKey)
+          .in("champion_id", championIds);
+
+        if (error) throw error;
+        if (cancelled) return;
+
+        const awakeningByChampionId = new Map(
+          (data || []).map((row) => [String(row.champion_id), clampAwakeningLevel(row.awakening_level)]),
+        );
+        const nextStates = createEmptyHeroStateMap();
+
+        heroLayerCards.forEach((hero) => {
+          const championId = championIdByHeroId[hero.id];
+          if (!championId) return;
+
+          const awakening = awakeningByChampionId.get(String(championId));
+          if (awakening !== undefined) {
+            nextStates[hero.id] = { owned: awakening >= 0, awakening };
+          }
+        });
+
+        setHeroStates(nextStates);
+      } catch (error) {
+        if (!cancelled) {
+          setHeroStates(createEmptyHeroStateMap());
+          setHeroBoxError(error?.message || "Impossible de charger la box du joueur.");
+        }
+      } finally {
+        if (!cancelled) setHeroBoxLoading(false);
+      }
+    }
+
+    loadPlayerAwakenings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [championIdByHeroId, selectedPlayerKey]);
 
   const visibleHeroes = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
     return heroLayerCards
       .filter((hero) => {
-        const state = heroStates[hero.id] || { owned: false, awakening: 0 };
+        const state = heroStates[hero.id] || { owned: false, awakening: -1 };
         const matchesQuery = normalizedQuery.length === 0 || hero.name.toLowerCase().includes(normalizedQuery);
         const matchesState =
           ownedFilter === "all" ||
@@ -1297,29 +1491,56 @@ function HeroBoxView() {
     return { owned, a5, awakening };
   }, [heroStates]);
 
-  function unlockHero(heroId) {
+  async function saveHeroAwakening(heroId, nextLevel) {
+    if (!canEdit || !selectedPlayerKey) return;
+
+    const championId = championIdByHeroId[heroId];
+    if (!championId) {
+      setHeroBoxError("Ce heros n'est pas relie a la table champions.");
+      return;
+    }
+
+    const previousState = heroStates[heroId] || { owned: false, awakening: -1 };
+    const awakeningLevel = clampAwakeningLevel(nextLevel);
+
+    setSavingHeroId(heroId);
+    setHeroBoxError("");
     setHeroStates((current) => ({
       ...current,
-      [heroId]: {
-        owned: true,
-        awakening: current[heroId]?.awakening || 0,
-      },
+      [heroId]: { owned: awakeningLevel >= 0, awakening: awakeningLevel },
     }));
+
+    try {
+      const { error } = await supabase.from("member_awakenings").upsert(
+        {
+          member_id: selectedPlayerKey,
+          champion_id: championId,
+          awakening_level: awakeningLevel,
+        },
+        { onConflict: "member_id,champion_id" },
+      );
+
+      if (error) throw error;
+    } catch (error) {
+      setHeroStates((current) => ({
+        ...current,
+        [heroId]: previousState,
+      }));
+      setHeroBoxError(error?.message || "Sauvegarde de la box impossible.");
+    } finally {
+      setSavingHeroId("");
+    }
+  }
+
+  function unlockHero(heroId) {
+    saveHeroAwakening(heroId, 0);
   }
 
   function setAwakening(heroId, level) {
-    setHeroStates((current) => {
-      const currentState = current[heroId] || { owned: false, awakening: 0 };
-      const nextAwakening = level === 1 && currentState.awakening === 1 ? 0 : level;
+    const currentState = heroStates[heroId] || { owned: false, awakening: -1 };
+    const nextAwakening = level === 1 && currentState.awakening === 1 ? 0 : level;
 
-      return {
-        ...current,
-        [heroId]: {
-          owned: true,
-          awakening: nextAwakening,
-        },
-      };
-    });
+    saveHeroAwakening(heroId, nextAwakening);
   }
 
   function markHeroImageReady(heroId) {
@@ -1357,6 +1578,56 @@ function HeroBoxView() {
               <strong>{stats.a5}</strong>
             </div>
           </div>
+        </div>
+
+        <div className="hero-box-player-panel">
+          <div className="hero-box-player-current">
+            <span>Box consultee</span>
+            <strong>{selectedPlayer ? getMemberDisplayName(selectedPlayer) : "Aucun joueur"}</strong>
+            <small>{selectedPlayer ? getMemberGuildLabel(selectedPlayer) : "Selectionne un joueur"}</small>
+          </div>
+
+          <label className="hero-box-player-search">
+            <Search className="h-4 w-4" />
+            <input
+              type="search"
+              value={playerQuery}
+              onChange={(event) => setPlayerQuery(event.target.value)}
+              placeholder="Rechercher un joueur"
+              aria-label="Rechercher un joueur"
+            />
+          </label>
+
+          <div className="hero-box-player-results" aria-label="Joueurs disponibles">
+            {playerSuggestions.map((member) => {
+              const memberId = String(member.id);
+              const isSelected = memberId === selectedPlayerKey;
+
+              return (
+                <button
+                  key={memberId}
+                  type="button"
+                  className={`hero-box-player-option ${isSelected ? "is-selected" : ""}`}
+                  onClick={() => {
+                    setSelectedPlayerId(memberId);
+                    setPlayerQuery(getMemberDisplayName(member));
+                  }}
+                >
+                  <strong>{getMemberDisplayName(member)}</strong>
+                  <span>{getMemberGuildLabel(member)}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <p className={`hero-box-readonly-note ${canEdit ? "can-edit" : "is-readonly"}`}>
+            {canEdit
+              ? "Edition autorisee pour cette box."
+              : "Lecture seule : tu peux consulter cette box, mais seules ta box ou les admins sont modifiables."}
+          </p>
+
+          {heroBoxLoading ? <p className="hero-box-sync-note">Synchronisation Supabase...</p> : null}
+          {heroBoxError ? <p className="hero-box-error">{heroBoxError}</p> : null}
         </div>
 
         <div className="hero-box-toolbar">
@@ -1472,12 +1743,14 @@ function HeroBoxView() {
             <HeroLayerCard
               key={hero.id}
               hero={hero}
-              state={heroStates[hero.id] || { owned: false, awakening: 0 }}
+              state={heroStates[hero.id] || { owned: false, awakening: -1 }}
               onUnlock={unlockHero}
               onAwakening={setAwakening}
               priority={index < 24}
               imageReady={loadedHeroImages.has(hero.id)}
               onImageReady={markHeroImageReady}
+              canEdit={canEdit}
+              saving={savingHeroId === hero.id}
             />
           ))}
         </div>
@@ -1486,7 +1759,17 @@ function HeroBoxView() {
   );
 }
 
-function HeroLayerCard({ hero, state, onUnlock, onAwakening, priority = false, imageReady = false, onImageReady }) {
+function HeroLayerCard({
+  hero,
+  state,
+  onUnlock,
+  onAwakening,
+  priority = false,
+  imageReady = false,
+  onImageReady,
+  canEdit = false,
+  saving = false,
+}) {
   const [cardImageReady, setCardImageReady] = useState(imageReady);
 
   useEffect(() => {
@@ -1504,7 +1787,7 @@ function HeroLayerCard({ hero, state, onUnlock, onAwakening, priority = false, i
     <article
       className={`hero-layer-card ${state.owned ? "is-owned" : "is-locked"} ${
         isImageReady ? "is-image-ready" : "is-image-loading"
-      }`}
+      } ${canEdit ? "is-editable" : "is-readonly"} ${saving ? "is-saving" : ""}`}
     >
       <div className="hero-layer-skeleton" aria-hidden="true" />
       <img
@@ -1523,20 +1806,26 @@ function HeroLayerCard({ hero, state, onUnlock, onAwakening, priority = false, i
           type="button"
           className="hero-layer-lock"
           aria-label={`Marquer ${hero.name} comme possede`}
+          disabled={!canEdit || saving}
+          title={canEdit ? `Marquer ${hero.name} comme possede` : "Lecture seule"}
           onClick={() => onUnlock(hero.id)}
         >
           <Lock className="h-7 w-7" />
         </button>
       ) : null}
 
-      <div className="hero-layer-stars" aria-label={`${hero.name} eveil A${state.awakening}`}>
+      <div
+        className="hero-layer-stars"
+        aria-label={state.owned ? `${hero.name} eveil A${state.awakening}` : `${hero.name} non possede`}
+      >
         {[1, 2, 3, 4, 5].map((level) => (
           <button
             key={level}
             type="button"
             className={state.owned && state.awakening >= level ? "is-active" : ""}
             aria-label={`Regler ${hero.name} en eveil ${level}`}
-            disabled={!state.owned}
+            disabled={!canEdit || !state.owned || saving}
+            title={canEdit ? `Regler ${hero.name} en eveil ${level}` : "Lecture seule"}
             onClick={() => onAwakening(hero.id, level)}
           >
             <Star className="h-full w-full" />

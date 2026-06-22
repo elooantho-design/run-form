@@ -375,6 +375,145 @@ body {
   line-height: 1;
 }
 
+.hero-box-player-panel {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.8fr) minmax(240px, 1fr);
+  gap: 12px;
+  margin-top: 18px;
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 10% 20%, rgba(250, 204, 21, 0.08), transparent 34%),
+    rgba(0, 0, 0, 0.24);
+  padding: 14px;
+}
+
+.hero-box-player-current {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-height: 62px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  padding: 10px 12px;
+}
+
+.hero-box-player-current span,
+.hero-box-player-current small {
+  color: rgba(212, 212, 216, 0.58);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero-box-player-current strong {
+  color: white;
+  font-size: 1rem;
+}
+
+.hero-box-player-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.32);
+  padding: 0 12px;
+  color: rgba(125, 211, 252, 0.86);
+}
+
+.hero-box-player-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: white;
+  font-size: 0.9rem;
+}
+
+.hero-box-player-search input::placeholder {
+  color: rgba(212, 212, 216, 0.5);
+}
+
+.hero-box-player-results {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hero-box-player-option {
+  display: inline-grid;
+  gap: 2px;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 7px 10px;
+  color: rgba(244, 244, 245, 0.78);
+  text-align: left;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.hero-box-player-option strong {
+  color: currentColor;
+  font-size: 0.82rem;
+}
+
+.hero-box-player-option span {
+  color: rgba(212, 212, 216, 0.55);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.hero-box-player-option:hover,
+.hero-box-player-option.is-selected {
+  border-color: rgba(56, 189, 248, 0.52);
+  background: rgba(56, 189, 248, 0.1);
+  color: white;
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.12);
+}
+
+.hero-box-readonly-note,
+.hero-box-sync-note,
+.hero-box-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  border-radius: 12px;
+  padding: 9px 11px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.hero-box-readonly-note.can-edit {
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: rgba(16, 185, 129, 0.08);
+  color: #a7f3d0;
+}
+
+.hero-box-readonly-note.is-readonly {
+  border: 1px solid rgba(250, 204, 21, 0.2);
+  background: rgba(250, 204, 21, 0.08);
+  color: #fde68a;
+}
+
+.hero-box-sync-note {
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: rgba(56, 189, 248, 0.08);
+  color: #bae6fd;
+}
+
+.hero-box-error {
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+}
+
 .hero-box-toolbar {
   display: flex;
   align-items: center;
@@ -649,6 +788,19 @@ body {
     0 0 28px rgba(250, 204, 21, 0.18);
 }
 
+.hero-layer-card.is-readonly {
+  cursor: default;
+}
+
+.hero-layer-card.is-readonly:hover {
+  transform: none;
+}
+
+.hero-layer-card.is-saving {
+  opacity: 0.72;
+  pointer-events: none;
+}
+
 .hero-layer-skeleton {
   position: absolute;
   z-index: 1;
@@ -744,6 +896,15 @@ body {
     inset 0 0 20px rgba(0, 0, 0, 0.5);
 }
 
+.hero-layer-lock:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 18px rgba(250, 204, 21, 0.16),
+    inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
 .hero-layer-stars {
   position: absolute;
   z-index: 5;
@@ -805,7 +966,12 @@ body {
 }
 
 .hero-layer-stars button:disabled {
-  cursor: default;
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.hero-layer-stars button:disabled.is-active {
+  opacity: 1;
 }
 
 .hero-layer-name {
@@ -857,6 +1023,10 @@ body {
     width: 100%;
     min-width: 0;
   }
+
+  .hero-box-player-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
@@ -866,6 +1036,11 @@ body {
 
   .hero-box-stats {
     grid-template-columns: 1fr;
+  }
+
+  .hero-box-player-results {
+    max-height: 170px;
+    overflow: auto;
   }
 
   .hero-layer-grid {
