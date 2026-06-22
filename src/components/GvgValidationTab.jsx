@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Edit3, RefreshCw, SearchCheck, Shield, Tra
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
+import { logPortalActivity } from "@/lib/portalActivity";
 
 const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const DIRECTIONS = ["N", "S", "E", "O"];
@@ -207,7 +208,7 @@ function getJobTone(job) {
   return "border-zinc-800 bg-zinc-950/65";
 }
 
-export default function GvgValidationTab() {
+export default function GvgValidationTab({ session }) {
   const apiBase = useMemo(() => getApiBase(), []);
 
   const [guild, setGuild] = useState("G1");
@@ -384,6 +385,15 @@ export default function GvgValidationTab() {
       }
 
       setMessage(`Probe supprime du serveur : ${sourceGuild} / ${jobId}.`);
+      void logPortalActivity(session, {
+        targetMemberId: session?.memberId || session?.id || null,
+        targetName: session?.watcherName || session?.name || "",
+        actionType: "gvg_job_delete",
+        entityType: "gvg",
+        entityId: jobId,
+        summary: `${session?.watcherName || session?.name || "Joueur"} a supprime un job GVG ${sourceGuild} / ${jobId}`,
+        metadata: { sourceGuild, jobId },
+      });
     } catch (error) {
       console.error("deleteServerJob error:", error);
       setMessage(`Erreur suppression VPS : ${error?.message || "erreur inconnue"}`);
@@ -480,6 +490,22 @@ export default function GvgValidationTab() {
       }
 
       setMessage(`Import OK : ${data?.inserted || 0} defenses injectees dans ${data?.guild}.`);
+      void logPortalActivity(session, {
+        targetMemberId: session?.memberId || session?.id || null,
+        targetName: session?.watcherName || session?.name || "",
+        actionType: "gvg_validation_import",
+        entityType: "gvg",
+        entityId: getJobId(selectedJob),
+        summary: `${session?.watcherName || session?.name || "Joueur"} a importe ${data?.inserted || 0} defenses GVG dans ${data?.guild || guild}`,
+        metadata: {
+          guild,
+          inserted: data?.inserted || 0,
+          sourceGuild: getJobSourceGuild(selectedJob),
+          jobId: getJobId(selectedJob),
+          side: selectedJob.side || "",
+          editedCount,
+        },
+      });
     } catch (error) {
       console.error("importValidated error:", error);
       setMessage(`Erreur import : ${error?.message || "erreur inconnue"}`);

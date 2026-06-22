@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { logPortalActivity } from "@/lib/portalActivity";
 
 const SOUL_STONE_TABS = [
   { id: "mes-pierres", label: "Mes pierres", icon: Gem },
@@ -324,6 +325,15 @@ export default function SoulStonesTab({ session }) {
       };
 
       setSoulStones((previous) => [created, ...previous]);
+      void logPortalActivity(session, {
+        targetMemberId: selectedMember.id,
+        targetName: selectedMember.name,
+        actionType: "soul_stone_add",
+        entityType: "soul_stone",
+        entityId: String(data.id),
+        summary: `${selectedMember.name} : ajout pierre ${type}`,
+        metadata: { type },
+      });
     } catch (error) {
       console.error("Erreur addSoulStone:", error);
       setErrorMessage("Une erreur est survenue pendant l'ajout.");
@@ -346,6 +356,15 @@ export default function SoulStonesTab({ session }) {
       }
 
       setSoulStones((previous) => previous.filter((stone) => stone.id !== lastStone.id));
+      void logPortalActivity(session, {
+        targetMemberId: selectedMember.id,
+        targetName: selectedMember.name,
+        actionType: "soul_stone_remove",
+        entityType: "soul_stone",
+        entityId: String(lastStone.id),
+        summary: `${selectedMember.name} : retrait pierre ${type}`,
+        metadata: { type },
+      });
     } catch (error) {
       console.error("Erreur removeLastSoulStone:", error);
       setErrorMessage("Une erreur est survenue pendant la suppression.");

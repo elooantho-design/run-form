@@ -40,6 +40,7 @@ import GvgPanelTab from "@/components/GvgPanelTab";
 import GvgAdminTab from "@/components/GvgAdminTab";
 import GvgValidationTab from "@/components/GvgValidationTab";
 import { supabase } from "@/lib/supabase";
+import { logPortalActivity } from "@/lib/portalActivity";
 
 const navigation = [
   { id: "home", label: "Accueil", icon: LayoutDashboard },
@@ -854,11 +855,27 @@ function ElectricBorderLayers() {
 function PortalShell({ session, onLogout }) {
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
+  const loggedTabViewsRef = useRef(new Set());
 
   const activeTitle = useMemo(() => {
     return [...navigation, ...adminNavigation].find((item) => item.id === active)?.label || "Accueil";
   }, [active]);
   const activeAdminItem = adminNavigation.some((item) => item.id === active);
+
+  useEffect(() => {
+    if (active === "home" || active === "logs" || loggedTabViewsRef.current.has(active)) return;
+
+    loggedTabViewsRef.current.add(active);
+    void logPortalActivity(session, {
+      targetMemberId: session?.memberId || session?.id || null,
+      targetName: session?.watcherName || session?.name || "",
+      actionType: "portal_tab_view",
+      entityType: "tab",
+      entityId: active,
+      summary: `${session?.watcherName || session?.name || "Joueur"} a ouvert ${activeTitle}`,
+      metadata: { tab: active, title: activeTitle },
+    });
+  }, [active, activeTitle, session]);
 
   return (
     <div className="min-h-screen bg-[#11100d] text-zinc-100">
@@ -983,12 +1000,12 @@ function PortalShell({ session, onLogout }) {
           {active === "personal-best" ? <PersonalBestTab session={session} /> : null}
           {active === "defenses" ? <MyDefensesTab session={session} /> : null}
           {active === "gvg" ? <GvgView /> : null}
-          {active === "launcher" ? <LauncherView /> : null}
+          {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
           {active === "templates" ? <TemplatesView /> : null}
           {active === "guilds" ? <GuildsView /> : null}
           {active === "billing" ? <BillingView /> : null}
-          {active === "logs" ? <LogsView /> : null}
+          {active === "logs" ? <LogsView session={session} /> : null}
           {active === "settings" ? <SettingsView /> : null}
         </main>
       </div>
@@ -1457,6 +1474,7 @@ function HeroBoxView({ session }) {
     if (!canEdit || !selectedPlayerKey) return;
 
     const championId = championIdByHeroId[heroId];
+    const hero = heroCards.find((item) => item.id === heroId);
     if (!championId) {
       setHeroBoxError("Ce heros n'est pas relie a la table champions.");
       return;
@@ -1483,6 +1501,20 @@ function HeroBoxView({ session }) {
       );
 
       if (error) throw error;
+      void logPortalActivity(session, {
+        targetMemberId: selectedPlayerKey,
+        targetName: selectedPlayer ? getMemberDisplayName(selectedPlayer) : "",
+        actionType: "hero_box_update",
+        entityType: "champion",
+        entityId: String(championId),
+        summary: `${selectedPlayer ? getMemberDisplayName(selectedPlayer) : "Joueur"} : ${hero?.name || "heros"} A${previousState.awakening} -> A${awakeningLevel}`,
+        metadata: {
+          heroId,
+          heroName: hero?.name || "",
+          previousAwakening: previousState.awakening,
+          nextAwakening: awakeningLevel,
+        },
+      });
     } catch (error) {
       setHeroStates((current) => ({
         ...current,
@@ -1520,6 +1552,22 @@ function HeroBoxView({ session }) {
       );
 
       if (error) throw error;
+      void logPortalActivity(session, {
+        targetMemberId: selectedPlayerKey,
+        targetName: selectedPlayer ? getMemberDisplayName(selectedPlayer) : "",
+        actionType: "hero_box_bulk_a5",
+        entityType: "champion",
+        summary: `${selectedPlayer ? getMemberDisplayName(selectedPlayer) : "Joueur"} : ${targetHeroes.length} heros ${rarityFilter} passes A5`,
+        metadata: {
+          rarity: rarityFilter,
+          count: targetHeroes.length,
+          heroes: targetHeroes.map((hero) => ({
+            id: hero.id,
+            name: hero.name,
+            championId: championIdByHeroId[hero.id],
+          })),
+        },
+      });
     } catch (error) {
       setHeroStates((current) => ({
         ...current,
@@ -1941,7 +1989,7 @@ function launcherEventLabel(event) {
   return labels[event] || event;
 }
 
-function LauncherView() {
+function LauncherView({ session: portalSession }) {
   const apiBase = useMemo(() => getApiBase(), []);
   const pollRef = useRef(null);
   const detectionDeadlineRef = useRef(0);
@@ -1949,15 +1997,15 @@ function LauncherView() {
   const [guild, setGuild] = useState("G1");
   const [side, setSide] = useState("enemy");
   const [sessionId, setSessionId] = useState("");
-  const [session, setSession] = useState(null);
+  const [launcherSession, setLauncherSession] = useState(null);
   const [launching, setLaunching] = useState(false);
   const [detected, setDetected] = useState(false);
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [message, setMessage] = useState("");
 
-  const events = Array.isArray(session?.events) ? session.events : [];
-  const progress = session?.progress || {};
-  const state = session?.state || "idle";
+  const events = Array.isArray(launcherSession?.events) ? launcherSession.events : [];
+  const progress = launcherSession?.progress || {};
+  const state = launcherSession?.state || "idle";
 
   useEffect(() => {
     return () => {
@@ -1985,7 +2033,7 @@ function LauncherView() {
     }
 
     const nextSession = data?.session || null;
-    setSession(nextSession);
+    setLauncherSession(nextSession);
 
     const nextState = nextSession?.state || "created";
     const hasStarted = nextState !== "created" || (nextSession?.events || []).some((item) => item.event === "launcher_started");
@@ -2028,7 +2076,7 @@ function LauncherView() {
       setDetected(false);
       setInstallModalOpen(false);
       setSessionId(nextSessionId);
-      setSession(null);
+      setLauncherSession(null);
       setMessage("Ouverture du launcher Paladin GVG...");
 
       const response = await fetch(`${apiBase}/api/gvg-server`, {
@@ -2048,7 +2096,20 @@ function LauncherView() {
         throw new Error(data?.error || "Impossible de creer la session launcher.");
       }
 
-      setSession(data?.session || null);
+      setLauncherSession(data?.session || null);
+      void logPortalActivity(portalSession, {
+        targetMemberId: portalSession?.memberId || portalSession?.id || null,
+        targetName: portalSession?.watcherName || portalSession?.name || "",
+        actionType: "gvg_launcher_start",
+        entityType: "gvg",
+        entityId: nextSessionId,
+        summary: `${portalSession?.watcherName || portalSession?.name || "Joueur"} a lance une capture GVG ${guild} (${side})`,
+        metadata: {
+          guild,
+          side,
+          sessionId: nextSessionId,
+        },
+      });
       startPolling(nextSessionId);
       window.location.href = `paladin-gvg://start?guild=${encodeURIComponent(guild)}&mode=${encodeURIComponent(
         guild.toLowerCase()
@@ -2368,21 +2429,260 @@ function BillingView() {
   );
 }
 
-function LogsView() {
+const logActionFilters = [
+  { id: "all", label: "Tout" },
+  { id: "hero_box_update", label: "Box heros" },
+  { id: "hero_box_bulk_a5", label: "Box A5" },
+  { id: "pb_update", label: "PB" },
+  { id: "pb_hero_update", label: "Heros PB" },
+  { id: "demon_monster_update", label: "Monstres" },
+  { id: "soul_stone_add", label: "Pierres +" },
+  { id: "soul_stone_remove", label: "Pierres -" },
+  { id: "defense_assign", label: "Defense +" },
+  { id: "defense_unassign", label: "Defense -" },
+  { id: "gvg_launcher_start", label: "GVG" },
+  { id: "gvg_validation_import", label: "Import GVG" },
+  { id: "gvg_job_delete", label: "Jobs GVG" },
+  { id: "portal_tab_view", label: "Vues" },
+];
+
+function formatLogDate(value) {
+  if (!value) return "-";
+
+  return new Date(value).toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function LogsView({ session }) {
+  const apiBase = useMemo(() => getApiBase(), []);
+  const [members, setMembers] = useState([]);
+  const [memberQuery, setMemberQuery] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState(session?.memberId || session?.id || "");
+  const [actionFilter, setActionFilter] = useState("all");
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const selectedMember = useMemo(
+    () => members.find((member) => String(member.id) === String(selectedMemberId)) || null,
+    [members, selectedMemberId],
+  );
+
+  const memberSuggestions = useMemo(() => {
+    const search = normalizeHeroKey(memberQuery);
+
+    return members
+      .filter((member) => {
+        if (!search) return true;
+        return normalizeHeroKey(`${getMemberDisplayName(member)} ${getMemberGuildLabel(member)} ${member.discord_id || ""}`).includes(search);
+      })
+      .slice(0, 10);
+  }, [memberQuery, members]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMembers() {
+      const { data, error } = await supabase
+        .from("guild_members")
+        .select("id, role, discord_id, watcher_name, guild_code")
+        .order("watcher_name", { ascending: true });
+
+      if (cancelled) return;
+
+      if (error) {
+        setErrorMessage(error.message || "Impossible de charger les joueurs.");
+        return;
+      }
+
+      const nextMembers = data || [];
+      setMembers(nextMembers);
+      setSelectedMemberId((current) => {
+        if (current && nextMembers.some((member) => String(member.id) === String(current))) return current;
+        const connectedId = session?.memberId || session?.id || "";
+        const connected = nextMembers.find((member) => String(member.id) === String(connectedId));
+        return connected?.id || nextMembers[0]?.id || "";
+      });
+    }
+
+    loadMembers();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id, session?.memberId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLogs() {
+      setLoading(true);
+      setErrorMessage("");
+
+      const params = new URLSearchParams();
+      if (selectedMemberId) params.set("memberId", selectedMemberId);
+      if (actionFilter !== "all") params.set("actionType", actionFilter);
+      params.set("limit", "120");
+
+      try {
+        const response = await fetch(`${apiBase}/api/portal-activity?${params.toString()}`);
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          throw new Error(data?.error || "Impossible de charger les logs.");
+        }
+
+        if (!cancelled) setLogs(data?.logs || []);
+      } catch (error) {
+        if (!cancelled) {
+          setLogs([]);
+          setErrorMessage(error?.message || "Impossible de charger les logs.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadLogs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [actionFilter, apiBase, selectedMemberId]);
+
   return (
-    <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-      <h2 className="text-xl font-semibold text-zinc-50">Journal systeme</h2>
-      <div className="mt-5 space-y-2 font-mono text-sm">
-        {[
-          "[20:50:41] reco exitCode=0",
-          "[20:50:42] previews generated=48",
-          "[20:50:44] site_payload.json ready",
-          "[20:51:00] waiting for validation",
-        ].map((line) => (
-          <div key={line} className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-zinc-300">
-            {line}
+    <section className="space-y-5">
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">Journal d'activite</div>
+            <h2 className="mt-2 text-2xl font-semibold text-zinc-50">Logs joueur</h2>
+            <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+              Recherche un joueur pour voir ses dernieres actions Portal : box, PB, monstres, pierres, defenses et GVG.
+            </p>
           </div>
-        ))}
+
+          <Badge className="w-fit rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+            {logs.length} evenement(s)
+          </Badge>
+        </div>
+
+        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(280px,420px)_1fr]">
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="log-member-search">
+              Joueur
+            </label>
+            <div className="mt-2 flex h-11 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 ring-emerald-400/20 transition focus-within:border-emerald-400/60 focus-within:ring-2">
+              <Search className="h-4 w-4 shrink-0 text-zinc-500" />
+              <input
+                id="log-member-search"
+                type="search"
+                value={memberQuery}
+                onChange={(event) => setMemberQuery(event.target.value)}
+                placeholder="Taper un nom de joueur"
+                className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+              />
+            </div>
+
+            <div className="mt-2 max-h-64 space-y-2 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/80 p-2">
+              {memberSuggestions.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-zinc-500">Aucun joueur trouve.</div>
+              ) : (
+                memberSuggestions.map((member) => {
+                  const selected = String(member.id) === String(selectedMemberId);
+
+                  return (
+                    <button
+                      key={member.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedMemberId(member.id);
+                        setMemberQuery(getMemberDisplayName(member));
+                      }}
+                      className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                        selected
+                          ? "border-emerald-300/55 bg-emerald-500/10 text-white"
+                          : "border-transparent bg-zinc-900/70 text-zinc-300 hover:border-emerald-400/35 hover:bg-zinc-900"
+                      }`}
+                    >
+                      <span className="block truncate text-sm font-semibold">{getMemberDisplayName(member)}</span>
+                      <span className="mt-0.5 block truncate text-xs text-zinc-500">{getMemberGuildLabel(member)}</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Type d'action</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {logActionFilters.map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  onClick={() => setActionFilter(filter.id)}
+                  className={`rounded-lg px-3 py-2 text-sm transition ${
+                    actionFilter === filter.id
+                      ? "bg-zinc-100 text-zinc-950"
+                      : "border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
+              Profil consulte :{" "}
+              <span className="font-semibold text-zinc-100">
+                {selectedMember ? getMemberDisplayName(selectedMember) : "Aucun joueur"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {errorMessage ? (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {errorMessage}
+        </div>
+      ) : null}
+
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
+        {loading ? (
+          <div className="text-sm text-zinc-500">Chargement des logs...</div>
+        ) : logs.length === 0 ? (
+          <div className="text-sm text-zinc-500">Aucun log trouve pour ce filtre.</div>
+        ) : (
+          <div className="space-y-3">
+            {logs.map((log) => (
+              <article key={log.id} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-50">{log.summary}</div>
+                    <div className="mt-1 text-xs text-zinc-500">
+                      Acteur : {log.actor_name || "Systeme"}
+                      {log.target_name ? ` - Cible : ${log.target_name}` : ""}
+                    </div>
+                  </div>
+                  <div className="text-right text-xs text-zinc-500">{formatLogDate(log.created_at)}</div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-300">{log.action_type}</Badge>
+                  {log.entity_type ? (
+                    <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-400">{log.entity_type}</Badge>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

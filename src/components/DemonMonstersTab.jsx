@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { logPortalActivity } from "@/lib/portalActivity";
 
 const DEMON_RARITY_FILTERS = [
   { id: "Tous", label: "Tous", tone: "border-zinc-600 bg-zinc-900 text-zinc-100" },
@@ -287,6 +288,7 @@ export default function DemonMonstersTab({ session }) {
     if (!selectedMember?.id || !selectedMonster?.id) return;
 
     const parsedLevel = Number(levelInput);
+    const previousLevel = Number(selectedMonster.level || 0);
 
     if (!Number.isInteger(parsedLevel) || parsedLevel < 0 || parsedLevel > 20) {
       alert("Le niveau doit etre un nombre entier entre 0 et 20.");
@@ -341,6 +343,20 @@ export default function DemonMonstersTab({ session }) {
         return previousEntries.map((entry, index) => (index === existingIndex ? nextEntry : entry));
       });
 
+      void logPortalActivity(session, {
+        targetMemberId: selectedMember.id,
+        targetName: selectedMember.name,
+        actionType: "demon_monster_update",
+        entityType: "demonic_monster",
+        entityId: String(selectedMonster.id),
+        summary: `${selectedMember.name} : ${selectedMonster.name || selectedMonster.slug} niveau ${previousLevel} -> ${parsedLevel}`,
+        metadata: {
+          monsterId: selectedMonster.id,
+          monsterName: selectedMonster.name || "",
+          previousLevel,
+          nextLevel: parsedLevel,
+        },
+      });
       setLevelDialogOpen(false);
       setSelectedMonster(null);
       setLevelInput("");

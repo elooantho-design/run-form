@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { logPortalActivity } from "@/lib/portalActivity";
 import {
   getDefenseConditionRequirements,
   getDefenseRootId,
@@ -534,11 +535,25 @@ export default function MyDefensesTab({ session }) {
     setMembers((previous) =>
       previous.map((item) => (String(item.id) === String(member.id) ? { ...item, [localKey]: defense.name } : item))
     );
+    void logPortalActivity(session, {
+      targetMemberId: member.id,
+      targetName: member.name,
+      actionType: "defense_assign",
+      entityType: "defense",
+      entityId: String(defense.id),
+      summary: `${member.name} : defense ${slot} affectee a ${defense.name}`,
+      metadata: {
+        slot,
+        defenseId: defense.id,
+        defenseName: defense.name,
+      },
+    });
   }
 
   async function clearAssignedDefense(slot) {
     if (!member?.id || !canEdit) return;
 
+    const previousDefenseName = slot === 1 ? member.defense1 : member.defense2;
     const column = slot === 1 ? "defense_1" : "defense_2";
     const localKey = slot === 1 ? "defense1" : "defense2";
     setSavingSlot(`clear-${slot}`);
@@ -560,6 +575,17 @@ export default function MyDefensesTab({ session }) {
     setMembers((previous) =>
       previous.map((item) => (String(item.id) === String(member.id) ? { ...item, [localKey]: EMPTY_DEFENSE } : item))
     );
+    void logPortalActivity(session, {
+      targetMemberId: member.id,
+      targetName: member.name,
+      actionType: "defense_unassign",
+      entityType: "defense",
+      summary: `${member.name} : defense ${slot} retiree (${previousDefenseName || "-"})`,
+      metadata: {
+        slot,
+        previousDefenseName,
+      },
+    });
   }
 
   async function setDefenseVote(defense, value) {

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { logPortalActivity } from "@/lib/portalActivity";
 
 const PB_SORT_OPTIONS = [
   { id: "top1", label: "Top 1" },
@@ -397,6 +398,8 @@ export default function PersonalBestTab({ session }) {
 
     const champion = allHeroesData.find((hero) => hero.name === heroName);
     if (!champion) return;
+    const targetMember = members.find((member) => String(member.id) === String(pbSlotToEdit.memberId));
+    const previousHeroName = pbSlotToEdit.currentChampionName || "";
 
     const { error } = await supabase
       .from("member_pb_entries")
@@ -436,10 +439,28 @@ export default function PersonalBestTab({ session }) {
         : previous,
     );
     setPbHeroSearch(heroName);
+    void logPortalActivity(session, {
+      targetMemberId: pbSlotToEdit.memberId,
+      targetName: targetMember?.name || "",
+      actionType: "pb_hero_update",
+      entityType: "pb",
+      entityId: String(pbSlotToEdit.entryId),
+      summary: `${targetMember?.name || "Joueur"} : affi ${pbSlotToEdit.slotIndex} heros ${previousHeroName || "-"} -> ${champion.name}`,
+      metadata: {
+        slotIndex: pbSlotToEdit.slotIndex,
+        previousHeroName,
+        nextHeroName: champion.name,
+        championId: champion.id,
+      },
+    });
   }
 
   async function updatePbRaw(entryId, nextValue) {
     const normalizedValue = Number(String(nextValue).replace(",", "."));
+    const currentEntry = pbEntries.find((entry) => String(entry.id) === String(entryId));
+    const targetMember = currentEntry
+      ? members.find((member) => String(member.id) === String(currentEntry.memberId))
+      : null;
 
     if (Number.isNaN(normalizedValue)) {
       setErrorMessage("Le PB brut doit etre une valeur numerique.");
@@ -472,6 +493,23 @@ export default function PersonalBestTab({ session }) {
           : entry,
       ),
     );
+
+    if (currentEntry) {
+      void logPortalActivity(session, {
+        targetMemberId: currentEntry.memberId,
+        targetName: targetMember?.name || currentEntry.memberName || "",
+        actionType: "pb_update",
+        entityType: "pb",
+        entityId: String(entryId),
+        summary: `${targetMember?.name || currentEntry.memberName || "Joueur"} : affi ${currentEntry.slotIndex} PB ${Number(currentEntry.pbRaw || 0)} -> ${normalizedValue}`,
+        metadata: {
+          slotIndex: currentEntry.slotIndex,
+          championName: currentEntry.championName,
+          previousPbRaw: Number(currentEntry.pbRaw || 0),
+          nextPbRaw: normalizedValue,
+        },
+      });
+    }
 
     return true;
   }
