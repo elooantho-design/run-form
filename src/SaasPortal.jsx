@@ -232,442 +232,241 @@ function clearPortalSession() {
 
 const heroRarityOrder = ["legendary", "epic", "rare", "ordinary", "basic"];
 const latestHeroReleaseWindowDays = 30;
-const latestHeroReleases = [
-  { name: "Clarissa", releasedAt: "2026-06-21" },
-  { name: "Gu Shi", releasedAt: "2026-06-21" },
-  { name: "Janus", releasedAt: "2026-06-21" },
-  { name: "Lulu", releasedAt: "2026-06-21" },
-  { name: "Oren", releasedAt: "2026-06-21" },
-  { name: "Solaris", releasedAt: "2026-06-21" },
-  { name: "Su Yue", releasedAt: "2026-06-21" },
-  { name: "Varro Draccus", releasedAt: "2026-06-21" },
-  { name: "Xasny", releasedAt: "2026-06-21" },
-];
 
-function heroNameFromFile(fileName) {
-  return fileName.replace(/\.[^.]+$/, "");
+const heroRarityMeta = {
+  legendary: { label: "Legendaires", color: "#facc15" },
+  epic: { label: "Epiques", color: "#c084fc" },
+  rare: { label: "Rares", color: "#38bdf8" },
+  ordinary: { label: "Ordinaires", color: "#4ade80" },
+  basic: { label: "Basiques", color: "#a1a1aa" },
+};
+
+const heroRoleMeta = {
+  combattant: { label: "Combattant", imageFile: "Combattant.png" },
+  heal: { label: "Heal", imageFile: "Heal.png" },
+  soigneur: { label: "Soigneur", imageFile: "Heal.png" },
+  mage: { label: "Mage", imageFile: "Mage.png" },
+  tacticien: { label: "Tacticien", imageFile: "Tacticien.png" },
+  tank: { label: "Tank", imageFile: "Tank.png" },
+  tireur: { label: "Tireur", imageFile: "Tireur.png" },
+};
+
+const heroFactionMeta = {
+  arbitre: { label: "Arbitre", imageFile: "Arbitre.png" },
+  cauchemar: { label: "Cauchemar", imageFile: "Cauchemar.png" },
+  chaotique: { label: "Chaotique", imageFile: "Chaotique.png" },
+  cultiste: { label: "Cultiste", imageFile: "Cultiste.png" },
+  esoterique: { label: "Esoterique", imageFile: "Esoterique.png" },
+  infernal: { label: "Infernal", imageFile: "Infernal.png" },
+  innommable: { label: "Innommable", imageFile: "Innommable.png" },
+  nordiste: { label: "Nordiste", imageFile: "Nordiste.png" },
+  perceur: { label: "Perceur", imageFile: "Perceur.png" },
+  sentinelle: { label: "Sentinelle", imageFile: "Sentinelle.png" },
+};
+
+const heroRoleOrder = Object.keys(heroRoleMeta);
+const heroFactionOrder = Object.keys(heroFactionMeta);
+
+function decodeLegacyMojibake(value) {
+  let text = String(value || "");
+
+  for (let index = 0; index < 2; index += 1) {
+    if ([...text].some((character) => character.charCodeAt(0) > 255)) break;
+
+    try {
+      const decoded = decodeURIComponent(
+        [...text]
+          .map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`)
+          .join(""),
+      );
+
+      if (decoded === text) break;
+      text = decoded;
+    } catch {
+      break;
+    }
+  }
+
+  return text;
 }
 
 function normalizeHeroKey(value) {
-  return String(value || "")
-    .replace(/Ã©/g, "é")
-    .replace(/Ã¨/g, "è")
-    .replace(/Ãª/g, "ê")
-    .replace(/Ã«/g, "ë")
-    .replace(/Ã /g, "à")
-    .replace(/Ã¢/g, "â")
-    .replace(/Ã¤/g, "ä")
-    .replace(/Ã¹/g, "ù")
-    .replace(/Ã»/g, "û")
-    .replace(/Ã¼/g, "ü")
-    .replace(/Ã´/g, "ô")
-    .replace(/Ã¶/g, "ö")
-    .replace(/Ã®/g, "î")
-    .replace(/Ã¯/g, "ï")
-    .replace(/Ã§/g, "ç")
-    .replace(/Ã‰/g, "É")
-    .replace(/Ãˆ/g, "È")
-    .replace(/ÃŠ/g, "Ê")
-    .replace(/Ã‡/g, "Ç")
+  return decodeLegacyMojibake(value)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
 }
 
-const heroChampionAliasGroups = [
-  ["Amiral", "Amiral Griffe", "Admiral Claw"],
-  ["Dame Alexendra", "Dame Alexandra", "Lady Alexandra"],
-  ["Gu Shi", "Gushi", "Gucci"],
-  ["Su Yue", "Suyu", "Suyue"],
-  ["Varro Draccus", "Varrodraccus", "Varro Dracus", "Varrodracus"],
-  ["Xasny", "Xaxniz", "Xasniz"],
-  ["Cerbeus", "Cerberus"],
-  ["Brokkir", "Brokir"],
-  ["Roi Harz", "King Harz"],
-  ["Dr Van Helsing", "Dr. Van Helsing", "Docteur Van Helsing"],
-  ["Captain Reve", "Captain Rêve", "Capitaine Reve", "Capitaine Rêve"],
-];
+function getChampionField(champion, fieldNames) {
+  for (const fieldName of fieldNames) {
+    const value = champion?.[fieldName];
+    if (value === null || value === undefined) continue;
+    if (Array.isArray(value)) {
+      if (value.length > 0) return value;
+      continue;
+    }
+    if (String(value).trim()) return value;
+  }
 
-const heroChampionAliasesByKey = new Map();
-
-heroChampionAliasGroups.forEach((group) => {
-  const keys = group.map(normalizeHeroKey).filter(Boolean);
-  keys.forEach((key) => {
-    const aliases = heroChampionAliasesByKey.get(key) || new Set();
-    keys.forEach((alias) => aliases.add(alias));
-    heroChampionAliasesByKey.set(key, aliases);
-  });
-});
-
-function expandHeroChampionKeys(keys) {
-  const expanded = new Set();
-
-  (keys || []).forEach((key) => {
-    const normalizedKey = normalizeHeroKey(key);
-    if (!normalizedKey) return;
-    expanded.add(normalizedKey);
-    (heroChampionAliasesByKey.get(normalizedKey) || []).forEach((alias) => expanded.add(alias));
-  });
-
-  return Array.from(expanded);
+  return "";
 }
 
-const heroRarityFilters = [
-  { id: "all", label: "Toutes", color: "#facc15" },
-  { id: "legendary", label: "Legendaires", color: "#facc15" },
-  { id: "epic", label: "Epiques", color: "#c084fc" },
-  { id: "rare", label: "Rares", color: "#38bdf8" },
-  { id: "ordinary", label: "Ordinaires", color: "#4ade80" },
-  { id: "basic", label: "Basiques", color: "#a1a1aa" },
-];
+function normalizeHeroDataValue(value) {
+  return decodeLegacyMojibake(value)
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
 
-const heroRoleFilters = [
-  { id: "all", label: "Tous les roles" },
-  { id: "combattant", label: "Combattant", image: calqueUrl("role", "Combattant.png") },
-  { id: "heal", label: "Heal", image: calqueUrl("role", "Heal.png") },
-  { id: "mage", label: "Mage", image: calqueUrl("role", "Mage.png") },
-  { id: "tacticien", label: "Tacticien", image: calqueUrl("role", "Tacticien.png") },
-  { id: "tank", label: "Tank", image: calqueUrl("role", "Tank.png") },
-  { id: "tireur", label: "Tireur", image: calqueUrl("role", "Tireur.png") },
-];
+function splitChampionValues(value) {
+  if (Array.isArray(value)) return value.map(normalizeHeroDataValue).filter(Boolean);
+  return String(value || "")
+    .split(/[;,|]/)
+    .map(normalizeHeroDataValue)
+    .filter(Boolean);
+}
 
-const heroFactionFilters = [
-  { id: "all", label: "Toutes les factions" },
-  { id: "arbitre", label: "Arbitre", image: calqueUrl("faction", "Arbitre.png") },
-  { id: "cauchemar", label: "Cauchemar", image: calqueUrl("faction", "Cauchemar.png") },
-  { id: "chaotique", label: "Chaotique", image: calqueUrl("faction", "Chaotique.png") },
-  { id: "cultiste", label: "Cultiste", image: calqueUrl("faction", "Cultiste.png") },
-  { id: "esoterique", label: "Esoterique", image: calqueUrl("faction", "Esoterique.png") },
-  { id: "infernal", label: "Infernal", image: calqueUrl("faction", "Infernal.png") },
-  { id: "innommable", label: "Innommable", image: calqueUrl("faction", "Innommable.png") },
-  { id: "nordiste", label: "Nordiste", image: calqueUrl("faction", "Nordiste.png") },
-  { id: "perceur", label: "Perceur", image: calqueUrl("faction", "Perceur.png") },
-  { id: "sentinelle", label: "Sentinelle", image: calqueUrl("faction", "Sentinelle.png") },
-];
+function formatHeroFilterLabel(value) {
+  const normalized = normalizeHeroDataValue(value);
+  const label = String(value || "").replace(/[_-]+/g, " ").trim();
+  if (!label) return normalized;
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
-const heroLayerData = [
-    { fileName: "Clarissa.png", rarity: "legendary", factions: ["esoterique"], roles: ["combattant"] },
-    { fileName: "Gu Shi.png", rarity: "legendary", factions: ["perceur", "infernal"], roles: ["tireur"] },
-    { fileName: "Janus.png", rarity: "legendary", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Lulu.png", rarity: "legendary", factions: ["nordiste"], roles: ["tacticien"] },
-    { fileName: "Oren.png", rarity: "legendary", factions: ["arbitre"], roles: ["combattant"] },
-    { fileName: "Solaris.png", rarity: "legendary", factions: ["nordiste"], roles: ["mage"] },
-    { fileName: "Su Yue.png", rarity: "legendary", factions: ["arbitre", "nordiste"], roles: ["tacticien"] },
-    { fileName: "Varro Draccus.png", rarity: "legendary", factions: ["chaotique", "esoterique"], roles: ["mage"] },
-    { fileName: "Xasny.png", rarity: "epic", factions: ["esoterique"], roles: ["combattant"] },
-    { fileName: "Abomination.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Aedrin.png", rarity: "legendary", factions: ["nordiste"] },
-    { fileName: "Aeris.png", rarity: "legendary", factions: ["sentinelle", "esoterique"] },
-    { fileName: "Amiral.png", rarity: "legendary", factions: ["chaotique", "cauchemar"] },
-    { fileName: "Apsan.png", rarity: "legendary", factions: ["perceur"] },
-    { fileName: "Aracha.png", rarity: "legendary", factions: ["perceur"] },
-    { fileName: "Ardéa.png", rarity: "legendary", factions: ["chaotique", "nordiste"] },
-    { fileName: "Arres.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Arrogance.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Calista.png", rarity: "legendary", factions: ["sentinelle"] },
-    { fileName: "Cassiel.png", rarity: "legendary", factions: ["arbitre", "nordiste"] },
-    { fileName: "Cerbeus.png", rarity: "legendary", factions: ["cultiste", "chaotique"] },
-    { fileName: "Comte Dracula.png", rarity: "legendary", factions: ["chaotique", "perceur"] },
-    { fileName: "Dane.png", rarity: "legendary", factions: ["sentinelle"] },
-    { fileName: "Eldrr.png", rarity: "legendary", factions: ["nordiste"] },
-    { fileName: "Ezareth.png", rarity: "legendary", factions: ["cultiste"] },
-    { fileName: "Falcia.png", rarity: "legendary", factions: ["nordiste", "esoterique"] },
-    { fileName: "Gisèle.png", rarity: "legendary", factions: ["chaotique", "cauchemar"] },
-    { fileName: "Gretchen.png", rarity: "legendary", factions: ["chaotique", "cauchemar"] },
-    { fileName: "Gul'Drak.png", rarity: "legendary", factions: ["chaotique", "infernal"] },
-    { fileName: "Hélga.png", rarity: "legendary", factions: ["esoterique"] },
-    { fileName: "Jeera.png", rarity: "legendary", factions: ["arbitre", "nordiste"] },
-    { fileName: "Kane.png", rarity: "legendary", factions: ["arbitre", "nordiste"] },
-    { fileName: "Kigiri.png", rarity: "legendary", factions: ["sentinelle", "cauchemar"] },
-    { fileName: "Kinéza.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Lu Bu.png", rarity: "legendary", factions: ["chaotique", "nordiste"] },
-    { fileName: "Lugaru.png", rarity: "legendary", factions: ["chaotique", "cauchemar"] },
-    { fileName: "Luxure.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Magda.png", rarity: "legendary", factions: ["cultiste"] },
-    { fileName: "Magmus.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Maw.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Nezha.png", rarity: "legendary", factions: ["sentinelle", "esoterique"] },
-    { fileName: "Numéra.png", rarity: "legendary", factions: ["perceur", "esoterique"] },
-    { fileName: "Phinéas.png", rarity: "legendary", factions: ["infernal"] },
-    { fileName: "Rosalia.png", rarity: "legendary", factions: ["cultiste"] },
-    { fileName: "Rygard.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Salazar.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Sélène.png", rarity: "legendary", factions: ["esoterique"] },
-    { fileName: "Sergei.png", rarity: "legendary", factions: ["chaotique", "cauchemar"] },
-    { fileName: "Sun Wukong.png", rarity: "legendary", factions: ["cauchemar", "sentinelle"] },
-    { fileName: "Thalen.png", rarity: "legendary", factions: ["arbitre", "esoterique"] },
-    { fileName: "Twyla.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Uredin.png", rarity: "legendary", factions: ["chaotique", "cultiste"] },
-    { fileName: "Valdéron.png", rarity: "legendary", factions: ["chaotique"] },
-    { fileName: "Valéria.png", rarity: "legendary", factions: ["chaotique", "cauchemar"] },
-    { fileName: "Valkyra.png", rarity: "legendary", factions: ["nordiste", "arbitre"] },
-    { fileName: "Volka.png", rarity: "legendary", factions: ["cauchemar"] },
-    { fileName: "Xéna.png", rarity: "legendary", factions: ["infernal"] },
-    { fileName: "Ymiret.png", rarity: "legendary", factions: ["innommable"] },
-    { fileName: "Zilithu.png", rarity: "legendary", factions: ["infernal"] },
-    { fileName: "Azhor.png", rarity: "legendary", factions: ["cauchemar"], roles: ["tank"] },
-    { fileName: "Brokkir.png", rarity: "legendary", factions: ["nordiste"], roles: ["tank"] },
-    { fileName: "Captain Rêve.png", rarity: "legendary", factions: ["cultiste"], roles: ["tank"] },
-    { fileName: "Chevalier Arlott.png", rarity: "legendary", factions: ["cultiste", "infernal"], roles: ["tank"] },
-    { fileName: "Constance.png", rarity: "legendary", factions: ["sentinelle", "arbitre"], roles: ["tank"] },
-    { fileName: "Cyrus.png", rarity: "legendary", factions: ["esoterique"], roles: ["tank"] },
-    { fileName: "Draelyn.png", rarity: "legendary", factions: ["sentinelle", "nordiste"], roles: ["tank"] },
-    { fileName: "Edith.png", rarity: "legendary", factions: ["sentinelle"], roles: ["tank"] },
-    { fileName: "Erlang Shen.png", rarity: "legendary", factions: ["arbitre", "perceur"], roles: ["tank"] },
-    { fileName: "Ghan.png", rarity: "legendary", factions: ["chaotique"], roles: ["tank"] },
-    { fileName: "Khadgrim.png", rarity: "legendary", factions: ["arbitre", "nordiste"], roles: ["tank"] },
-    { fileName: "Krodor.png", rarity: "legendary", factions: ["nordiste"], roles: ["tank"] },
-    { fileName: "Orim.png", rarity: "legendary", factions: ["infernal"], roles: ["tank"] },
-    { fileName: "Régulus.png", rarity: "legendary", factions: ["sentinelle"], roles: ["tank"] },
-    { fileName: "Roi Harz.png", rarity: "legendary", factions: ["nordiste"], roles: ["tank"] },
-    { fileName: "Torodor.png", rarity: "legendary", factions: ["cauchemar"], roles: ["tank"] },
-    { fileName: "Trusk.png", rarity: "legendary", factions: ["esoterique"], roles: ["tank"] },
-    { fileName: "Akira.png", rarity: "legendary", factions: ["perceur", "nordiste"], roles: ["tireur"] },
-    { fileName: "Alaura.png", rarity: "legendary", factions: ["sentinelle", "perceur"], roles: ["tireur"] },
-    { fileName: "Calypso.png", rarity: "legendary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Crach.png", rarity: "legendary", factions: ["sentinelle"], roles: ["tireur"] },
-    { fileName: "Dame Alexendra.png", rarity: "legendary", factions: ["arbitre", "perceur"], roles: ["tireur"] },
-    { fileName: "Dr Van Helsing.png", rarity: "legendary", factions: ["perceur", "cauchemar"], roles: ["tireur"] },
-    { fileName: "Fenris.png", rarity: "legendary", factions: ["nordiste"], roles: ["tireur"] },
-    { fileName: "Hatssut.png", rarity: "legendary", factions: ["cauchemar"], roles: ["tireur"] },
-    { fileName: "Hex.png", rarity: "legendary", factions: ["infernal", "perceur"], roles: ["tireur"] },
-    { fileName: "Iovar.png", rarity: "legendary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Kai.png", rarity: "legendary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Lucius.png", rarity: "legendary", factions: ["sentinelle"], roles: ["tireur"] },
-    { fileName: "Lynx.png", rarity: "legendary", factions: ["nordiste"], roles: ["tireur"] },
-    { fileName: "Myca.png", rarity: "legendary", factions: ["infernal"], roles: ["tireur"] },
-    { fileName: "Nyx.png", rarity: "legendary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Pelagios.png", rarity: "legendary", factions: ["arbitre", "perceur"], roles: ["tireur"] },
-    { fileName: "Raizan.png", rarity: "legendary", factions: ["cauchemar"], roles: ["tireur"] },
-    { fileName: "Razaak.png", rarity: "legendary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Ruen Hollow.png", rarity: "legendary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Sargak.png", rarity: "legendary", factions: ["chaotique", "perceur"], roles: ["tireur"] },
-    { fileName: "Setram.png", rarity: "legendary", factions: ["infernal"], roles: ["tireur"] },
-    { fileName: "Silas.png", rarity: "legendary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Sythra.png", rarity: "legendary", factions: ["chaotique", "perceur"], roles: ["tireur"] },
-    { fileName: "Talinne.png", rarity: "legendary", factions: ["sentinelle", "perceur"], roles: ["tireur"] },
-    { fileName: "Vorn.png", rarity: "legendary", factions: ["perceur", "esoterique"], roles: ["tireur"] },
-    { fileName: "Yuri.png", rarity: "legendary", factions: ["cauchemar", "perceur"], roles: ["tireur"] },
-    { fileName: "Ajax.png", rarity: "legendary", factions: ["innommable"], roles: ["mage"] },
-    { fileName: "Alistair.png", rarity: "legendary", factions: ["arbitre", "sentinelle"], roles: ["mage"] },
-    { fileName: "Anaï.png", rarity: "legendary", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Anora.png", rarity: "legendary", factions: ["cultiste", "esoterique"], roles: ["mage"] },
-    { fileName: "Béatrix.png", rarity: "legendary", factions: ["cultiste", "esoterique"], roles: ["mage"] },
-    { fileName: "Belzébuth.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Boréas.png", rarity: "legendary", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Carosa.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Dahlia.png", rarity: "legendary", factions: ["cultiste", "esoterique"], roles: ["mage"] },
-    { fileName: "Doubletronche.png", rarity: "legendary", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Durza.png", rarity: "legendary", factions: ["chaotique", "cultiste"], roles: ["mage"] },
-    { fileName: "Ingrid.png", rarity: "legendary", factions: ["arbitre", "sentinelle"], roles: ["mage"] },
-    { fileName: "Init.png", rarity: "legendary", factions: ["arbitre", "esoterique"], roles: ["mage"] },
-    { fileName: "Kaede.png", rarity: "legendary", factions: ["esoterique", "chaotique"], roles: ["mage"] },
-    { fileName: "Khamet.png", rarity: "legendary", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Kria.png", rarity: "legendary", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Laseer.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Lyra.png", rarity: "legendary", factions: ["infernal", "esoterique"], roles: ["mage"] },
-    { fileName: "Malrik.png", rarity: "legendary", factions: ["infernal", "esoterique"], roles: ["mage"] },
-    { fileName: "Morrigan.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Nocturne.png", rarity: "legendary", factions: ["nordiste", "infernal"], roles: ["mage"] },
-    { fileName: "Nstya.png", rarity: "legendary", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Praetus.png", rarity: "legendary", factions: ["arbitre"], roles: ["mage"] },
-    { fileName: "Séréphine.png", rarity: "legendary", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Shamir.png", rarity: "legendary", factions: ["nordiste"], roles: ["mage"] },
-    { fileName: "Solcadens.png", rarity: "legendary", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Velisse.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Venoma.png", rarity: "legendary", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Vierna.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Violetta Vane.png", rarity: "legendary", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Vixera.png", rarity: "legendary", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Xaris.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Zélus.png", rarity: "legendary", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Artémis.png", rarity: "legendary", factions: ["cultiste"], roles: ["heal"] },
-    { fileName: "Aylin.png", rarity: "legendary", factions: ["infernal"], roles: ["heal"] },
-    { fileName: "Corneline.png", rarity: "legendary", factions: ["chaotique", "cultiste"], roles: ["heal"] },
-    { fileName: "Dassomi.png", rarity: "legendary", factions: ["chaotique", "esoterique"], roles: ["heal"] },
-    { fileName: "Diaochan.png", rarity: "legendary", factions: ["sentinelle", "infernal"], roles: ["heal"] },
-    { fileName: "Eirlys.png", rarity: "legendary", factions: ["sentinelle", "nordiste"], roles: ["heal"] },
-    { fileName: "Elowyn.png", rarity: "legendary", factions: ["esoterique"], roles: ["heal"] },
-    { fileName: "Eunomie.png", rarity: "legendary", factions: ["arbitre", "sentinelle"], roles: ["heal"] },
-    { fileName: "Ezryn.png", rarity: "legendary", factions: ["esoterique"], roles: ["heal"] },
-    { fileName: "Ferssi.png", rarity: "legendary", factions: ["infernal"], roles: ["heal"] },
-    { fileName: "Gwendoline.png", rarity: "legendary", factions: ["nordiste"], roles: ["heal"] },
-    { fileName: "Laya.png", rarity: "legendary", factions: ["sentinelle"], roles: ["heal"] },
-    { fileName: "Lightlocke.png", rarity: "legendary", factions: ["sentinelle", "nordiste"], roles: ["heal"] },
-    { fileName: "Nerissa.png", rarity: "legendary", factions: ["esoterique"], roles: ["heal"] },
-    { fileName: "Nissandei.png", rarity: "epic", factions: ["perceur"], roles: ["heal"] },
-    { fileName: "Sadie.png", rarity: "legendary", factions: ["nordiste"], roles: ["heal"] },
-    { fileName: "Spring.png", rarity: "rare", factions: [], roles: ["heal"] },
-    { fileName: "Talula.png", rarity: "legendary", factions: ["perceur"], roles: ["heal"] },
-    { fileName: "Vortex.png", rarity: "epic", factions: ["nordiste"], roles: ["heal"] },
-    { fileName: "Astraël.png", rarity: "legendary", factions: ["nordiste", "cauchemar"], roles: ["tacticien"] },
-    { fileName: "Guan Yu.png", rarity: "legendary", factions: ["sentinelle", "nordiste"], roles: ["tacticien"] },
-    { fileName: "Leikan.png", rarity: "legendary", factions: ["arbitre", "cauchemar"], roles: ["tacticien"] },
-    { fileName: "Moriden.png", rarity: "legendary", factions: ["cauchemar", "esoterique"], roles: ["tacticien"] },
-    { fileName: "Rivenhald.png", rarity: "legendary", factions: ["nordiste"], roles: ["tacticien"] },
-    { fileName: "Valara.png", rarity: "legendary", factions: ["arbitre", "esoterique"], roles: ["tacticien"] },
-    { fileName: "Vlad Draculea.png", rarity: "legendary", factions: ["cultiste"], roles: ["tacticien"] },
-    { fileName: "Ain.png", rarity: "epic", factions: ["sentinelle"] },
-    { fileName: "Atrox.png", rarity: "epic", factions: ["cultiste", "chaotique"] },
-    { fileName: "Cram.png", rarity: "epic", factions: ["infernal"] },
-    { fileName: "Cyclone.png", rarity: "epic", factions: ["esoterique"] },
-    { fileName: "Cyrene.png", rarity: "epic", factions: ["sentinelle", "cultiste"] },
-    { fileName: "Daline.png", rarity: "epic", factions: ["sentinelle"] },
-    { fileName: "Deimos.png", rarity: "epic", factions: ["cauchemar"] },
-    { fileName: "Démon.png", rarity: "epic", factions: ["cauchemar"] },
-    { fileName: "Elysia.png", rarity: "epic", factions: ["arbitre"] },
-    { fileName: "Estide.png", rarity: "epic", factions: ["nordiste"] },
-    { fileName: "Fureur.png", rarity: "epic", factions: ["cauchemar"] },
-    { fileName: "Gourmandise.png", rarity: "epic", factions: ["cauchemar"] },
-    { fileName: "Janqhar.png", rarity: "epic", factions: ["esoterique"] },
-    { fileName: "Komodo.png", rarity: "epic", factions: ["cauchemar"] },
-    { fileName: "Rork.png", rarity: "epic", factions: ["nordiste"] },
-    { fileName: "Vladov.png", rarity: "epic", factions: ["chaotique", "cauchemar"] },
-    { fileName: "Voroth.png", rarity: "epic", factions: ["nordiste"] },
-    { fileName: "Ardeth.png", rarity: "epic", factions: ["esoterique"], roles: ["tank"] },
-    { fileName: "Aveline.png", rarity: "epic", factions: ["nordiste", "sentinelle"], roles: ["tank"] },
-    { fileName: "Baron.png", rarity: "epic", factions: ["cauchemar"], roles: ["tank"] },
-    { fileName: "Dayga.png", rarity: "epic", factions: ["cauchemar"], roles: ["tank"] },
-    { fileName: "Isolde.png", rarity: "epic", factions: ["nordiste"], roles: ["tank"] },
-    { fileName: "Jorge.png", rarity: "epic", factions: ["chaotique", "cultiste"], roles: ["tank"] },
-    { fileName: "Livianne.png", rarity: "epic", factions: ["sentinelle", "perceur"], roles: ["tank"] },
-    { fileName: "Malvira.png", rarity: "legendary", factions: ["nordiste", "cultiste"], roles: ["tank"] },
-    { fileName: "Mériel.png", rarity: "epic", factions: ["sentinelle"], roles: ["tank"] },
-    { fileName: "Olague.png", rarity: "epic", factions: ["nordiste"], roles: ["tank"] },
-    { fileName: "Rhox.png", rarity: "epic", factions: ["nordiste"], roles: ["tank"] },
-    { fileName: "Thunkles.png", rarity: "epic", factions: ["cultiste"], roles: ["tank"] },
-    { fileName: "Titus.png", rarity: "epic", factions: ["infernal"], roles: ["tank"] },
-    { fileName: "Brienne.png", rarity: "epic", factions: ["sentinelle", "perceur"], roles: ["tireur"] },
-    { fileName: "Brunor.png", rarity: "epic", factions: ["nordiste", "infernal"], roles: ["tireur"] },
-    { fileName: "Eliza.png", rarity: "epic", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Esmée.png", rarity: "epic", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Filippa.png", rarity: "epic", factions: ["esoterique"], roles: ["tireur"] },
-    { fileName: "Harpun.png", rarity: "epic", factions: ["nordiste"], roles: ["tireur"] },
-    { fileName: "Idril.png", rarity: "epic", factions: ["sentinelle", "perceur"], roles: ["tireur"] },
-    { fileName: "Luneria.png", rarity: "epic", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Maul.png", rarity: "epic", factions: ["nordiste"], roles: ["tireur"] },
-    { fileName: "Tazira.png", rarity: "epic", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Théowin.png", rarity: "epic", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Vargus.png", rarity: "epic", factions: ["chaotique", "perceur"], roles: ["tireur"] },
-    { fileName: "Abyzou.png", rarity: "epic", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Ai.png", rarity: "epic", factions: ["esoterique", "nordiste"], roles: ["mage"] },
-    { fileName: "Avarice.png", rarity: "epic", factions: ["cultiste", "cauchemar"], roles: ["mage"] },
-    { fileName: "Azzoth.png", rarity: "epic", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Demi.png", rarity: "epic", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Eon.png", rarity: "epic", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Eona.png", rarity: "epic", factions: ["cultiste", "sentinelle"], roles: ["mage"] },
-    { fileName: "Faelin.png", rarity: "epic", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Imani.png", rarity: "epic", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Kalina.png", rarity: "epic", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Laurelle.png", rarity: "epic", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Marri.png", rarity: "epic", factions: ["nordiste"], roles: ["mage"] },
-    { fileName: "Nauvras.png", rarity: "epic", factions: ["cauchemar", "esoterique"], roles: ["mage"] },
-    { fileName: "Nazeem.png", rarity: "epic", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Niro.png", rarity: "rare", factions: ["cultiste", "sentinelle"], roles: ["mage"] },
-    { fileName: "Osiren.png", rarity: "epic", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Pierre.png", rarity: "legendary", factions: ["cultiste", "chaotique"], roles: ["mage"] },
-    { fileName: "Pyros.png", rarity: "epic", factions: ["infernal"], roles: ["mage"] },
-    { fileName: "Raiden.png", rarity: "epic", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Soleil.png", rarity: "epic", factions: ["sentinelle", "infernal"], roles: ["mage"] },
-    { fileName: "Dolorès.png", rarity: "epic", factions: ["infernal"], roles: ["heal"] },
-    { fileName: "Hollow.png", rarity: "epic", factions: ["cultiste"], roles: ["heal"] },
-    { fileName: "Lili.png", rarity: "epic", factions: ["perceur", "esoterique"], roles: ["heal"] },
-    { fileName: "Midan.png", rarity: "epic", factions: ["nordiste"], roles: ["heal"] },
-    { fileName: "Barclay.png", rarity: "rare", factions: [] },
-    { fileName: "Borut.png", rarity: "rare", factions: ["sentinelle"] },
-    { fileName: "Décimus.png", rarity: "rare", factions: [] },
-    { fileName: "Duradel.png", rarity: "rare", factions: [] },
-    { fileName: "Gnash.png", rarity: "rare", factions: [] },
-    { fileName: "Gogran.png", rarity: "rare", factions: [] },
-    { fileName: "Narvi.png", rarity: "rare", factions: [] },
-    { fileName: "Orgul.png", rarity: "rare", factions: [] },
-    { fileName: "Rhutu.png", rarity: "rare", factions: [] },
-    { fileName: "Shelor.png", rarity: "rare", factions: [] },
-    { fileName: "Skulf.png", rarity: "rare", factions: [] },
-    { fileName: "Barbe-Grise.png", rarity: "legendary", factions: ["esoterique"], roles: ["tank"] },
-    { fileName: "Dagna.png", rarity: "rare", factions: ["nordiste"], roles: ["tank"] },
-    { fileName: "Ghorza.png", rarity: "rare", factions: [], roles: ["tank"] },
-    { fileName: "Glen.png", rarity: "rare", factions: [], roles: ["tank"] },
-    { fileName: "Rex.png", rarity: "rare", factions: ["sentinelle"], roles: ["tank"] },
-    { fileName: "Amahle.png", rarity: "rare", factions: [], roles: ["tireur"] },
-    { fileName: "Cuke.png", rarity: "rare", factions: [], roles: ["tireur"] },
-    { fileName: "Drogo.png", rarity: "rare", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Elukas.png", rarity: "rare", factions: ["cultiste"], roles: ["tireur"] },
-    { fileName: "Morène.png", rarity: "rare", factions: ["infernal", "perceur"], roles: ["tireur"] },
-    { fileName: "Dame Mina.png", rarity: "legendary", factions: ["nordiste", "perceur"], roles: ["mage"] },
-    { fileName: "Glacius.png", rarity: "legendary", factions: ["nordiste"], roles: ["mage"] },
-    { fileName: "Gonkba.png", rarity: "rare", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Nisalt.png", rarity: "epic", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Selkhat.png", rarity: "epic", factions: ["esoterique"], roles: ["mage"] },
-    { fileName: "Sorzus.png", rarity: "rare", factions: ["cauchemar"], roles: ["mage"] },
-    { fileName: "Voltus.png", rarity: "rare", factions: ["cultiste"], roles: ["mage"] },
-    { fileName: "Aryn.png", rarity: "rare", factions: [], roles: ["heal"] },
-    { fileName: "Automne.png", rarity: "rare", factions: ["infernal"], roles: ["heal"] },
-    { fileName: "Camille.png", rarity: "rare", factions: ["sentinelle"], roles: ["heal"] },
-    { fileName: "Nunéna.png", rarity: "rare", factions: [], roles: ["heal"] },
-    { fileName: "Arlow.png", rarity: "ordinary", factions: [] },
-    { fileName: "Halder.png", rarity: "ordinary", factions: [] },
-    { fileName: "Hayden.png", rarity: "ordinary", factions: [] },
-    { fileName: "Jonas.png", rarity: "ordinary", factions: [] },
-    { fileName: "Ryder.png", rarity: "ordinary", factions: [] },
-    { fileName: "Preter.png", rarity: "ordinary", factions: [], roles: ["tank"] },
-    { fileName: "Rhumaleine.png", rarity: "ordinary", factions: [], roles: ["tank"] },
-    { fileName: "Rogers.png", rarity: "ordinary", factions: [], roles: ["tank"] },
-    { fileName: "Balafre.png", rarity: "ordinary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Liam.png", rarity: "ordinary", factions: ["perceur"], roles: ["tireur"] },
-    { fileName: "Skreef.png", rarity: "ordinary", factions: [], roles: ["tireur"] },
-    { fileName: "Wagrak.png", rarity: "ordinary", factions: [], roles: ["mage"] },
-    { fileName: "Langlyn.png", rarity: "ordinary", factions: [], roles: ["heal"] },
-    { fileName: "Lilia.png", rarity: "basic", factions: [] },
-    { fileName: "Piquier.png", rarity: "basic", factions: [] },
-    { fileName: "Gale.png", rarity: "basic", factions: [], roles: ["tireur"] },
-    { fileName: "Josh.png", rarity: "basic", factions: [], roles: ["tireur"] },
-];
+function orderIndex(value, order) {
+  const index = order.indexOf(value);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
 
-const heroLayerKeySet = new Set(heroLayerData.map((hero) => normalizeHeroKey(heroNameFromFile(hero.fileName))));
-const latestHeroReleaseWindowMs = latestHeroReleaseWindowDays * 24 * 60 * 60 * 1000;
-const activeLatestHeroKeys = latestHeroReleases
-  .filter((release) => {
-    const releasedAt = Date.parse(`${release.releasedAt}T00:00:00`);
-    return Number.isFinite(releasedAt) && Date.now() - releasedAt < latestHeroReleaseWindowMs;
-  })
-  .map((release) => normalizeHeroKey(release.name))
-  .filter((key) => heroLayerKeySet.has(key));
+function sortHeroValues(left, right, order) {
+  const orderDiff = orderIndex(left, order) - orderIndex(right, order);
+  if (orderDiff !== 0) return orderDiff;
+  return left.localeCompare(right, "fr", { sensitivity: "base" });
+}
 
-const heroLayerCards = [...heroLayerData]
-  .sort((left, right) => {
-    const rarityDiff = heroRarityOrder.indexOf(left.rarity) - heroRarityOrder.indexOf(right.rarity);
-    if (rarityDiff !== 0) return rarityDiff;
-    return left.fileName.localeCompare(right.fileName, "fr", { sensitivity: "base" });
-  })
-  .map((hero) => {
-    const name = heroNameFromFile(hero.fileName);
-    const latestReleaseIndex = activeLatestHeroKeys.indexOf(normalizeHeroKey(name));
+function getChampionPortalName(champion) {
+  return String(
+    getChampionField(champion, [
+      "portal_name",
+      "PortalName",
+      "portalName",
+      "portalname",
+      "display_name",
+      "displayName",
+      "name",
+    ]) || "",
+  ).trim();
+}
 
-    return {
-      ...hero,
-      id: name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-      name,
-      image: calqueUrl("hero", hero.fileName),
-      roles: hero.roles || ["combattant"],
-      isLatestRelease: latestReleaseIndex !== -1,
-      latestReleaseRank: latestReleaseIndex === -1 ? null : latestReleaseIndex + 1,
-    };
-  });
+function getChampionRarity(champion) {
+  return normalizeHeroDataValue(getChampionField(champion, ["rarity", "Rarity"]));
+}
 
-function createEmptyHeroStateMap() {
-  return Object.fromEntries(heroLayerCards.map((hero) => [hero.id, { owned: false, awakening: -1 }]));
+function normalizeHeroImageFile(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+
+  const withoutQuery = rawValue.split(/[?#]/)[0];
+  const fileName = withoutQuery.split(/[\\/]/).filter(Boolean).pop() || withoutQuery;
+  if (!fileName) return "";
+
+  try {
+    const decodedFileName = decodeURIComponent(fileName);
+    return /\.[a-z0-9]+$/i.test(decodedFileName) ? decodedFileName : decodedFileName + ".png";
+  } catch {
+    return /\.[a-z0-9]+$/i.test(fileName) ? fileName : fileName + ".png";
+  }
+}
+
+function getChampionHeroImageFile(champion, portalName) {
+  const configuredFile = getChampionField(champion, [
+    "image_file",
+    "imageFile",
+    "ImageFile",
+    "file_name",
+    "fileName",
+    "filename",
+    "Filename",
+    "calque_file",
+    "CalqueFile",
+    "image",
+    "Image",
+  ]);
+  const imageFile = normalizeHeroImageFile(configuredFile);
+
+  return imageFile || normalizeHeroImageFile(portalName);
+}
+
+function getChampionReleaseTime(champion) {
+  const releaseValue = getChampionField(champion, [
+    "released_at",
+    "release_date",
+    "ReleaseDate",
+    "latest_release_at",
+    "LatestReleaseAt",
+  ]);
+  const releaseTime = Date.parse(releaseValue);
+
+  return Number.isFinite(releaseTime) ? releaseTime : null;
+}
+
+function isChampionMarkedLatest(champion) {
+  const flag = getChampionField(champion, ["is_latest_release", "isLatestRelease", "latest", "Latest"]);
+  if (typeof flag === "boolean") return flag;
+  return ["1", "true", "yes", "oui"].includes(String(flag || "").trim().toLowerCase());
+}
+
+function buildPortalHeroCards(champions) {
+  const latestReleaseWindowMs = latestHeroReleaseWindowDays * 24 * 60 * 60 * 1000;
+
+  return (champions || [])
+    .map((champion) => {
+      const portalName = getChampionPortalName(champion);
+      const championId = champion?.id;
+      if (!portalName || championId === null || championId === undefined) return null;
+
+      const imageFile = getChampionHeroImageFile(champion, portalName);
+      const releaseTime = getChampionReleaseTime(champion);
+      const isRecentRelease = releaseTime !== null && Date.now() - releaseTime < latestReleaseWindowMs;
+      const isLatestRelease = isChampionMarkedLatest(champion) || isRecentRelease;
+
+      return {
+        id: String(championId),
+        championId,
+        technicalName: String(champion?.name || "").trim(),
+        name: portalName,
+        portalName,
+        rarity: getChampionRarity(champion),
+        factions: splitChampionValues(getChampionField(champion, ["faction", "Faction", "factions", "Factions"])),
+        roles: splitChampionValues(getChampionField(champion, ["role", "Role", "roles", "Roles"])),
+        imageFile,
+        image: imageFile ? calqueUrl("hero", imageFile) : "",
+        isLatestRelease,
+        latestReleaseRank: releaseTime === null ? null : -releaseTime,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const rarityDiff = orderIndex(left.rarity, heroRarityOrder) - orderIndex(right.rarity, heroRarityOrder);
+      if (rarityDiff !== 0) return rarityDiff;
+      return left.name.localeCompare(right.name, "fr", { sensitivity: "base" });
+    });
+}
+
+function createEmptyHeroStateMap(heroes = []) {
+  return Object.fromEntries(heroes.map((hero) => [hero.id, { owned: false, awakening: -1 }]));
+}
+
+function buildChampionIdByHeroId(heroes = []) {
+  return Object.fromEntries(heroes.map((hero) => [hero.id, hero.championId || ""]));
 }
 
 function clampAwakeningLevel(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return -1;
   return Math.max(-1, Math.min(5, Math.trunc(numeric)));
-}
-
-function getHeroChampionKeys(hero) {
-  return expandHeroChampionKeys([hero.name, hero.fileName, String(hero.fileName || "").replace(/\.[^.]+$/, "")]);
 }
 
 function getMemberDisplayName(member) {
@@ -678,45 +477,38 @@ function getMemberGuildLabel(member) {
   return member?.guild_code || "Sans guilde";
 }
 
-function getChampionCandidateKeys(champion) {
-  return Array.from(
-    new Set(
-      [
-        champion?.name,
-        champion?.nom,
-        champion?.hero_name,
-        champion?.champion_name,
-        champion?.slug,
-        champion?.code,
-        champion?.template_key,
-        champion?.file_name,
-        champion?.filename,
-        champion?.image,
-      ]
-        .map((value) => normalizeHeroKey(value))
-        .filter(Boolean),
-    ),
+function buildHeroRarityFilters(heroes) {
+  const rarities = [...new Set((heroes || []).map((hero) => hero.rarity).filter(Boolean))].sort((left, right) =>
+    sortHeroValues(left, right, heroRarityOrder),
   );
+
+  return [
+    { id: "all", label: "Toutes", color: "#facc15" },
+    ...rarities.map((rarity) => ({
+      id: rarity,
+      label: heroRarityMeta[rarity]?.label || formatHeroFilterLabel(rarity),
+      color: heroRarityMeta[rarity]?.color || "#a1a1aa",
+    })),
+  ];
 }
 
-function buildChampionIdByHeroId(champions) {
-  const championIdByKey = new Map();
+function buildHeroIconFilters(heroes, fieldName, meta, order, kind, allLabel, allShortLabel) {
+  const values = [
+    ...new Set((heroes || []).flatMap((hero) => (Array.isArray(hero[fieldName]) ? hero[fieldName] : [])).filter(Boolean)),
+  ].sort((left, right) => sortHeroValues(left, right, order));
 
-  (champions || []).forEach((champion) => {
-    expandHeroChampionKeys(getChampionCandidateKeys(champion)).forEach((key) => {
-      if (!championIdByKey.has(key)) championIdByKey.set(key, champion.id);
-    });
-  });
-
-  return Object.fromEntries(
-    heroLayerCards.map((hero) => {
-      const championId = getHeroChampionKeys(hero)
-        .map((key) => championIdByKey.get(key))
-        .find(Boolean);
-
-      return [hero.id, championId || ""];
+  return [
+    { id: "all", label: allLabel, shortLabel: allShortLabel },
+    ...values.map((value) => {
+      const itemMeta = meta[value] || {};
+      return {
+        id: value,
+        label: itemMeta.label || formatHeroFilterLabel(value),
+        shortLabel: itemMeta.shortLabel,
+        image: itemMeta.imageFile ? calqueUrl(kind, itemMeta.imageFile) : null,
+      };
     }),
-  );
+  ];
 }
 
 function statusClass(status) {
@@ -1335,19 +1127,39 @@ function HeroBoxView({ session }) {
   const [latestOnly, setLatestOnly] = useState(false);
   const [loadedHeroImages, setLoadedHeroImages] = useState(() => new Set());
   const preloadingHeroImagesRef = useRef(new Set());
+  const [heroCards, setHeroCards] = useState([]);
   const [members, setMembers] = useState([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState(session?.memberId || session?.id || "");
-  const [championIdByHeroId, setChampionIdByHeroId] = useState({});
   const [heroBoxLoading, setHeroBoxLoading] = useState(false);
   const [heroBoxError, setHeroBoxError] = useState("");
   const [savingHeroId, setSavingHeroId] = useState("");
-  const [heroStates, setHeroStates] = useState(() => createEmptyHeroStateMap());
+  const [heroStates, setHeroStates] = useState({});
 
   const connectedPlayerId = session?.memberId || session?.id || "";
   const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
   const connectedPlayerKey = connectedPlayerId ? String(connectedPlayerId) : "";
   const selectedPlayerKey = selectedPlayerId ? String(selectedPlayerId) : "";
   const canEdit = Boolean(isAdminUser || (selectedPlayerKey && selectedPlayerKey === connectedPlayerKey));
+  const championIdByHeroId = useMemo(() => buildChampionIdByHeroId(heroCards), [heroCards]);
+  const heroRarityFilters = useMemo(() => buildHeroRarityFilters(heroCards), [heroCards]);
+  const heroRoleFilters = useMemo(
+    () => buildHeroIconFilters(heroCards, "roles", heroRoleMeta, heroRoleOrder, "role", "Tous les roles", "Tous"),
+    [heroCards],
+  );
+  const heroFactionFilters = useMemo(
+    () =>
+      buildHeroIconFilters(
+        heroCards,
+        "factions",
+        heroFactionMeta,
+        heroFactionOrder,
+        "faction",
+        "Toutes les factions",
+        "Toutes",
+      ),
+    [heroCards],
+  );
+  const hasLatestHeroes = useMemo(() => heroCards.some((hero) => hero.isLatestRelease), [heroCards]);
 
   const selectedPlayer = useMemo(
     () => members.find((member) => String(member.id) === selectedPlayerKey) || null,
@@ -1366,6 +1178,16 @@ function HeroBoxView({ session }) {
       })
       .slice(0, 8);
   }, [members, playerQuery]);
+
+  useEffect(() => {
+    if (!hasLatestHeroes && latestOnly) setLatestOnly(false);
+  }, [hasLatestHeroes, latestOnly]);
+
+  useEffect(() => {
+    if (!heroRarityFilters.some((filter) => filter.id === rarityFilter)) setRarityFilter("all");
+    if (!heroRoleFilters.some((filter) => filter.id === roleFilter)) setRoleFilter("all");
+    if (!heroFactionFilters.some((filter) => filter.id === factionFilter)) setFactionFilter("all");
+  }, [factionFilter, heroFactionFilters, heroRarityFilters, heroRoleFilters, rarityFilter, roleFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1388,8 +1210,10 @@ function HeroBoxView({ session }) {
         if (cancelled) return;
 
         const nextMembers = membersResult.data || [];
+        const nextHeroCards = buildPortalHeroCards(championsResult.data || []);
         setMembers(nextMembers);
-        setChampionIdByHeroId(buildChampionIdByHeroId(championsResult.data || []));
+        setHeroCards(nextHeroCards);
+        setHeroStates(createEmptyHeroStateMap(nextHeroCards));
         setSelectedPlayerId((current) => current || connectedPlayerKey || String(nextMembers[0]?.id || ""));
       } catch (error) {
         if (!cancelled) setHeroBoxError(error?.message || "Impossible de charger les joueurs et champions.");
@@ -1409,14 +1233,19 @@ function HeroBoxView({ session }) {
     let cancelled = false;
 
     async function loadPlayerAwakenings() {
+      if (heroCards.length === 0) {
+        setHeroStates({});
+        return;
+      }
+
       if (!selectedPlayerKey) {
-        setHeroStates(createEmptyHeroStateMap());
+        setHeroStates(createEmptyHeroStateMap(heroCards));
         return;
       }
 
       const championIds = Object.values(championIdByHeroId).filter(Boolean);
       if (championIds.length === 0) {
-        setHeroStates(createEmptyHeroStateMap());
+        setHeroStates(createEmptyHeroStateMap(heroCards));
         return;
       }
 
@@ -1436,9 +1265,9 @@ function HeroBoxView({ session }) {
         const awakeningByChampionId = new Map(
           (data || []).map((row) => [String(row.champion_id), clampAwakeningLevel(row.awakening_level)]),
         );
-        const nextStates = createEmptyHeroStateMap();
+        const nextStates = createEmptyHeroStateMap(heroCards);
 
-        heroLayerCards.forEach((hero) => {
+        heroCards.forEach((hero) => {
           const championId = championIdByHeroId[hero.id];
           if (!championId) return;
 
@@ -1451,7 +1280,7 @@ function HeroBoxView({ session }) {
         setHeroStates(nextStates);
       } catch (error) {
         if (!cancelled) {
-          setHeroStates(createEmptyHeroStateMap());
+          setHeroStates(createEmptyHeroStateMap(heroCards));
           setHeroBoxError(error?.message || "Impossible de charger la box du joueur.");
         }
       } finally {
@@ -1464,15 +1293,17 @@ function HeroBoxView({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [championIdByHeroId, selectedPlayerKey]);
+  }, [championIdByHeroId, heroCards, selectedPlayerKey]);
 
   const visibleHeroes = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = normalizeHeroKey(query);
 
-    return heroLayerCards
+    return heroCards
       .filter((hero) => {
         const state = heroStates[hero.id] || { owned: false, awakening: -1 };
-        const matchesQuery = normalizedQuery.length === 0 || hero.name.toLowerCase().includes(normalizedQuery);
+        const matchesQuery =
+          normalizedQuery.length === 0 ||
+          normalizeHeroKey(`${hero.name} ${hero.technicalName}`).includes(normalizedQuery);
         const matchesState =
           ownedFilter === "all" ||
           (ownedFilter === "owned" && state.owned) ||
@@ -1488,7 +1319,7 @@ function HeroBoxView({ session }) {
         if (!latestOnly) return 0;
         return (left.latestReleaseRank || 999) - (right.latestReleaseRank || 999);
       });
-  }, [factionFilter, heroStates, latestOnly, ownedFilter, query, rarityFilter, roleFilter]);
+  }, [factionFilter, heroCards, heroStates, latestOnly, ownedFilter, query, rarityFilter, roleFilter]);
 
   const priorityHeroes = useMemo(() => visibleHeroes.slice(0, 24), [visibleHeroes]);
   const priorityHeroImageCount = priorityHeroes.length;
@@ -1611,14 +1442,13 @@ function HeroBoxView({ session }) {
             <div className="hero-box-eyebrow">Watcher of Realms</div>
             <h2>Ma box heros</h2>
             <p>
-              Test de viabilite avec tes calques. Le visuel de carte reste dans l'image, et les etoiles d'eveil sont
-              superposees en bas de la vignette.
+              Collection alimentee par Supabase, avec les calques servis par le VPS et les eveils relies aux champions.
             </p>
           </div>
           <div className="hero-box-stats" aria-label="Statistiques de collection">
             <div>
               <span>Possedes</span>
-              <strong>{stats.owned}/{heroLayerCards.length}</strong>
+              <strong>{stats.owned}/{heroCards.length}</strong>
             </div>
             <div>
               <span>Eveils</span>
@@ -1712,17 +1542,19 @@ function HeroBoxView({ session }) {
         </div>
 
         <div className="hero-box-filter-row" aria-label="Filtres de rarete">
-          <button
-            type="button"
-            className="hero-rarity-filter hero-box-latest-filter"
-            style={{ "--rarity-color": "#38bdf8" }}
-            aria-pressed={latestOnly}
-            onClick={() => setLatestOnly((value) => !value)}
-            title="Afficher les dernieres sorties ingame"
-          >
-            <Clock3 className="h-4 w-4" />
-            Dernieres sorties
-          </button>
+          {hasLatestHeroes ? (
+            <button
+              type="button"
+              className="hero-rarity-filter hero-box-latest-filter"
+              style={{ "--rarity-color": "#38bdf8" }}
+              aria-pressed={latestOnly}
+              onClick={() => setLatestOnly((value) => !value)}
+              title="Afficher les dernieres sorties ingame"
+            >
+              <Clock3 className="h-4 w-4" />
+              Dernieres sorties
+            </button>
+          ) : null}
           {heroRarityFilters.map((filter) => (
             <button
               key={filter.id}
@@ -1750,7 +1582,11 @@ function HeroBoxView({ session }) {
                 aria-pressed={roleFilter === filter.id}
                 onClick={() => setRoleFilter(filter.id)}
               >
-                {filter.image ? <img src={filter.image} alt="" draggable="false" /> : <span>Tous</span>}
+                {filter.image ? (
+                  <img src={filter.image} alt="" draggable="false" />
+                ) : (
+                  <span>{filter.shortLabel || filter.label}</span>
+                )}
               </button>
             ))}
           </div>
@@ -1766,7 +1602,11 @@ function HeroBoxView({ session }) {
                 aria-pressed={factionFilter === filter.id}
                 onClick={() => setFactionFilter(filter.id)}
               >
-                {filter.image ? <img src={filter.image} alt="" draggable="false" /> : <span>Toutes</span>}
+                {filter.image ? (
+                  <img src={filter.image} alt="" draggable="false" />
+                ) : (
+                  <span>{filter.shortLabel || filter.label}</span>
+                )}
               </button>
             ))}
           </div>
@@ -1821,23 +1661,14 @@ function HeroLayerCard({
   canEdit = false,
   saving = false,
 }) {
-  const [cardImageReady, setCardImageReady] = useState(imageReady);
-
-  useEffect(() => {
-    setCardImageReady(imageReady);
-  }, [hero.image, imageReady]);
-
   function handleImageReady() {
-    setCardImageReady(true);
     onImageReady?.(hero.id);
   }
-
-  const isImageReady = cardImageReady || imageReady;
 
   return (
     <article
       className={`hero-layer-card ${state.owned ? "is-owned" : "is-locked"} ${
-        isImageReady ? "is-image-ready" : "is-image-loading"
+        imageReady ? "is-image-ready" : "is-image-loading"
       } ${canEdit ? "is-editable" : "is-readonly"} ${saving ? "is-saving" : ""}`}
     >
       <div className="hero-layer-skeleton" aria-hidden="true" />
