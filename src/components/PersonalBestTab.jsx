@@ -352,6 +352,12 @@ export default function PersonalBestTab({ session }) {
   const summary = useMemo(() => {
     const rowsWithPb = pbRows.filter((row) => row.top1 > 0);
     const bestRow = rowsWithPb[0] || null;
+    const connectedMemberId = session?.memberId || session?.id || "";
+    const connectedName = normalizeText(session?.watcherName || session?.memberName || session?.name);
+    const connectedRow =
+      pbRows.find((row) => connectedMemberId && String(row.memberId) === String(connectedMemberId)) ||
+      pbRows.find((row) => connectedName && normalizeText(row.memberName) === connectedName) ||
+      null;
     const averageTop3 =
       rowsWithPb.length > 0
         ? rowsWithPb.reduce((sum, row) => sum + row.top3, 0) / rowsWithPb.length
@@ -360,10 +366,10 @@ export default function PersonalBestTab({ session }) {
     return {
       rowCount: pbRows.length,
       bestName: bestRow?.memberName || "-",
-      bestTop1: bestRow?.top1 || 0,
+      connectedTop1: connectedRow?.top1 || 0,
       averageTop3,
     };
-  }, [pbRows]);
+  }, [pbRows, session?.id, session?.memberId, session?.memberName, session?.name, session?.watcherName]);
 
   function canEditRow(rowMemberId) {
     return isAdmin || String(rowMemberId) === String(session?.memberId);
@@ -514,8 +520,10 @@ export default function PersonalBestTab({ session }) {
               <div className="mt-2 text-2xl font-semibold text-zinc-50">{summary.rowCount}</div>
             </div>
             <div className="rounded-2xl border border-emerald-300/20 bg-black/40 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Meilleur Top 1</div>
-              <div className="mt-2 text-2xl font-semibold text-emerald-200">{formatPbAverage(summary.bestTop1)}</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Mon Top 1</div>
+              <div className="mt-2 text-2xl font-semibold text-emerald-200">
+                {formatPbAverage(summary.connectedTop1)}
+              </div>
             </div>
             <div className="rounded-2xl border border-amber-300/20 bg-black/40 p-4">
               <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Top 3 moyen</div>
