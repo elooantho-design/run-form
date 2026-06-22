@@ -2610,12 +2610,12 @@ function PlayerAccessView({ session }) {
   const apiBase = useMemo(() => getApiBase(), []);
   const actorMemberId = session?.memberId || session?.id || "";
   const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const [members, setMembers] = useState([]);
   const [adminPassword, setAdminPassword] = useState("");
   const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
   const [selectedMember, setSelectedMember] = useState(null);
   const [temporaryPassword, setTemporaryPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loadingMembers, setLoadingMembers] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
@@ -2623,56 +2623,48 @@ function PlayerAccessView({ session }) {
   const selectedMemberIsProtected = isAdminRole(selectedMember?.role);
 
   useEffect(() => {
-    if (!isAdminUser) return undefined;
+    if (!isAdminUser) return;
 
-    const search = query.trim();
-    setTemporaryPassword("");
+    async function loadMembers() {
+      setLoadingMembers(true);
+      try {
+        const { data, error } = await supabase
+          .from("guild_members")
+          .select("id, role, discord_id, watcher_name, guild_code")
+          .order("watcher_name", { ascending: true });
 
-    if (!adminPassword.trim() || search.length < 2) {
-      setSuggestions([]);
-      setErrorMessage("");
-      setLoading(false);
-      return undefined;
+        if (error) throw error;
+
+        setMembers((data || []).map((member) => ({
+          id: member.id,
+          name: getMemberDisplayName(member),
+          discordId: member.discord_id || "",
+          guildCode: member.guild_code || "",
+          role: member.role || "Joueur",
+        })));
+      } catch (error) {
+        console.error("[portal-access-members]", error);
+        setMembers([]);
+        setErrorMessage("Impossible de charger les joueurs.");
+      } finally {
+        setLoadingMembers(false);
+      }
     }
 
-    const controller = new AbortController();
-    const timeout = window.setTimeout(async () => {
-      setLoading(true);
-      setErrorMessage("");
+    loadMembers();
+  }, [isAdminUser]);
 
-      try {
-        const response = await fetch(`${apiBase}/api/portal-access`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "search",
-            actorMemberId,
-            adminPassword,
-            query: search,
-          }),
-          signal: controller.signal,
-        });
-        const payload = await response.json().catch(() => ({}));
+  const suggestions = useMemo(() => {
+    const search = normalizeHeroKey(query);
+    if (search.length < 2) return [];
 
-        if (!response.ok) {
-          throw new Error(payload.error || "Recherche impossible.");
-        }
-
-        setSuggestions(payload.members || []);
-      } catch (error) {
-        if (error.name === "AbortError") return;
-        setSuggestions([]);
-        setErrorMessage(error.message || "Recherche impossible.");
-      } finally {
-        setLoading(false);
-      }
-    }, 260);
-
-    return () => {
-      window.clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [actorMemberId, adminPassword, apiBase, isAdminUser, query]);
+    return members
+      .filter((member) => {
+        const haystack = normalizeHeroKey(`${member.name} ${member.discordId} ${member.guildCode}`);
+        return haystack.includes(search);
+      })
+      .slice(0, 20);
+  }, [members, query]);
 
   async function copyValue(value, field) {
     if (!value || !navigator?.clipboard) return;
@@ -2735,28 +2727,14 @@ function PlayerAccessView({ session }) {
           <div>
             <h2 className="text-xl font-semibold text-zinc-50">Acces joueurs</h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Identifiant visible, reset temporaire avec changement obligatoire.
+              Recherche joueur, identifiant et reset temporaire.
             </p>
           </div>
           <Badge className="rounded-md border-amber-500/30 bg-amber-500/10 text-amber-200">Admin</Badge>
         </div>
 
-        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <div className="space-y-4">
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="player-access-password">
-                Mot de passe admin
-              </label>
-              <input
-                id="player-access-password"
-                type="password"
-                value={adminPassword}
-                onChange={(event) => setAdminPassword(event.target.value)}
-                className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
-                autoComplete="current-password"
-              />
-            </div>
-
             <div>
               <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="player-access-search">
                 Joueur
@@ -2779,13 +2757,13 @@ function PlayerAccessView({ session }) {
               </div>
 
               <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
-                {loading ? (
+                {loadingMembers ? (
                   <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-500">
-                    Recherche...
+                    Chargement...
                   </div>
                 ) : suggestions.length === 0 ? (
                   <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-500">
-                    Aucun joueur selectionne.
+                    {query.trim().length < 2 ? "Tape au moins 2 lettres." : "Aucun joueur trouve."}
                   </div>
                 ) : (
                   suggestions.map((member) => {
@@ -2873,14 +2851,30 @@ function PlayerAccessView({ session }) {
                   </div>
                 </div>
 
-                <Button
-                  type="button"
-                  className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
-                  onClick={resetPassword}
-                  disabled={resetting || !adminPassword.trim() || selectedMemberIsProtected}
-                >
-                  {resetting ? "Generation..." : "Generer un mot de passe"}
-                </Button>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="player-access-password">
+                    Confirmation admin
+                  </label>
+                  <div className="mt-2 flex flex-col gap-3 sm:flex-row">
+                    <input
+                      id="player-access-password"
+                      type="password"
+                      value={adminPassword}
+                      onChange={(event) => setAdminPassword(event.target.value)}
+                      className="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                      placeholder="Ton mot de passe"
+                      autoComplete="current-password"
+                    />
+                    <Button
+                      type="button"
+                      className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+                      onClick={resetPassword}
+                      disabled={resetting || !adminPassword.trim() || selectedMemberIsProtected}
+                    >
+                      {resetting ? "Generation..." : "Generer"}
+                    </Button>
+                  </div>
+                </div>
                 {selectedMemberIsProtected ? (
                   <div className="text-sm text-amber-300">Compte admin protege.</div>
                 ) : null}
