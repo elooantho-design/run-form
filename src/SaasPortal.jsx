@@ -60,6 +60,7 @@ const adminNavigation = [
   { id: "launcher", label: "Launcher", icon: Bot },
   { id: "validation", label: "Validation", icon: SearchCheck },
   { id: "logs", label: "Logs", icon: Activity },
+  { id: "player-access", label: "Acces joueurs", icon: Lock, adminOnly: true },
 ];
 
 const categoryCards = [
@@ -167,6 +168,8 @@ function getApiBase() {
 
 const PORTAL_SESSION_STORAGE_KEY = "paladinPortalSession";
 const DASHBOARD_SESSION_STORAGE_KEY = "guildDashboardSession";
+const portalDefaultPasswords = ["motdepassemembre", "motdepasseadmin"];
+const portalTemporaryPasswordPrefix = "TMP-";
 
 function isAdminRole(role) {
   return ["admin", "administrateur", "leader", "officier"].includes(
@@ -194,7 +197,13 @@ function buildPortalSession(member) {
     guild_code: guildCode,
     isAdmin: admin,
     admin,
+    passwordChangeRequired: Boolean(member?.password_change_required),
   };
+}
+
+function isForcedPortalPassword(password) {
+  const cleanPassword = String(password || "").trim();
+  return portalDefaultPasswords.includes(cleanPassword) || cleanPassword.startsWith(portalTemporaryPasswordPrefix);
 }
 
 function readJsonStorage(key, storage) {
@@ -224,6 +233,17 @@ function persistPortalSession(session, remember) {
     window.localStorage.setItem(PORTAL_SESSION_STORAGE_KEY, serialized);
   } else {
     window.localStorage.removeItem(PORTAL_SESSION_STORAGE_KEY);
+  }
+}
+
+function replaceStoredPortalSession(session) {
+  if (typeof window === "undefined") return;
+  const serialized = JSON.stringify(session);
+  window.sessionStorage.setItem(PORTAL_SESSION_STORAGE_KEY, serialized);
+  window.localStorage.setItem(DASHBOARD_SESSION_STORAGE_KEY, serialized);
+
+  if (window.localStorage.getItem(PORTAL_SESSION_STORAGE_KEY)) {
+    window.localStorage.setItem(PORTAL_SESSION_STORAGE_KEY, serialized);
   }
 }
 
@@ -637,7 +657,7 @@ function LoginPanel({ onLogin }) {
         return;
       }
 
-      onLogin(buildPortalSession(data), { remember });
+      onLogin(buildPortalSession({ ...data, password_change_required: isForcedPortalPassword(cleanPassword) }), { remember });
     } catch (error) {
       console.error("[portal-login]", error);
       setErrorMessage("Connexion impossible. Reessaie ou contacte un admin.");
@@ -856,11 +876,16 @@ function PortalShell({ session, onLogout }) {
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const loggedTabViewsRef = useRef(new Set());
+  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const visibleAdminNavigation = useMemo(
+    () => adminNavigation.filter((item) => !item.adminOnly || isAdminUser),
+    [isAdminUser],
+  );
 
   const activeTitle = useMemo(() => {
     return [...navigation, ...adminNavigation].find((item) => item.id === active)?.label || "Accueil";
   }, [active]);
-  const activeAdminItem = adminNavigation.some((item) => item.id === active);
+  const activeAdminItem = visibleAdminNavigation.some((item) => item.id === active);
 
   useEffect(() => {
     if (active === "home" || active === "logs" || loggedTabViewsRef.current.has(active)) return;
@@ -931,7 +956,7 @@ function PortalShell({ session, onLogout }) {
 
             {adminNavOpen ? (
               <div className="mt-1 space-y-1 rounded-lg border border-zinc-800 bg-zinc-950/80 p-1">
-                {adminNavigation.map((item) => {
+                {visibleAdminNavigation.map((item) => {
                   const Icon = item.icon;
                   const selected = active === item.id;
 
@@ -1002,6 +1027,7 @@ function PortalShell({ session, onLogout }) {
           {active === "gvg" ? <GvgView /> : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
+          {active === "player-access" ? <PlayerAccessView session={session} /> : null}
           {active === "templates" ? <TemplatesView /> : null}
           {active === "guilds" ? <GuildsView /> : null}
           {active === "billing" ? <BillingView /> : null}
@@ -2429,6 +2455,455 @@ function BillingView() {
   );
 }
 
+function PasswordChangeRequiredView({ session, onPasswordChanged, onLogout }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    if (saving) return;
+
+    const cleanCurrentPassword = currentPassword.trim();
+    const cleanNewPassword = newPassword.trim();
+    const cleanConfirmPassword = confirmPassword.trim();
+
+    if (!cleanCurrentPassword || !cleanNewPassword || !cleanConfirmPassword) {
+      setErrorMessage("Tous les champs sont obligatoires.");
+      return;
+    }
+
+    if (cleanNewPassword.length < 6) {
+      setErrorMessage("Le nouveau mot de passe doit faire au moins 6 caracteres.");
+      return;
+    }
+
+    if (cleanNewPassword !== cleanConfirmPassword) {
+      setErrorMessage("La confirmation ne correspond pas.");
+      return;
+    }
+
+    if (isForcedPortalPassword(cleanNewPassword)) {
+      setErrorMessage("Choisis un mot de passe different du mot de passe temporaire.");
+      return;
+    }
+
+    setSaving(true);
+    setErrorMessage("");
+
+    try {
+      const { data, error } = await supabase
+        .from("guild_members")
+        .update({ password: cleanNewPassword })
+        .eq("id", session?.memberId || session?.id)
+        .eq("password", cleanCurrentPassword)
+        .select("id")
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) {
+        setErrorMessage("Le mot de passe actuel est incorrect.");
+        return;
+      }
+
+      await logPortalActivity(session, {
+        targetMemberId: session?.memberId || session?.id || null,
+        targetName: session?.watcherName || session?.name || "",
+        actionType: "player_password_change",
+        entityType: "guild_members",
+        entityId: session?.memberId || session?.id || null,
+        summary: `${session?.watcherName || session?.name || "Joueur"} a change son mot de passe`,
+      });
+
+      onPasswordChanged();
+    } catch (error) {
+      console.error("[portal-password-change]", error);
+      setErrorMessage("Changement impossible. Reessaie ou contacte un admin.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#11100d] px-4 py-8 text-zinc-100">
+      <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold text-zinc-50">Changement requis</h1>
+            <p className="mt-1 text-sm text-zinc-500">{session?.watcherName || session?.name || "Joueur"}</p>
+          </div>
+          <Badge className="rounded-md border-amber-500/30 bg-amber-500/10 text-amber-200">Temporaire</Badge>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="current-password">
+              Mot de passe actuel
+            </label>
+            <input
+              id="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+              autoComplete="current-password"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="new-password">
+              Nouveau mot de passe
+            </label>
+            <input
+              id="new-password"
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+              autoComplete="new-password"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="confirm-password">
+              Confirmation
+            </label>
+            <input
+              id="confirm-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+
+        {errorMessage ? (
+          <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            {errorMessage}
+          </div>
+        ) : null}
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          <Button type="submit" className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400" disabled={saving}>
+            {saving ? "Enregistrement..." : "Changer"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+            onClick={onLogout}
+          >
+            Deconnexion
+          </Button>
+        </div>
+      </form>
+    </main>
+  );
+}
+
+function PlayerAccessView({ session }) {
+  const apiBase = useMemo(() => getApiBase(), []);
+  const actorMemberId = session?.memberId || session?.id || "";
+  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const [adminPassword, setAdminPassword] = useState("");
+  const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [copiedField, setCopiedField] = useState("");
+  const selectedMemberIsProtected = isAdminRole(selectedMember?.role);
+
+  useEffect(() => {
+    if (!isAdminUser) return undefined;
+
+    const search = query.trim();
+    setTemporaryPassword("");
+
+    if (!adminPassword.trim() || search.length < 2) {
+      setSuggestions([]);
+      setErrorMessage("");
+      setLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setLoading(true);
+      setErrorMessage("");
+
+      try {
+        const response = await fetch(`${apiBase}/api/portal-access`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "search",
+            actorMemberId,
+            adminPassword,
+            query: search,
+          }),
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(payload.error || "Recherche impossible.");
+        }
+
+        setSuggestions(payload.members || []);
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        setSuggestions([]);
+        setErrorMessage(error.message || "Recherche impossible.");
+      } finally {
+        setLoading(false);
+      }
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [actorMemberId, adminPassword, apiBase, isAdminUser, query]);
+
+  async function copyValue(value, field) {
+    if (!value || !navigator?.clipboard) return;
+
+    await navigator.clipboard.writeText(value);
+    setCopiedField(field);
+    window.setTimeout(() => setCopiedField(""), 1400);
+  }
+
+  async function resetPassword() {
+    if (!selectedMember?.id || !adminPassword.trim() || resetting) return;
+
+    setResetting(true);
+    setErrorMessage("");
+    setSuccessMessage("");
+    setTemporaryPassword("");
+
+    try {
+      const response = await fetch(`${apiBase}/api/portal-access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reset",
+          actorMemberId,
+          adminPassword,
+          memberId: selectedMember.id,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Reset impossible.");
+      }
+
+      setSelectedMember(payload.member || selectedMember);
+      setTemporaryPassword(payload.temporaryPassword || "");
+      setSuccessMessage("Mot de passe temporaire genere. Le joueur devra le changer a la prochaine connexion.");
+    } catch (error) {
+      setErrorMessage(error.message || "Reset impossible.");
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  if (!isAdminUser) {
+    return (
+      <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <h2 className="text-xl font-semibold text-zinc-50">Acces joueurs</h2>
+        <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          Reserve aux administrateurs.
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-6">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold text-zinc-50">Acces joueurs</h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              Identifiant visible, reset temporaire avec changement obligatoire.
+            </p>
+          </div>
+          <Badge className="rounded-md border-amber-500/30 bg-amber-500/10 text-amber-200">Admin</Badge>
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="player-access-password">
+                Mot de passe admin
+              </label>
+              <input
+                id="player-access-password"
+                type="password"
+                value={adminPassword}
+                onChange={(event) => setAdminPassword(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                autoComplete="current-password"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="player-access-search">
+                Joueur
+              </label>
+              <div className="mt-2 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+                <Search className="h-4 w-4 text-zinc-500" />
+                <input
+                  id="player-access-search"
+                  type="search"
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setSelectedMember(null);
+                    setSuccessMessage("");
+                  }}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+                  placeholder="Nom ou identifiant"
+                  autoComplete="off"
+                />
+              </div>
+
+              <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
+                {loading ? (
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-500">
+                    Recherche...
+                  </div>
+                ) : suggestions.length === 0 ? (
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-500">
+                    Aucun joueur selectionne.
+                  </div>
+                ) : (
+                  suggestions.map((member) => {
+                    const selected = String(member.id) === String(selectedMember?.id);
+
+                    return (
+                      <button
+                        key={member.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedMember(member);
+                          setQuery(member.name);
+                          setTemporaryPassword("");
+                          setSuccessMessage("");
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                          selected
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+                            : "border-zinc-800 bg-zinc-900 text-zinc-200 hover:border-zinc-700"
+                        }`}
+                      >
+                        <span className="block truncate text-sm font-semibold">{member.name}</span>
+                        <span className="mt-0.5 block truncate text-xs text-zinc-500">
+                          {member.guildCode || "Cluster"} {member.discordId ? `- ${member.discordId}` : ""}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+            {!selectedMember ? (
+              <div className="flex h-full min-h-64 items-center justify-center text-sm text-zinc-500">
+                Selectionne un joueur.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Profil</div>
+                    <div className="mt-1 text-2xl font-semibold text-zinc-50">{selectedMember.name}</div>
+                    <div className="mt-1 text-sm text-zinc-500">
+                      {selectedMember.guildCode || "Cluster"} - {selectedMember.role || "Joueur"}
+                    </div>
+                  </div>
+                  <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-300">
+                    {selectedMember.role || "Joueur"}
+                  </Badge>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Identifiant</div>
+                    <div className="mt-2 break-all text-lg font-semibold text-zinc-50">
+                      {selectedMember.discordId || "-"}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="mt-3 rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                      onClick={() => copyValue(selectedMember.discordId, "login")}
+                      disabled={!selectedMember.discordId}
+                    >
+                      {copiedField === "login" ? "Copie" : "Copier"}
+                    </Button>
+                  </div>
+
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Mot de passe temporaire</div>
+                    <div className="mt-2 break-all text-lg font-semibold text-zinc-50">
+                      {temporaryPassword || "-"}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="mt-3 rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                      onClick={() => copyValue(temporaryPassword, "password")}
+                      disabled={!temporaryPassword}
+                    >
+                      {copiedField === "password" ? "Copie" : "Copier"}
+                    </Button>
+                  </div>
+                </div>
+
+                <Button
+                  type="button"
+                  className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+                  onClick={resetPassword}
+                  disabled={resetting || !adminPassword.trim() || selectedMemberIsProtected}
+                >
+                  {resetting ? "Generation..." : "Generer un mot de passe"}
+                </Button>
+                {selectedMemberIsProtected ? (
+                  <div className="text-sm text-amber-300">Compte admin protege.</div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {errorMessage ? (
+          <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            {errorMessage}
+          </div>
+        ) : null}
+        {successMessage ? (
+          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            {successMessage}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 const logActionFilters = [
   { id: "all", label: "Tout" },
   { id: "hero_box_update", label: "Box heros" },
@@ -2443,6 +2918,8 @@ const logActionFilters = [
   { id: "gvg_launcher_start", label: "GVG" },
   { id: "gvg_validation_import", label: "Import GVG" },
   { id: "gvg_job_delete", label: "Jobs GVG" },
+  { id: "player_password_reset", label: "Acces joueurs" },
+  { id: "player_password_change", label: "Mot de passe" },
   { id: "portal_tab_view", label: "Vues" },
 ];
 
@@ -2712,6 +3189,14 @@ export default function SaasPortal() {
     setSession(nextSession);
   }
 
+  function handlePasswordChanged() {
+    setSession((current) => {
+      const nextSession = { ...(current || {}), passwordChangeRequired: false };
+      replaceStoredPortalSession(nextSession);
+      return nextSession;
+    });
+  }
+
   function handleLogout() {
     clearPortalSession();
     setSession(null);
@@ -2719,6 +3204,16 @@ export default function SaasPortal() {
 
   if (!session) {
     return <LoginPanel onLogin={handleLogin} />;
+  }
+
+  if (session.passwordChangeRequired) {
+    return (
+      <PasswordChangeRequiredView
+        session={session}
+        onPasswordChanged={handlePasswordChanged}
+        onLogout={handleLogout}
+      />
+    );
   }
 
   return <PortalShell session={session} onLogout={handleLogout} />;
