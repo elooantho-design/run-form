@@ -49,13 +49,16 @@ const navigation = [
   { id: "personal-best", label: "Mes PB", icon: Activity },
   { id: "defenses", label: "Mes defenses", icon: Bot },
   { id: "gvg", label: "GVG", icon: Shield },
-  { id: "launcher", label: "Launcher", icon: Bot },
-  { id: "validation", label: "Validation", icon: SearchCheck },
   { id: "templates", label: "Templates", icon: Grid3X3 },
   { id: "guilds", label: "Guildes", icon: Users },
   { id: "billing", label: "Licences", icon: WalletCards },
-  { id: "logs", label: "Logs", icon: Activity },
   { id: "settings", label: "Parametres", icon: Settings },
+];
+
+const adminNavigation = [
+  { id: "launcher", label: "Launcher", icon: Bot },
+  { id: "validation", label: "Validation", icon: SearchCheck },
+  { id: "logs", label: "Logs", icon: Activity },
 ];
 
 const categoryCards = [
@@ -850,10 +853,12 @@ function ElectricBorderLayers() {
 
 function PortalShell({ session, onLogout }) {
   const [active, setActive] = useState("home");
+  const [adminNavOpen, setAdminNavOpen] = useState(false);
 
   const activeTitle = useMemo(() => {
-    return navigation.find((item) => item.id === active)?.label || "Accueil";
+    return [...navigation, ...adminNavigation].find((item) => item.id === active)?.label || "Accueil";
   }, [active]);
+  const activeAdminItem = adminNavigation.some((item) => item.id === active);
 
   return (
     <div className="min-h-screen bg-[#11100d] text-zinc-100">
@@ -890,6 +895,48 @@ function PortalShell({ session, onLogout }) {
               </button>
             );
           })}
+
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => setAdminNavOpen((value) => !value)}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                activeAdminItem
+                  ? "bg-zinc-900 text-zinc-50"
+                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+              }`}
+              aria-expanded={adminNavOpen}
+            >
+              <Lock className="h-4 w-4" />
+              <span className="flex-1">Admin</span>
+              <ChevronRight className={`h-4 w-4 transition-transform ${adminNavOpen ? "rotate-90" : ""}`} />
+            </button>
+
+            {adminNavOpen ? (
+              <div className="mt-1 space-y-1 rounded-lg border border-zinc-800 bg-zinc-950/80 p-1">
+                {adminNavigation.map((item) => {
+                  const Icon = item.icon;
+                  const selected = active === item.id;
+
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setActive(item.id)}
+                      className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${
+                        selected
+                          ? "bg-zinc-800 text-zinc-50"
+                          : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </nav>
 
         <div className="absolute bottom-5 left-4 right-4 rounded-lg border border-zinc-800 bg-zinc-900 p-3">
