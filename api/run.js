@@ -3,7 +3,7 @@ import {
   isMissingGuildCodeColumn,
   resolveRunScope,
   stratMatchesRunScope,
-} from "./run-scope.js";
+} from "../src/lib/runScopeServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,

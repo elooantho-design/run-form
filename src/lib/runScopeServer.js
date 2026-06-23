@@ -5,7 +5,7 @@ import {
   normalizeGuildCodeKey,
   PALADIN_CLUSTER_GUILD_CODES,
   PALADIN_SPACE_KEY,
-} from "../src/lib/guildScope.js";
+} from "./guildScope.js";
 
 function normalizeRoleValue(role) {
   return String(role || "")
