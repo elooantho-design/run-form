@@ -262,7 +262,7 @@ const addImageBlock = async (event) => {
         <div>
           <h2 className="flex items-center gap-2 text-xl font-bold text-white">
             <Shield className="h-5 w-5" />
-            Admin défenses
+            Gestion défense
           </h2>
           <p className="text-sm text-zinc-400">
             Gestion des défenses disponibles dans Mes défenses.
@@ -303,6 +303,14 @@ const addImageBlock = async (event) => {
         >
           Bastion
         </button>
+
+        <button
+          type="button"
+          onClick={() => setTypeFilter("bulle")}
+          className={filterButtonClass("bulle")}
+        >
+          Bulle
+        </button>
       </div>
 
       <div className="grid gap-3">
@@ -317,7 +325,7 @@ const addImageBlock = async (event) => {
             return (
               <div
                 key={defense.id}
-                className={`grid min-h-[220px] grid-cols-[1fr_300px_auto] gap-5 rounded-2xl p-4 ${defenseCardClass(
+                className={`grid min-h-[220px] gap-5 rounded-2xl p-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)_auto] ${defenseCardClass(
                   defense.tier
                 )}`}
               >

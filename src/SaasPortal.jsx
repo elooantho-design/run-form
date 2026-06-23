@@ -12,11 +12,13 @@ import {
   Gauge,
   Grid3X3,
   HardDrive,
+  ImagePlus,
   LayoutDashboard,
   Lock,
   LogOut,
   Play,
   PlusCircle,
+  RefreshCw,
   Search,
   SearchCheck,
   Server,
@@ -27,6 +29,7 @@ import {
   UploadCloud,
   Users,
   WalletCards,
+  X,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -41,6 +44,7 @@ import GvgCurrentTab from "@/components/GvgCurrentTab";
 import GvgPanelTab from "@/components/GvgPanelTab";
 import GvgAdminTab from "@/components/GvgAdminTab";
 import GvgValidationTab from "@/components/GvgValidationTab";
+import AdminDefensesTab from "@/components/AdminDefensesTab";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
 
@@ -60,6 +64,7 @@ const navigation = [
 
 const adminNavigation = [
   { id: "guild-management", label: "Gestion guildes", icon: Users, adminOnly: true },
+  { id: "admin-defenses", label: "Gestion défense", icon: Shield, adminOnly: true },
   { id: "launcher", label: "Launcher", icon: Bot },
   { id: "validation", label: "Validation", icon: SearchCheck },
   { id: "logs", label: "Logs", icon: Activity },
@@ -905,11 +910,15 @@ function PortalShell({ session, onLogout }) {
     });
   }, [active, activeTitle, session]);
 
+  useEffect(() => {
+    if (activeAdminItem) setAdminNavOpen(true);
+  }, [activeAdminItem]);
+
   return (
     <div className="min-h-screen bg-[#11100d] text-zinc-100">
       <ElectricBorderFilter />
-      <aside className="fixed inset-y-0 left-0 hidden w-72 border-r border-zinc-800 bg-zinc-950/95 px-4 py-5 lg:block">
-        <div className="flex items-center gap-3 px-2">
+      <aside className="fixed inset-y-0 left-0 hidden w-72 flex-col border-r border-zinc-800 bg-zinc-950/95 px-4 py-5 lg:flex">
+        <div className="flex flex-none items-center gap-3 px-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/10">
             <Compass className="h-5 w-5 text-emerald-300" />
           </div>
@@ -919,7 +928,7 @@ function PortalShell({ session, onLogout }) {
           </div>
         </div>
 
-        <nav className="mt-8 space-y-1">
+        <nav className="mt-8 min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 pb-3">
           {navigation.map((item) => {
             const Icon = item.icon;
             const selected = active === item.id;
@@ -984,7 +993,7 @@ function PortalShell({ session, onLogout }) {
           </div>
         </nav>
 
-        <div className="absolute bottom-5 left-4 right-4 rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+        <div className="mt-4 flex-none rounded-lg border border-zinc-800 bg-zinc-900 p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-sm font-medium text-zinc-100">{session.name}</div>
@@ -1031,6 +1040,7 @@ function PortalShell({ session, onLogout }) {
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
           {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
+          {active === "admin-defenses" ? <PortalAdminDefensesView session={session} /> : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
           {active === "templates" ? <AddHeroView session={session} /> : null}
           {active === "guilds" ? <GuildsView /> : null}
@@ -2344,6 +2354,847 @@ function LauncherView({ session: portalSession }) {
               </Button>
             </div>
           </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+const PORTAL_ADMIN_DEFENSE_GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
+const EMPTY_DEFENSE_SLOT = "--";
+
+const emptyPortalDefenseDraft = {
+  id: 0,
+  name: "",
+  tier: "meta_s",
+  type: "Tour",
+  faction: "",
+  image: "",
+  guildCode: "G1",
+  isGlobal: false,
+  slots: ["", "", "", "", ""],
+};
+
+function getPortalSessionGuildCode(session) {
+  return session?.guildCode || session?.guild_code || session?.guild || "G1";
+}
+
+function mapPortalAdminDefenseRow(row) {
+  const slots = [...(row.guild_defense_slots || [])]
+    .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
+    .map((slot) => slot.champions?.name || "")
+    .filter(Boolean);
+
+  const conditions = (row.guild_defense_conditions || []).map((condition) => ({
+    id: condition.id,
+    championId: condition.champion_id,
+    minAwakening: condition.min_awakening,
+    label: `${condition.champions?.name || "Hero"} A${condition.min_awakening} minimum`,
+  }));
+
+  return {
+    id: row.id,
+    name: row.name || "",
+    tier: row.tier || "meta_s",
+    type: row.type || "Tour",
+    faction: row.faction || "",
+    guildCode: row.guild_code || "G1",
+    isGlobal: Boolean(row.is_global),
+    sourceDefenseId: row.source_defense_id || null,
+    sortOrder: row.sort_order ?? 9999,
+    slots,
+    conditions,
+    image: row.image_url || "",
+    image_url: row.image_url || "",
+  };
+}
+
+function normalizeDefenseChampionName(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getDefenseStoragePathFromPublicUrl(fileUrl) {
+  if (!fileUrl) return null;
+
+  try {
+    const url = new URL(fileUrl);
+    const marker = "/storage/v1/object/public/defense-images/";
+    const markerIndex = url.pathname.indexOf(marker);
+
+    if (markerIndex === -1) return null;
+    return decodeURIComponent(url.pathname.slice(markerIndex + marker.length));
+  } catch (error) {
+    console.error("Erreur parsing URL storage defense:", error);
+    return null;
+  }
+}
+
+function compressPortalDefenseImage(file, maxWidth = 1400, quality = 0.86) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type?.startsWith("image/")) {
+      reject(new Error("Choisis une image valide pour la defense."));
+      return;
+    }
+
+    const image = new Image();
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      image.onload = () => {
+        const scale = Math.min(1, maxWidth / Math.max(image.width || 1, image.height || 1));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+
+        const context = canvas.getContext("2d");
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error("Compression image impossible."));
+              return;
+            }
+
+            resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".webp"), { type: "image/webp" }));
+          },
+          "image/webp",
+          quality,
+        );
+      };
+
+      image.onerror = () => reject(new Error("Lecture de l'image impossible."));
+      image.src = reader.result;
+    };
+
+    reader.onerror = () => reject(new Error("Lecture du fichier impossible."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function PortalAdminDefensesView({ session }) {
+  const [activeGuildCode, setActiveGuildCode] = useState(getPortalSessionGuildCode(session));
+  const [defenses, setDefenses] = useState([]);
+  const [champions, setChampions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draft, setDraft] = useState(emptyPortalDefenseDraft);
+  const [conditionOpen, setConditionOpen] = useState(false);
+  const [conditionDefenseId, setConditionDefenseId] = useState("");
+  const [newCondition, setNewCondition] = useState({ hero: "", minAwakening: 5 });
+  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+
+  const championByName = useMemo(() => {
+    const entries = champions.map((champion) => [
+      normalizeDefenseChampionName(champion.name),
+      champion,
+    ]);
+    return new Map(entries);
+  }, [champions]);
+
+  const selectedConditionDefense = useMemo(
+    () => defenses.find((defense) => String(defense.id) === String(conditionDefenseId)) || null,
+    [conditionDefenseId, defenses],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAdminDefenses() {
+      if (!isAdminUser) {
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setErrorMessage("");
+
+      const [defensesResult, championsResult] = await Promise.all([
+        supabase
+          .from("guild_defenses")
+          .select(`
+            id,
+            name,
+            tier,
+            type,
+            faction,
+            image_url,
+            guild_code,
+            is_global,
+            source_defense_id,
+            sort_order,
+            created_at,
+            guild_defense_slots (
+              slot_index,
+              champion_id,
+              champions (
+                name
+              )
+            ),
+            guild_defense_conditions (
+              id,
+              champion_id,
+              min_awakening,
+              champions (
+                name
+              )
+            )
+          `)
+          .or(`is_global.eq.true,guild_code.eq.${activeGuildCode}`)
+          .order("created_at", { ascending: true }),
+        supabase.from("champions").select("id, name, portal_name").order("name", { ascending: true }),
+      ]);
+
+      if (cancelled) return;
+
+      if (defensesResult.error || championsResult.error) {
+        console.error("Erreur chargement gestion defense Portal:", defensesResult.error || championsResult.error);
+        setDefenses([]);
+        setChampions([]);
+        setErrorMessage("Impossible de charger les defenses admin pour le moment.");
+        setLoading(false);
+        return;
+      }
+
+      const nextDefenses = (defensesResult.data || [])
+        .map(mapPortalAdminDefenseRow)
+        .sort((left, right) => {
+          if ((left.sortOrder ?? 9999) !== (right.sortOrder ?? 9999)) {
+            return (left.sortOrder ?? 9999) - (right.sortOrder ?? 9999);
+          }
+
+          return String(left.name || "").localeCompare(String(right.name || ""), "fr", { sensitivity: "base" });
+        });
+
+      setDefenses(nextDefenses);
+      setChampions(championsResult.data || []);
+      setLoading(false);
+    }
+
+    loadAdminDefenses();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGuildCode, isAdminUser, refreshTick]);
+
+  function openAddDefense() {
+    setMessage("");
+    setErrorMessage("");
+    setDraft({
+      ...emptyPortalDefenseDraft,
+      guildCode: activeGuildCode,
+      isGlobal: activeGuildCode === "G1",
+    });
+    setDraftOpen(true);
+  }
+
+  function openEditDefense(defense) {
+    setMessage("");
+    setErrorMessage("");
+    setDraft({
+      id: defense.id,
+      name: defense.name || "",
+      tier: defense.tier || "meta_s",
+      type: defense.type || "Tour",
+      faction: defense.faction || "",
+      image: defense.image || defense.image_url || "",
+      guildCode: defense.guildCode || activeGuildCode,
+      isGlobal: Boolean(defense.isGlobal),
+      slots: [...(defense.slots || []), "", "", "", "", ""].slice(0, 5),
+    });
+    setDraftOpen(true);
+  }
+
+  function updateDraftSlot(index, value) {
+    setDraft((previous) => {
+      const nextSlots = [...previous.slots];
+      nextSlots[index] = value;
+      return { ...previous, slots: nextSlots };
+    });
+  }
+
+  async function handleDefenseImageChange(event) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    if (!file) return;
+
+    setSaving(true);
+    setErrorMessage("");
+
+    try {
+      const compressedFile = await compressPortalDefenseImage(file);
+      const randomId =
+        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+      const filePath = `portal-defense-${Date.now()}-${randomId}.webp`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("defense-images")
+        .upload(filePath, compressedFile, {
+          contentType: "image/webp",
+          upsert: false,
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from("defense-images").getPublicUrl(filePath);
+      setDraft((previous) => ({ ...previous, image: data.publicUrl }));
+    } catch (error) {
+      setErrorMessage(error?.message || "Upload de l'image impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveDraftDefense(event) {
+    event?.preventDefault();
+    if (!isAdminUser || saving) return;
+
+    const cleanName = draft.name.trim();
+    const normalizedSlots = draft.slots.map((slot) => slot.trim()).filter(Boolean);
+
+    if (!cleanName || normalizedSlots.length !== 5) {
+      setErrorMessage("Renseigne un nom et les 5 heros de la defense.");
+      return;
+    }
+
+    const slotChampions = normalizedSlots.map((heroName) => championByName.get(normalizeDefenseChampionName(heroName)));
+
+    if (slotChampions.some((champion) => !champion)) {
+      setErrorMessage("Un des heros n'existe pas dans la table champions. Utilise l'autocompletion.");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    setErrorMessage("");
+
+    const isEditMode = draft.id && String(draft.id) !== "0";
+    const nextGuildCode = isEditMode && draft.isGlobal ? draft.guildCode || "G1" : activeGuildCode;
+    const nextIsGlobal = isEditMode ? Boolean(draft.isGlobal) : activeGuildCode === "G1";
+    const defensePayload = {
+      name: cleanName,
+      tier: draft.tier,
+      type: draft.type,
+      faction: draft.faction.trim() || null,
+      image_url: draft.image || null,
+      guild_code: nextGuildCode,
+      is_global: nextIsGlobal,
+    };
+
+    try {
+      const { data: defenseData, error: defenseError } = isEditMode
+        ? await supabase
+            .from("guild_defenses")
+            .update(defensePayload)
+            .eq("id", draft.id)
+            .select("id, name, tier, type, faction, image_url, guild_code, is_global")
+            .single()
+        : await supabase
+            .from("guild_defenses")
+            .insert(defensePayload)
+            .select("id, name, tier, type, faction, image_url, guild_code, is_global")
+            .single();
+
+      if (defenseError) throw defenseError;
+
+      if (isEditMode) {
+        const { error: deleteSlotsError } = await supabase
+          .from("guild_defense_slots")
+          .delete()
+          .eq("defense_id", defenseData.id);
+
+        if (deleteSlotsError) throw deleteSlotsError;
+      }
+
+      const { error: slotsError } = await supabase.from("guild_defense_slots").insert(
+        slotChampions.map((champion, index) => ({
+          defense_id: defenseData.id,
+          champion_id: champion.id,
+          slot_index: index + 1,
+        })),
+      );
+
+      if (slotsError) throw slotsError;
+
+      void logPortalActivity(session, {
+        actionType: isEditMode ? "admin_defense_update" : "admin_defense_create",
+        entityType: "defense",
+        entityId: String(defenseData.id),
+        summary: `${session?.watcherName || session?.name || "Admin"} a ${isEditMode ? "modifie" : "cree"} la defense ${cleanName}`,
+        metadata: {
+          defenseName: cleanName,
+          guildCode: nextGuildCode,
+          isGlobal: nextIsGlobal,
+          slots: normalizedSlots,
+        },
+      });
+
+      setDraftOpen(false);
+      setMessage(`Defense ${isEditMode ? "mise a jour" : "ajoutee"} : ${cleanName}.`);
+      setRefreshTick((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(error?.message || "Sauvegarde de la defense impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openConditionDialog(defense) {
+    const firstHero = defense?.slots?.[0] || "";
+    setConditionDefenseId(String(defense?.id || ""));
+    setNewCondition({ hero: firstHero, minAwakening: 5 });
+    setConditionOpen(true);
+    setMessage("");
+    setErrorMessage("");
+  }
+
+  async function addDefenseCondition(event) {
+    event?.preventDefault();
+    if (!isAdminUser || saving || !selectedConditionDefense) return;
+
+    const heroName = newCondition.hero.trim();
+    const minAwakening = Number(newCondition.minAwakening);
+
+    if (!heroName || Number.isNaN(minAwakening)) {
+      setErrorMessage("Choisis un heros et un niveau d'eveil.");
+      return;
+    }
+
+    if (!(selectedConditionDefense.slots || []).includes(heroName)) {
+      setErrorMessage("La condition doit viser un heros present dans cette defense.");
+      return;
+    }
+
+    const champion = championByName.get(normalizeDefenseChampionName(heroName));
+    if (!champion) {
+      setErrorMessage("Hero introuvable dans la table champions.");
+      return;
+    }
+
+    const alreadyExists = (selectedConditionDefense.conditions || []).some(
+      (condition) =>
+        normalizeDefenseChampionName(condition.label).startsWith(normalizeDefenseChampionName(heroName)) &&
+        Number(condition.minAwakening) === minAwakening,
+    );
+
+    if (alreadyExists) {
+      setErrorMessage("Cette condition existe deja.");
+      return;
+    }
+
+    setSaving(true);
+    setErrorMessage("");
+
+    try {
+      const { error } = await supabase.from("guild_defense_conditions").insert({
+        defense_id: selectedConditionDefense.id,
+        champion_id: champion.id,
+        min_awakening: minAwakening,
+      });
+
+      if (error) throw error;
+
+      void logPortalActivity(session, {
+        actionType: "admin_defense_condition_add",
+        entityType: "defense",
+        entityId: String(selectedConditionDefense.id),
+        summary: `${session?.watcherName || session?.name || "Admin"} a ajoute une condition a ${selectedConditionDefense.name}`,
+        metadata: {
+          defenseName: selectedConditionDefense.name,
+          heroName,
+          minAwakening,
+        },
+      });
+
+      setConditionOpen(false);
+      setMessage(`Condition ajoutee a ${selectedConditionDefense.name}.`);
+      setRefreshTick((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(error?.message || "Ajout de condition impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteDefense(defense) {
+    if (!isAdminUser || saving || !defense?.id) return;
+
+    const confirmed = window.confirm(`Supprimer la defense "${defense.name}" ?`);
+    if (!confirmed) return;
+
+    setSaving(true);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const { data: blocks, error: blocksError } = await supabase
+        .from("guild_defense_blocks")
+        .select("id, block_type, content")
+        .eq("defense_id", defense.id);
+
+      if (blocksError) throw blocksError;
+
+      const storagePaths = [
+        getDefenseStoragePathFromPublicUrl(defense.image || defense.image_url),
+        ...(blocks || [])
+          .filter((block) => block.block_type === "image")
+          .map((block) => getDefenseStoragePathFromPublicUrl(block.content)),
+      ].filter(Boolean);
+
+      const uniqueStoragePaths = [...new Set(storagePaths)];
+
+      if (uniqueStoragePaths.length > 0) {
+        const { error: storageError } = await supabase.storage.from("defense-images").remove(uniqueStoragePaths);
+        if (storageError) throw storageError;
+      }
+
+      const [resetDefense1, resetDefense2, blocksDelete, conditionsDelete, slotsDelete] = await Promise.all([
+        supabase.from("guild_members").update({ defense_1: EMPTY_DEFENSE_SLOT }).eq("defense_1", defense.name),
+        supabase.from("guild_members").update({ defense_2: EMPTY_DEFENSE_SLOT }).eq("defense_2", defense.name),
+        supabase.from("guild_defense_blocks").delete().eq("defense_id", defense.id),
+        supabase.from("guild_defense_conditions").delete().eq("defense_id", defense.id),
+        supabase.from("guild_defense_slots").delete().eq("defense_id", defense.id),
+      ]);
+
+      const mutationError =
+        resetDefense1.error ||
+        resetDefense2.error ||
+        blocksDelete.error ||
+        conditionsDelete.error ||
+        slotsDelete.error;
+
+      if (mutationError) throw mutationError;
+
+      const { error: defenseError } = await supabase.from("guild_defenses").delete().eq("id", defense.id);
+      if (defenseError) throw defenseError;
+
+      void logPortalActivity(session, {
+        actionType: "admin_defense_delete",
+        entityType: "defense",
+        entityId: String(defense.id),
+        summary: `${session?.watcherName || session?.name || "Admin"} a supprime la defense ${defense.name}`,
+        metadata: {
+          defenseName: defense.name,
+          guildCode: defense.guildCode,
+          isGlobal: defense.isGlobal,
+        },
+      });
+
+      setMessage(`Defense supprimee : ${defense.name}.`);
+      setRefreshTick((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(error?.message || "Suppression de la defense impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!isAdminUser) {
+    return (
+      <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <h2 className="text-xl font-semibold text-zinc-50">Gestion défense</h2>
+        <p className="mt-2 text-sm text-zinc-400">Cet onglet est reserve aux administrateurs.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold text-zinc-50">Gestion défense</h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              Gestion admin des defenses disponibles dans Mes defenses.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+              onClick={() => setRefreshTick((value) => value + 1)}
+              disabled={loading || saving}
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Actualiser
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {PORTAL_ADMIN_DEFENSE_GUILDS.map((guildCode) => (
+            <button
+              key={guildCode}
+              type="button"
+              onClick={() => setActiveGuildCode(guildCode)}
+              className={`rounded-lg border px-3 py-1.5 text-sm transition ${
+                activeGuildCode === guildCode
+                  ? "border-emerald-500 bg-emerald-500/15 text-emerald-200"
+                  : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              }`}
+            >
+              {guildCode}
+            </button>
+          ))}
+          <Badge className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
+            {defenses.length} defenses visibles
+          </Badge>
+        </div>
+      </div>
+
+      {message ? (
+        <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+          {message}
+        </div>
+      ) : null}
+
+      {errorMessage ? (
+        <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {errorMessage}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-400">
+          Chargement des defenses...
+        </div>
+      ) : (
+        <AdminDefensesTab
+          defenses={defenses}
+          onAdd={openAddDefense}
+          onEdit={openEditDefense}
+          onDelete={deleteDefense}
+          onAddCondition={openConditionDialog}
+        />
+      )}
+
+      <datalist id="portal-admin-defense-heroes">
+        {champions.map((champion) => (
+          <option key={champion.id} value={champion.name}>
+            {champion.portal_name || champion.name}
+          </option>
+        ))}
+      </datalist>
+
+      {draftOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <form
+            onSubmit={saveDraftDefense}
+            className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-zinc-100 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">
+                  {draft.id ? "Modifier une defense" : "Ajouter une defense"}
+                </h3>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Les heros doivent correspondre au champ Name de Supabase.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDraftOpen(false)}
+                className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
+                aria-label="Fermer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_260px]">
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-zinc-300">
+                  Nom de la defense
+                  <input
+                    type="text"
+                    value={draft.name}
+                    onChange={(event) => setDraft((previous) => ({ ...previous, name: event.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
+                    required
+                  />
+                </label>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="block text-sm font-medium text-zinc-300">
+                    Tier
+                    <select
+                      value={draft.tier}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, tier: event.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
+                    >
+                      <option value="meta_s">Meta S</option>
+                      <option value="meta_a">Meta A</option>
+                      <option value="secondaire">Secondaire</option>
+                    </select>
+                  </label>
+
+                  <label className="block text-sm font-medium text-zinc-300">
+                    Type
+                    <select
+                      value={draft.type}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, type: event.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
+                    >
+                      <option value="Tour">Tour</option>
+                      <option value="Bastion">Bastion</option>
+                      <option value="Bulle">Bulle</option>
+                    </select>
+                  </label>
+
+                  <label className="block text-sm font-medium text-zinc-300">
+                    Faction
+                    <input
+                      type="text"
+                      value={draft.faction}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, faction: event.target.value }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {draft.slots.map((slot, index) => (
+                    <label key={`slot-${index}`} className="block text-sm font-medium text-zinc-300">
+                      Hero {index + 1}
+                      <input
+                        type="text"
+                        list="portal-admin-defense-heroes"
+                        value={slot}
+                        onChange={(event) => updateDraftSlot(index, event.target.value)}
+                        className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
+                        required
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
+                  {draft.image ? (
+                    <img src={draft.image} alt={draft.name || "Defense"} className="h-52 w-full object-contain" />
+                  ) : (
+                    <div className="flex h-52 items-center justify-center text-sm text-zinc-500">
+                      Aucune image
+                    </div>
+                  )}
+                </div>
+
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800">
+                  <ImagePlus className="h-4 w-4" />
+                  Image defense
+                  <input type="file" accept="image/*" className="hidden" onChange={handleDefenseImageChange} />
+                </label>
+
+                {draft.isGlobal ? (
+                  <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-200">Defense globale</Badge>
+                ) : (
+                  <Badge className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
+                    Guilde {activeGuildCode}
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 bg-transparent text-zinc-200"
+                onClick={() => setDraftOpen(false)}
+                disabled={saving}
+              >
+                Annuler
+              </Button>
+              <Button type="submit" className="rounded-lg bg-emerald-600 text-white hover:bg-emerald-500" disabled={saving}>
+                {saving ? "Sauvegarde..." : "Sauvegarder"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {conditionOpen && selectedConditionDefense ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <form
+            onSubmit={addDefenseCondition}
+            className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-zinc-100 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">Ajouter une condition</h3>
+                <p className="mt-1 text-sm text-zinc-500">{selectedConditionDefense.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConditionOpen(false)}
+                className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
+                aria-label="Fermer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_140px]">
+              <label className="block text-sm font-medium text-zinc-300">
+                Hero
+                <select
+                  value={newCondition.hero}
+                  onChange={(event) => setNewCondition((previous) => ({ ...previous, hero: event.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
+                >
+                  {(selectedConditionDefense.slots || []).map((heroName) => (
+                    <option key={heroName} value={heroName}>
+                      {heroName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block text-sm font-medium text-zinc-300">
+                Eveil min
+                <select
+                  value={newCondition.minAwakening}
+                  onChange={(event) =>
+                    setNewCondition((previous) => ({ ...previous, minAwakening: Number(event.target.value) }))
+                  }
+                  className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
+                >
+                  {[0, 1, 2, 3, 4, 5].map((level) => (
+                    <option key={level} value={level}>
+                      A{level}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 bg-transparent text-zinc-200"
+                onClick={() => setConditionOpen(false)}
+                disabled={saving}
+              >
+                Annuler
+              </Button>
+              <Button type="submit" className="rounded-lg bg-emerald-600 text-white hover:bg-emerald-500" disabled={saving}>
+                Ajouter
+              </Button>
+            </div>
+          </form>
         </div>
       ) : null}
     </section>
