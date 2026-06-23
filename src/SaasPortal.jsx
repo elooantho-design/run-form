@@ -1094,7 +1094,7 @@ function PortalShell({ session, onLogout }) {
           {active === "guilds" ? <GuildsView session={session} /> : null}
           {active === "billing" ? <BillingView session={session} /> : null}
           {active === "logs" ? <LogsView session={session} /> : null}
-          {active === "settings" ? <SettingsView /> : null}
+          {active === "settings" ? <SettingsView session={session} onLogout={onLogout} /> : null}
         </main>
       </div>
     </div>
@@ -4544,17 +4544,34 @@ function LogsView({ session }) {
   );
 }
 
-function SettingsView() {
+function SettingsView({ session, onLogout }) {
   return (
-    <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-      <h2 className="text-xl font-semibold text-zinc-50">Parametres</h2>
-      <div className="mt-5 grid gap-4 md:grid-cols-2">
-        {["Connexion Supabase", "API VPS", "Retention images", "Roles utilisateurs"].map((item) => (
-          <div key={item} className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-            <div className="font-medium text-zinc-100">{item}</div>
-            <div className="mt-1 text-sm text-zinc-500">A connecter dans une prochaine iteration.</div>
+    <section className="space-y-5">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <h2 className="text-xl font-semibold text-zinc-50">Parametres</h2>
+        <p className="mt-2 text-sm text-zinc-500">Gestion de la session Portal.</p>
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-sm font-semibold uppercase tracking-[0.16em] text-zinc-500">Compte connecte</div>
+            <div className="mt-2 text-lg font-semibold text-zinc-50">{session?.watcherName || session?.name || "Joueur"}</div>
+            <div className="mt-1 text-sm text-zinc-500">
+              {session?.role || "Membre"} {session?.guildCode ? `- ${session.guildCode}` : ""}
+            </div>
           </div>
-        ))}
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onLogout}
+            className="w-full rounded-lg border-red-500/35 bg-red-500/10 text-red-100 hover:bg-red-500/20 md:w-auto"
+          >
+            <LogOut className="mr-2 h-4 w-4" />
+            Se deconnecter
+          </Button>
+        </div>
       </div>
     </section>
   );
