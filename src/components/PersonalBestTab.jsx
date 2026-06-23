@@ -7,7 +7,12 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
-import { filterByGuildScope } from "@/lib/guildScope";
+import {
+  PALADIN_CLUSTER_GUILD_CODES,
+  filterByGuildScope,
+  isPaladinSession,
+  normalizeGuildCodeKey,
+} from "@/lib/guildScope";
 
 const PB_SORT_OPTIONS = [
   { id: "top1", label: "Top 1" },
@@ -131,8 +136,10 @@ export default function PersonalBestTab({ session }) {
   const [pbRawInput, setPbRawInput] = useState("");
   const [pbRowDetailOpen, setPbRowDetailOpen] = useState(false);
   const [pbSelectedMember, setPbSelectedMember] = useState(null);
+  const [activeGuildCode, setActiveGuildCode] = useState(() => getSessionGuildCode(session));
 
   const guildCode = getSessionGuildCode(session);
+  const isPaladinScope = isPaladinSession(session);
   const memberIds = useMemo(() => members.map((member) => member.id).filter(Boolean), [members]);
 
   const isAdmin = useMemo(() => {
@@ -145,6 +152,15 @@ export default function PersonalBestTab({ session }) {
       role.includes("leader")
     );
   }, [session]);
+
+  useEffect(() => {
+    setActiveGuildCode((current) => {
+      if (!isPaladinScope) return guildCode;
+      if (PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(current))) return current;
+      if (PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(guildCode))) return guildCode;
+      return "G1";
+    });
+  }, [guildCode, isPaladinScope]);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,16 +206,20 @@ export default function PersonalBestTab({ session }) {
         return;
       }
 
-      const scopedMembers = filterByGuildScope(membersResult.data || [], session, (row) => row.guild_code, {
-        leaderSeesAll: true,
-      });
+      const scopedMembers = isPaladinScope
+        ? (membersResult.data || []).filter(
+            (row) => normalizeGuildCodeKey(row.guild_code) === normalizeGuildCodeKey(activeGuildCode),
+          )
+        : filterByGuildScope(membersResult.data || [], session, (row) => row.guild_code, {
+            leaderSeesAll: false,
+          });
 
       setMembers(
         scopedMembers.map((row) => ({
           id: row.id,
           name: row.watcher_name || "Joueur",
           discordId: row.discord_id || "",
-          guildCode: row.guild_code || guildCode,
+          guildCode: row.guild_code || activeGuildCode || guildCode,
           assignment: row.assignment || "Tour",
           awakenings: buildMemberAwakenings(row.member_awakenings),
         })),
@@ -221,7 +241,7 @@ export default function PersonalBestTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [guildCode, session]);
+  }, [activeGuildCode, guildCode, isPaladinScope, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -590,6 +610,21 @@ export default function PersonalBestTab({ session }) {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {isPaladinScope ? (
+                <div className="mr-2 flex flex-wrap gap-2">
+                  {PALADIN_CLUSTER_GUILD_CODES.map((code) => (
+                    <Button
+                      key={code}
+                      type="button"
+                      variant={normalizeGuildCodeKey(activeGuildCode) === code ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setActiveGuildCode(code)}
+                    >
+                      {code}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
               {PB_SORT_OPTIONS.map((option) => (
                 <Button
                   key={option.id}

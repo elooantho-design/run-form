@@ -14,7 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
-import { filterByGuildScope, isPaladinSession, isSameGuildSpace } from "@/lib/guildScope";
+import {
+  filterByGuildScope,
+  isPaladinGuildCode,
+  isSameGuildSpace,
+  normalizeGuildCodeKey,
+} from "@/lib/guildScope";
 import {
   getDefenseConditionRequirements,
   getDefenseRootId,
@@ -47,6 +52,17 @@ function getSlotHeroName(slot) {
 
 function getDefenseLikeTargetId(defense) {
   return getDefenseRootId(defense);
+}
+
+function defenseMatchesMemberGuild(defense, memberGuildCode) {
+  const memberIsPaladin = isPaladinGuildCode(memberGuildCode);
+
+  if (defense.isGlobal || !defense.guildCode) return memberIsPaladin;
+  if (memberIsPaladin) {
+    return normalizeGuildCodeKey(defense.guildCode) === normalizeGuildCodeKey(memberGuildCode);
+  }
+
+  return isSameGuildSpace(defense.guildCode, memberGuildCode);
 }
 
 function getDefenseTypeLabel(defense) {
@@ -166,13 +182,8 @@ export default function MyDefensesTab({ session }) {
   const memberDefenses = useMemo(() => {
     const memberGuildCode = member?.guildCode || guildCode;
 
-    return defenses.filter(
-      (defense) => {
-        if (defense.isGlobal || !defense.guildCode) return isPaladinSession(session);
-        return isSameGuildSpace(defense.guildCode, memberGuildCode);
-      }
-    );
-  }, [defenses, guildCode, member?.guildCode, session]);
+    return defenses.filter((defense) => defenseMatchesMemberGuild(defense, memberGuildCode));
+  }, [defenses, guildCode, member?.guildCode]);
 
   const selectedDefenseNames = useMemo(() => {
     return [member?.defense1, member?.defense2].filter((name) => !isEmptyDefenseName(name));
