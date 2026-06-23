@@ -80,7 +80,7 @@ const navigation = [
 const adminNavigation = [
   { id: "guild-management", label: "Gestion guildes", icon: Users, adminOnly: true },
   { id: "admin-defenses", label: "Gestion défense", icon: Shield, adminOnly: true },
-  { id: "intersaison", label: "Intersaison", icon: RefreshCw, adminOnly: true },
+  { id: "intersaison", label: "Intersaison", icon: RefreshCw, adminOnly: true, paladinOnly: true },
   { id: "run-add", label: "Ajout de run", icon: PlusCircle, adminOnly: true },
   { id: "run-edit", label: "Modification de run", icon: FileJson, adminOnly: true },
   { id: "templates", label: "Ajout heros", icon: PlusCircle, leaderOnly: true },
@@ -933,22 +933,33 @@ function PortalShell({ session, onLogout }) {
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
   const isLeaderUser = isLeaderSession(session);
+  const isPaladinUser = isPaladinSession(session);
   const controlBrand = getControlBrand(session);
   const guildScopeDescription = getGuildScopeDescription(session);
   const visibleAdminNavigation = useMemo(
     () =>
       adminNavigation.filter((item) => {
+        if (item.paladinOnly && !isPaladinUser) return false;
         if (item.leaderOnly) return isLeaderUser;
         if (item.adminOnly) return isAdminUser;
         return true;
       }),
-    [isAdminUser, isLeaderUser],
+    [isAdminUser, isLeaderUser, isPaladinUser],
   );
 
   const activeTitle = useMemo(() => {
     return [...navigation, ...adminNavigation].find((item) => item.id === active)?.label || "Accueil";
   }, [active]);
   const activeAdminItem = visibleAdminNavigation.some((item) => item.id === active);
+
+  useEffect(() => {
+    const isAdminTab = adminNavigation.some((item) => item.id === active);
+    const isVisibleAdminTab = visibleAdminNavigation.some((item) => item.id === active);
+
+    if (isAdminTab && !isVisibleAdminTab) {
+      setActive("home");
+    }
+  }, [active, visibleAdminNavigation]);
 
   useEffect(() => {
     if (active === "home" || active === "logs" || loggedTabViewsRef.current.has(active)) return;
