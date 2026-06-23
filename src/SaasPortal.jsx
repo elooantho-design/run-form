@@ -48,6 +48,7 @@ import AdminDefensesTab from "@/components/AdminDefensesTab";
 import RunSearchGrid from "@/components/RunSearchGrid";
 import RunAddTab from "@/components/RunAddTab";
 import RunEditTab from "@/components/RunEditTab";
+import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
 
@@ -66,6 +67,7 @@ const navigation = [
 const adminNavigation = [
   { id: "guild-management", label: "Gestion guildes", icon: Users, adminOnly: true },
   { id: "admin-defenses", label: "Gestion défense", icon: Shield, adminOnly: true },
+  { id: "intersaison", label: "Intersaison", icon: RefreshCw, adminOnly: true },
   { id: "run-add", label: "Ajout de run", icon: PlusCircle, adminOnly: true },
   { id: "run-edit", label: "Modification de run", icon: FileJson, adminOnly: true },
   { id: "templates", label: "Ajout heros", icon: PlusCircle, leaderOnly: true },
@@ -1067,6 +1069,7 @@ function PortalShell({ session, onLogout }) {
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
           {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
           {active === "admin-defenses" ? <PortalAdminDefensesView session={session} /> : null}
+          {active === "intersaison" ? <PortalIntersaisonTab session={session} /> : null}
           {active === "run-add" ? <RunAddTab /> : null}
           {active === "run-edit" ? <RunEditTab /> : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
