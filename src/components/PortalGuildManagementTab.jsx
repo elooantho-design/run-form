@@ -78,8 +78,7 @@ function isAdminSession(session) {
       session?.admin ||
       role.includes("admin") ||
       role.includes("administrateur") ||
-      role.includes("leader") ||
-      role.includes("officier"),
+      role.includes("leader"),
   );
 }
 

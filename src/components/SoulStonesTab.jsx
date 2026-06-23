@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { filterByGuildScope, isLeaderSession } from "@/lib/guildScope";
 
 const SOUL_STONE_TABS = [
   { id: "mes-pierres", label: "Mes pierres", icon: Gem },
@@ -116,6 +117,7 @@ export default function SoulStonesTab({ session }) {
   const [clusterSoulStoneRows, setClusterSoulStoneRows] = useState([]);
   const [clusterSoulStonesLoading, setClusterSoulStonesLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const visibleMemberIds = useMemo(() => new Set(members.map((member) => String(member.id))), [members]);
 
   const selectedMember = useMemo(() => {
     return members.find((member) => String(member.id) === String(selectedMemberId)) || members[0] || null;
@@ -165,7 +167,9 @@ export default function SoulStonesTab({ session }) {
         return;
       }
 
-      const mapped = (data || []).map((row) => ({
+      const mapped = filterByGuildScope(data || [], session, (row) => row.guild_code, {
+        leaderSeesAll: true,
+      }).map((row) => ({
         id: row.id,
         name: row.watcher_name || "Joueur",
         discordId: row.discord_id || "",
@@ -194,7 +198,7 @@ export default function SoulStonesTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [session?.memberId, session?.name, session?.watcherName]);
+  }, [session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -261,6 +265,7 @@ export default function SoulStonesTab({ session }) {
       }
 
       const rows = (data || [])
+        .filter((row) => isLeaderSession(session) || visibleMemberIds.has(String(row.member_id)))
         .map((row) => ({
           memberId: row.member_id,
           watcherName: row.watcher_name || "Inconnu",
@@ -283,7 +288,7 @@ export default function SoulStonesTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [soulStones.length]);
+  }, [session, soulStones.length, visibleMemberIds]);
 
   const totalLordSoulStones = useMemo(() => {
     return soulStones.filter((stone) => stone.type === "lord").length;

@@ -40,8 +40,7 @@ function canManageIntersaison(session) {
       session?.leader ||
       role.includes("admin") ||
       role.includes("administrateur") ||
-      role.includes("leader") ||
-      role.includes("officier"),
+      role.includes("leader"),
   );
 }
 

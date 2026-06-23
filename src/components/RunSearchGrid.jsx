@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { getGuildScopeDescription, isLeaderSession, isPaladinSession } from "@/lib/guildScope";
 
 import {
   Select,
@@ -212,7 +213,7 @@ function getDirectionOverlayConfig(dir) {
   }
 }
 
-export default function RunSearchGrid() {
+export default function RunSearchGrid({ session: portalSession } = {}) {
   const [mode, setMode] = useState("tour");
   const [bgError, setBgError] = useState(false);
 
@@ -226,7 +227,7 @@ export default function RunSearchGrid() {
   const [botQueryItems, setBotQueryItems] = useState([]);
     const specialDiscordId = "266913883170668545";
 
-  const session = useMemo(() => {
+  const dashboardSession = useMemo(() => {
     if (typeof window === "undefined") return null;
 
     try {
@@ -235,8 +236,10 @@ export default function RunSearchGrid() {
       return null;
     }
   }, []);
+  const session = portalSession || dashboardSession;
 
   const isSpecialExternal = String(session?.discordId || "") === String(specialDiscordId);
+  const isExternalScopedSession = Boolean(session && !isLeaderSession(session) && !isPaladinSession(session));
 
   const [heroPool, setHeroPool] = useState(HEROES_FALLBACK);
   const [heroesLoading, setHeroesLoading] = useState(false);
@@ -262,6 +265,7 @@ const gridSpec = useMemo(() => {
 
   const activeSlot = activePos ? slotByPos.get(activePos) || null : null;
   const canAddMore = slots.length < MAX_SLOTS;
+
   async function runSearch() {
   const queryItems = slots
     .filter((s) => s.hero)
@@ -520,6 +524,24 @@ function copyToClipboard(text) {
       console.error("Erreur copie :", err);
     });
 }
+
+  if (isExternalScopedSession) {
+    return (
+      <Card className="rounded-lg border-zinc-800 bg-zinc-950">
+        <CardHeader>
+          <CardTitle className="text-lg text-zinc-100">Recherche de run</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-zinc-400">
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100">
+            La banque de runs globale est protegee pour {getGuildScopeDescription(session)}.
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+            Il faut ajouter un champ de scope sur les runs avant d'ouvrir la recherche aux guildes externes sans exposer les donnees Paladin.
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">

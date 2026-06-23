@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { filterByGuildScope } from "@/lib/guildScope";
 
 const DEMON_RARITY_FILTERS = [
   { id: "Tous", label: "Tous", tone: "border-zinc-600 bg-zinc-900 text-zinc-100" },
@@ -122,7 +123,9 @@ export default function DemonMonstersTab({ session }) {
         return;
       }
 
-      const mapped = (data || []).map((row) => ({
+      const mapped = filterByGuildScope(data || [], session, (row) => row.guild_code, {
+        leaderSeesAll: true,
+      }).map((row) => ({
         id: row.id,
         name: row.watcher_name || "Joueur",
         discordId: row.discord_id || "",
@@ -151,7 +154,7 @@ export default function DemonMonstersTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [session?.memberId, session?.name, session?.watcherName]);
+  }, [session]);
 
   useEffect(() => {
     let cancelled = false;

@@ -55,7 +55,7 @@ function normalizeText(value) {
 }
 
 function isAdminRole(role) {
-  return ["admin", "administrateur", "leader", "officier"].includes(normalizeText(role));
+  return ["admin", "administrateur", "leader"].includes(normalizeText(role));
 }
 
 function isLeaderRole(role) {

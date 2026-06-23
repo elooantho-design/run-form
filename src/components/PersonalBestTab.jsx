@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { filterByGuildScope } from "@/lib/guildScope";
 
 const PB_SORT_OPTIONS = [
   { id: "top1", label: "Top 1" },
@@ -169,7 +170,6 @@ export default function PersonalBestTab({ session }) {
               )
             )
           `)
-          .eq("guild_code", guildCode)
           .order("watcher_name", { ascending: true }),
         supabase.from("champions").select("id, name, lord").order("name", { ascending: true }),
       ]);
@@ -190,8 +190,12 @@ export default function PersonalBestTab({ session }) {
         return;
       }
 
+      const scopedMembers = filterByGuildScope(membersResult.data || [], session, (row) => row.guild_code, {
+        leaderSeesAll: true,
+      });
+
       setMembers(
-        (membersResult.data || []).map((row) => ({
+        scopedMembers.map((row) => ({
           id: row.id,
           name: row.watcher_name || "Joueur",
           discordId: row.discord_id || "",
@@ -217,7 +221,7 @@ export default function PersonalBestTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [guildCode]);
+  }, [guildCode, session]);
 
   useEffect(() => {
     let cancelled = false;

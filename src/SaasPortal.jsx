@@ -49,8 +49,10 @@ import RunSearchGrid from "@/components/RunSearchGrid";
 import RunAddTab from "@/components/RunAddTab";
 import RunEditTab from "@/components/RunEditTab";
 import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
+import PortalGuildsTab from "@/components/PortalGuildsTab";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { filterByGuildScope, getControlBrand, getGuildScopeDescription } from "@/lib/guildScope";
 
 const navigation = [
   { id: "home", label: "Accueil", icon: LayoutDashboard },
@@ -200,7 +202,7 @@ function isLeaderRole(role) {
 }
 
 function isAdminRole(role) {
-  return ["admin", "administrateur", "leader", "officier"].includes(normalizeRoleValue(role));
+  return ["admin", "administrateur", "leader"].includes(normalizeRoleValue(role));
 }
 
 function isLeaderSession(session) {
@@ -920,6 +922,8 @@ function PortalShell({ session, onLogout }) {
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
   const isLeaderUser = isLeaderSession(session);
+  const controlBrand = getControlBrand(session);
+  const guildScopeDescription = getGuildScopeDescription(session);
   const visibleAdminNavigation = useMemo(
     () =>
       adminNavigation.filter((item) => {
@@ -963,8 +967,8 @@ function PortalShell({ session, onLogout }) {
             <Compass className="h-5 w-5 text-emerald-300" />
           </div>
           <div>
-            <div className="font-semibold text-zinc-50">Paladin Control</div>
-            <div className="text-xs text-zinc-500">GVG automation suite</div>
+            <div className="font-semibold text-zinc-50">{controlBrand}</div>
+            <div className="text-xs text-zinc-500">{guildScopeDescription}</div>
           </div>
         </div>
 
@@ -1077,7 +1081,7 @@ function PortalShell({ session, onLogout }) {
           {active === "personal-best" ? <PersonalBestTab session={session} /> : null}
           {active === "defenses" ? <MyDefensesTab session={session} /> : null}
           {active === "gvg" ? <GvgView session={session} /> : null}
-          {active === "run-search" ? <RunSearchGrid /> : null}
+          {active === "run-search" ? <RunSearchGrid session={session} /> : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
           {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
@@ -1384,7 +1388,12 @@ function HeroBoxView({ session }) {
         if (championsResult.error) throw championsResult.error;
         if (cancelled) return;
 
-        const nextMembers = membersResult.data || [];
+        const nextMembers = filterByGuildScope(
+          membersResult.data || [],
+          session,
+          (member) => member.guild_code,
+          { leaderSeesAll: true },
+        );
         const nextHeroCards = buildPortalHeroCards(championsResult.data || []);
         setMembers(nextMembers);
         setHeroCards(nextHeroCards);
@@ -1402,7 +1411,7 @@ function HeroBoxView({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [connectedPlayerKey]);
+  }, [connectedPlayerKey, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3796,40 +3805,7 @@ function AddHeroView({ session }) {
 }
 
 function GuildsView({ session }) {
-  const isLeaderUser = isLeaderSession(session);
-
-  if (!isLeaderUser) {
-    return (
-      <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-xl font-semibold text-zinc-50">Guildes</h2>
-        <p className="mt-2 text-sm text-zinc-400">Cet onglet est reserve au role leader.</p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-      <h2 className="text-xl font-semibold text-zinc-50">Guildes</h2>
-      <div className="mt-5 overflow-hidden rounded-lg border border-zinc-800">
-        <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] bg-zinc-900 px-4 py-3 text-sm font-medium text-zinc-400">
-          <div>Nom</div>
-          <div>Plan</div>
-          <div>GVG</div>
-          <div>Etat</div>
-        </div>
-        {guildRows.map((row) => (
-          <div key={row.name} className="grid grid-cols-[1.4fr_1fr_1fr_1fr] border-t border-zinc-800 px-4 py-3 text-sm">
-            <div className="font-medium text-zinc-100">{row.name}</div>
-            <div className="text-zinc-400">{row.plan}</div>
-            <div className="text-zinc-400">{row.gvg}</div>
-            <div>
-              <Badge className={`rounded-md ${statusClass(row.status)}`}>{row.status}</Badge>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
+  return <PortalGuildsTab session={session} />;
 }
 
 function BillingView({ session }) {
@@ -4038,7 +4014,11 @@ function PlayerAccessView({ session }) {
 
         if (error) throw error;
 
-        setMembers((data || []).map((member) => ({
+        const scopedMembers = filterByGuildScope(data || [], session, (member) => member.guild_code, {
+          leaderSeesAll: true,
+        });
+
+        setMembers(scopedMembers.map((member) => ({
           id: member.id,
           name: getMemberDisplayName(member),
           discordId: member.discord_id || "",
@@ -4055,7 +4035,7 @@ function PlayerAccessView({ session }) {
     }
 
     loadMembers();
-  }, [isAdminUser]);
+  }, [isAdminUser, session]);
 
   const suggestions = useMemo(() => {
     const search = normalizeHeroKey(query);
@@ -4374,7 +4354,9 @@ function LogsView({ session }) {
         return;
       }
 
-      const nextMembers = data || [];
+      const nextMembers = filterByGuildScope(data || [], session, (member) => member.guild_code, {
+        leaderSeesAll: true,
+      });
       setMembers(nextMembers);
       setSelectedMemberId((current) => {
         if (current && nextMembers.some((member) => String(member.id) === String(current))) return current;
@@ -4389,7 +4371,7 @@ function LogsView({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [session?.id, session?.memberId]);
+  }, [session]);
 
   useEffect(() => {
     let cancelled = false;

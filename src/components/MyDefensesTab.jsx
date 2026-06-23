@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { filterByGuildScope, isPaladinSession, isSameGuildSpace } from "@/lib/guildScope";
 import {
   getDefenseConditionRequirements,
   getDefenseRootId,
@@ -166,12 +167,12 @@ export default function MyDefensesTab({ session }) {
     const memberGuildCode = member?.guildCode || guildCode;
 
     return defenses.filter(
-      (defense) =>
-        defense.isGlobal ||
-        !defense.guildCode ||
-        String(defense.guildCode) === String(memberGuildCode)
+      (defense) => {
+        if (defense.isGlobal || !defense.guildCode) return isPaladinSession(session);
+        return isSameGuildSpace(defense.guildCode, memberGuildCode);
+      }
     );
-  }, [defenses, guildCode, member?.guildCode]);
+  }, [defenses, guildCode, member?.guildCode, session]);
 
   const selectedDefenseNames = useMemo(() => {
     return [member?.defense1, member?.defense2].filter((name) => !isEmptyDefenseName(name));
@@ -371,7 +372,9 @@ export default function MyDefensesTab({ session }) {
         }
       }
 
-      const mappedMembers = (membersResult.data || []).map((row) => ({
+      const mappedMembers = filterByGuildScope(membersResult.data || [], session, (row) => row.guild_code, {
+        leaderSeesAll: true,
+      }).map((row) => ({
         id: row.id,
         name: row.watcher_name || "Joueur",
         discordId: row.discord_id || "",
@@ -391,7 +394,9 @@ export default function MyDefensesTab({ session }) {
         return;
       }
 
-      const mappedDefenses = defenseRows
+      const mappedDefenses = filterByGuildScope(defenseRows, session, (row) => row.guild_code, {
+        leaderSeesAll: true,
+      })
         .map((row) => {
           const slots = [...(row.guild_defense_slots || [])]
             .sort((a, b) => a.slot_index - b.slot_index)
@@ -457,7 +462,7 @@ export default function MyDefensesTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [connectedMemberId, session?.name, session?.watcherName]);
+  }, [connectedMemberId, session]);
 
   useEffect(() => {
     if (!selectedMemberBase?.id) {

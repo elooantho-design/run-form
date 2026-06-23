@@ -135,8 +135,7 @@ export default function GvgPanelTab({ session: portalSession } = {}) {
     session?.admin === true ||
     sessionRole.includes("admin") ||
     sessionRole.includes("administrateur") ||
-    sessionRole.includes("leader") ||
-    sessionRole.includes("officier");
+    sessionRole.includes("leader");
 const [guild, setGuild] = useState("G1");
 const [recordModalOpen, setRecordModalOpen] = useState(false);
 const [recordCreating, setRecordCreating] = useState(false);
