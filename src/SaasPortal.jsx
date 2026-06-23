@@ -16,6 +16,7 @@ import {
   Lock,
   LogOut,
   Play,
+  PlusCircle,
   Search,
   SearchCheck,
   Server,
@@ -51,7 +52,7 @@ const navigation = [
   { id: "personal-best", label: "Mes PB", icon: Activity },
   { id: "defenses", label: "Mes defenses", icon: Bot },
   { id: "gvg", label: "GVG", icon: Shield },
-  { id: "templates", label: "Templates", icon: Grid3X3 },
+  { id: "templates", label: "Ajout heros", icon: PlusCircle },
   { id: "guilds", label: "Guildes", icon: Users },
   { id: "billing", label: "Licences", icon: WalletCards },
   { id: "settings", label: "Parametres", icon: Settings },
@@ -1031,7 +1032,7 @@ function PortalShell({ session, onLogout }) {
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
           {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
-          {active === "templates" ? <TemplatesView /> : null}
+          {active === "templates" ? <AddHeroView session={session} /> : null}
           {active === "guilds" ? <GuildsView /> : null}
           {active === "billing" ? <BillingView /> : null}
           {active === "logs" ? <LogsView session={session} /> : null}
@@ -2388,29 +2389,458 @@ function ValidationView() {
   );
 }
 
-function TemplatesView() {
+const addHeroInitialState = {
+  portalName: "",
+  technicalName: "",
+  rarity: "legendary",
+  role: "combattant",
+  factions: ["sentinelle"],
+  lord: "non-lord",
+  adminPassword: "",
+};
+
+const HERO_CALQUE_MAX_DIMENSION = 900;
+const HERO_CALQUE_MAX_BYTES = 2 * 1024 * 1024;
+
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} Mo`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} Ko`;
+  return `${bytes} o`;
+}
+
+function compressHeroCalqueFile(file, outputName) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type?.startsWith("image/")) {
+      reject(new Error("Choisis une image valide pour le calque hero-calc."));
+      return;
+    }
+
+    const image = new Image();
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      image.onload = () => {
+        const scale = Math.min(
+          1,
+          HERO_CALQUE_MAX_DIMENSION / Math.max(image.width || 1, image.height || 1),
+        );
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement("canvas");
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const context = canvas.getContext("2d");
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.clearRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error("Compression du calque impossible."));
+            return;
+          }
+
+          const compressedFile = new File([blob], outputName, { type: "image/png" });
+
+          if (compressedFile.size > HERO_CALQUE_MAX_BYTES) {
+            reject(new Error("Le calque reste au-dessus du seuil de 2 Mo apres compression."));
+            return;
+          }
+
+          resolve({
+            file: compressedFile,
+            width,
+            height,
+            originalBytes: file.size,
+            compressedBytes: compressedFile.size,
+          });
+        }, "image/png");
+      };
+
+      image.onerror = () => reject(new Error("Lecture du calque impossible."));
+      image.src = reader.result;
+    };
+
+    reader.onerror = () => reject(new Error("Lecture du fichier impossible."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function AddHeroView({ session }) {
+  const apiBase = useMemo(() => getApiBase(), []);
+  const heroCalqueInputRef = useRef(null);
+  const [form, setForm] = useState(addHeroInitialState);
+  const [heroCalqueFile, setHeroCalqueFile] = useState(null);
+  const [compressionInfo, setCompressionInfo] = useState(null);
+  const [technicalNameTouched, setTechnicalNameTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [createdChampion, setCreatedChampion] = useState(null);
+  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+
+  const selectedFactionLabels = form.factions
+    .map((faction) => heroFactionMeta[faction]?.label || formatHeroFilterLabel(faction))
+    .join(", ");
+
+  const expectedImageFile = normalizeHeroImageFile(form.portalName);
+
+  function updateForm(patch) {
+    setForm((previous) => ({ ...previous, ...patch }));
+  }
+
+  function handlePortalNameChange(value) {
+    setForm((previous) => ({
+      ...previous,
+      portalName: value,
+      technicalName: technicalNameTouched ? previous.technicalName : normalizeHeroKey(value),
+    }));
+  }
+
+  function handleHeroCalqueChange(event) {
+    const file = event.target.files?.[0] || null;
+    setHeroCalqueFile(file);
+    setCompressionInfo(null);
+    setMessage("");
+    setErrorMessage("");
+  }
+
+  function toggleFaction(faction) {
+    setForm((previous) => {
+      const nextFactions = previous.factions.includes(faction)
+        ? previous.factions.filter((item) => item !== faction)
+        : [...previous.factions, faction];
+
+      return {
+        ...previous,
+        factions: nextFactions.length > 0 ? nextFactions : [faction],
+      };
+    });
+  }
+
+  async function submitHero(event) {
+    event.preventDefault();
+    if (!isAdminUser || saving) return;
+
+    const payload = {
+      action: "create",
+      actorMemberId: session?.memberId || session?.id,
+      adminPassword: form.adminPassword,
+      name: form.technicalName.trim(),
+      portalName: form.portalName.trim(),
+      rarity: form.rarity,
+      role: form.role,
+      factions: form.factions,
+      lord: form.lord,
+    };
+
+    if (!payload.name || !payload.portalName || !payload.adminPassword) {
+      setErrorMessage("Name technique, PortalName et mot de passe admin sont obligatoires.");
+      return;
+    }
+
+    if (!heroCalqueFile) {
+      setErrorMessage("Ajoute le calque hero-calc du heros avant de valider.");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    setErrorMessage("");
+    setCreatedChampion(null);
+    setCompressionInfo(null);
+
+    try {
+      const compressedCalque = await compressHeroCalqueFile(heroCalqueFile, expectedImageFile);
+      const formData = new FormData();
+
+      Object.entries(payload).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          formData.append(key, value.join(";"));
+          return;
+        }
+
+        formData.append(key, value ?? "");
+      });
+
+      formData.append("heroCalque", compressedCalque.file, expectedImageFile);
+
+      const response = await fetch(`${apiBase}/api/portal-champions`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Creation du heros impossible.");
+      }
+
+      setCreatedChampion(data?.champion || null);
+      setCompressionInfo(compressedCalque);
+      setMessage(`${payload.portalName} a ete ajoute a Supabase et envoye dans hero-calques.`);
+      setForm({ ...addHeroInitialState, adminPassword: form.adminPassword });
+      setHeroCalqueFile(null);
+      if (heroCalqueInputRef.current) heroCalqueInputRef.current.value = "";
+      setTechnicalNameTouched(false);
+    } catch (error) {
+      setErrorMessage(error?.message || "Creation du heros impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <section className="grid gap-4 xl:grid-cols-[1fr_380px]">
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-xl font-semibold text-zinc-50">Templates heros</h2>
-        <p className="mt-1 text-sm text-zinc-500">Espace admin prevu pour ajouter un heros et tester son matching.</p>
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
-          {["Upload template", "Test sur captures", "Publication serveur"].map((label, index) => (
-            <div key={label} className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-              <div className="text-sm text-zinc-500">Etape {index + 1}</div>
-              <div className="mt-2 font-medium text-zinc-100">{label}</div>
+    <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <form onSubmit={submitHero} className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <PlusCircle className="h-5 w-5 text-emerald-300" />
+              <h2 className="text-xl font-semibold text-zinc-50">Ajout heros</h2>
             </div>
-          ))}
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-zinc-500">
+              Creation du heros dans Supabase et envoi du calque hero-calc vers le VPS.
+            </p>
+          </div>
+          <Badge className="rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+            Hero-calques VPS
+          </Badge>
         </div>
-      </div>
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-lg font-semibold text-zinc-50">A surveiller</h2>
-        <div className="mt-4 space-y-3">
-          {["Suffixes normalises", "Doublons visuels", "Score minimum", "Sens des fleches"].map((item) => (
-            <div key={item} className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-300">
-              {item}
+
+        {!isAdminUser ? (
+          <div className="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+            Cet onglet est reserve aux admins, leaders et officiers.
+          </div>
+        ) : (
+          <>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="block">
+                <span className="text-sm text-zinc-400">Name technique normalise</span>
+                <input
+                  type="text"
+                  value={form.technicalName}
+                  onChange={(event) => {
+                    setTechnicalNameTouched(true);
+                    updateForm({ technicalName: event.target.value });
+                  }}
+                  placeholder="ex: nouvelheros"
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                />
+                <span className="mt-1 block text-xs text-zinc-600">Utilise par la detection et les liens techniques.</span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">PortalName</span>
+                <input
+                  type="text"
+                  value={form.portalName}
+                  onChange={(event) => handlePortalNameChange(event.target.value)}
+                  placeholder="Ex: Nouveau Heros"
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                />
+                <span className="mt-1 block text-xs text-zinc-600">Nom affiche dans la box Portal.</span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">Rarete</span>
+                <select
+                  value={form.rarity}
+                  onChange={(event) => updateForm({ rarity: event.target.value })}
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                >
+                  {heroRarityOrder.map((rarity) => (
+                    <option key={rarity} value={rarity}>
+                      {heroRarityMeta[rarity]?.label || rarity}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">Role</span>
+                <select
+                  value={form.role}
+                  onChange={(event) => updateForm({ role: event.target.value })}
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                >
+                  {heroRoleOrder.map((role) => (
+                    <option key={role} value={role}>
+                      {heroRoleMeta[role]?.label || formatHeroFilterLabel(role)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">Lord</span>
+                <select
+                  value={form.lord}
+                  onChange={(event) => updateForm({ lord: event.target.value })}
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                >
+                  <option value="non-lord">Non-lord</option>
+                  <option value="lord">Lord</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">Mot de passe admin</span>
+                <input
+                  type="password"
+                  value={form.adminPassword}
+                  onChange={(event) => updateForm({ adminPassword: event.target.value })}
+                  placeholder="Confirmation admin"
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                />
+              </label>
             </div>
-          ))}
+
+            <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+                    <UploadCloud className="h-4 w-4 text-emerald-300" />
+                    Calque hero-calc
+                  </div>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Le fichier est converti en PNG, limite 900 px sur le plus grand cote, puis envoye dans `hero-calques`.
+                  </p>
+                </div>
+                <Badge className="w-fit rounded-lg border-zinc-700 bg-zinc-950 text-zinc-300">
+                  seuil 2 Mo
+                </Badge>
+              </div>
+              <label className="mt-4 block">
+                <input
+                  ref={heroCalqueInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleHeroCalqueChange}
+                  className="block w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-emerald-500 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-zinc-950 hover:file:bg-emerald-400"
+                />
+              </label>
+              <div className="mt-3 grid gap-2 text-xs text-zinc-500 sm:grid-cols-2">
+                <div className="rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2">
+                  Fichier final : <span className="text-zinc-200">{expectedImageFile || "--"}</span>
+                </div>
+                <div className="rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2">
+                  Source : <span className="text-zinc-200">{heroCalqueFile?.name || "--"}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <div className="text-sm text-zinc-400">Faction</div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {heroFactionOrder.map((faction) => {
+                  const selected = form.factions.includes(faction);
+                  return (
+                    <button
+                      key={faction}
+                      type="button"
+                      onClick={() => toggleFaction(faction)}
+                      className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+                        selected
+                          ? "border-emerald-300/60 bg-emerald-500/15 text-emerald-100"
+                          : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-600 hover:text-zinc-100"
+                      }`}
+                    >
+                      {heroFactionMeta[faction]?.label || formatHeroFilterLabel(faction)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {message ? (
+              <div className="mt-5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                {message}
+              </div>
+            ) : null}
+
+            {errorMessage ? (
+              <div className="mt-5 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                {errorMessage}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                disabled={saving}
+                onClick={() => {
+                  setForm(addHeroInitialState);
+                  setHeroCalqueFile(null);
+                  if (heroCalqueInputRef.current) heroCalqueInputRef.current.value = "";
+                  setCompressionInfo(null);
+                  setTechnicalNameTouched(false);
+                  setMessage("");
+                  setErrorMessage("");
+                  setCreatedChampion(null);
+                }}
+              >
+                Reset
+              </Button>
+              <Button
+                type="submit"
+                className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+                disabled={saving}
+              >
+                <PlusCircle className="mr-2 h-4 w-4" />
+                {saving ? "Creation..." : "Ajouter le heros"}
+              </Button>
+            </div>
+          </>
+        )}
+      </form>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <h2 className="text-lg font-semibold text-zinc-50">Apercu creation</h2>
+        <div className="mt-4 space-y-3 text-sm">
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div className="text-zinc-500">name</div>
+            <div className="mt-1 break-words font-medium text-zinc-100">{form.technicalName || "--"}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div className="text-zinc-500">PortalName</div>
+            <div className="mt-1 break-words font-medium text-zinc-100">{form.portalName || "--"}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div className="text-zinc-500">Rarity / role / faction</div>
+            <div className="mt-1 text-zinc-100">
+              {heroRarityMeta[form.rarity]?.label || form.rarity} / {heroRoleMeta[form.role]?.label || form.role} / {selectedFactionLabels}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div className="text-zinc-500">lord</div>
+            <div className="mt-1 font-medium text-zinc-100">{form.lord}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div className="text-zinc-500">Calque attendu par la box</div>
+            <div className="mt-1 break-words font-medium text-zinc-100">{expectedImageFile || "--"}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div className="text-zinc-500">Compression hero-calc</div>
+            <div className="mt-1 text-zinc-100">
+              {compressionInfo
+                ? `${formatBytes(compressionInfo.originalBytes)} -> ${formatBytes(compressionInfo.compressedBytes)} (${compressionInfo.width}x${compressionInfo.height})`
+                : `PNG max ${HERO_CALQUE_MAX_DIMENSION}px / ${formatBytes(HERO_CALQUE_MAX_BYTES)}`}
+            </div>
+          </div>
+          {createdChampion ? (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-emerald-200">
+              Dernier heros cree : {createdChampion.portal_name || createdChampion.PortalName || createdChampion.name}
+            </div>
+          ) : null}
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-emerald-100">
+            Seul le dossier VPS hero-calques est concerne ici. Les templates de reconnaissance ne sont pas geres par cet onglet.
+          </div>
         </div>
       </div>
     </section>
