@@ -9,9 +9,13 @@ import {
   getDefenseLikeTargetId,
   getMetaDefenseCounters,
 } from "@/calculations";
-import { normalizeGuildCodeKey } from "@/lib/guildScope";
+import {
+  PALADIN_CLUSTER_GUILD_CODES,
+  isPaladinGuildCode,
+  isPaladinSession,
+  normalizeGuildCodeKey,
+} from "@/lib/guildScope";
 
-const GUILD_CODES = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const EMPTY_DEFENSE = "--";
 
 function getSessionGuildCode(session) {
@@ -107,6 +111,13 @@ export default function PortalGuildManagementTab({ session }) {
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
+  const visibleGuildCodes = useMemo(() => {
+    if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
+
+    const sessionGuildCode = getSessionGuildCode(session);
+    return sessionGuildCode ? [sessionGuildCode] : [];
+  }, [session]);
+  const activeGuildIsPaladin = isPaladinGuildCode(activeGuildCode);
 
   const activeMembers = useMemo(
     () => members.filter((member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode)),
@@ -116,12 +127,12 @@ export default function PortalGuildManagementTab({ session }) {
   const activeDefenses = useMemo(
     () =>
       defenses.filter(
-        (defense) =>
-          defense.isGlobal ||
-          !defense.guildCode ||
-          String(defense.guildCode) === String(activeGuildCode)
+        (defense) => {
+          if (defense.isGlobal || !defense.guildCode) return activeGuildIsPaladin;
+          return normalizeGuildCodeKey(defense.guildCode) === normalizeGuildCodeKey(activeGuildCode);
+        }
       ),
-    [activeGuildCode, defenses]
+    [activeGuildCode, activeGuildIsPaladin, defenses]
   );
 
   const trackedMetaDefense = useMemo(() => {
@@ -168,6 +179,16 @@ export default function PortalGuildManagementTab({ session }) {
 
     return votes;
   }, [connectedMemberId, defenseVotes]);
+
+  useEffect(() => {
+    if (visibleGuildCodes.length === 0) return;
+
+    setActiveGuildCode((current) =>
+      visibleGuildCodes.some((guildCode) => normalizeGuildCodeKey(guildCode) === normalizeGuildCodeKey(current))
+        ? current
+        : visibleGuildCodes[0],
+    );
+  }, [visibleGuildCodes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -552,6 +573,10 @@ export default function PortalGuildManagementTab({ session }) {
 
   async function transferMemberToGuild() {
     if (!memberToTransfer?.id || !targetGuildCode || targetGuildCode === memberToTransfer.guildCode) return;
+    const targetAllowed = visibleGuildCodes.some(
+      (guildCode) => normalizeGuildCodeKey(guildCode) === normalizeGuildCodeKey(targetGuildCode),
+    );
+    if (!targetAllowed) return;
 
     const confirmed = window.confirm(`Transferer ${memberToTransfer.name} vers ${targetGuildCode} ?`);
     if (!confirmed) return;
@@ -840,7 +865,7 @@ export default function PortalGuildManagementTab({ session }) {
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          {GUILD_CODES.map((guildCode) => (
+          {visibleGuildCodes.map((guildCode) => (
             <button
               key={guildCode}
               type="button"
@@ -1019,8 +1044,13 @@ export default function PortalGuildManagementTab({ session }) {
             </div>
 
             <div className="mt-5 grid gap-2">
-              {GUILD_CODES.filter((guildCode) => guildCode !== (memberToTransfer.guildCode || activeGuildCode)).map(
-                (guildCode) => (
+              {visibleGuildCodes
+                .filter(
+                  (guildCode) =>
+                    normalizeGuildCodeKey(guildCode) !==
+                    normalizeGuildCodeKey(memberToTransfer.guildCode || activeGuildCode),
+                )
+                .map((guildCode) => (
                   <button
                     key={guildCode}
                     type="button"
@@ -1033,8 +1063,7 @@ export default function PortalGuildManagementTab({ session }) {
                   >
                     {guildCode}
                   </button>
-                )
-              )}
+                ))}
             </div>
 
             <div className="mt-6 flex flex-wrap justify-end gap-2">
@@ -1053,7 +1082,12 @@ export default function PortalGuildManagementTab({ session }) {
               <Button
                 type="button"
                 className="rounded-lg bg-amber-500 text-zinc-950 hover:bg-amber-400"
-                disabled={!targetGuildCode}
+                disabled={
+                  !targetGuildCode ||
+                  !visibleGuildCodes.some(
+                    (guildCode) => normalizeGuildCodeKey(guildCode) === normalizeGuildCodeKey(targetGuildCode),
+                  )
+                }
                 onClick={transferMemberToGuild}
               >
                 Transferer
