@@ -9,6 +9,7 @@ import {
   getDefenseLikeTargetId,
   getMetaDefenseCounters,
 } from "@/calculations";
+import { normalizeGuildCodeKey } from "@/lib/guildScope";
 
 const GUILD_CODES = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const EMPTY_DEFENSE = "--";
@@ -108,7 +109,7 @@ export default function PortalGuildManagementTab({ session }) {
   const isAdmin = isAdminSession(session);
 
   const activeMembers = useMemo(
-    () => members.filter((member) => String(member.guildCode || activeGuildCode) === String(activeGuildCode)),
+    () => members.filter((member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode)),
     [activeGuildCode, members]
   );
 
@@ -296,7 +297,7 @@ export default function PortalGuildManagementTab({ session }) {
           id: row.id,
           name: row.watcher_name || row.discord_id || "Joueur",
           discordId: row.discord_id || "",
-          guildCode: row.guild_code || "G1",
+          guildCode: row.guild_code || "",
           assignment: normalizeAssignment(row.assignment),
           status: row.status || "À faire",
           awakeningStatus: row.awakening_status || "En attente",
@@ -323,7 +324,13 @@ export default function PortalGuildManagementTab({ session }) {
       setSelectedMemberId((current) => {
         if (current && mappedMembers.some((member) => String(member.id) === String(current))) return current;
         const connectedMember = mappedMembers.find((member) => String(member.id) === String(connectedMemberId));
-        return connectedMember?.id || mappedMembers.find((member) => member.guildCode === activeGuildCode)?.id || null;
+        return (
+          connectedMember?.id ||
+          mappedMembers.find(
+            (member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode),
+          )?.id ||
+          null
+        );
       });
       setLoading(false);
     }
