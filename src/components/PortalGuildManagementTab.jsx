@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, RefreshCw, ShieldCheck, Users } from "lucide-react";
+import { ArrowRightLeft, Plus, RefreshCw, ShieldCheck, UserPlus, Users, X } from "lucide-react";
 import GestionDefenseTab from "@/components/GestionDefenseTab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,6 +80,13 @@ export default function PortalGuildManagementTab({ session }) {
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [memberToTransfer, setMemberToTransfer] = useState(null);
   const [targetGuildCode, setTargetGuildCode] = useState("");
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [newMember, setNewMember] = useState({
+    name: "",
+    discordId: "",
+    forumPostUrl: "",
+  });
+  const [addingMember, setAddingMember] = useState(false);
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -553,6 +560,219 @@ export default function PortalGuildManagementTab({ session }) {
     setSelectedMemberId((current) => (String(current) === String(memberToTransfer.id) ? null : current));
   }
 
+  async function addMember() {
+    const cleanName = newMember.name.trim();
+    const cleanDiscordId = newMember.discordId.trim();
+    const cleanForumPostUrl = newMember.forumPostUrl.trim();
+
+    if (!cleanName || !cleanDiscordId) {
+      setErrorMessage("Nom joueur et ID Discord sont obligatoires.");
+      return;
+    }
+
+    setAddingMember(true);
+    setErrorMessage("");
+
+    const { data: existingMember, error: existingMemberError } = await supabase
+      .from("guild_members")
+      .select("id, watcher_name, discord_id, guild_code")
+      .eq("discord_id", cleanDiscordId)
+      .maybeSingle();
+
+    if (existingMemberError) {
+      console.error("Erreur verification membre existant Portal:", existingMemberError);
+      setErrorMessage(existingMemberError.message || "Verification du membre impossible.");
+      setAddingMember(false);
+      return;
+    }
+
+    if (existingMember?.guild_code) {
+      setErrorMessage(`Ce joueur existe deja dans ${existingMember.guild_code}.`);
+      setAddingMember(false);
+      return;
+    }
+
+    if (existingMember) {
+      const confirmed = window.confirm(
+        `Ce joueur existe deja en externe. Le rattacher a la guilde ${activeGuildCode} ?`
+      );
+
+      if (!confirmed) {
+        setAddingMember(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("guild_members")
+        .update({
+          watcher_name: cleanName,
+          personal_forum_post_url: cleanForumPostUrl || null,
+          guild_code: activeGuildCode,
+        })
+        .eq("id", existingMember.id)
+        .select("id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, awakening_status, personal_forum_post_url")
+        .single();
+
+      if (error) {
+        console.error("Erreur rattachement membre externe Portal:", error);
+        setErrorMessage(error.message || "Rattachement impossible.");
+        setAddingMember(false);
+        return;
+      }
+
+      const attachedMember = {
+        id: data.id,
+        name: data.watcher_name || cleanName,
+        discordId: data.discord_id || cleanDiscordId,
+        guildCode: data.guild_code || activeGuildCode,
+        assignment: normalizeAssignment(data.assignment),
+        status: data.status || "À faire",
+        awakeningStatus: data.awakening_status || "En attente",
+        personalForumPostUrl: data.personal_forum_post_url || "",
+        defense1: data.defense_1 || EMPTY_DEFENSE,
+        defense2: data.defense_2 || EMPTY_DEFENSE,
+        awakenings: {},
+      };
+
+      setMembers((previous) => [
+        ...previous.filter((member) => String(member.id) !== String(attachedMember.id)),
+        attachedMember,
+      ]);
+      setSelectedMemberId(attachedMember.id);
+      setNewMember({ name: "", discordId: "", forumPostUrl: "" });
+      setAddMemberOpen(false);
+      setAddingMember(false);
+      void logPortalActivity(session, {
+        targetMemberId: attachedMember.id,
+        targetName: attachedMember.name,
+        actionType: "guild_management_member_attach",
+        entityType: "member",
+        entityId: String(attachedMember.id),
+        summary: `${attachedMember.name} rattache a ${activeGuildCode}`,
+        metadata: { guildCode: activeGuildCode, discordId: cleanDiscordId },
+      });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("guild_members")
+      .insert([
+        {
+          watcher_name: cleanName,
+          discord_id: cleanDiscordId,
+          personal_forum_post_url: cleanForumPostUrl || null,
+          guild_code: activeGuildCode,
+          role: "member",
+          password: "motdepassemembre",
+          assignment: "Tour",
+          status: "À faire",
+          awakening_status: "En attente",
+          defense_1: EMPTY_DEFENSE,
+          defense_2: EMPTY_DEFENSE,
+        },
+      ])
+      .select("id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, awakening_status, personal_forum_post_url")
+      .single();
+
+    if (error) {
+      console.error("Erreur ajout membre Portal:", error);
+      setErrorMessage(error.message || "Ajout du membre impossible.");
+      setAddingMember(false);
+      return;
+    }
+
+    let createdWarnings = [];
+    let championsData = [];
+
+    const { data: loadedChampions, error: championsError } = await supabase
+      .from("champions")
+      .select("id, name")
+      .order("name", { ascending: true });
+
+    if (championsError) {
+      console.error("Erreur chargement champions pour nouveau membre Portal:", championsError);
+      createdWarnings = [...createdWarnings, "Initialisation des eveils impossible."];
+    } else {
+      championsData = loadedChampions || [];
+    }
+
+    const awakeningRows = championsData
+      .filter((champion) => champion.id)
+      .map((champion) => ({
+        member_id: data.id,
+        champion_id: champion.id,
+        awakening_level: -1,
+      }));
+
+    if (awakeningRows.length > 0) {
+      const { error: awakeningInsertError } = await supabase.from("member_awakenings").insert(awakeningRows);
+
+      if (awakeningInsertError) {
+        console.error("Erreur creation eveils nouveau membre Portal:", awakeningInsertError);
+        createdWarnings = [...createdWarnings, "Initialisation des eveils impossible."];
+      }
+    }
+
+    const pbRows = [1, 2, 3, 4, 5].map((slotIndex) => ({
+      member_id: data.id,
+      member_name: data.watcher_name,
+      slot_index: slotIndex,
+      pb_raw: 0,
+      champion_id: null,
+    }));
+
+    const { error: pbInsertError } = await supabase.from("member_pb_entries").insert(pbRows);
+
+    if (pbInsertError) {
+      console.error("Erreur creation PB nouveau membre Portal:", pbInsertError);
+      createdWarnings = [...createdWarnings, "Initialisation des PB impossible."];
+    }
+
+    const awakenings = {};
+    championsData.forEach((champion) => {
+      if (champion.name) {
+        awakenings[champion.name] = -1;
+      }
+    });
+
+    const createdMember = {
+      id: data.id,
+      name: data.watcher_name || cleanName,
+      discordId: data.discord_id || cleanDiscordId,
+      guildCode: data.guild_code || activeGuildCode,
+      assignment: normalizeAssignment(data.assignment),
+      status: data.status || "À faire",
+      awakeningStatus: data.awakening_status || "En attente",
+      personalForumPostUrl: data.personal_forum_post_url || "",
+      defense1: data.defense_1 || EMPTY_DEFENSE,
+      defense2: data.defense_2 || EMPTY_DEFENSE,
+      awakenings,
+    };
+
+    setMembers((previous) => [...previous, createdMember]);
+    setSelectedMemberId(createdMember.id);
+    setNewMember({ name: "", discordId: "", forumPostUrl: "" });
+    setAddMemberOpen(false);
+    setAddingMember(false);
+    if (createdWarnings.length > 0) {
+      setErrorMessage(`Membre cree, mais ${createdWarnings.join(" ")}`);
+    }
+    void logPortalActivity(session, {
+      targetMemberId: createdMember.id,
+      targetName: createdMember.name,
+      actionType: "guild_management_member_create",
+      entityType: "member",
+      entityId: String(createdMember.id),
+      summary: `${createdMember.name} ajoute a ${activeGuildCode}`,
+      metadata: {
+        guildCode: activeGuildCode,
+        discordId: cleanDiscordId,
+        pbSlotsCreated: pbRows.length,
+        awakeningsCreated: awakeningRows.length,
+      },
+    });
+  }
+
   return (
     <section className="space-y-5">
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
@@ -575,6 +795,15 @@ export default function PortalGuildManagementTab({ session }) {
             <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-300">
               {activeDefenses.length} defenses
             </Badge>
+            <Button
+              type="button"
+              className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+              disabled={!isAdmin}
+              onClick={() => setAddMemberOpen(true)}
+            >
+              <UserPlus className="mr-2 h-4 w-4" />
+              Ajouter un membre
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -657,6 +886,99 @@ export default function PortalGuildManagementTab({ session }) {
           </div>
         </div>
       )}
+
+      {addMemberOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-xl rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10">
+                  <UserPlus className="h-5 w-5 text-emerald-200" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-zinc-50">Ajouter un membre</h3>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    Le joueur sera ajoute dans {activeGuildCode} avec le mot de passe par defaut membre.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+                onClick={() => {
+                  if (addingMember) return;
+                  setAddMemberOpen(false);
+                }}
+                title="Fermer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4">
+              <label className="block">
+                <span className="text-sm text-zinc-400">Nom joueur</span>
+                <input
+                  type="text"
+                  value={newMember.name}
+                  onChange={(event) => setNewMember((previous) => ({ ...previous, name: event.target.value }))}
+                  placeholder="Ex: Robsoul"
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">ID Discord</span>
+                <input
+                  type="text"
+                  value={newMember.discordId}
+                  onChange={(event) => setNewMember((previous) => ({ ...previous, discordId: event.target.value }))}
+                  placeholder="Ex: 259417928569585665"
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">Lien forum personnel</span>
+                <input
+                  type="url"
+                  value={newMember.forumPostUrl}
+                  onChange={(event) => setNewMember((previous) => ({ ...previous, forumPostUrl: event.target.value }))}
+                  placeholder="https://discord.com/channels/..."
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                />
+              </label>
+
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 p-4 text-sm leading-6 text-zinc-400">
+                Creation automatique : profil joueur, box heros initialisee a non possede, 5 slots PB vides,
+                role defense <span className="text-zinc-100">Tour</span> et statut <span className="text-zinc-100">À faire</span>.
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                disabled={addingMember}
+                onClick={() => setAddMemberOpen(false)}
+              >
+                Annuler
+              </Button>
+              <Button
+                type="button"
+                className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+                disabled={addingMember || !newMember.name.trim() || !newMember.discordId.trim()}
+                onClick={addMember}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                {addingMember ? "Ajout..." : "Confirmer"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {transferDialogOpen && memberToTransfer ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
