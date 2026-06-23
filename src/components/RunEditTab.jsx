@@ -82,6 +82,38 @@ function getApiBase() {
   return "";
 }
 
+function getDashboardSession() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return JSON.parse(localStorage.getItem("guildDashboardSession") || "null");
+  } catch {
+    return null;
+  }
+}
+
+function getRunSessionPayload(session) {
+  return {
+    memberId: session?.memberId || session?.member_id || session?.id || "",
+    discordId: session?.discordId || session?.discord_id || "",
+    guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
+    role: session?.role || "",
+  };
+}
+
+function buildRunScopeQuery(session) {
+  const payload = getRunSessionPayload(session);
+  const params = new URLSearchParams();
+
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim()) {
+      params.set(key, String(value));
+    }
+  });
+
+  return params.toString();
+}
+
 function getDirectionOverlayConfig(dir) {
   const d = String(dir || "").trim().toUpperCase();
 
@@ -127,7 +159,7 @@ function getDirectionOverlayConfig(dir) {
   }
 }
 
-export default function RunEditTab() {
+export default function RunEditTab({ session: portalSession } = {}) {
   const [mode, setMode] = useState("tour");
   const [bgError, setBgError] = useState(false);
 
@@ -147,6 +179,8 @@ const [deleteLoading, setDeleteLoading] = useState(false);
   const [commentaire, setCommentaire] = useState("");
   const [runId, setRunId] = useState("");
   const apiBase = useMemo(() => getApiBase(), []);
+  const dashboardSession = useMemo(() => getDashboardSession(), []);
+  const session = portalSession || dashboardSession;
 
   const gridSpec = useMemo(() => {
     return RUN_GRID_MODES[mode] || RUN_GRID_MODES.tour;
@@ -264,6 +298,7 @@ async function saveRun() {
         "Content-Type": "application/json",
       },
             body: JSON.stringify({
+            session: getRunSessionPayload(session),
             strat_id: runId.trim(),
             mode,
             youtubeUrl: youtubeUrl.trim(),
@@ -328,6 +363,7 @@ async function deleteRun() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        session: getRunSessionPayload(session),
         strat_id: runId.trim(),
       }),
     });
@@ -374,8 +410,9 @@ async function loadRun() {
     setSaveLoading(true);
     setSaveMessage("");
 
+    const scopeQuery = buildRunScopeQuery(session);
     const response = await fetch(
-      `${apiBase}/api/run?action=get&id=${encodeURIComponent(runId.trim())}`
+      `${apiBase}/api/run?action=get&id=${encodeURIComponent(runId.trim())}${scopeQuery ? `&${scopeQuery}` : ""}`
     );
 
     const rawText = await response.text();
@@ -905,7 +942,7 @@ useEffect(() => {
                 </div>
 
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
-                  Le bouton d’enregistrement est prêt visuellement, mais pas encore branché à Supabase.
+                  Le chargement, la modification et la suppression sont limites a la banque de l'espace connecte.
                 </div>
               </CardContent>
             </Card>

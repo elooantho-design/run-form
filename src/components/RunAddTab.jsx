@@ -82,6 +82,25 @@ function getApiBase() {
   return "";
 }
 
+function getDashboardSession() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return JSON.parse(localStorage.getItem("guildDashboardSession") || "null");
+  } catch {
+    return null;
+  }
+}
+
+function getRunSessionPayload(session) {
+  return {
+    memberId: session?.memberId || session?.member_id || session?.id || "",
+    discordId: session?.discordId || session?.discord_id || "",
+    guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
+    role: session?.role || "",
+  };
+}
+
 function getDirectionOverlayConfig(dir) {
   const d = String(dir || "").trim().toUpperCase();
 
@@ -127,7 +146,7 @@ function getDirectionOverlayConfig(dir) {
   }
 }
 
-export default function RunAddTab() {
+export default function RunAddTab({ session: portalSession } = {}) {
   const [mode, setMode] = useState("tour");
   const [bgError, setBgError] = useState(false);
 
@@ -145,6 +164,8 @@ const [saveLoading, setSaveLoading] = useState(false);
   const [attackCode, setAttackCode] = useState("");
   const [commentaire, setCommentaire] = useState("");
   const apiBase = useMemo(() => getApiBase(), []);
+  const dashboardSession = useMemo(() => getDashboardSession(), []);
+  const session = portalSession || dashboardSession;
 
   const gridSpec = useMemo(() => {
     return RUN_GRID_MODES[mode] || RUN_GRID_MODES.tour;
@@ -262,6 +283,7 @@ async function saveRun() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        session: getRunSessionPayload(session),
         mode,
         youtubeUrl: youtubeUrl.trim(),
         attackCode: attackCode.trim(),
@@ -766,7 +788,7 @@ useEffect(() => {
                 </div>
 
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
-                  Le bouton d’enregistrement est prêt visuellement, mais pas encore branché à Supabase.
+                  Le run sera enregistre dans la banque de l'espace connecte.
                 </div>
               </CardContent>
             </Card>

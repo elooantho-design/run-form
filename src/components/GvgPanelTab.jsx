@@ -24,6 +24,15 @@ function getApiBase() {
   return "";
 }
 
+function getRunSessionPayload(session) {
+  return {
+    memberId: session?.memberId || session?.member_id || session?.id || "",
+    discordId: session?.discordId || session?.discord_id || "",
+    guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
+    role: session?.role || "",
+  };
+}
+
 function parseYoutubeTimeToSeconds(value) {
   if (!value) return 0;
 
@@ -1016,7 +1025,7 @@ const response = await fetch(`${apiBase}/api/run?action=search`, {
   headers: {
     "Content-Type": "application/json",
   },
-  body: JSON.stringify({ queryItems }),
+  body: JSON.stringify({ queryItems, session: getRunSessionPayload(session) }),
 });
 
 const rawText = await response.text();

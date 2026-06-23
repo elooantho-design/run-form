@@ -1,4 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  isMissingGuildCodeColumn,
+  resolveRunScope,
+  stratMatchesRunScope,
+} from "./run-scope.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -52,6 +57,63 @@ function normalizeSlots(slots) {
         direction: String(slot?.direction || "").trim().toUpperCase(),
       }))
     : [];
+}
+
+function makeMissingGuildCodeError() {
+  const error = new Error(
+    "Colonne defence_strat.guild_code manquante. Ajoute-la dans Supabase pour activer les banques de runs externes."
+  );
+  error.statusCode = 500;
+  return error;
+}
+
+async function fetchScopedStratsByIds(supabaseClient, stratIds, scope) {
+  if (!stratIds?.length) return [];
+
+  const { data, error } = await supabaseClient
+    .from("defence_strat")
+    .select("id, commentaire, youtube_url, created_at, attack_code, guild_code")
+    .in("id", stratIds);
+
+  if (error) {
+    if (!isMissingGuildCodeColumn(error)) throw error;
+    if (!scope?.isPaladin) throw makeMissingGuildCodeError();
+
+    const fallback = await supabaseClient
+      .from("defence_strat")
+      .select("id, commentaire, youtube_url, created_at, attack_code")
+      .in("id", stratIds);
+
+    if (fallback.error) throw fallback.error;
+    return (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
+  }
+
+  return (data || []).filter((strat) => stratMatchesRunScope(strat, scope));
+}
+
+async function fetchScopedStratById(supabaseClient, stratId, scope) {
+  const { data, error } = await supabaseClient
+    .from("defence_strat")
+    .select("id, commentaire, youtube_url, attack_code, guild_code")
+    .eq("id", stratId)
+    .maybeSingle();
+
+  if (error) {
+    if (!isMissingGuildCodeColumn(error)) throw error;
+    if (!scope?.isPaladin) throw makeMissingGuildCodeError();
+
+    const fallback = await supabaseClient
+      .from("defence_strat")
+      .select("id, commentaire, youtube_url, attack_code")
+      .eq("id", stratId)
+      .maybeSingle();
+
+    if (fallback.error) throw fallback.error;
+    return fallback.data ? { ...fallback.data, guild_code: null } : null;
+  }
+
+  if (!data || !stratMatchesRunScope(data, scope)) return null;
+  return data;
 }
 
 async function fetchCandidateStratIdsByChampionsStrict(
@@ -139,7 +201,7 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
 async function searchDefenceStrict(
   supabaseClient,
   queryItems,
-  { limit = 10, maxCandidates = 50000 } = {}
+  { limit = 10, maxCandidates = 50000, scope = null } = {}
 ) {
   if (!queryItems?.length) return [];
 
@@ -162,14 +224,12 @@ async function searchDefenceStrict(
 
   if (!stratIds.length) return [];
 
-  const { data: strats, error: stratsError } = await supabaseClient
-    .from("defence_strat")
-    .select("id, commentaire, youtube_url, created_at, attack_code")
-    .in("id", stratIds);
+  const strats = await fetchScopedStratsByIds(supabaseClient, stratIds, scope);
+  const scopedStratIds = strats.map((strat) => strat.id).filter(Boolean);
 
-  if (stratsError) throw stratsError;
+  if (!scopedStratIds.length) return [];
 
-  const slots = await fetchAllSlotsForStratIds(supabaseClient, stratIds, 1000);
+  const slots = await fetchAllSlotsForStratIds(supabaseClient, scopedStratIds, 1000);
   const slotsByStrat = new Map();
 
   for (const slot of slots || []) {
@@ -209,6 +269,7 @@ async function searchDefenceStrict(
 
 async function handleAdd(req, res) {
   const { mode, youtubeUrl, attackCode, commentaire, slots } = req.body || {};
+  const scope = await resolveRunScope(supabase, req);
   const normalizedSlots = normalizeSlots(slots);
 
   if (!youtubeUrl || !String(youtubeUrl).trim()) {
@@ -233,15 +294,36 @@ async function handleAdd(req, res) {
     });
   }
 
-  const { data: stratRow, error: stratError } = await supabase
+  const stratPayload = {
+    youtube_url: String(youtubeUrl).trim(),
+    commentaire: String(commentaire || "").trim() || null,
+    attack_code: String(attackCode || "").trim() || null,
+    guild_code: scope.stratGuildCode,
+  };
+
+  let { data: stratRow, error: stratError } = await supabase
     .from("defence_strat")
-    .insert({
-      youtube_url: String(youtubeUrl).trim(),
-      commentaire: String(commentaire || "").trim() || null,
-      attack_code: String(attackCode || "").trim() || null,
-    })
-    .select("id, youtube_url, commentaire, attack_code")
+    .insert(stratPayload)
+    .select("id, youtube_url, commentaire, attack_code, guild_code")
     .single();
+
+  if (stratError && isMissingGuildCodeColumn(stratError) && scope.isPaladin) {
+    const fallbackPayload = { ...stratPayload };
+    delete fallbackPayload.guild_code;
+
+    const fallback = await supabase
+      .from("defence_strat")
+      .insert(fallbackPayload)
+      .select("id, youtube_url, commentaire, attack_code")
+      .single();
+
+    stratRow = fallback.data ? { ...fallback.data, guild_code: null } : null;
+    stratError = fallback.error;
+  }
+
+  if (stratError && isMissingGuildCodeColumn(stratError) && !scope.isPaladin) {
+    return res.status(500).json({ error: makeMissingGuildCodeError().message });
+  }
 
   if (stratError || !stratRow?.id) {
     return res.status(500).json({
@@ -272,6 +354,7 @@ async function handleAdd(req, res) {
 
 async function handleSearch(req, res) {
   const { queryItems } = req.body || {};
+  const scope = await resolveRunScope(supabase, req);
 
   if (!Array.isArray(queryItems) || !queryItems.length) {
     return res.status(400).json({ error: "queryItems manquant" });
@@ -279,6 +362,7 @@ async function handleSearch(req, res) {
 
   const results = await searchDefenceStrict(supabase, queryItems, {
     limit: 10,
+    scope,
   });
 
   return res.status(200).json(results);
@@ -286,18 +370,15 @@ async function handleSearch(req, res) {
 
 async function handleGet(req, res) {
   const { id } = req.query || {};
+  const scope = await resolveRunScope(supabase, req);
 
   if (!id) {
     return res.status(400).json({ error: "id manquant" });
   }
 
-  const { data: strat, error: stratError } = await supabase
-    .from("defence_strat")
-    .select("id, commentaire, youtube_url, attack_code")
-    .eq("id", id)
-    .single();
+  const strat = await fetchScopedStratById(supabase, id, scope);
 
-  if (stratError || !strat) {
+  if (!strat) {
     return res.status(404).json({ error: "run introuvable" });
   }
 
@@ -321,6 +402,7 @@ async function handleGet(req, res) {
 
 async function handleUpdate(req, res) {
   const { strat_id, youtubeUrl, attackCode, commentaire, slots } = req.body || {};
+  const scope = await resolveRunScope(supabase, req);
 
   if (!strat_id) {
     return res.status(400).json({ error: "strat_id manquant" });
@@ -330,11 +412,13 @@ async function handleUpdate(req, res) {
     return res.status(400).json({ error: "youtubeUrl manquant" });
   }
 
-  if (!Array.isArray(slots) || slots.length !== 5) {
+  const normalizedSlots = normalizeSlots(slots);
+
+  if (normalizedSlots.length !== 5) {
     return res.status(400).json({ error: "5 slots obligatoires" });
   }
 
-  const hasIncompleteSlot = slots.some(
+  const hasIncompleteSlot = normalizedSlots.some(
     (slot) => !slot?.position || !slot?.hero || !slot?.direction
   );
 
@@ -342,6 +426,11 @@ async function handleUpdate(req, res) {
     return res.status(400).json({
       error: "Chaque slot doit avoir position, hero, direction",
     });
+  }
+
+  const existingStrat = await fetchScopedStratById(supabase, strat_id, scope);
+  if (!existingStrat) {
+    return res.status(404).json({ error: "run introuvable pour cette guilde" });
   }
 
   const { error: updateStratError } = await supabase
@@ -366,11 +455,11 @@ async function handleUpdate(req, res) {
     return res.status(500).json({ error: "erreur suppression slots" });
   }
 
-  const payload = slots.map((slot) => ({
+  const payload = normalizedSlots.map((slot) => ({
     strat_id,
-    champion: String(slot.hero).trim().toLowerCase(),
-    position: String(slot.position).trim().toUpperCase(),
-    direction: String(slot.direction).trim().toUpperCase(),
+    champion: slot.hero,
+    position: slot.position,
+    direction: slot.direction,
   }));
 
   const { error: insertSlotsError } = await supabase
@@ -389,9 +478,15 @@ async function handleUpdate(req, res) {
 
 async function handleDelete(req, res) {
   const { strat_id } = req.body || {};
+  const scope = await resolveRunScope(supabase, req);
 
   if (!strat_id) {
     return res.status(400).json({ error: "strat_id manquant" });
+  }
+
+  const existingStrat = await fetchScopedStratById(supabase, strat_id, scope);
+  if (!existingStrat) {
+    return res.status(404).json({ error: "run introuvable pour cette guilde" });
   }
 
   const { error: deleteSlotsError } = await supabase

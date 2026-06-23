@@ -1,4 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  getRunScopeForGvgGuild,
+  isMissingGuildCodeColumn,
+  stratMatchesRunScope,
+} from "./run-scope.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -126,7 +131,7 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
 async function searchDefenceStrict(
   supabaseClient,
   queryItems,
-  { limit = 10, maxCandidates = 800 } = {}
+  { limit = 10, maxCandidates = 50000, scope = null } = {}
 ) {
   if (!queryItems?.length) return [];
 
@@ -150,14 +155,32 @@ async function searchDefenceStrict(
 
   if (!stratIds.length) return [];
 
-  const { data: strats, error: e1 } = await supabaseClient
+  let { data: strats, error: e1 } = await supabaseClient
     .from("defence_strat")
-    .select("id, commentaire, youtube_url, created_at, attack_code")
+    .select("id, commentaire, youtube_url, created_at, attack_code, guild_code")
     .in("id", stratIds);
 
-  if (e1) throw e1;
+  if (e1) {
+    if (!isMissingGuildCodeColumn(e1)) throw e1;
+    if (!scope?.isPaladin) {
+      throw new Error("Colonne defence_strat.guild_code manquante pour isoler les banques de runs externes.");
+    }
 
-  const slots = await fetchAllSlotsForStratIds(supabaseClient, stratIds, 1000);
+    const fallback = await supabaseClient
+      .from("defence_strat")
+      .select("id, commentaire, youtube_url, created_at, attack_code")
+      .in("id", stratIds);
+
+    if (fallback.error) throw fallback.error;
+    strats = (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
+  }
+
+  strats = (strats || []).filter((strat) => stratMatchesRunScope(strat, scope));
+  const scopedStratIds = strats.map((strat) => strat.id).filter(Boolean);
+
+  if (!scopedStratIds.length) return [];
+
+  const slots = await fetchAllSlotsForStratIds(supabaseClient, scopedStratIds, 1000);
 
   const slotsByStrat = new Map();
   for (const s of slots || []) {
@@ -218,7 +241,7 @@ export default async function handler(req, res) {
 
     const { data: defense, error: defenseError } = await supabase
       .from("gvg_defense")
-      .select("id, heroes")
+      .select("id, guild, heroes")
       .eq("id", gvgDefenseId)
       .maybeSingle();
 
@@ -241,6 +264,7 @@ export default async function handler(req, res) {
 
     const results = await searchDefenceStrict(supabase, queryItems, {
       limit: 10,
+      scope: getRunScopeForGvgGuild(defense.guild),
     });
 
     return res.status(200).json({

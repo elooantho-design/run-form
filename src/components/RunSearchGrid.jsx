@@ -5,7 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { getGuildScopeDescription, isLeaderSession, isPaladinSession } from "@/lib/guildScope";
 
 import {
   Select,
@@ -89,6 +88,15 @@ function getApiBase() {
   }
 
   return "";
+}
+
+function getRunSessionPayload(session) {
+  return {
+    memberId: session?.memberId || session?.member_id || session?.id || "",
+    discordId: session?.discordId || session?.discord_id || "",
+    guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
+    role: session?.role || "",
+  };
 }
 
 function parseTimeToSeconds(value) {
@@ -222,10 +230,9 @@ export default function RunSearchGrid({ session: portalSession } = {}) {
   const [loadingSearch, setLoadingSearch] = useState(false);
   const apiBase = useMemo(() => getApiBase(), []);
   const [activePos, setActivePos] = useState(null);
-    const [botCommand, setBotCommand] = useState("");
+  const [botCommand, setBotCommand] = useState("");
   const [botModalOpen, setBotModalOpen] = useState(false);
   const [botQueryItems, setBotQueryItems] = useState([]);
-    const specialDiscordId = "266913883170668545";
 
   const dashboardSession = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -237,9 +244,6 @@ export default function RunSearchGrid({ session: portalSession } = {}) {
     }
   }, []);
   const session = portalSession || dashboardSession;
-
-  const isSpecialExternal = String(session?.discordId || "") === String(specialDiscordId);
-  const isExternalScopedSession = Boolean(session && !isLeaderSession(session) && !isPaladinSession(session));
 
   const [heroPool, setHeroPool] = useState(HEROES_FALLBACK);
   const [heroesLoading, setHeroesLoading] = useState(false);
@@ -285,7 +289,7 @@ const gridSpec = useMemo(() => {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ queryItems }),
+      body: JSON.stringify({ queryItems, session: getRunSessionPayload(session) }),
     });
 
         if (!res.ok) {
@@ -334,7 +338,7 @@ async function runBotCommandSearch() {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ queryItems }),
+      body: JSON.stringify({ queryItems, session: getRunSessionPayload(session) }),
     });
 
     if (!res.ok) {
@@ -524,24 +528,6 @@ function copyToClipboard(text) {
       console.error("Erreur copie :", err);
     });
 }
-
-  if (isExternalScopedSession) {
-    return (
-      <Card className="rounded-lg border-zinc-800 bg-zinc-950">
-        <CardHeader>
-          <CardTitle className="text-lg text-zinc-100">Recherche de run</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-zinc-400">
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100">
-            La banque de runs globale est protegee pour {getGuildScopeDescription(session)}.
-          </div>
-          <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-            Il faut ajouter un champ de scope sur les runs avant d'ouvrir la recherche aux guildes externes sans exposer les donnees Paladin.
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
 
   return (
     <div className="space-y-6">

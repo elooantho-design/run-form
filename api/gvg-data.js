@@ -1,6 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import fs from "fs";
 import path from "path";
+import {
+  getRunScopeForGvgGuild,
+  isMissingGuildCodeColumn,
+  stratMatchesRunScope,
+} from "./run-scope.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -1092,6 +1097,7 @@ async function handleRecordOk(req, res) {
   }
 
   const normalizedGuild = String(guild).toUpperCase();
+  const runScope = getRunScopeForGvgGuild(normalizedGuild);
 
   if (!UPLOADED_DIR) {
     return res.status(500).json({
@@ -1261,6 +1267,41 @@ function heroesToSlots(stratId, heroes) {
     .filter(Boolean);
 }
 
+function missingRunScopeColumnResponse(res) {
+  return res.status(500).json({
+    error: "Colonne defence_strat.guild_code manquante. Ajoute-la dans Supabase pour isoler les banques de runs externes.",
+  });
+}
+
+async function findExistingRunStrat(defKey, youtubeUrl, runScope) {
+  let { data, error } = await supabase
+    .from("defence_strat")
+    .select("id, guild_code")
+    .eq("def_key", defKey)
+    .eq("youtube_url", youtubeUrl);
+
+  if (error) {
+    if (!isMissingGuildCodeColumn(error)) throw error;
+    if (!runScope.isPaladin) {
+      const missingColumnError = new Error("missing defence_strat.guild_code");
+      missingColumnError.missingGuildCodeColumn = true;
+      throw missingColumnError;
+    }
+
+    const fallback = await supabase
+      .from("defence_strat")
+      .select("id")
+      .eq("def_key", defKey)
+      .eq("youtube_url", youtubeUrl)
+      .limit(1);
+
+    if (fallback.error) throw fallback.error;
+    return fallback.data?.[0] || null;
+  }
+
+  return (data || []).find((strat) => stratMatchesRunScope(strat, runScope)) || null;
+}
+
 async function handlePushToBase(req, res) {
   const { guild } = req.body || {};
 
@@ -1269,6 +1310,7 @@ async function handlePushToBase(req, res) {
   }
 
   const normalizedGuild = String(guild).toUpperCase();
+  const runScope = getRunScopeForGvgGuild(normalizedGuild);
 
   const { data: defenses, error: readError } = await supabase
     .from("gvg_defense")
@@ -1311,32 +1353,51 @@ async function handlePushToBase(req, res) {
     const defKey = makeDefKey(defense);
     const stratName = makeStratName(defense);
 
-    const { data: existingStrats, error: existingError } = await supabase
-      .from("defence_strat")
-      .select("id")
-      .eq("def_key", defKey)
-      .eq("youtube_url", defense.youtube_url)
-      .limit(1);
+    let existingStrat = null;
 
-    if (existingError) {
+    try {
+      existingStrat = await findExistingRunStrat(defKey, defense.youtube_url, runScope);
+    } catch (existingError) {
       console.error("[gvg-data:push_to_base] read defence_strat error:", existingError);
+      if (existingError?.missingGuildCodeColumn) return missingRunScopeColumnResponse(res);
       return res.status(500).json({ error: "erreur lecture defence_strat" });
     }
 
-    let stratId = existingStrats?.[0]?.id || null;
+    let stratId = existingStrat?.id || null;
 
     if (!stratId) {
-      const { data: insertedStrat, error: insertStratError } = await supabase
+      const insertPayload = {
+        name: stratName,
+        commentaire: defense.record_comment || null,
+        youtube_url: defense.youtube_url,
+        def_key: defKey,
+        attack_code: defense.attack_code || null,
+        guild_code: runScope.stratGuildCode,
+      };
+
+      let { data: insertedStrat, error: insertStratError } = await supabase
         .from("defence_strat")
-        .insert({
-          name: stratName,
-          commentaire: defense.record_comment || null,
-          youtube_url: defense.youtube_url,
-          def_key: defKey,
-          attack_code: defense.attack_code || null,
-        })
+        .insert(insertPayload)
         .select("id")
         .single();
+
+      if (insertStratError && isMissingGuildCodeColumn(insertStratError) && runScope.isPaladin) {
+        const fallbackPayload = { ...insertPayload };
+        delete fallbackPayload.guild_code;
+
+        const fallback = await supabase
+          .from("defence_strat")
+          .insert(fallbackPayload)
+          .select("id")
+          .single();
+
+        insertedStrat = fallback.data;
+        insertStratError = fallback.error;
+      }
+
+      if (insertStratError && isMissingGuildCodeColumn(insertStratError) && !runScope.isPaladin) {
+        return missingRunScopeColumnResponse(res);
+      }
 
       if (insertStratError || !insertedStrat?.id) {
         console.error("[gvg-data:push_to_base] insert defence_strat error:", insertStratError);
@@ -1345,14 +1406,33 @@ async function handlePushToBase(req, res) {
 
       stratId = insertedStrat.id;
     } else {
-      const { error: updateStratError } = await supabase
+      const updatePayload = {
+        name: stratName,
+        commentaire: defense.record_comment || null,
+        attack_code: defense.attack_code || null,
+      };
+
+      if (!runScope.isPaladin) {
+        updatePayload.guild_code = runScope.stratGuildCode;
+      }
+
+      let { error: updateStratError } = await supabase
         .from("defence_strat")
-        .update({
-          name: stratName,
-          commentaire: defense.record_comment || null,
-          attack_code: defense.attack_code || null,
-        })
+        .update(updatePayload)
         .eq("id", stratId);
+
+      if (updateStratError && isMissingGuildCodeColumn(updateStratError) && runScope.isPaladin) {
+        delete updatePayload.guild_code;
+        const fallback = await supabase
+          .from("defence_strat")
+          .update(updatePayload)
+          .eq("id", stratId);
+        updateStratError = fallback.error;
+      }
+
+      if (updateStratError && isMissingGuildCodeColumn(updateStratError) && !runScope.isPaladin) {
+        return missingRunScopeColumnResponse(res);
+      }
 
       if (updateStratError) {
         console.error("[gvg-data:push_to_base] update defence_strat error:", updateStratError);

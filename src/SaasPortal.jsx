@@ -1109,8 +1109,8 @@ function PortalShell({ session, onLogout }) {
           {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
           {active === "admin-defenses" ? <PortalAdminDefensesView session={session} /> : null}
           {active === "intersaison" ? <PortalIntersaisonTab session={session} /> : null}
-          {active === "run-add" ? <RunAddTab /> : null}
-          {active === "run-edit" ? <RunEditTab /> : null}
+          {active === "run-add" ? <RunAddTab session={session} /> : null}
+          {active === "run-edit" ? <RunEditTab session={session} /> : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
           {active === "templates" ? <AddHeroView session={session} /> : null}
           {active === "guilds" ? <GuildsView session={session} /> : null}
