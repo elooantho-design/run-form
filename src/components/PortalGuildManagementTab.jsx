@@ -62,8 +62,25 @@ function mapVoteRow(row) {
   };
 }
 
+function normalizeRoleValue(role) {
+  return String(role || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
 function isAdminSession(session) {
-  return Boolean(session?.isAdmin || session?.admin || String(session?.role || "").toLowerCase().includes("admin"));
+  const role = normalizeRoleValue(session?.role);
+
+  return Boolean(
+    session?.isAdmin ||
+      session?.admin ||
+      role.includes("admin") ||
+      role.includes("administrateur") ||
+      role.includes("leader") ||
+      role.includes("officier"),
+  );
 }
 
 export default function PortalGuildManagementTab({ session }) {

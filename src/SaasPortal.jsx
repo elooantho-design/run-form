@@ -203,6 +203,14 @@ function isAdminRole(role) {
   return ["admin", "administrateur", "leader", "officier"].includes(normalizeRoleValue(role));
 }
 
+function isLeaderSession(session) {
+  return Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
+}
+
+function isAdminSession(session) {
+  return Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+}
+
 function buildPortalSession(member) {
   const watcherName = member?.watcher_name || member?.discord_id || "Joueur";
   const guildCode = member?.guild_code || "G1";
@@ -228,6 +236,11 @@ function buildPortalSession(member) {
     leader,
     passwordChangeRequired: Boolean(member?.password_change_required),
   };
+}
+
+function refreshPortalSessionStorage(nextSession) {
+  replaceStoredPortalSession(nextSession);
+  return nextSession;
 }
 
 function isForcedPortalPassword(password) {
@@ -905,8 +918,8 @@ function PortalShell({ session, onLogout }) {
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const loggedTabViewsRef = useRef(new Set());
-  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
-  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
+  const isAdminUser = isAdminSession(session);
+  const isLeaderUser = isLeaderSession(session);
   const visibleAdminNavigation = useMemo(
     () =>
       adminNavigation.filter((item) => {
@@ -1279,7 +1292,7 @@ function HeroBoxView({ session }) {
   const [heroStates, setHeroStates] = useState({});
 
   const connectedPlayerId = session?.memberId || session?.id || "";
-  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const isAdminUser = isAdminSession(session);
   const connectedPlayerKey = connectedPlayerId ? String(connectedPlayerId) : "";
   const selectedPlayerKey = selectedPlayerId ? String(selectedPlayerId) : "";
   const canEdit = Boolean(isAdminUser || (selectedPlayerKey && selectedPlayerKey === connectedPlayerKey));
@@ -1997,7 +2010,7 @@ function HeroLayerCard({
 
 function GvgView({ session }) {
   const [activeGvgView, setActiveGvgView] = useState("current");
-  const canUseGvgAdminViews = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const canUseGvgAdminViews = isAdminSession(session);
 
   const views = [
     { id: "current", label: "GVG en cours" },
@@ -2537,7 +2550,7 @@ function PortalAdminDefensesView({ session }) {
   const [conditionOpen, setConditionOpen] = useState(false);
   const [conditionDefenseId, setConditionDefenseId] = useState("");
   const [newCondition, setNewCondition] = useState({ hero: "", minAwakening: 5 });
-  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const isAdminUser = isAdminSession(session);
 
   const championByName = useMemo(() => {
     const entries = champions.map((champion) => [
@@ -3416,7 +3429,7 @@ function AddHeroView({ session }) {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [createdChampion, setCreatedChampion] = useState(null);
-  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
+  const isLeaderUser = isLeaderSession(session);
 
   const selectedFactionLabels = form.factions
     .map((faction) => heroFactionMeta[faction]?.label || formatHeroFilterLabel(faction))
@@ -3783,7 +3796,7 @@ function AddHeroView({ session }) {
 }
 
 function GuildsView({ session }) {
-  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
+  const isLeaderUser = isLeaderSession(session);
 
   if (!isLeaderUser) {
     return (
@@ -3820,7 +3833,7 @@ function GuildsView({ session }) {
 }
 
 function BillingView({ session }) {
-  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
+  const isLeaderUser = isLeaderSession(session);
 
   if (!isLeaderUser) {
     return (
@@ -3999,7 +4012,7 @@ function PasswordChangeRequiredView({ session, onPasswordChanged, onLogout }) {
 function PlayerAccessView({ session }) {
   const apiBase = useMemo(() => getApiBase(), []);
   const actorMemberId = session?.memberId || session?.id || "";
-  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const isAdminUser = isAdminSession(session);
   const [members, setMembers] = useState([]);
   const [adminPassword, setAdminPassword] = useState("");
   const [query, setQuery] = useState("");
@@ -4567,6 +4580,59 @@ function SettingsView() {
 
 export default function SaasPortal() {
   const [session, setSession] = useState(() => readStoredPortalSession());
+
+  useEffect(() => {
+    const memberId = session?.memberId || session?.id || null;
+    const discordId = session?.discordId || session?.discord_id || null;
+
+    if (!memberId && !discordId) return undefined;
+
+    let cancelled = false;
+
+    async function refreshStoredSessionRole() {
+      try {
+        let query = supabase
+          .from("guild_members")
+          .select("id, role, discord_id, watcher_name, guild_code");
+
+        query = memberId ? query.eq("id", memberId) : query.eq("discord_id", discordId);
+
+        const { data, error } = await query.maybeSingle();
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn("[portal-session-refresh]", error);
+          return;
+        }
+
+        if (!data) return;
+
+        setSession((current) => {
+          const currentMemberId = current?.memberId || current?.id || null;
+          const currentDiscordId = current?.discordId || current?.discord_id || null;
+
+          if (memberId && String(currentMemberId) !== String(memberId)) return current;
+          if (!memberId && discordId && String(currentDiscordId) !== String(discordId)) return current;
+
+          return refreshPortalSessionStorage(
+            buildPortalSession({
+              ...data,
+              password_change_required: Boolean(current?.passwordChangeRequired),
+            }),
+          );
+        });
+      } catch (error) {
+        if (!cancelled) console.warn("[portal-session-refresh]", error);
+      }
+    }
+
+    void refreshStoredSessionRole();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.memberId, session?.id, session?.discordId, session?.discord_id]);
 
   function handleLogin(nextSession, options = {}) {
     persistPortalSession(nextSession, Boolean(options.remember));
