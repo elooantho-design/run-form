@@ -62,9 +62,9 @@ const navigation = [
 const adminNavigation = [
   { id: "guild-management", label: "Gestion guildes", icon: Users, adminOnly: true },
   { id: "admin-defenses", label: "Gestion défense", icon: Shield, adminOnly: true },
-  { id: "templates", label: "Ajout heros", icon: PlusCircle, adminOnly: true },
-  { id: "guilds", label: "Guildes", icon: Users, adminOnly: true },
-  { id: "billing", label: "Licences", icon: WalletCards, adminOnly: true },
+  { id: "templates", label: "Ajout heros", icon: PlusCircle, leaderOnly: true },
+  { id: "guilds", label: "Guildes", icon: Users, leaderOnly: true },
+  { id: "billing", label: "Licences", icon: WalletCards, leaderOnly: true },
   { id: "launcher", label: "Launcher", icon: Bot },
   { id: "validation", label: "Validation", icon: SearchCheck },
   { id: "logs", label: "Logs", icon: Activity },
@@ -179,10 +179,20 @@ const DASHBOARD_SESSION_STORAGE_KEY = "guildDashboardSession";
 const portalDefaultPasswords = ["motdepassemembre", "motdepasseadmin"];
 const portalTemporaryPasswordPrefix = "TMP-";
 
+function normalizeRoleValue(role) {
+  return String(role || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function isLeaderRole(role) {
+  return normalizeRoleValue(role) === "leader";
+}
+
 function isAdminRole(role) {
-  return ["admin", "administrateur", "leader", "officier"].includes(
-    String(role || "").trim().toLowerCase(),
-  );
+  return ["admin", "administrateur", "leader", "officier"].includes(normalizeRoleValue(role));
 }
 
 function buildPortalSession(member) {
@@ -190,6 +200,7 @@ function buildPortalSession(member) {
   const guildCode = member?.guild_code || "G1";
   const role = member?.role || "Joueur";
   const admin = isAdminRole(role);
+  const leader = isLeaderRole(role);
 
   return {
     memberId: member?.id || null,
@@ -205,6 +216,8 @@ function buildPortalSession(member) {
     guild_code: guildCode,
     isAdmin: admin,
     admin,
+    isLeader: leader,
+    leader,
     passwordChangeRequired: Boolean(member?.password_change_required),
   };
 }
@@ -885,9 +898,15 @@ function PortalShell({ session, onLogout }) {
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
   const visibleAdminNavigation = useMemo(
-    () => adminNavigation.filter((item) => !item.adminOnly || isAdminUser),
-    [isAdminUser],
+    () =>
+      adminNavigation.filter((item) => {
+        if (item.leaderOnly) return isLeaderUser;
+        if (item.adminOnly) return isAdminUser;
+        return true;
+      }),
+    [isAdminUser, isLeaderUser],
   );
 
   const activeTitle = useMemo(() => {
@@ -1043,8 +1062,8 @@ function PortalShell({ session, onLogout }) {
           {active === "admin-defenses" ? <PortalAdminDefensesView session={session} /> : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
           {active === "templates" ? <AddHeroView session={session} /> : null}
-          {active === "guilds" ? <GuildsView /> : null}
-          {active === "billing" ? <BillingView /> : null}
+          {active === "guilds" ? <GuildsView session={session} /> : null}
+          {active === "billing" ? <BillingView session={session} /> : null}
           {active === "logs" ? <LogsView session={session} /> : null}
           {active === "settings" ? <SettingsView /> : null}
         </main>
@@ -3370,7 +3389,7 @@ function AddHeroView({ session }) {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [createdChampion, setCreatedChampion] = useState(null);
-  const isAdminUser = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
 
   const selectedFactionLabels = form.factions
     .map((faction) => heroFactionMeta[faction]?.label || formatHeroFilterLabel(faction))
@@ -3413,7 +3432,7 @@ function AddHeroView({ session }) {
 
   async function submitHero(event) {
     event.preventDefault();
-    if (!isAdminUser || saving) return;
+    if (!isLeaderUser || saving) return;
 
     const payload = {
       action: "create",
@@ -3428,7 +3447,7 @@ function AddHeroView({ session }) {
     };
 
     if (!payload.name || !payload.portalName || !payload.adminPassword) {
-      setErrorMessage("Name technique, PortalName et mot de passe admin sont obligatoires.");
+      setErrorMessage("Name technique, PortalName et mot de passe leader sont obligatoires.");
       return;
     }
 
@@ -3500,9 +3519,9 @@ function AddHeroView({ session }) {
           </Badge>
         </div>
 
-        {!isAdminUser ? (
+        {!isLeaderUser ? (
           <div className="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-            Cet onglet est reserve aux admins, leaders et officiers.
+            Cet onglet est reserve au role leader.
           </div>
         ) : (
           <>
@@ -3577,12 +3596,12 @@ function AddHeroView({ session }) {
               </label>
 
               <label className="block">
-                <span className="text-sm text-zinc-400">Mot de passe admin</span>
+                <span className="text-sm text-zinc-400">Mot de passe leader</span>
                 <input
                   type="password"
                   value={form.adminPassword}
                   onChange={(event) => updateForm({ adminPassword: event.target.value })}
-                  placeholder="Confirmation admin"
+                  placeholder="Confirmation leader"
                   className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
                 />
               </label>
@@ -3736,7 +3755,18 @@ function AddHeroView({ session }) {
   );
 }
 
-function GuildsView() {
+function GuildsView({ session }) {
+  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
+
+  if (!isLeaderUser) {
+    return (
+      <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <h2 className="text-xl font-semibold text-zinc-50">Guildes</h2>
+        <p className="mt-2 text-sm text-zinc-400">Cet onglet est reserve au role leader.</p>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
       <h2 className="text-xl font-semibold text-zinc-50">Guildes</h2>
@@ -3762,7 +3792,18 @@ function GuildsView() {
   );
 }
 
-function BillingView() {
+function BillingView({ session }) {
+  const isLeaderUser = Boolean(session?.isLeader || session?.leader || isLeaderRole(session?.role));
+
+  if (!isLeaderUser) {
+    return (
+      <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+        <h2 className="text-xl font-semibold text-zinc-50">Licences</h2>
+        <p className="mt-2 text-sm text-zinc-400">Cet onglet est reserve au role leader.</p>
+      </section>
+    );
+  }
+
   return (
     <section className="grid gap-4 md:grid-cols-3">
       {["Interne", "Guilde externe", "Entreprise"].map((plan, index) => (

@@ -136,7 +136,13 @@ export default function PersonalBestTab({ session }) {
 
   const isAdmin = useMemo(() => {
     const role = getSessionRole(session);
-    return role.includes("admin") || role.includes("administrateur");
+    return (
+      session?.isAdmin ||
+      session?.admin ||
+      role.includes("admin") ||
+      role.includes("administrateur") ||
+      role.includes("leader")
+    );
   }, [session]);
 
   useEffect(() => {

@@ -91,7 +91,12 @@ export default function DemonMonstersTab({ session }) {
 
   const canEditDemonicMonsters = useMemo(() => {
     const role = getSessionRole(session);
-    const isAdmin = role.includes("admin") || role.includes("administrateur");
+    const isAdmin =
+      session?.isAdmin ||
+      session?.admin ||
+      role.includes("admin") ||
+      role.includes("administrateur") ||
+      role.includes("leader");
     const isOwnProfile =
       selectedMember?.id && session?.memberId
         ? String(selectedMember.id) === String(session.memberId)

@@ -58,6 +58,10 @@ function isAdminRole(role) {
   return ["admin", "administrateur", "leader", "officier"].includes(normalizeText(role));
 }
 
+function isLeaderRole(role) {
+  return normalizeText(role) === "leader";
+}
+
 function getMemberName(member) {
   return member?.watcher_name || member?.discord_id || "Joueur";
 }
@@ -164,6 +168,20 @@ async function requireAdmin(actorMemberId, adminPassword) {
   }
 
   return { admin: data };
+}
+
+async function requireLeader(actorMemberId, adminPassword) {
+  const adminCheck = await requireAdmin(actorMemberId, adminPassword);
+
+  if (adminCheck.error) {
+    return adminCheck;
+  }
+
+  if (!isLeaderRole(adminCheck.admin.role)) {
+    return { error: "Acces leader refuse.", status: 403 };
+  }
+
+  return adminCheck;
 }
 
 function normalizeList(values, allowedValues) {
@@ -321,7 +339,7 @@ async function prepareHeroCalque(file, expectedFileName) {
 async function handleCreate(body, heroCalqueFile, res) {
   const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const adminPassword = cleanText(body.adminPassword || body.admin_password);
-  const adminCheck = await requireAdmin(actorMemberId, adminPassword);
+  const adminCheck = await requireLeader(actorMemberId, adminPassword);
 
   if (adminCheck.error) {
     sendJson(res, adminCheck.status, { error: adminCheck.error });
