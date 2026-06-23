@@ -1061,7 +1061,7 @@ function PortalShell({ session, onLogout }) {
           {active === "demon-monsters" ? <DemonMonstersTab session={session} /> : null}
           {active === "personal-best" ? <PersonalBestTab session={session} /> : null}
           {active === "defenses" ? <MyDefensesTab session={session} /> : null}
-          {active === "gvg" ? <GvgView /> : null}
+          {active === "gvg" ? <GvgView session={session} /> : null}
           {active === "run-search" ? <RunSearchGrid /> : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
@@ -1992,30 +1992,45 @@ function HeroLayerCard({
   );
 }
 
-function GvgView() {
+function GvgView({ session }) {
   const [activeGvgView, setActiveGvgView] = useState("current");
+  const canUseGvgAdminViews = Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
 
   const views = [
     { id: "current", label: "GVG en cours" },
-    { id: "panel", label: "Pilotage" },
-    { id: "admin", label: "Imports VPS" },
+    { id: "panel", label: "Pilotage", adminOnly: true },
+    { id: "admin", label: "Imports VPS", adminOnly: true },
   ];
+
+  useEffect(() => {
+    const activeView = views.find((view) => view.id === activeGvgView);
+    if (activeView?.adminOnly && !canUseGvgAdminViews) {
+      setActiveGvgView("current");
+    }
+  }, [activeGvgView, canUseGvgAdminViews]);
 
   return (
     <section className="space-y-5">
       <div className="flex flex-wrap gap-2 rounded-xl border border-zinc-800 bg-zinc-950/90 p-2">
         {views.map((view) => {
           const selected = activeGvgView === view.id;
+          const disabled = Boolean(view.adminOnly && !canUseGvgAdminViews);
 
           return (
             <button
               key={view.id}
               type="button"
-              onClick={() => setActiveGvgView(view.id)}
+              onClick={() => {
+                if (!disabled) setActiveGvgView(view.id);
+              }}
+              disabled={disabled}
+              title={disabled ? "Reserve aux admins et leaders" : view.label}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                 selected
                   ? "bg-violet-500/20 text-violet-100 shadow-[0_0_18px_rgba(168,85,247,0.22)]"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+                  : disabled
+                    ? "cursor-not-allowed text-zinc-600 opacity-50"
+                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
               }`}
             >
               {view.label}
@@ -2025,8 +2040,8 @@ function GvgView() {
       </div>
 
       {activeGvgView === "current" ? <GvgCurrentTab /> : null}
-      {activeGvgView === "panel" ? <GvgPanelTab /> : null}
-      {activeGvgView === "admin" ? <GvgAdminTab /> : null}
+      {activeGvgView === "panel" && canUseGvgAdminViews ? <GvgPanelTab session={session} /> : null}
+      {activeGvgView === "admin" && canUseGvgAdminViews ? <GvgAdminTab /> : null}
     </section>
   );
 }

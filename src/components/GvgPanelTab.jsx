@@ -113,9 +113,9 @@ function normalizeDir(dir) {
   return d;
 }
 
-export default function GvgPanelTab() {
+export default function GvgPanelTab({ session: portalSession } = {}) {
   const apiBase = useMemo(() => getApiBase(), []);
-  const session = useMemo(() => {
+  const dashboardSession = useMemo(() => {
     if (typeof window === "undefined") return null;
 
     try {
@@ -124,6 +124,7 @@ export default function GvgPanelTab() {
       return null;
     }
   }, []);
+  const session = portalSession || dashboardSession;
 
   const sessionRole = String(session?.role || "")
     .normalize("NFD")
@@ -133,7 +134,9 @@ export default function GvgPanelTab() {
     session?.isAdmin === true ||
     session?.admin === true ||
     sessionRole.includes("admin") ||
-    sessionRole.includes("administrateur");
+    sessionRole.includes("administrateur") ||
+    sessionRole.includes("leader") ||
+    sessionRole.includes("officier");
 const [guild, setGuild] = useState("G1");
 const [recordModalOpen, setRecordModalOpen] = useState(false);
 const [recordCreating, setRecordCreating] = useState(false);
