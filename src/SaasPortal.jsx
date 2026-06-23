@@ -35,6 +35,7 @@ import DemonMonstersTab from "@/components/DemonMonstersTab";
 import SoulStonesTab from "@/components/SoulStonesTab";
 import PersonalBestTab from "@/components/PersonalBestTab";
 import MyDefensesTab from "@/components/MyDefensesTab";
+import PortalGuildManagementTab from "@/components/PortalGuildManagementTab";
 import GvgCurrentTab from "@/components/GvgCurrentTab";
 import GvgPanelTab from "@/components/GvgPanelTab";
 import GvgAdminTab from "@/components/GvgAdminTab";
@@ -57,6 +58,7 @@ const navigation = [
 ];
 
 const adminNavigation = [
+  { id: "guild-management", label: "Gestion guildes", icon: Users, adminOnly: true },
   { id: "launcher", label: "Launcher", icon: Bot },
   { id: "validation", label: "Validation", icon: SearchCheck },
   { id: "logs", label: "Logs", icon: Activity },
@@ -1027,6 +1029,7 @@ function PortalShell({ session, onLogout }) {
           {active === "gvg" ? <GvgView /> : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
+          {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
           {active === "templates" ? <TemplatesView /> : null}
           {active === "guilds" ? <GuildsView /> : null}
