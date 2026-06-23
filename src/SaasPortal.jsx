@@ -58,6 +58,11 @@ import {
   getGvgGuildLabel,
   getGuildScopeDescription,
   getVisibleGvgGuildCodes,
+  isPaladinGuildCode,
+  isPaladinSession,
+  normalizeGuildCode,
+  normalizeGuildCodeKey,
+  PALADIN_CLUSTER_GUILD_CODES,
 } from "@/lib/guildScope";
 
 const navigation = [
@@ -2445,7 +2450,6 @@ function LauncherView({ session: portalSession }) {
   );
 }
 
-const PORTAL_ADMIN_DEFENSE_GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const EMPTY_DEFENSE_SLOT = "--";
 
 const emptyPortalDefenseDraft = {
@@ -2461,7 +2465,7 @@ const emptyPortalDefenseDraft = {
 };
 
 function getPortalSessionGuildCode(session) {
-  return session?.guildCode || session?.guild_code || session?.guild || "G1";
+  return normalizeGuildCode(session?.guildCode || session?.guild_code || session?.guild || "G1");
 }
 
 function mapPortalAdminDefenseRow(row, blocksByDefenseId = new Map()) {
@@ -2577,6 +2581,17 @@ function PortalAdminDefensesView({ session }) {
   const [conditionDefenseId, setConditionDefenseId] = useState("");
   const [newCondition, setNewCondition] = useState({ hero: "", minAwakening: 5 });
   const isAdminUser = isAdminSession(session);
+  const visibleDefenseGuildCodes = useMemo(() => {
+    if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
+
+    const sessionGuildCode = getPortalSessionGuildCode(session);
+    return sessionGuildCode ? [sessionGuildCode] : [];
+  }, [session]);
+  const activeGuildCodeKey = normalizeGuildCodeKey(activeGuildCode);
+  const activeGuildIsVisible = visibleDefenseGuildCodes.some(
+    (guildCode) => normalizeGuildCodeKey(guildCode) === activeGuildCodeKey,
+  );
+  const activeGuildIsPaladin = isPaladinGuildCode(activeGuildCode);
 
   const championByName = useMemo(() => {
     const entries = champions.map((champion) => [
@@ -2592,10 +2607,15 @@ function PortalAdminDefensesView({ session }) {
   );
 
   useEffect(() => {
+    if (visibleDefenseGuildCodes.length === 0 || activeGuildIsVisible) return;
+    setActiveGuildCode(visibleDefenseGuildCodes[0]);
+  }, [activeGuildIsVisible, visibleDefenseGuildCodes]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadAdminDefenses() {
-      if (!isAdminUser) {
+      if (!isAdminUser || !activeGuildIsVisible) {
         setLoading(false);
         return;
       }
@@ -2603,39 +2623,43 @@ function PortalAdminDefensesView({ session }) {
       setLoading(true);
       setErrorMessage("");
 
-      const [defensesResult, championsResult] = await Promise.all([
-        supabase
-          .from("guild_defenses")
-          .select(`
-            id,
-            name,
-            tier,
-            type,
-            faction,
-            image_url,
-            guild_code,
-            is_global,
-            source_defense_id,
-            sort_order,
-            created_at,
-            guild_defense_slots (
-              slot_index,
-              champion_id,
-              champions (
-                name
-              )
-            ),
-            guild_defense_conditions (
-              id,
-              champion_id,
-              min_awakening,
-              champions (
-                name
-              )
+      let defensesQuery = supabase
+        .from("guild_defenses")
+        .select(`
+          id,
+          name,
+          tier,
+          type,
+          faction,
+          image_url,
+          guild_code,
+          is_global,
+          source_defense_id,
+          sort_order,
+          created_at,
+          guild_defense_slots (
+            slot_index,
+            champion_id,
+            champions (
+              name
             )
-          `)
-          .or(`is_global.eq.true,guild_code.eq.${activeGuildCode}`)
-          .order("created_at", { ascending: true }),
+          ),
+          guild_defense_conditions (
+            id,
+            champion_id,
+            min_awakening,
+            champions (
+              name
+            )
+          )
+        `);
+
+      defensesQuery = activeGuildIsPaladin
+        ? defensesQuery.or(`is_global.eq.true,guild_code.eq.${activeGuildCode}`)
+        : defensesQuery.eq("guild_code", activeGuildCode);
+
+      const [defensesResult, championsResult] = await Promise.all([
+        defensesQuery.order("created_at", { ascending: true }),
         supabase.from("champions").select("id, name, portal_name").order("name", { ascending: true }),
       ]);
 
@@ -2707,7 +2731,7 @@ function PortalAdminDefensesView({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [activeGuildCode, isAdminUser, refreshTick]);
+  }, [activeGuildCode, activeGuildIsPaladin, activeGuildIsVisible, isAdminUser, refreshTick]);
 
   function openAddDefense() {
     setMessage("");
@@ -2715,7 +2739,7 @@ function PortalAdminDefensesView({ session }) {
     setDraft({
       ...emptyPortalDefenseDraft,
       guildCode: activeGuildCode,
-      isGlobal: activeGuildCode === "G1",
+      isGlobal: activeGuildIsPaladin && activeGuildCode === "G1",
     });
     setDraftOpen(true);
   }
@@ -2801,8 +2825,8 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
 
     const isEditMode = draft.id && String(draft.id) !== "0";
-    const nextGuildCode = isEditMode && draft.isGlobal ? draft.guildCode || "G1" : activeGuildCode;
-    const nextIsGlobal = isEditMode ? Boolean(draft.isGlobal) : activeGuildCode === "G1";
+    const nextIsGlobal = activeGuildIsPaladin && (isEditMode ? Boolean(draft.isGlobal) : activeGuildCode === "G1");
+    const nextGuildCode = nextIsGlobal ? draft.guildCode || "G1" : activeGuildCode;
     const defensePayload = {
       name: cleanName,
       tier: draft.tier,
@@ -2974,15 +2998,33 @@ function PortalAdminDefensesView({ session }) {
       ].filter(Boolean);
 
       const uniqueStoragePaths = [...new Set(storagePaths)];
+      const resetGuildCodes =
+        defense.isGlobal || isPaladinGuildCode(defense.guildCode)
+          ? PALADIN_CLUSTER_GUILD_CODES
+          : [defense.guildCode || activeGuildCode].filter(Boolean);
 
       if (uniqueStoragePaths.length > 0) {
         const { error: storageError } = await supabase.storage.from("defense-images").remove(uniqueStoragePaths);
         if (storageError) throw storageError;
       }
 
+      let resetDefense1Query = supabase
+        .from("guild_members")
+        .update({ defense_1: EMPTY_DEFENSE_SLOT })
+        .eq("defense_1", defense.name);
+      let resetDefense2Query = supabase
+        .from("guild_members")
+        .update({ defense_2: EMPTY_DEFENSE_SLOT })
+        .eq("defense_2", defense.name);
+
+      if (resetGuildCodes.length > 0) {
+        resetDefense1Query = resetDefense1Query.in("guild_code", resetGuildCodes);
+        resetDefense2Query = resetDefense2Query.in("guild_code", resetGuildCodes);
+      }
+
       const [resetDefense1, resetDefense2, blocksDelete, conditionsDelete, slotsDelete] = await Promise.all([
-        supabase.from("guild_members").update({ defense_1: EMPTY_DEFENSE_SLOT }).eq("defense_1", defense.name),
-        supabase.from("guild_members").update({ defense_2: EMPTY_DEFENSE_SLOT }).eq("defense_2", defense.name),
+        resetDefense1Query,
+        resetDefense2Query,
         supabase.from("guild_defense_blocks").delete().eq("defense_id", defense.id),
         supabase.from("guild_defense_conditions").delete().eq("defense_id", defense.id),
         supabase.from("guild_defense_slots").delete().eq("defense_id", defense.id),
@@ -3056,13 +3098,13 @@ function PortalAdminDefensesView({ session }) {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          {PORTAL_ADMIN_DEFENSE_GUILDS.map((guildCode) => (
+          {visibleDefenseGuildCodes.map((guildCode) => (
             <button
               key={guildCode}
               type="button"
               onClick={() => setActiveGuildCode(guildCode)}
               className={`rounded-lg border px-3 py-1.5 text-sm transition ${
-                activeGuildCode === guildCode
+                normalizeGuildCodeKey(activeGuildCode) === normalizeGuildCodeKey(guildCode)
                   ? "border-emerald-500 bg-emerald-500/15 text-emerald-200"
                   : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
               }`}
@@ -3220,7 +3262,7 @@ function PortalAdminDefensesView({ session }) {
                   <input type="file" accept="image/*" className="hidden" onChange={handleDefenseImageChange} />
                 </label>
 
-                {draft.isGlobal ? (
+                {draft.isGlobal && isPaladinGuildCode(draft.guildCode || activeGuildCode) ? (
                   <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-200">Defense globale</Badge>
                 ) : (
                   <Badge className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
