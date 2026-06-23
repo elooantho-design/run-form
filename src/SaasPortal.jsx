@@ -2379,7 +2379,7 @@ function getPortalSessionGuildCode(session) {
   return session?.guildCode || session?.guild_code || session?.guild || "G1";
 }
 
-function mapPortalAdminDefenseRow(row) {
+function mapPortalAdminDefenseRow(row, blocksByDefenseId = new Map()) {
   const slots = [...(row.guild_defense_slots || [])]
     .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
     .map((slot) => slot.champions?.name || "")
@@ -2404,6 +2404,7 @@ function mapPortalAdminDefenseRow(row) {
     sortOrder: row.sort_order ?? 9999,
     slots,
     conditions,
+    infoBlocks: blocksByDefenseId.get(String(row.id)) || [],
     image: row.image_url || "",
     image_url: row.image_url || "",
   };
@@ -2564,8 +2565,45 @@ function PortalAdminDefensesView({ session }) {
         return;
       }
 
-      const nextDefenses = (defensesResult.data || [])
-        .map(mapPortalAdminDefenseRow)
+      const defenseRows = defensesResult.data || [];
+      const defenseIds = defenseRows.map((row) => row.id).filter(Boolean);
+      let blocksByDefenseId = new Map();
+
+      if (defenseIds.length > 0) {
+        const { data: blockRows, error: blocksError } = await supabase
+          .from("guild_defense_blocks")
+          .select("id, defense_id, block_type, content, sort_order")
+          .in("defense_id", defenseIds)
+          .order("sort_order", { ascending: true });
+
+        if (cancelled) return;
+
+        if (blocksError) {
+          console.error("Erreur chargement infos gestion defense Portal:", blocksError);
+        } else {
+          blocksByDefenseId = (blockRows || []).reduce((grouped, block) => {
+            const defenseId = String(block.defense_id);
+            const previous = grouped.get(defenseId) || [];
+
+            grouped.set(defenseId, [
+              ...previous,
+              {
+                id: block.id,
+                blockType: block.block_type,
+                block_type: block.block_type,
+                content: block.content,
+                sortOrder: block.sort_order ?? 9999,
+                sort_order: block.sort_order ?? 9999,
+              },
+            ]);
+
+            return grouped;
+          }, new Map());
+        }
+      }
+
+      const nextDefenses = defenseRows
+        .map((row) => mapPortalAdminDefenseRow(row, blocksByDefenseId))
         .sort((left, right) => {
           if ((left.sortOrder ?? 9999) !== (right.sortOrder ?? 9999)) {
             return (left.sortOrder ?? 9999) - (right.sortOrder ?? 9999);

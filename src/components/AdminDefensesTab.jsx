@@ -15,6 +15,33 @@ const [selectedDefenseForBlocks, setSelectedDefenseForBlocks] = useState(null);
 const [defenseBlocks, setDefenseBlocks] = useState([]);
 const [blocksLoading, setBlocksLoading] = useState(false);
 const [newTextBlock, setNewTextBlock] = useState("");
+const [infoBlocksByDefenseId, setInfoBlocksByDefenseId] = useState({});
+
+const normalizeInfoBlock = (block) => ({
+  ...block,
+  block_type: block.block_type || block.blockType || "text",
+  blockType: block.blockType || block.block_type || "text",
+  sort_order: block.sort_order ?? block.sortOrder ?? 9999,
+  sortOrder: block.sortOrder ?? block.sort_order ?? 9999,
+});
+
+const sortInfoBlocks = (blocks = []) =>
+  blocks
+    .map(normalizeInfoBlock)
+    .sort((a, b) => (a.sort_order ?? 9999) - (b.sort_order ?? 9999));
+
+const cacheDefenseInfoBlocks = (defenseId, blocks) => {
+  if (!defenseId) return;
+
+  setInfoBlocksByDefenseId((prev) => ({
+    ...prev,
+    [String(defenseId)]: sortInfoBlocks(blocks),
+  }));
+};
+
+const getDefenseInfoBlocks = (defense) =>
+  infoBlocksByDefenseId[String(defense.id)] ||
+  sortInfoBlocks(defense.infoBlocks || []);
 
 const openDefenseBlocksModal = async (defense) => {
   setSelectedDefenseForBlocks(defense);
@@ -31,7 +58,9 @@ const openDefenseBlocksModal = async (defense) => {
     console.error("Erreur chargement blocs défense:", error);
     setDefenseBlocks([]);
   } else {
-    setDefenseBlocks(data || []);
+    const nextBlocks = sortInfoBlocks(data || []);
+    setDefenseBlocks(nextBlocks);
+    cacheDefenseInfoBlocks(defense.id, nextBlocks);
   }
 
   setBlocksLoading(false);
@@ -86,6 +115,7 @@ const moveBlock = async (index, direction) => {
   }));
 
   setDefenseBlocks(updated);
+  cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, updated);
 
   await Promise.all(
     updated.map((block) =>
@@ -132,7 +162,9 @@ const deleteBlock = async (block) => {
     return;
   }
 
-  setDefenseBlocks((prev) => prev.filter((b) => b.id !== block.id));
+  const nextBlocks = defenseBlocks.filter((b) => b.id !== block.id);
+  setDefenseBlocks(nextBlocks);
+  cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
 };
 
 const addTextBlock = async () => {
@@ -159,7 +191,9 @@ const addTextBlock = async () => {
     return;
   }
 
-  setDefenseBlocks((prev) => [...prev, data]);
+  const nextBlocks = sortInfoBlocks([...defenseBlocks, data]);
+  setDefenseBlocks(nextBlocks);
+  cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
   setNewTextBlock("");
 };
 
@@ -250,7 +284,9 @@ const addImageBlock = async (event) => {
       return;
     }
 
-    setDefenseBlocks((prev) => [...prev, data]);
+    const nextBlocks = sortInfoBlocks([...defenseBlocks, data]);
+    setDefenseBlocks(nextBlocks);
+    cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
   } catch (error) {
     console.error("Erreur compression/upload image bloc:", error);
   }
@@ -321,6 +357,7 @@ const addImageBlock = async (event) => {
         ) : (
           displayedDefenses.map((defense) => {
             const imageSrc = defense.image || defense.image_url || "";
+            const infoBlocks = getDefenseInfoBlocks(defense);
 
             return (
               <div
@@ -361,6 +398,49 @@ const addImageBlock = async (event) => {
                         ))}
                       </ul>
                     )}
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-zinc-900/60 bg-black/20 p-3 text-sm text-zinc-300">
+                    <div>
+                      Infos :
+                      {infoBlocks.length === 0 ? (
+                        <span className="ml-2 text-zinc-400">Aucune</span>
+                      ) : null}
+                    </div>
+
+                    {infoBlocks.length > 0 ? (
+                      <div className="mt-2 space-y-2">
+                        {infoBlocks.slice(0, 3).map((block, index) => {
+                          const blockType = block.block_type || block.blockType;
+
+                          return blockType === "image" ? (
+                            <div
+                              key={block.id || `${defense.id}-info-image-${index}`}
+                              className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/80"
+                            >
+                              <img
+                                src={block.content}
+                                alt="Info defense"
+                                className="max-h-24 w-full object-contain"
+                              />
+                            </div>
+                          ) : (
+                            <div
+                              key={block.id || `${defense.id}-info-text-${index}`}
+                              className="max-h-20 overflow-hidden whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-950/70 p-2 text-xs leading-relaxed text-zinc-200"
+                            >
+                              {block.content}
+                            </div>
+                          );
+                        })}
+
+                        {infoBlocks.length > 3 ? (
+                          <div className="text-xs text-zinc-400">
+                            +{infoBlocks.length - 3} info{infoBlocks.length - 3 > 1 ? "s" : ""} dans le modal
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
