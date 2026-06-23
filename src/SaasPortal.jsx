@@ -56,15 +56,15 @@ const navigation = [
   { id: "personal-best", label: "Mes PB", icon: Activity },
   { id: "defenses", label: "Mes defenses", icon: Bot },
   { id: "gvg", label: "GVG", icon: Shield },
-  { id: "templates", label: "Ajout heros", icon: PlusCircle },
-  { id: "guilds", label: "Guildes", icon: Users },
-  { id: "billing", label: "Licences", icon: WalletCards },
   { id: "settings", label: "Parametres", icon: Settings },
 ];
 
 const adminNavigation = [
   { id: "guild-management", label: "Gestion guildes", icon: Users, adminOnly: true },
   { id: "admin-defenses", label: "Gestion défense", icon: Shield, adminOnly: true },
+  { id: "templates", label: "Ajout heros", icon: PlusCircle, adminOnly: true },
+  { id: "guilds", label: "Guildes", icon: Users, adminOnly: true },
+  { id: "billing", label: "Licences", icon: WalletCards, adminOnly: true },
   { id: "launcher", label: "Launcher", icon: Bot },
   { id: "validation", label: "Validation", icon: SearchCheck },
   { id: "logs", label: "Logs", icon: Activity },
