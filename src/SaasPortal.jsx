@@ -45,6 +45,7 @@ import GvgPanelTab from "@/components/GvgPanelTab";
 import GvgAdminTab from "@/components/GvgAdminTab";
 import GvgValidationTab from "@/components/GvgValidationTab";
 import AdminDefensesTab from "@/components/AdminDefensesTab";
+import RunSearchGrid from "@/components/RunSearchGrid";
 import RunAddTab from "@/components/RunAddTab";
 import RunEditTab from "@/components/RunEditTab";
 import { supabase } from "@/lib/supabase";
@@ -58,6 +59,7 @@ const navigation = [
   { id: "personal-best", label: "Mes PB", icon: Activity },
   { id: "defenses", label: "Mes defenses", icon: Bot },
   { id: "gvg", label: "GVG", icon: Shield },
+  { id: "run-search", label: "Recherche de run", icon: Search },
   { id: "settings", label: "Parametres", icon: Settings },
 ];
 
@@ -1060,6 +1062,7 @@ function PortalShell({ session, onLogout }) {
           {active === "personal-best" ? <PersonalBestTab session={session} /> : null}
           {active === "defenses" ? <MyDefensesTab session={session} /> : null}
           {active === "gvg" ? <GvgView /> : null}
+          {active === "run-search" ? <RunSearchGrid /> : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
           {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
