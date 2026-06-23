@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { getGvgGuildLabel, getVisibleGvgGuildCodes, normalizeGvgGuildCode } from "@/lib/guildScope";
 
-const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const DIRECTIONS = ["N", "S", "E", "O"];
 const DEFENSE_SLOT_COUNT = 5;
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
@@ -58,7 +58,7 @@ function getJobGuildCode(job) {
 }
 
 function isJobForGuild(job, guild) {
-  return getJobGuildCode(job) === guild;
+  return normalizeGvgGuildCode(getJobGuildCode(job)) === normalizeGvgGuildCode(guild);
 }
 
 function getJobSourceGuild(job) {
@@ -208,10 +208,20 @@ function getJobTone(job) {
   return "border-zinc-800 bg-zinc-950/65";
 }
 
+function getDefaultValidationGuild(session) {
+  return getVisibleGvgGuildCodes(session)[0] || "G1";
+}
+
+function isGuildAllowed(guild, visibleGuilds) {
+  const normalizedGuild = normalizeGvgGuildCode(guild);
+  return visibleGuilds.some((item) => normalizeGvgGuildCode(item) === normalizedGuild);
+}
+
 export default function GvgValidationTab({ session }) {
   const apiBase = useMemo(() => getApiBase(), []);
+  const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
 
-  const [guild, setGuild] = useState("G1");
+  const [guild, setGuild] = useState(() => getDefaultValidationGuild(session));
   const [jobs, setJobs] = useState([]);
   const [selectedJob, setSelectedJob] = useState(null);
   const [items, setItems] = useState([]);
@@ -229,6 +239,7 @@ export default function GvgValidationTab({ session }) {
   );
 
   const hiddenJobsCount = jobs.length - visibleJobs.length;
+  const selectedGuildAllowed = isGuildAllowed(guild, visibleGuilds);
   const selectedItem = items[selectedIndex] || null;
   const validatedCount = items.filter((item) => item._validated).length;
   const editedCount = items.filter((item) => item._edited).length;
@@ -251,6 +262,25 @@ export default function GvgValidationTab({ session }) {
 
     return Array.from(values).sort((left, right) => left.localeCompare(right, "fr"));
   }, [championPool, items]);
+
+  useEffect(() => {
+    if (visibleGuilds.length === 0) {
+      setGuild("");
+      setSelectedJob(null);
+      setItems([]);
+      setSelectedIndex(0);
+      setJobs([]);
+      return;
+    }
+
+    if (isGuildAllowed(guild, visibleGuilds)) return;
+
+    setGuild(visibleGuilds[0]);
+    setSelectedJob(null);
+    setItems([]);
+    setSelectedIndex(0);
+    setJobs([]);
+  }, [guild, visibleGuilds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -279,6 +309,11 @@ export default function GvgValidationTab({ session }) {
   }, []);
 
   async function loadJobs() {
+    if (!selectedGuildAllowed) {
+      setMessage("Guilde non autorisee pour cette session.");
+      return;
+    }
+
     try {
       setLoadingJobs(true);
       setMessage("");
@@ -305,6 +340,11 @@ export default function GvgValidationTab({ session }) {
   }
 
   async function selectJob(job) {
+    if (!isJobForGuild(job, guild)) {
+      setMessage("Job hors perimetre pour cette session.");
+      return;
+    }
+
     try {
       setLoadingPayload(true);
       setMessage("");
@@ -336,6 +376,11 @@ export default function GvgValidationTab({ session }) {
   }
 
   async function deleteServerJob(job) {
+    if (!isJobForGuild(job, guild)) {
+      setMessage("Suppression bloquee : job hors perimetre pour cette session.");
+      return;
+    }
+
     const sourceGuild = getJobSourceGuild(job);
     const jobId = getJobId(job);
 
@@ -451,6 +496,11 @@ export default function GvgValidationTab({ session }) {
   }
 
   async function importValidated() {
+    if (!selectedGuildAllowed) {
+      setMessage("Import bloque : guilde non autorisee pour cette session.");
+      return;
+    }
+
     if (!readyToImport || !selectedJob) {
       setMessage("Tout doit etre valide avant l'import.");
       return;
@@ -547,11 +597,11 @@ export default function GvgValidationTab({ session }) {
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              {GUILDS.map((item) => (
+              {visibleGuilds.map((item) => (
                 <Button
                   key={item}
                   type="button"
-                  variant={guild === item ? "default" : "outline"}
+                  variant={normalizeGvgGuildCode(guild) === normalizeGvgGuildCode(item) ? "default" : "outline"}
                   className="rounded-2xl"
                   onClick={() => {
                     setGuild(item);
@@ -560,7 +610,7 @@ export default function GvgValidationTab({ session }) {
                     setSelectedIndex(0);
                   }}
                 >
-                  {item}
+                  {getGvgGuildLabel(item)}
                 </Button>
               ))}
             </div>
