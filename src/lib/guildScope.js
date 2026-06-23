@@ -9,6 +9,13 @@ export function normalizeGuildCodeKey(value) {
   return normalizeGuildCode(value).toUpperCase();
 }
 
+export function normalizeGvgGuildCode(value) {
+  return normalizeGuildCodeKey(value)
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Z0-9_-]/g, "")
+    .slice(0, 24);
+}
+
 export function isPaladinGuildCode(value) {
   return PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(value));
 }
@@ -52,6 +59,17 @@ export function getSessionGuildSpaceKey(session) {
 
 export function isPaladinSession(session) {
   return getSessionGuildSpaceKey(session) === PALADIN_SPACE_KEY;
+}
+
+export function getVisibleGvgGuildCodes(session) {
+  if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
+
+  const guildCode = normalizeGvgGuildCode(getSessionGuildCode(session));
+  return guildCode ? [guildCode] : [];
+}
+
+export function getGvgGuildLabel(guildCode) {
+  return normalizeGuildCode(guildCode).replace(/[_-]+/g, " ");
 }
 
 export function isLeaderSession(session) {

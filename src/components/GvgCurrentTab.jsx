@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-
-const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
+import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -73,12 +72,8 @@ function toGroupEmoji(value) {
     .join("");
 }
 
-export default function GvgCurrentTab() {
+export default function GvgCurrentTab({ session: portalSession } = {}) {
   const apiBase = useMemo(() => getApiBase(), []);
-
-  const [selectedGuild, setSelectedGuild] = useState(() => {
-    return localStorage.getItem("gvg_selected_guild") || "";
-  });
 const [refreshTick, setRefreshTick] = useState(0);
   const [selectedFilter, setSelectedFilter] = useState(null);
   const [selectedBastionId, setSelectedBastionId] = useState(null);
@@ -111,7 +106,7 @@ const [refreshTick, setRefreshTick] = useState(0);
     const [reproCandidatesModalOpen, setReproCandidatesModalOpen] = useState(false);
 
 
-  const session = useMemo(() => {
+  const dashboardSession = useMemo(() => {
     if (typeof window === "undefined") return null;
 
     try {
@@ -121,6 +116,26 @@ const [refreshTick, setRefreshTick] = useState(0);
       return null;
     }
   }, []);
+  const session = portalSession || dashboardSession;
+  const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
+  const [selectedGuild, setSelectedGuild] = useState(() => {
+    return localStorage.getItem("gvg_selected_guild") || "";
+  });
+
+  useEffect(() => {
+    if (visibleGuilds.length === 0) {
+      setSelectedGuild("");
+      if (typeof window !== "undefined") localStorage.removeItem("gvg_selected_guild");
+      return;
+    }
+
+    setSelectedGuild((current) => {
+      if (visibleGuilds.includes(current)) return current;
+      const nextGuild = visibleGuilds[0];
+      if (typeof window !== "undefined") localStorage.setItem("gvg_selected_guild", nextGuild);
+      return nextGuild;
+    });
+  }, [visibleGuilds]);
 
   const currentWatcherName = useMemo(() => {
     return (
@@ -133,6 +148,7 @@ const [refreshTick, setRefreshTick] = useState(0);
 
 async function loadGvg(cancelled = false) {
   if (!selectedGuild) return;
+  if (!visibleGuilds.includes(selectedGuild)) return;
 
   try {
     setLoading(true);
@@ -268,7 +284,7 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [apiBase, selectedGuild, refreshTick]);
+}, [apiBase, selectedGuild, refreshTick, visibleGuilds]);
 
 const bastions = useMemo(() => {
   return [1, 2, 3, 4].map((bastionId) => {
@@ -612,7 +628,7 @@ async function markDefenseAsOpened(defenseId) {
               </div>
 
               <div className="flex flex-wrap gap-3">
-                {GUILDS.map((guild) => (
+                {visibleGuilds.map((guild) => (
                   <Button
                     key={guild}
                     type="button"
@@ -622,7 +638,7 @@ async function markDefenseAsOpened(defenseId) {
                       setSelectedGuild(guild);
                     }}
                   >
-                    {guild}
+                    {getGvgGuildLabel(guild)}
                   </Button>
                 ))}
               </div>
@@ -633,7 +649,7 @@ async function markDefenseAsOpened(defenseId) {
                 <div>
                   <div className="text-sm text-zinc-400">Guilde sélectionnée</div>
                   <div className="text-2xl font-semibold text-zinc-100">
-                    {selectedGuild}
+                    {getGvgGuildLabel(selectedGuild)}
                   </div>
                 </div>
 

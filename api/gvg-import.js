@@ -6,8 +6,13 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
+function normalizeGuildCode(value) {
+  const code = String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
+  return /^[A-Z0-9_-]{2,24}$/.test(code) ? code : null;
+}
+
 function isValidGuild(value) {
-  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+  return normalizeGuildCode(value) !== null;
 }
 
 function parseDefenseMeta(defName) {
@@ -185,7 +190,7 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
     throw error;
   }
 
-  const normalizedGuild = String(guild).toUpperCase();
+  const normalizedGuild = normalizeGuildCode(guild);
   const rows = [];
 
   for (const item of items) {
@@ -265,7 +270,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "items manquants" });
     }
 
-    const normalizedGuild = String(guild).toUpperCase();
+    const normalizedGuild = normalizeGuildCode(guild);
 
     const rows = [];
 

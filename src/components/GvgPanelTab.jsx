@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-
-const DEFAULT_GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
+import {
+  getGvgGuildLabel,
+  getVisibleGvgGuildCodes,
+  isPaladinSession,
+} from "@/lib/guildScope";
 
 function normalizeGuildInput(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24);
@@ -125,6 +128,8 @@ export default function GvgPanelTab({ session: portalSession } = {}) {
     }
   }, []);
   const session = portalSession || dashboardSession;
+  const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
+  const canUseCustomGuildInput = isPaladinSession(session);
 
   const sessionRole = String(session?.role || "")
     .normalize("NFD")
@@ -167,6 +172,11 @@ const [runsModal, setRunsModal] = useState(null);
 const [runs, setRuns] = useState([]);
 const [runsLoading, setRunsLoading] = useState(false);
 
+useEffect(() => {
+  if (visibleGuilds.length === 0) return;
+  setGuild((current) => (visibleGuilds.includes(current) ? current : visibleGuilds[0]));
+}, [visibleGuilds]);
+
 const recordCounts = useMemo(
   () => ({
     enemy: enemyItems.filter((d) => d.record_status === "a_record").length,
@@ -176,6 +186,8 @@ const recordCounts = useMemo(
 );
 
   async function load() {
+    if (!visibleGuilds.includes(guild)) return;
+
     try {
       setLoading(true);
       setMessage("");
@@ -267,7 +279,7 @@ const recordCounts = useMemo(
     setGroupCalc(null);
     load();
     loadRecordSessions({ silent: true });
-  }, [guild]);
+  }, [guild, visibleGuilds]);
 
 function makeRecordSessionId() {
   const random = Math.random().toString(36).slice(2, 10);
@@ -1233,7 +1245,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
   return (
     <div className="space-y-4">
 <div className="flex flex-wrap items-center gap-2">
-  {DEFAULT_GUILDS.map((item) => (
+  {visibleGuilds.map((item) => (
     <button
       key={item}
       onClick={() => setGuild(item)}
@@ -1241,17 +1253,19 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
         guild === item ? "bg-white text-black" : "bg-zinc-800 text-white"
       }`}
     >
-      {item}
+      {getGvgGuildLabel(item)}
     </button>
   ))}
 
-  <input
-    value={guild}
-    onChange={(event) => setGuild(normalizeGuildInput(event.target.value))}
-    className="w-24 rounded border border-zinc-700 bg-zinc-950 px-3 py-1 text-sm uppercase text-white outline-none focus:border-cyan-400"
-    placeholder="MAD"
-    title="Code guilde"
-  />
+  {canUseCustomGuildInput ? (
+    <input
+      value={guild}
+      onChange={(event) => setGuild(normalizeGuildInput(event.target.value))}
+      className="w-24 rounded border border-zinc-700 bg-zinc-950 px-3 py-1 text-sm uppercase text-white outline-none focus:border-cyan-400"
+      placeholder="MAD"
+      title="Code guilde"
+    />
+  ) : null}
 
 <button
   onClick={() => {
@@ -1408,7 +1422,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
           <div className="w-full max-w-2xl rounded-xl border border-cyan-500/40 bg-zinc-950 p-5 shadow-[0_0_30px_rgba(34,211,238,0.18)]">
             <div className="mb-1 text-lg font-semibold text-white">Lancer un record GVG</div>
             <div className="mb-4 text-sm text-zinc-400">
-              Guilde {guild}. Le plan sera limite a cette guilde et aux defenses marquees a record.
+              Guilde {getGvgGuildLabel(guild)}. Le plan sera limite a cette guilde et aux defenses marquees a record.
             </div>
 
             <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 text-xs text-zinc-300">

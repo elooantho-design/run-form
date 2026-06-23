@@ -52,7 +52,13 @@ import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
-import { filterByGuildScope, getControlBrand, getGuildScopeDescription } from "@/lib/guildScope";
+import {
+  filterByGuildScope,
+  getControlBrand,
+  getGvgGuildLabel,
+  getGuildScopeDescription,
+  getVisibleGvgGuildCodes,
+} from "@/lib/guildScope";
 
 const navigation = [
   { id: "home", label: "Accueil", icon: LayoutDashboard },
@@ -2064,9 +2070,9 @@ function GvgView({ session }) {
         })}
       </div>
 
-      {activeGvgView === "current" ? <GvgCurrentTab /> : null}
+      {activeGvgView === "current" ? <GvgCurrentTab session={session} /> : null}
       {activeGvgView === "panel" && canUseGvgAdminViews ? <GvgPanelTab session={session} /> : null}
-      {activeGvgView === "admin" && canUseGvgAdminViews ? <GvgAdminTab /> : null}
+      {activeGvgView === "admin" && canUseGvgAdminViews ? <GvgAdminTab session={session} /> : null}
     </section>
   );
 }
@@ -2101,6 +2107,7 @@ function LauncherView({ session: portalSession }) {
   const apiBase = useMemo(() => getApiBase(), []);
   const pollRef = useRef(null);
   const detectionDeadlineRef = useRef(0);
+  const visibleGvgGuilds = useMemo(() => getVisibleGvgGuildCodes(portalSession), [portalSession]);
 
   const [guild, setGuild] = useState("G1");
   const [side, setSide] = useState("enemy");
@@ -2120,6 +2127,11 @@ function LauncherView({ session: portalSession }) {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (visibleGvgGuilds.length === 0) return;
+    setGuild((current) => (visibleGvgGuilds.includes(current) ? current : visibleGvgGuilds[0]));
+  }, [visibleGvgGuilds]);
 
   async function readJson(response, label) {
     const text = await response.text();
@@ -2177,6 +2189,11 @@ function LauncherView({ session: portalSession }) {
   }
 
   async function launchCapture() {
+    if (!visibleGvgGuilds.includes(guild)) {
+      setMessage("Guilde non autorisee pour cette session.");
+      return;
+    }
+
     const nextSessionId = makeLauncherSessionId();
 
     try {
@@ -2266,7 +2283,7 @@ function LauncherView({ session: portalSession }) {
           <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
             <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Guilde</div>
             <div className="mt-3 flex flex-wrap gap-2">
-              {["G1", "G2", "G3", "G4", "G5", "G6", "G7"].map((item) => (
+              {visibleGvgGuilds.map((item) => (
                 <button
                   key={item}
                   type="button"
@@ -2277,7 +2294,7 @@ function LauncherView({ session: portalSession }) {
                       : "border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:border-zinc-500"
                   }`}
                 >
-                  {item}
+                  {getGvgGuildLabel(item)}
                 </button>
               ))}
             </div>

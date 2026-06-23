@@ -8,8 +8,13 @@ const supabase = createClient(
 
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
 
+function normalizeGuildCode(value) {
+  const code = String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
+  return /^[A-Z0-9_-]{2,24}$/.test(code) ? code : null;
+}
+
 function isValidGuild(value) {
-  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+  return normalizeGuildCode(value) !== null;
 }
 
 function getGvgServerConfig() {
@@ -85,7 +90,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const guild = String(req.body?.guild || "").toUpperCase();
+    const guild = normalizeGuildCode(req.body?.guild);
 
     if (!isValidGuild(guild)) {
       return res.status(400).json({ error: "guild manquante ou invalide" });

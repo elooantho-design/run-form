@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
 
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
 
@@ -45,10 +46,11 @@ function formatDate(value) {
   }
 }
 
-const GUILDS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
-
 function getJobGuildCode(job) {
-  return String(job?.target_guild || job?.mode || job?.guild || "").toUpperCase();
+  return String(job?.target_guild || job?.mode || job?.guild || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_");
 }
 
 function isJobForGuild(job, guild) {
@@ -88,8 +90,9 @@ function getJobTone(job) {
   return "border-zinc-700 bg-zinc-950/55";
 }
 
-export default function GvgAdminTab() {
+export default function GvgAdminTab({ session } = {}) {
   const apiBase = useMemo(() => getApiBase(), []);
+  const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
 
   const [guild, setGuild] = useState("G1");
   const [jsonInput, setJsonInput] = useState("");
@@ -109,8 +112,18 @@ export default function GvgAdminTab() {
     [guild, serverJobs]
   );
   const hiddenServerJobsCount = serverJobs.length - visibleServerJobs.length;
+  const selectedGuildAllowed = visibleGuilds.includes(guild);
+
+  useEffect(() => {
+    if (visibleGuilds.length === 0) return;
+    setGuild((current) => (visibleGuilds.includes(current) ? current : visibleGuilds[0]));
+  }, [visibleGuilds]);
 
   async function importItems(items, { ally = false } = {}) {
+    if (!selectedGuildAllowed) {
+      throw new Error("Guilde non autorisee pour cette session.");
+    }
+
     const response = await fetch(`${apiBase}/api/gvg-import`, {
       method: "POST",
       headers: {
@@ -191,7 +204,9 @@ export default function GvgAdminTab() {
   }
 
   async function handleReset() {
-    const confirmed = window.confirm(`Reinitialiser entierement la GVG ${guild} ?`);
+    if (!selectedGuildAllowed) return;
+
+    const confirmed = window.confirm(`Reinitialiser entierement la GVG ${getGvgGuildLabel(guild)} ?`);
 
     if (!confirmed) return;
 
@@ -224,6 +239,8 @@ export default function GvgAdminTab() {
   }
 
   async function loadServerJobs() {
+    if (!selectedGuildAllowed) return;
+
     try {
       setLoadingJobs(true);
       setMessage("");
@@ -239,7 +256,7 @@ export default function GvgAdminTab() {
       }
 
       setServerJobs(Array.isArray(data?.jobs) ? data.jobs : []);
-      setMessage(`Jobs VPS charges : ${data?.jobs?.length || 0}. Affiches pour ${guild} : ${(data?.jobs || []).filter((job) => isJobForGuild(job, guild)).length}.`);
+      setMessage(`Jobs VPS charges : ${data?.jobs?.length || 0}. Affiches pour ${getGvgGuildLabel(guild)} : ${(data?.jobs || []).filter((job) => isJobForGuild(job, guild)).length}.`);
     } catch (error) {
       console.error("loadServerJobs error:", error);
       setMessage(`Erreur jobs VPS : ${error?.message || "erreur inconnue"}`);
@@ -249,8 +266,10 @@ export default function GvgAdminTab() {
   }
 
   async function importServerJob(job) {
+    if (!selectedGuildAllowed) return;
+
     const confirmed = window.confirm(
-      `Importer le job ${getJobSourceGuild(job)} / ${getJobId(job)} dans ${guild} ?`
+      `Importer le job ${getJobSourceGuild(job)} / ${getJobId(job)} dans ${getGvgGuildLabel(guild)} ?`
     );
 
     if (!confirmed) return;
@@ -344,6 +363,8 @@ export default function GvgAdminTab() {
   }
 
   async function handleImportGroups() {
+    if (!selectedGuildAllowed) return;
+
     try {
       const parsed = JSON.parse(groupJson);
 
@@ -373,6 +394,8 @@ export default function GvgAdminTab() {
   }
 
   async function handleUploadImages(files) {
+    if (!selectedGuildAllowed) return;
+
     if (!files.length) return;
 
     const BATCH_SIZE = 8;
@@ -440,7 +463,7 @@ export default function GvgAdminTab() {
             <div className="text-sm text-zinc-400">Guilde ciblee</div>
 
             <div className="mt-3 flex flex-wrap gap-3">
-              {GUILDS.map((item) => (
+                {visibleGuilds.map((item) => (
                 <Button
                   key={item}
                   type="button"
@@ -448,7 +471,7 @@ export default function GvgAdminTab() {
                   className="rounded-2xl"
                   onClick={() => setGuild(item)}
                 >
-                  {item}
+                  {getGvgGuildLabel(item)}
                 </Button>
               ))}
 
@@ -456,10 +479,10 @@ export default function GvgAdminTab() {
                 type="button"
                 variant="destructive"
                 className="rounded-2xl"
-                disabled={loadingImport || loadingReset}
+                disabled={loadingImport || loadingReset || !selectedGuildAllowed}
                 onClick={handleReset}
               >
-                {loadingReset ? "Reset..." : `Reset ${guild}`}
+                {loadingReset ? "Reset..." : `Reset ${getGvgGuildLabel(guild)}`}
               </Button>
             </div>
           </div>
@@ -470,7 +493,7 @@ export default function GvgAdminTab() {
                 <div className="text-sm font-semibold text-cyan-100">Jobs VPS</div>
                 <div className="text-xs text-zinc-400">
                   Captures envoyees par les launchers joueurs et traitees cote serveur.
-                  {hiddenServerJobsCount > 0 ? ` ${hiddenServerJobsCount} job(s) hors ${guild} masques.` : ""}
+                  {hiddenServerJobsCount > 0 ? ` ${hiddenServerJobsCount} job(s) hors ${getGvgGuildLabel(guild)} masques.` : ""}
                 </div>
               </div>
 
@@ -478,7 +501,7 @@ export default function GvgAdminTab() {
                 type="button"
                 className="rounded-2xl"
                 variant="outline"
-                disabled={loadingJobs}
+                disabled={loadingJobs || !selectedGuildAllowed}
                 onClick={loadServerJobs}
               >
                 {loadingJobs ? "Chargement..." : "Rafraichir"}
@@ -525,7 +548,7 @@ export default function GvgAdminTab() {
                         }
                         onClick={() => importServerJob(job)}
                       >
-                        {jobImportingId === getJobId(job) ? "Import..." : `Importer dans ${guild}`}
+                        {jobImportingId === getJobId(job) ? "Import..." : `Importer dans ${getGvgGuildLabel(guild)}`}
                       </Button>
                       <Button
                         type="button"
@@ -543,7 +566,7 @@ export default function GvgAdminTab() {
                 ))
               ) : (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
-                  Aucun job charge pour {guild}.
+                  Aucun job charge pour {getGvgGuildLabel(guild)}.
                 </div>
               )}
             </div>
@@ -564,10 +587,10 @@ export default function GvgAdminTab() {
             <Button
               type="button"
               className="mt-3 rounded-2xl"
-              disabled={loadingImport || loadingReset}
+              disabled={loadingImport || loadingReset || !selectedGuildAllowed}
               onClick={handleImport}
             >
-              {loadingImport ? "Import en cours..." : `Importer ${guild}`}
+              {loadingImport ? "Import en cours..." : `Importer ${getGvgGuildLabel(guild)}`}
             </Button>
           </div>
 
@@ -586,6 +609,7 @@ export default function GvgAdminTab() {
               type="file"
               multiple
               accept="image/*"
+              disabled={!selectedGuildAllowed}
               onChange={(event) => handleUploadImages(Array.from(event.target.files || []))}
               className="text-sm text-zinc-200"
             />
@@ -617,6 +641,7 @@ export default function GvgAdminTab() {
               type="button"
               variant="outline"
               className="mt-2 rounded-2xl"
+              disabled={!selectedGuildAllowed}
               onClick={handleImportGroups}
             >
               Import groupes
@@ -644,10 +669,10 @@ export default function GvgAdminTab() {
             <Button
               type="button"
               className="mt-3 rounded-2xl bg-red-600 hover:bg-red-500"
-              disabled={loadingImport}
+              disabled={loadingImport || !selectedGuildAllowed}
               onClick={handleImportAlly}
             >
-              {loadingImport ? "Import allie..." : `Importer ALLIE ${guild}`}
+              {loadingImport ? "Import allie..." : `Importer ALLIE ${getGvgGuildLabel(guild)}`}
             </Button>
           </div>
         </CardContent>
