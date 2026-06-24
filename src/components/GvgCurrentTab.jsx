@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
+import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -74,6 +77,7 @@ function toGroupEmoji(value) {
 
 export default function GvgCurrentTab({ session: portalSession } = {}) {
   const apiBase = useMemo(() => getApiBase(), []);
+  const { language, t } = usePortalLanguage();
 const [refreshTick, setRefreshTick] = useState(0);
   const [selectedFilter, setSelectedFilter] = useState(null);
   const [selectedBastionId, setSelectedBastionId] = useState(null);
@@ -104,6 +108,7 @@ const [refreshTick, setRefreshTick] = useState(0);
     const [reproCandidates, setReproCandidates] = useState([]);
     const [reproHeroes, setReproHeroes] = useState([]);
     const [reproCandidatesModalOpen, setReproCandidatesModalOpen] = useState(false);
+    const [championDisplayMap, setChampionDisplayMap] = useState(() => new Map());
 
 
   const dashboardSession = useMemo(() => {
@@ -136,6 +141,27 @@ const [refreshTick, setRefreshTick] = useState(0);
       return nextGuild;
     });
   }, [visibleGuilds]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadChampionDisplayMap() {
+      const { data, error } = await supabase.from("champions").select("*");
+      if (cancelled) return;
+      if (error) {
+        console.warn("champions display map unavailable:", error);
+        return;
+      }
+
+      setChampionDisplayMap(buildChampionDisplayMap(data || []));
+    }
+
+    loadChampionDisplayMap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const currentWatcherName = useMemo(() => {
     return (
@@ -616,7 +642,7 @@ async function markDefenseAsOpened(defenseId) {
       <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
         <CardHeader className="border-b border-zinc-800">
           <CardTitle className="text-lg text-zinc-100">
-            GVG en cours
+            {t("gvg.current", "GVG en cours")}
           </CardTitle>
         </CardHeader>
 
@@ -624,7 +650,7 @@ async function markDefenseAsOpened(defenseId) {
           {!selectedGuild ? (
             <div className="space-y-4">
               <div className="text-sm text-zinc-400">
-                Choisis la guilde à afficher.
+                {t("gvg.chooseGuild", "Choisis la guilde a afficher.")}
               </div>
 
               <div className="flex flex-wrap gap-3">
@@ -647,7 +673,7 @@ async function markDefenseAsOpened(defenseId) {
             <div className="space-y-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-sm text-zinc-400">Guilde sélectionnée</div>
+                  <div className="text-sm text-zinc-400">{t("gvg.selectedGuild", "Guilde selectionnee")}</div>
                   <div className="text-2xl font-semibold text-zinc-100">
                     {getGvgGuildLabel(selectedGuild)}
                   </div>
@@ -666,7 +692,7 @@ async function markDefenseAsOpened(defenseId) {
                     setMessage("");
                   }}
                 >
-                  Changer de guilde
+                  {t("gvg.changeGuild", "Changer de guilde")}
                 </Button>
               </div>
 
@@ -678,7 +704,7 @@ async function markDefenseAsOpened(defenseId) {
 
               {loading ? (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
-                  Chargement de la GVG...
+                  {t("gvg.loading", "Chargement de la GVG...")}
                 </div>
               ) : null}
 
@@ -1233,7 +1259,7 @@ async function markDefenseAsOpened(defenseId) {
               <div className="mt-1 text-xs text-zinc-300">
                 {strat.slots.map((s, i) => (
                   <div key={i}>
-                    {s.champion} {s.position || ""} {s.direction || ""}
+                    {translateChampionName(s.champion, championDisplayMap, language)} {s.position || ""} {s.direction || ""}
                   </div>
                 ))}
               </div>
@@ -1256,7 +1282,7 @@ async function markDefenseAsOpened(defenseId) {
       <div className="mb-4 flex gap-4 text-sm text-zinc-400">
         {reproHeroes.map((h) => (
           <div key={h.champion_id} className="w-[100px] text-center">
-            {h.champion_name}
+            {translateChampionName(h.champion_name, championDisplayMap, language)}
           </div>
         ))}
       </div>

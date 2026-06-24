@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 import {
   Select,
@@ -222,6 +224,7 @@ function getDirectionOverlayConfig(dir) {
 }
 
 export default function RunSearchGrid({ session: portalSession } = {}) {
+  const { language, t } = usePortalLanguage();
   const [mode, setMode] = useState("tour");
   const [bgError, setBgError] = useState(false);
 
@@ -246,6 +249,7 @@ export default function RunSearchGrid({ session: portalSession } = {}) {
   const session = portalSession || dashboardSession;
 
   const [heroPool, setHeroPool] = useState(HEROES_FALLBACK);
+  const [championDisplayMap, setChampionDisplayMap] = useState(() => new Map());
   const [heroesLoading, setHeroesLoading] = useState(false);
   const [heroesError, setHeroesError] = useState("");
   const [heroQuery, setHeroQuery] = useState("");
@@ -362,8 +366,13 @@ async function runBotCommandSearch() {
 
     if (!q) return sortedPool.slice(0, 10);
 
-    return sortedPool.filter((hero) => norm(hero).startsWith(q)).slice(0, 10);
-  }, [heroPool, heroQuery]);
+    return sortedPool
+      .filter((hero) => {
+        const displayName = translateChampionName(hero, championDisplayMap, language);
+        return norm(hero).startsWith(q) || norm(displayName).startsWith(q);
+      })
+      .slice(0, 10);
+  }, [championDisplayMap, heroPool, heroQuery, language]);
 
     function resetAll() {
     setSlots([]);
@@ -385,7 +394,7 @@ async function runBotCommandSearch() {
     if (slotByPos.has(pos)) {
       const existing = slotByPos.get(pos);
       setActivePos(pos);
-      setHeroQuery(existing?.hero || "");
+      setHeroQuery(translateChampionName(existing?.hero || "", championDisplayMap, language));
       return;
     }
 
@@ -426,7 +435,7 @@ async function runBotCommandSearch() {
       try {
         const { data, error } = await supabase
           .from("champions")
-          .select("name")
+          .select("*")
           .order("name", { ascending: true });
 
         if (error) throw error;
@@ -447,6 +456,7 @@ async function runBotCommandSearch() {
 
         if (!cancelled && uniq.length) {
           setHeroPool(uniq);
+          setChampionDisplayMap(buildChampionDisplayMap(data || []));
         }
       } catch (e) {
         if (!cancelled) {
@@ -478,13 +488,13 @@ async function runBotCommandSearch() {
   useEffect(() => {
     if (slots.length === 1 && !activePos && slots[0]?.id) {
       setActivePos(slots[0].id);
-      setHeroQuery(slots[0].hero || "");
+      setHeroQuery(translateChampionName(slots[0].hero || "", championDisplayMap, language));
     }
 
     if (slots.length === 0) {
       setHeroQuery("");
     }
-  }, [slots, activePos]);
+  }, [championDisplayMap, language, slots, activePos]);
 
 function parseBotCommand(input) {
   const text = String(input || "").trim().toLowerCase();
@@ -535,9 +545,9 @@ function copyToClipboard(text) {
         <CardHeader className="border-b border-zinc-800">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
-              <CardTitle className="text-lg text-zinc-100">Recherche de run</CardTitle>
+              <CardTitle className="text-lg text-zinc-100">{t("run.search.title", "Recherche de run")}</CardTitle>
               <div className="mt-1 text-sm text-zinc-400">
-                Clique jusqu’à {MAX_SLOTS} cases, puis renseigne héros et direction.
+                {t("run.helper", "Clique jusqu'a 5 cases, puis renseigne heros et direction.").replace("5", MAX_SLOTS)}
               </div>
             </div>
 
@@ -549,13 +559,13 @@ function copyToClipboard(text) {
                 className="rounded-2xl border-zinc-700 text-zinc-200"
               >
                 <RotateCcw className="mr-2 h-4 w-4" />
-                Reset
+                {t("common.reset", "Reset")}
               </Button>
                 <Button
                 onClick={runSearch}
                 className="rounded-2xl"
                 >
-                Rechercher
+                {t("common.search", "Rechercher")}
                 </Button>
               <select
                 value={mode}
@@ -582,7 +592,7 @@ function copyToClipboard(text) {
                     {!bgError ? (
                       <img
                         src={gridSpec.bgUrl}
-                        alt="Référence"
+                        alt={t("run.mapReference", "Reference")}
                         className="absolute"
                         style={{
                         left: "clamp(20px, 4vw, 36px)",
@@ -691,7 +701,7 @@ function copyToClipboard(text) {
                                       <div className="relative flex h-full w-full items-center justify-center overflow-visible">
                                         <img
                                           src={getHeroImageSrc(slot.hero)}
-                                          alt={slot.hero}
+                                          alt={translateChampionName(slot.hero, championDisplayMap, language)}
                                           className="max-h-[72%] max-w-[72%] object-contain"
                                           onError={(e) => {
                                             e.currentTarget.style.display = "none";
@@ -739,7 +749,7 @@ function copyToClipboard(text) {
                   </div>
 
                   <div className="mt-3 text-xs text-zinc-400">
-                    {gridSpec.label}: {gridSpec.rows} lignes × {gridSpec.cols} colonnes
+                    {gridSpec.label}: {gridSpec.rows} {t("run.rows", "lignes")} x {gridSpec.cols} {t("run.columns", "colonnes")}
                   </div>
                 </div>
               </div>
@@ -748,19 +758,19 @@ function copyToClipboard(text) {
             <div className="space-y-4">
               <Card className="rounded-3xl border-zinc-800 bg-zinc-950/60">
                 <CardHeader className="border-b border-zinc-800">
-                  <CardTitle className="text-base text-zinc-100">Édition</CardTitle>
+                  <CardTitle className="text-base text-zinc-100">{t("run.editor", "Edition")}</CardTitle>
                 </CardHeader>
 
                 <CardContent className="space-y-4 p-4">
                   {!activeSlot ? (
                     <div className="text-sm text-zinc-400">
-                      Clique une case dans la grille.
+                      {t("run.clickGrid", "Clique une case dans la grille.")}
                     </div>
                   ) : (
                     <>
                       <div className="flex items-center justify-between">
                         <div>
-                          <div className="text-sm text-zinc-400">Position</div>
+                          <div className="text-sm text-zinc-400">{t("common.position", "Position")}</div>
                           <div className="text-2xl font-semibold text-zinc-100">
                             {activeSlot.id}
                           </div>
@@ -778,13 +788,13 @@ function copyToClipboard(text) {
 
                       <div className="space-y-2">
                         <label className="text-sm text-zinc-300">
-                          Héros {heroesLoading ? "(chargement...)" : ""}
+                          {t("common.hero", "Heros")} {heroesLoading ? t("common.loadingParenthesis", "(chargement...)") : ""}
                         </label>
 
                         <Input
                           value={heroQuery}
                           onChange={(e) => setHeroQuery(e.target.value)}
-                          placeholder="Commence à taper…"
+                          placeholder={t("run.startTyping", "Commence a taper...")}
                           className="rounded-2xl border-zinc-700 bg-zinc-950 text-zinc-100"
                         />
 
@@ -799,19 +809,19 @@ function copyToClipboard(text) {
                               type="button"
                               variant={activeSlot.hero === h ? "default" : "outline"}
                               onClick={() => {
-                                setHeroQuery(h);
+                                setHeroQuery(translateChampionName(h, championDisplayMap, language));
                                 updateActiveSlot({ hero: h });
                               }}
                               className="rounded-2xl"
                             >
-                              {h}
+                              {translateChampionName(h, championDisplayMap, language)}
                             </Button>
                           ))}
                         </div>
                       </div>
 
                       <div className="space-y-2">
-                        <label className="text-sm text-zinc-300">Direction</label>
+                        <label className="text-sm text-zinc-300">{t("common.direction", "Direction")}</label>
 
                         <div className="grid grid-cols-4 gap-2">
                           {DIRS.map((d) => (
@@ -834,13 +844,13 @@ function copyToClipboard(text) {
 
               <Card className="rounded-3xl border-zinc-800 bg-zinc-950/60">
                 <CardHeader className="border-b border-zinc-800">
-                  <CardTitle className="text-base text-zinc-100">Sélection actuelle</CardTitle>
+                  <CardTitle className="text-base text-zinc-100">{t("run.currentSelection", "Selection actuelle")}</CardTitle>
                 </CardHeader>
 
                 <CardContent className="p-4">
                   <div className="flex flex-wrap gap-2">
                     {slots.length === 0 ? (
-                      <Badge>Aucune</Badge>
+                      <Badge>{t("common.none", "Aucune")}</Badge>
                     ) : (
                       [...slots]
                         .filter((slot) => slot && slot.id)
@@ -855,7 +865,7 @@ function copyToClipboard(text) {
                               type="button"
                               onClick={() => {
                                 setActivePos(slot.id);
-                                setHeroQuery(slot.hero || "");
+                                setHeroQuery(translateChampionName(slot.hero || "", championDisplayMap, language));
                               }}
                               className="text-left"
                             >
@@ -866,7 +876,7 @@ function copyToClipboard(text) {
                                     : "border-emerald-700 bg-emerald-600 text-white"
                                 }
                               >
-                                {slot.id} · {slot.hero || "(héros)"} · {slot.dir || "(dir)"}
+                                {slot.id} - {slot.hero ? translateChampionName(slot.hero, championDisplayMap, language) : t("run.emptyHero", "(heros)")} - {slot.dir || t("run.emptyDirection", "(dir)")}
                               </Badge>
                             </button>
                           );
@@ -884,14 +894,14 @@ function copyToClipboard(text) {
             <Card className="rounded-3xl border-zinc-800 bg-zinc-950/60">
               <CardHeader className="border-b border-zinc-800">
                 <CardTitle className="text-base text-zinc-100">
-                  Recherche via commande bot
+                  {t("run.botSearch", "Recherche via commande bot")}
                 </CardTitle>
               </CardHeader>
 
               <CardContent className="p-4">
                 <div className="space-y-3">
                   <div className="text-sm text-zinc-400">
-                    Colle la commande générée par son bot, puis affine si besoin.
+                    {t("run.botSearchHelp", "Colle la commande generee par son bot, puis affine si besoin.")}
                   </div>
 
                   <div className="flex flex-col gap-2 md:flex-row">
@@ -907,21 +917,21 @@ function copyToClipboard(text) {
                       onClick={openBotCommandSearch}
                       className="rounded-2xl"
                     >
-                      Lancer la recherche
+                      {t("run.launchSearch", "Lancer la recherche")}
                     </Button>
                   </div>
                 </div>
               </CardContent>
             </Card>
           )}
-              <CardTitle className="text-base text-zinc-100">Résultats</CardTitle>
+              <CardTitle className="text-base text-zinc-100">{t("run.results", "Resultats")}</CardTitle>
             </CardHeader>
 
             <CardContent className="p-4">
               {loadingSearch ? (
-                <div className="text-sm text-zinc-400">Recherche en cours...</div>
+                <div className="text-sm text-zinc-400">{t("run.searching", "Recherche en cours...")}</div>
               ) : results.length === 0 ? (
-                <div className="text-sm text-zinc-400">Aucun résultat affiché.</div>
+                <div className="text-sm text-zinc-400">{t("run.noResult", "Aucun resultat affiche.")}</div>
               ) : (
                 <div className="space-y-4">
                   {results.map((result) => (
@@ -1004,7 +1014,7 @@ function copyToClipboard(text) {
                 <div className="mt-3 space-y-1 text-xs text-zinc-400">
                         {(result.slots || []).map((slot, index) => (
                           <div key={`${result.strat_id}-${index}`}>
-                            {slot.champion} — {slot.position || "-"} / {slot.direction || "-"}
+                            {translateChampionName(slot.champion, championDisplayMap, language)} — {slot.position || "-"} / {slot.direction || "-"}
                           </div>
                         ))}
                       </div>
@@ -1037,7 +1047,7 @@ function copyToClipboard(text) {
                   className="grid grid-cols-1 gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3 md:grid-cols-[180px_1fr_120px]"
                 >
                   <div className="flex items-center text-sm font-medium text-zinc-100">
-                    {item.champion}
+                    {translateChampionName(item.champion, championDisplayMap, language)}
                   </div>
 
                   <Input

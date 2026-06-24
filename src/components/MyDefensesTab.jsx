@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import {
   filterByGuildScope,
   isPaladinGuildCode,
@@ -27,6 +28,7 @@ import {
   getMemberTrackedDefenseScore,
   normalizeDefenseTier,
 } from "@/calculations";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
 
@@ -136,6 +138,7 @@ function getCompatibilityState(member, defense) {
 }
 
 export default function MyDefensesTab({ session }) {
+  const { language, t } = usePortalLanguage();
   const [members, setMembers] = useState([]);
   const [selectedMemberId, setSelectedMemberId] = useState(session?.memberId || session?.id || "");
   const [memberQuery, setMemberQuery] = useState("");
@@ -148,6 +151,7 @@ export default function MyDefensesTab({ session }) {
   const [savingSlot, setSavingSlot] = useState("");
   const [voteSavingId, setVoteSavingId] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [championDisplayMap, setChampionDisplayMap] = useState(() => new Map());
 
   const guildCode = getSessionGuildCode(session);
   const connectedMemberId = session?.memberId || session?.id || "";
@@ -299,7 +303,7 @@ export default function MyDefensesTab({ session }) {
       setErrorMessage("");
       const sessionWatcherName = session?.watcherName || session?.name || "";
 
-      const [membersResult, defensesResult, votesResult] = await Promise.all([
+      const [membersResult, defensesResult, votesResult, championsResult] = await Promise.all([
         supabase
           .from("guild_members")
           .select("id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2")
@@ -336,14 +340,15 @@ export default function MyDefensesTab({ session }) {
           `)
           .order("created_at", { ascending: true }),
         supabase.from("cluster_defense_likes").select("id, defense_id, member_id, value, created_at"),
+        supabase.from("champions").select("*"),
       ]);
 
       if (cancelled) return;
 
-      if (membersResult.error || defensesResult.error || votesResult.error) {
+      if (membersResult.error || defensesResult.error || votesResult.error || championsResult.error) {
         console.error(
           "Erreur chargement mes defenses:",
-          membersResult.error || defensesResult.error || votesResult.error
+          membersResult.error || defensesResult.error || votesResult.error || championsResult.error
         );
         setErrorMessage("Impossible de charger tes defenses pour le moment.");
         setLoading(false);
@@ -456,6 +461,7 @@ export default function MyDefensesTab({ session }) {
       setMembers(mappedMembers);
       setDefenses(mappedDefenses);
       setDefenseVotes(mappedVotes);
+      setChampionDisplayMap(buildChampionDisplayMap(championsResult.data || []));
       const normalizedSessionName = normalizeText(sessionWatcherName);
       const selectedMember =
         mappedMembers.find((item) => String(item.id) === String(connectedMemberId)) ||
@@ -708,7 +714,7 @@ export default function MyDefensesTab({ session }) {
   if (loading) {
     return (
       <Card className="rounded-[1.1rem] border-zinc-800 bg-zinc-950/86">
-        <CardContent className="p-6 text-sm text-zinc-400">Chargement de tes defenses...</CardContent>
+        <CardContent className="p-6 text-sm text-zinc-400">{t("defenses.loading", "Chargement de tes defenses...")}</CardContent>
       </Card>
     );
   }
@@ -720,13 +726,13 @@ export default function MyDefensesTab({ session }) {
         <div className="relative z-10 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
           <div className="max-w-3xl">
             <p className="text-sm font-semibold uppercase tracking-[0.28em] text-pink-200">
-              Espace joueur
+              {t("defenses.playerSpace", "Espace joueur")}
             </p>
             <h2 className="mt-3 text-3xl font-semibold text-white md:text-4xl">
-              Mes defenses
+              {t("defenses.title", "Mes defenses")}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-300 md:text-base">
-              Choisis tes deux defenses et verifie si ta box actuelle permet de les jouer.
+              {t("defenses.description", "Choisis tes deux defenses et verifie si ta box actuelle permet de les jouer.")}
             </p>
           </div>
 
@@ -734,7 +740,7 @@ export default function MyDefensesTab({ session }) {
             {[
               { label: "Slots", value: `${summary.filledSlots}/2`, icon: Shield },
               { label: "OK", value: `${summary.compatibleSlots}/2`, icon: CheckCircle2 },
-              { label: "Score max", value: summary.bestScore || "-", icon: ThumbsUp },
+              { label: t("defenses.maxScore", "Score max"), value: summary.bestScore || "-", icon: ThumbsUp },
             ].map((item) => {
               const Icon = item.icon;
 
@@ -759,7 +765,7 @@ export default function MyDefensesTab({ session }) {
       {!member ? (
         <Card className="rounded-[1.1rem] border-zinc-800 bg-zinc-950/86">
           <CardContent className="p-6 text-sm text-zinc-500">
-            Aucun profil joueur trouve pour cette session.
+            {t("defenses.noProfile", "Aucun profil joueur trouve pour cette session.")}
           </CardContent>
         </Card>
       ) : (
@@ -770,7 +776,7 @@ export default function MyDefensesTab({ session }) {
                 <div>
                   <div className="text-2xl font-semibold text-zinc-50">{member.name}</div>
                   <div className="mt-1 text-sm text-zinc-500">
-                    {member.assignment || "Tour"} - edition ouverte
+                    {member.assignment || "Tour"} - {t("defenses.openEdit", "edition ouverte")}
                   </div>
                   <Badge className="mt-3 w-fit rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
                     {member.guildCode || guildCode}
@@ -779,7 +785,7 @@ export default function MyDefensesTab({ session }) {
 
                 <div className="w-full max-w-xl">
                   <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="defense-member-search">
-                    Joueur
+                    {t("defenses.player", "Joueur")}
                   </label>
                   <div className="mt-2 flex h-10 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 ring-pink-400/25 transition focus-within:border-pink-400/60 focus-within:ring-2">
                     <Search className="h-4 w-4 shrink-0 text-zinc-500" />
@@ -788,13 +794,13 @@ export default function MyDefensesTab({ session }) {
                       type="search"
                       value={memberQuery}
                       onChange={(event) => setMemberQuery(event.target.value)}
-                      placeholder="Rechercher un joueur"
+                      placeholder={t("heroBox.searchPlayer", "Rechercher un joueur")}
                       className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                     />
                   </div>
                   <div className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/80 p-2">
                     {memberSuggestions.length === 0 ? (
-                      <div className="px-3 py-2 text-sm text-zinc-500">Aucun joueur trouve.</div>
+                      <div className="px-3 py-2 text-sm text-zinc-500">{t("defenses.noPlayer", "Aucun joueur trouve.")}</div>
                     ) : (
                       memberSuggestions.map((suggestion) => {
                         const selected = String(suggestion.id) === String(member.id);
@@ -839,6 +845,8 @@ export default function MyDefensesTab({ session }) {
                     slot={slot}
                     canEdit={canEdit}
                     saving={savingSlot === `clear-${slot}`}
+                    championDisplayMap={championDisplayMap}
+                    language={language}
                     onClear={() => clearAssignedDefense(slot)}
                     voteProps={voteProps}
                   />
@@ -851,9 +859,9 @@ export default function MyDefensesTab({ session }) {
             <CardHeader className="border-b border-zinc-800">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                 <div>
-                  <div className="text-lg font-semibold text-zinc-50">Choisir une defense</div>
+                  <div className="text-lg font-semibold text-zinc-50">{t("defenses.choose", "Choisir une defense")}</div>
                   <div className="text-sm text-zinc-500">
-                    Les doublons de heros sont signales avant attribution.
+                    {t("defenses.duplicates", "Les doublons de heros sont signales avant attribution.")}
                   </div>
                 </div>
 
@@ -863,7 +871,7 @@ export default function MyDefensesTab({ session }) {
                     <Input
                       value={defenseQuery}
                       onChange={(event) => setDefenseQuery(event.target.value)}
-                      placeholder="Rechercher une defense..."
+                      placeholder={t("defenses.search", "Rechercher une defense...")}
                       className="rounded-lg border-zinc-700 bg-zinc-900 pl-9 text-zinc-100"
                     />
                   </div>
@@ -871,7 +879,7 @@ export default function MyDefensesTab({ session }) {
                     {[
                       { id: "tour", label: "Tours" },
                       { id: "bastion", label: "Bastions" },
-                      { id: "all", label: "Toutes" },
+                      { id: "all", label: t("common.all", "Toutes") },
                     ].map((filter) => (
                       <button
                         key={filter.id}
@@ -899,6 +907,8 @@ export default function MyDefensesTab({ session }) {
                     member={member}
                     canEdit={canEdit}
                     saving={savingSlot === `1-${defense.id}` || savingSlot === `2-${defense.id}`}
+                    championDisplayMap={championDisplayMap}
+                    language={language}
                     onAssign={() => assignToFirstFreeSlot(defense)}
                     voteProps={voteProps}
                   />
@@ -920,18 +930,22 @@ function AssignedDefenseCard({
   slot,
   canEdit,
   saving,
+  championDisplayMap,
+  language,
   onClear,
   voteProps,
 }) {
+  const { t } = usePortalLanguage();
+
   if (!defense) {
     return (
       <div className="rounded-lg border border-dashed border-zinc-700 bg-zinc-950/70 p-5">
-        <div className="text-sm text-zinc-500">Defense {slot}</div>
+        <div className="text-sm text-zinc-500">{t("defenses.defense", "Defense")} {slot}</div>
         <div className="mt-3 text-lg font-semibold text-zinc-200">
-          {isEmptyDefenseName(defenseName) ? "Aucune defense selectionnee" : defenseName}
+          {isEmptyDefenseName(defenseName) ? t("defenses.noneSelected", "Aucune defense selectionnee") : defenseName}
         </div>
         <div className="mt-3 text-sm text-zinc-500">
-          Selectionne une defense dans la liste en dessous pour remplir ce slot.
+          {t("defenses.selectBelow", "Selectionne une defense dans la liste en dessous pour remplir ce slot.")}
         </div>
       </div>
     );
@@ -941,7 +955,7 @@ function AssignedDefenseCard({
     <DefenseCardShell defense={defense} member={member} voteProps={voteProps}>
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm text-zinc-500">Defense {slot}</div>
+          <div className="text-sm text-zinc-500">{t("defenses.defense", "Defense")} {slot}</div>
           <div className="mt-1 text-xl font-semibold text-white">{defense.name}</div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
@@ -954,17 +968,19 @@ function AssignedDefenseCard({
               disabled={saving}
               className="rounded-lg border-red-500/35 bg-red-500/10 text-red-200 hover:bg-red-500/20"
             >
-              Retirer
+              {t("common.remove", "Retirer")}
             </Button>
           ) : null}
         </div>
       </div>
-      <DefenseBody defense={defense} member={member} />
+      <DefenseBody defense={defense} member={member} championDisplayMap={championDisplayMap} language={language} />
     </DefenseCardShell>
   );
 }
 
-function AvailableDefenseCard({ defense, member, canEdit, saving, onAssign, voteProps }) {
+function AvailableDefenseCard({ defense, member, canEdit, saving, onAssign, voteProps, championDisplayMap, language }) {
+  const { t } = usePortalLanguage();
+
   return (
     <DefenseCardShell defense={defense} member={member} voteProps={voteProps}>
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -972,10 +988,10 @@ function AvailableDefenseCard({ defense, member, canEdit, saving, onAssign, vote
           <div className="truncate text-lg font-semibold text-white">{defense.name}</div>
           {defense.duplicateCount > 0 ? (
             <div className="mt-1 text-xs text-amber-300">
-              Doublon : {defense.duplicateHeroes.join(", ")}
+              {t("defenses.duplicate", "Doublon")} : {defense.duplicateHeroes.map((hero) => translateChampionName(hero, championDisplayMap, language)).join(", ")}
             </div>
           ) : (
-            <div className="mt-1 text-xs text-emerald-300">Aucun doublon heros</div>
+            <div className="mt-1 text-xs text-emerald-300">{t("defenses.noDuplicate", "Aucun doublon heros")}</div>
           )}
         </div>
         <div className="flex flex-wrap justify-end gap-2">
@@ -987,12 +1003,12 @@ function AvailableDefenseCard({ defense, member, canEdit, saving, onAssign, vote
               disabled={saving}
               className="rounded-lg bg-pink-500 text-white hover:bg-pink-400"
             >
-              Ajouter
+              {t("common.add", "Ajouter")}
             </Button>
           ) : null}
         </div>
       </div>
-      <DefenseBody defense={defense} member={member} />
+      <DefenseBody defense={defense} member={member} championDisplayMap={championDisplayMap} language={language} />
     </DefenseCardShell>
   );
 }
@@ -1024,18 +1040,20 @@ function DefenseCardShell({ defense, member, voteProps, children }) {
 }
 
 function DefenseInfoBlocks({ blocks }) {
+  const { t } = usePortalLanguage();
+
   if (!blocks?.length) return null;
 
   return (
     <div className="mt-4 space-y-3 rounded-lg border border-pink-300/20 bg-pink-500/8 p-3">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-pink-200">Infos defense</div>
+      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-pink-200">{t("defenses.info", "Infos defense")}</div>
       <div className="space-y-3 text-sm leading-6 text-zinc-200">
         {blocks.map((block) =>
           block.blockType === "image" ? (
             <img
               key={block.id}
               src={block.content}
-              alt="Info defense"
+              alt={t("defenses.info", "Info defense")}
               className="mx-auto max-h-[180px] w-full rounded-md object-contain"
             />
           ) : (
@@ -1085,7 +1103,8 @@ function VoteControls({ defense, voteProps }) {
   );
 }
 
-function DefenseBody({ defense, member }) {
+function DefenseBody({ defense, member, championDisplayMap, language }) {
+  const { t } = usePortalLanguage();
   const missingConditions = getDefenseConditionRequirements(defense).filter(
     (requirement) => (member?.awakenings?.[requirement.hero] ?? -1) < requirement.minAwakening
   );
@@ -1100,14 +1119,14 @@ function DefenseBody({ defense, member }) {
         {defense.image ? (
           <img src={defense.image} alt={defense.name} className="max-h-[210px] w-full object-contain" />
         ) : (
-          <div className="text-sm text-zinc-500">Aucune image</div>
+          <div className="text-sm text-zinc-500">{t("defenses.noImage", "Aucune image")}</div>
         )}
       </div>
 
       <div className="space-y-3">
         <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
           <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-            Heros / Eveils
+            {t("defenses.heroesAwakenings", "Heros / Eveils")}
           </div>
           <div className="space-y-2">
             {(defense.slots || []).map((slot, index) => {
@@ -1120,7 +1139,9 @@ function DefenseBody({ defense, member }) {
                   key={`${defense.id}-${heroName}-${index}`}
                   className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2"
                 >
-                  <span className="min-w-0 truncate text-sm text-zinc-100">{heroName}</span>
+                  <span className="min-w-0 truncate text-sm text-zinc-100">
+                    {translateChampionName(heroName, championDisplayMap, language)}
+                  </span>
                   <span
                     className={`shrink-0 rounded-md px-2 py-1 text-xs ${
                       owned ? "bg-emerald-500/16 text-emerald-200" : "bg-red-500/16 text-red-200"
@@ -1136,23 +1157,28 @@ function DefenseBody({ defense, member }) {
 
         <div className="grid gap-2">
           <div className="flex items-start justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
-            <span className="text-sm text-zinc-400">Heros manquants</span>
+            <span className="text-sm text-zinc-400">{t("defenses.missingHeroes", "Heros manquants")}</span>
             <span className={`text-right text-sm ${missingHeroes.length === 0 ? "text-emerald-300" : "text-red-300"}`}>
-              {missingHeroes.length === 0 ? "OK" : missingHeroes.join(", ")}
+              {missingHeroes.length === 0
+                ? "OK"
+                : missingHeroes.map((heroName) => translateChampionName(heroName, championDisplayMap, language)).join(", ")}
             </span>
           </div>
           <div className="flex items-start justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
-            <span className="text-sm text-zinc-400">Conditions</span>
+            <span className="text-sm text-zinc-400">{t("defenses.conditions", "Conditions")}</span>
             <span className={`text-right text-sm ${missingConditions.length === 0 ? "text-emerald-300" : "text-red-300"}`}>
               {missingConditions.length === 0
                 ? "OK"
                 : missingConditions
-                    .map((requirement) => `${requirement.hero} A${requirement.minAwakening}`)
+                    .map(
+                      (requirement) =>
+                        `${translateChampionName(requirement.hero, championDisplayMap, language)} A${requirement.minAwakening}`,
+                    )
                     .join(", ")}
             </span>
           </div>
           <div className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
-            <span className="text-sm text-zinc-400">Score d'eveil</span>
+            <span className="text-sm text-zinc-400">{t("defenses.awakeningScore", "Score d'eveil")}</span>
             <span className="text-sm text-zinc-100">{score ?? "-"}</span>
           </div>
         </div>

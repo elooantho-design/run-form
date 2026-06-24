@@ -52,6 +52,8 @@ import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { getChampionEnglishName } from "@/lib/championDisplay";
+import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
 import {
   filterByGuildScope,
   getControlBrand,
@@ -66,44 +68,48 @@ import {
 } from "@/lib/guildScope";
 
 const navigation = [
-  { id: "home", label: "Accueil", icon: LayoutDashboard },
-  { id: "hero-box", label: "Ma box heros", icon: Grid3X3 },
-  { id: "soul-stones", label: "Pierre d'ame", icon: Sparkles },
-  { id: "demon-monsters", label: "Monstres demoniaques", icon: Shield },
-  { id: "personal-best", label: "Mes PB", icon: Activity },
-  { id: "defenses", label: "Mes defenses", icon: Bot },
-  { id: "gvg", label: "GVG", icon: Shield },
-  { id: "run-search", label: "Recherche de run", icon: Search },
-  { id: "settings", label: "Parametres", icon: Settings },
+  { id: "home", label: "Accueil", labelKey: "nav.home", icon: LayoutDashboard },
+  { id: "hero-box", label: "Ma box heros", labelKey: "nav.heroBox", icon: Grid3X3 },
+  { id: "soul-stones", label: "Pierre d'ame", labelKey: "nav.soulStones", icon: Sparkles },
+  { id: "demon-monsters", label: "Monstres demoniaques", labelKey: "nav.demonMonsters", icon: Shield },
+  { id: "personal-best", label: "Mes PB", labelKey: "nav.personalBest", icon: Activity },
+  { id: "defenses", label: "Mes defenses", labelKey: "nav.defenses", icon: Bot },
+  { id: "gvg", label: "GVG", labelKey: "nav.gvg", icon: Shield },
+  { id: "run-search", label: "Recherche de run", labelKey: "nav.runSearch", icon: Search },
+  { id: "settings", label: "Parametres", labelKey: "nav.settings", icon: Settings },
 ];
 
 const adminNavigation = [
-  { id: "guild-management", label: "Gestion guildes", icon: Users, adminOnly: true },
-  { id: "admin-defenses", label: "Gestion défense", icon: Shield, adminOnly: true },
-  { id: "intersaison", label: "Intersaison", icon: RefreshCw, adminOnly: true, paladinOnly: true },
-  { id: "run-add", label: "Ajout de run", icon: PlusCircle, adminOnly: true },
-  { id: "run-edit", label: "Modification de run", icon: FileJson, adminOnly: true },
-  { id: "templates", label: "Ajout heros", icon: PlusCircle, leaderOnly: true },
-  { id: "guilds", label: "Guildes", icon: Users, leaderOnly: true },
-  { id: "billing", label: "Licences", icon: WalletCards, leaderOnly: true },
-  { id: "launcher", label: "Launcher", icon: Bot },
-  { id: "validation", label: "Validation", icon: SearchCheck },
-  { id: "logs", label: "Logs", icon: Activity },
-  { id: "player-access", label: "Acces joueurs", icon: Lock, adminOnly: true },
+  { id: "guild-management", label: "Gestion guildes", labelKey: "nav.guildManagement", icon: Users, adminOnly: true },
+  { id: "admin-defenses", label: "Gestion defense", labelKey: "nav.adminDefenses", icon: Shield, adminOnly: true },
+  { id: "intersaison", label: "Intersaison", labelKey: "nav.intersaison", icon: RefreshCw, adminOnly: true, paladinOnly: true },
+  { id: "run-add", label: "Ajout de run", labelKey: "nav.runAdd", icon: PlusCircle, adminOnly: true },
+  { id: "run-edit", label: "Modification de run", labelKey: "nav.runEdit", icon: FileJson, adminOnly: true },
+  { id: "templates", label: "Ajout heros", labelKey: "nav.templates", icon: PlusCircle, leaderOnly: true },
+  { id: "guilds", label: "Guildes", labelKey: "nav.guilds", icon: Users, leaderOnly: true },
+  { id: "billing", label: "Licences", labelKey: "nav.billing", icon: WalletCards, leaderOnly: true },
+  { id: "launcher", label: "Launcher", labelKey: "nav.launcher", icon: Bot },
+  { id: "validation", label: "Validation", labelKey: "nav.validation", icon: SearchCheck },
+  { id: "logs", label: "Logs", labelKey: "nav.logs", icon: Activity },
+  { id: "player-access", label: "Acces joueurs", labelKey: "nav.playerAccess", icon: Lock, adminOnly: true },
 ];
 
 const categoryCards = [
   {
     id: "profile",
     title: "Mon profil",
+    titleKey: "home.myProfile.title",
     description: "Gerez vos informations personnelles et vos preferences.",
+    descriptionKey: "home.myProfile.description",
     icon: Users,
     tone: "border-sky-500/25 bg-sky-500/10 text-sky-200",
   },
   {
     id: "hero-box",
     title: "Ma box heros",
+    titleKey: "home.heroBox.title",
     description: "Accedez a votre collection et gerez vos heros.",
+    descriptionKey: "home.heroBox.description",
     icon: Grid3X3,
     tone: "border-indigo-500/25 bg-indigo-500/10 text-indigo-200",
     target: "hero-box",
@@ -111,7 +117,9 @@ const categoryCards = [
   {
     id: "soul-stones",
     title: "Pierres d'ame",
+    titleKey: "home.soulStones.title",
     description: "Gerez et optimisez vos pierres d'ame.",
+    descriptionKey: "home.soulStones.description",
     icon: Sparkles,
     tone: "border-amber-500/25 bg-amber-500/10 text-amber-200",
     target: "soul-stones",
@@ -119,7 +127,9 @@ const categoryCards = [
   {
     id: "demon-monsters",
     title: "Monstres demoniaques",
+    titleKey: "home.demonMonsters.title",
     description: "Affrontez les forces obscures et domptez-les.",
+    descriptionKey: "home.demonMonsters.description",
     icon: Shield,
     tone: "border-red-500/25 bg-red-500/10 text-red-200",
     target: "demon-monsters",
@@ -127,7 +137,9 @@ const categoryCards = [
   {
     id: "personal-best",
     title: "Mes PB",
+    titleKey: "home.personalBest.title",
     description: "Consultez vos records et performances personnelles.",
+    descriptionKey: "home.personalBest.description",
     icon: Activity,
     tone: "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
     target: "personal-best",
@@ -135,7 +147,9 @@ const categoryCards = [
   {
     id: "defenses",
     title: "Mes defenses",
+    titleKey: "home.defenses.title",
     description: "Configurez et renforcez vos defenses.",
+    descriptionKey: "home.defenses.description",
     icon: Bot,
     tone: "border-violet-500/25 bg-violet-500/10 text-violet-200",
     target: "defenses",
@@ -523,6 +537,7 @@ function buildPortalHeroCards(champions) {
         technicalName: String(champion?.name || "").trim(),
         name: portalName,
         portalName,
+        englishName: getChampionEnglishName(champion),
         rarity: getChampionRarity(champion),
         factions: splitChampionValues(getChampionField(champion, ["faction", "Faction", "factions", "Factions"])),
         roles: splitChampionValues(getChampionField(champion, ["role", "Role", "roles", "Roles"])),
@@ -539,6 +554,11 @@ function buildPortalHeroCards(champions) {
       if (rarityDiff !== 0) return rarityDiff;
       return left.name.localeCompare(right.name, "fr", { sensitivity: "base" });
     });
+}
+
+function getPortalHeroDisplayName(hero, language = "fr") {
+  if (!hero) return "";
+  return language === "en" && hero.englishName ? hero.englishName : hero.portalName || hero.name || hero.technicalName || "";
 }
 
 function createEmptyHeroStateMap(heroes = []) {
@@ -927,7 +947,77 @@ function ElectricBorderLayers() {
   );
 }
 
+function LanguageFlagMark({ languageCode }) {
+  const isEnglish = languageCode === "en";
+
+  return (
+    <span
+      aria-hidden="true"
+      className="relative inline-flex h-4 w-6 overflow-hidden rounded-[3px] border border-white/20 shadow-sm"
+      style={{
+        background: isEnglish
+          ? "linear-gradient(90deg, #012169 0 100%)"
+          : "linear-gradient(90deg, #1d4ed8 0 33%, #f8fafc 33% 66%, #dc2626 66% 100%)",
+      }}
+    >
+      {isEnglish ? (
+        <>
+          <span className="absolute left-1/2 top-0 h-full w-[3px] -translate-x-1/2 bg-white/90" />
+          <span className="absolute left-0 top-1/2 h-[3px] w-full -translate-y-1/2 bg-white/90" />
+          <span className="absolute left-1/2 top-0 h-full w-[1.5px] -translate-x-1/2 bg-red-600" />
+          <span className="absolute left-0 top-1/2 h-[1.5px] w-full -translate-y-1/2 bg-red-600" />
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+function PortalLanguageSelector() {
+  const { language, setLanguage, currentLanguage } = usePortalLanguage();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <Button
+        type="button"
+        variant="outline"
+        className="h-9 rounded-lg border-zinc-700 bg-zinc-900 px-3 text-zinc-100 hover:bg-zinc-800"
+        aria-label={`Langue actuelle : ${currentLanguage.label}`}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <LanguageFlagMark languageCode={language} />
+        <span className="ml-2 text-xs font-semibold">{currentLanguage.shortLabel}</span>
+      </Button>
+
+      {open ? (
+        <div className="absolute right-0 top-11 z-30 w-44 rounded-xl border border-zinc-800 bg-zinc-950 p-1 shadow-2xl">
+          {PORTAL_LANGUAGES.map((item) => (
+            <button
+              key={item.code}
+              type="button"
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition ${
+                language === item.code
+                  ? "bg-zinc-800 text-zinc-50"
+                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+              }`}
+              onClick={() => {
+                setLanguage(item.code);
+                setOpen(false);
+              }}
+            >
+              <LanguageFlagMark languageCode={item.code} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PortalShell({ session, onLogout }) {
+  const { t } = usePortalLanguage();
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const loggedTabViewsRef = useRef(new Set());
@@ -948,8 +1038,9 @@ function PortalShell({ session, onLogout }) {
   );
 
   const activeTitle = useMemo(() => {
-    return [...navigation, ...adminNavigation].find((item) => item.id === active)?.label || "Accueil";
-  }, [active]);
+    const activeItem = [...navigation, ...adminNavigation].find((item) => item.id === active);
+    return activeItem ? t(activeItem.labelKey, activeItem.label) : t("nav.home", "Accueil");
+  }, [active, t]);
   const activeAdminItem = visibleAdminNavigation.some((item) => item.id === active);
 
   useEffect(() => {
@@ -1011,7 +1102,7 @@ function PortalShell({ session, onLogout }) {
                 }`}
               >
                 <Icon className="h-4 w-4" />
-                <span>{item.label}</span>
+                <span>{t(item.labelKey, item.label)}</span>
               </button>
             );
           })}
@@ -1028,7 +1119,7 @@ function PortalShell({ session, onLogout }) {
               aria-expanded={adminNavOpen}
             >
               <Lock className="h-4 w-4" />
-              <span className="flex-1">Admin</span>
+              <span className="flex-1">{t("nav.admin", "Admin")}</span>
               <ChevronRight className={`h-4 w-4 transition-transform ${adminNavOpen ? "rotate-90" : ""}`} />
             </button>
 
@@ -1050,7 +1141,7 @@ function PortalShell({ session, onLogout }) {
                       }`}
                     >
                       <Icon className="h-4 w-4" />
-                      <span>{item.label}</span>
+                      <span>{t(item.labelKey, item.label)}</span>
                     </button>
                   );
                 })}
@@ -1069,7 +1160,7 @@ function PortalShell({ session, onLogout }) {
               type="button"
               onClick={onLogout}
               className="rounded-md p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-              title="Deconnexion"
+              title={t("settings.logout", "Deconnexion")}
             >
               <LogOut className="h-4 w-4" />
             </button>
@@ -1081,13 +1172,14 @@ function PortalShell({ session, onLogout }) {
         <header className="sticky top-0 z-20 border-b border-zinc-800 bg-[#11100d]/95 px-4 py-4 backdrop-blur md:px-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm text-zinc-500">Portail</div>
+              <div className="text-sm text-zinc-500">{t("portal.label", "Portail")}</div>
               <h1 className="text-2xl font-semibold text-zinc-50">{activeTitle}</h1>
             </div>
             <div className="flex items-center gap-2">
               <Badge className="rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
-                API VPS prete
+                {t("portal.apiReady", "API VPS prete")}
               </Badge>
+              <PortalLanguageSelector />
               <Button variant="outline" className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800">
                 <Bell className="h-4 w-4" />
               </Button>
@@ -1124,11 +1216,12 @@ function PortalShell({ session, onLogout }) {
 }
 
 function HomeView({ session, setActive }) {
+  const { t } = usePortalLanguage();
   const displayName = session.watcherName || session.name || "Joueur";
   const summaryCards = [
-    { label: "Guilde", value: session.guild || "Paladin", icon: Users },
-    { label: "Role", value: session.role || "Joueur", icon: Shield },
-    { label: "Profil", value: "Non valide", icon: CheckCircle2 },
+    { label: t("home.guild", "Guilde"), value: session.guild || "Paladin", icon: Users },
+    { label: t("home.role", "Role"), value: session.role || "Joueur", icon: Shield },
+    { label: t("home.profile", "Profil"), value: t("home.notValidated", "Non valide"), icon: CheckCircle2 },
   ];
 
   return (
@@ -1146,12 +1239,15 @@ function HomeView({ session, setActive }) {
         <div className="absolute inset-0 rounded-[inherit] bg-[radial-gradient(circle_at_50%_42%,rgba(168,85,247,0.3),transparent_30%),linear-gradient(180deg,rgba(0,0,0,0.04),rgba(0,0,0,0.68))]" />
         <div className="relative z-10 grid min-h-[340px] gap-6 p-6 sm:p-8 lg:h-full lg:min-h-0 lg:grid-cols-[1fr_minmax(420px,0.78fr)] lg:items-end lg:p-[clamp(28px,2.4vw,42px)]">
           <div className="max-w-[620px] self-start lg:self-center">
-            <p className="text-sm font-medium text-violet-200 sm:text-base">Accueil joueur</p>
+            <p className="text-sm font-medium text-violet-200 sm:text-base">{t("home.playerHome", "Accueil joueur")}</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white drop-shadow-[0_2px_16px_rgba(0,0,0,0.85)] sm:text-4xl lg:text-[2.35rem]">
-              Bienvenue, {displayName}
+              {t("home.welcome", "Bienvenue")}, {displayName}
             </h2>
             <p className="mt-4 max-w-[410px] text-sm leading-6 text-zinc-300 sm:text-base">
-              Gerez vos outils, suivez vos activites et preparez vos batailles pour la gloire.
+              {t(
+                "home.description",
+                "Gerez vos outils, suivez vos activites et preparez vos batailles pour la gloire.",
+              )}
             </p>
           </div>
 
@@ -1270,10 +1366,12 @@ function HomeView({ session, setActive }) {
                             isProfile ? "text-sky-200/85" : "text-amber-100/85"
                           }`}
                         >
-                          {isProfile ? "Profil joueur" : "Heros"}
+                          {isProfile ? t("home.profileCard", "Profil joueur") : t("home.heroesCard", "Heros")}
                         </div>
-                        <div className="mt-1 text-lg font-semibold text-zinc-50">{card.title}</div>
-                        <p className="mt-2 max-w-[260px] text-sm leading-5 text-zinc-200/80">{card.description}</p>
+                        <div className="mt-1 text-lg font-semibold text-zinc-50">{t(card.titleKey, card.title)}</div>
+                        <p className="mt-2 max-w-[260px] text-sm leading-5 text-zinc-200/80">
+                          {t(card.descriptionKey, card.description)}
+                        </p>
                       </div>
                       <ChevronRight className={`h-4 w-4 ${isProfile ? "text-sky-100" : "text-amber-100"}`} />
                     </div>
@@ -1285,7 +1383,7 @@ function HomeView({ session, setActive }) {
                     <Icon className="h-5 w-5" />
                   </div>
                   <div className="mt-4 flex items-center justify-between gap-3">
-                    <div className="text-base font-semibold text-zinc-50">{card.title}</div>
+                    <div className="text-base font-semibold text-zinc-50">{t(card.titleKey, card.title)}</div>
                     <ChevronRight className="h-4 w-4" />
                   </div>
                 </>
@@ -1299,6 +1397,7 @@ function HomeView({ session, setActive }) {
 }
 
 function HeroBoxView({ session }) {
+  const { language, t } = usePortalLanguage();
   const [query, setQuery] = useState("");
   const [playerQuery, setPlayerQuery] = useState("");
   const [ownedFilter, setOwnedFilter] = useState("all");
@@ -1325,8 +1424,17 @@ function HeroBoxView({ session }) {
   const championIdByHeroId = useMemo(() => buildChampionIdByHeroId(heroCards), [heroCards]);
   const heroRarityFilters = useMemo(() => buildHeroRarityFilters(heroCards), [heroCards]);
   const heroRoleFilters = useMemo(
-    () => buildHeroIconFilters(heroCards, "roles", heroRoleMeta, heroRoleOrder, "role", "Tous les roles", "Tous"),
-    [heroCards],
+    () =>
+      buildHeroIconFilters(
+        heroCards,
+        "roles",
+        heroRoleMeta,
+        heroRoleOrder,
+        "role",
+        t("heroBox.allRoles", "Tous les roles"),
+        t("heroBox.allRolesShort", "Tous"),
+      ),
+    [heroCards, t],
   );
   const heroFactionFilters = useMemo(
     () =>
@@ -1336,10 +1444,10 @@ function HeroBoxView({ session }) {
         heroFactionMeta,
         heroFactionOrder,
         "faction",
-        "Toutes les factions",
-        "Toutes",
+        t("heroBox.allFactions", "Toutes les factions"),
+        t("heroBox.allFactionsShort", "Toutes"),
       ),
-    [heroCards],
+    [heroCards, t],
   );
   const hasLatestHeroes = useMemo(() => heroCards.some((hero) => hero.isLatestRelease), [heroCards]);
   const selectedRarityFilter = useMemo(
@@ -1507,9 +1615,12 @@ function HeroBoxView({ session }) {
     return heroCards
       .filter((hero) => {
         const state = heroStates[hero.id] || { owned: false, awakening: -1 };
+        const displayName = getPortalHeroDisplayName(hero, language);
         const matchesQuery =
           normalizedQuery.length === 0 ||
-          normalizeHeroKey(`${hero.name} ${hero.technicalName}`).includes(normalizedQuery);
+          normalizeHeroKey(`${displayName} ${hero.name} ${hero.portalName} ${hero.technicalName} ${hero.englishName}`).includes(
+            normalizedQuery,
+          );
         const matchesState =
           ownedFilter === "all" ||
           (ownedFilter === "owned" && state.owned) ||
@@ -1525,7 +1636,7 @@ function HeroBoxView({ session }) {
         if (!latestOnly) return 0;
         return (left.latestReleaseRank || 999) - (right.latestReleaseRank || 999);
       });
-  }, [factionFilter, heroCards, heroStates, latestOnly, ownedFilter, query, rarityFilter, roleFilter]);
+  }, [factionFilter, heroCards, heroStates, language, latestOnly, ownedFilter, query, rarityFilter, roleFilter]);
 
   const priorityHeroes = useMemo(() => visibleHeroes.slice(0, 24), [visibleHeroes]);
   const priorityHeroImageCount = priorityHeroes.length;
@@ -1590,6 +1701,7 @@ function HeroBoxView({ session }) {
 
     const championId = championIdByHeroId[heroId];
     const hero = heroCards.find((item) => item.id === heroId);
+    const heroDisplayName = getPortalHeroDisplayName(hero, language);
     if (!championId) {
       setHeroBoxError("Ce heros n'est pas relie a la table champions.");
       return;
@@ -1622,10 +1734,11 @@ function HeroBoxView({ session }) {
         actionType: "hero_box_update",
         entityType: "champion",
         entityId: String(championId),
-        summary: `${selectedPlayer ? getMemberDisplayName(selectedPlayer) : "Joueur"} : ${hero?.name || "heros"} A${previousState.awakening} -> A${awakeningLevel}`,
+        summary: `${selectedPlayer ? getMemberDisplayName(selectedPlayer) : "Joueur"} : ${heroDisplayName || "heros"} A${previousState.awakening} -> A${awakeningLevel}`,
         metadata: {
           heroId,
           heroName: hero?.name || "",
+          heroDisplayName,
           previousAwakening: previousState.awakening,
           nextAwakening: awakeningLevel,
         },
@@ -1720,22 +1833,25 @@ function HeroBoxView({ session }) {
         <div className="hero-box-heading">
           <div>
             <div className="hero-box-eyebrow">Watcher of Realms</div>
-            <h2>Ma box heros</h2>
+            <h2>{t("heroBox.title", "Ma box heros")}</h2>
             <p>
-              Collection alimentee par Supabase, avec les calques servis par le VPS et les eveils relies aux champions.
+              {t(
+                "heroBox.description",
+                "Collection alimentee par Supabase, avec les calques servis par le VPS et les eveils relies aux champions.",
+              )}
             </p>
           </div>
-          <div className="hero-box-stats" aria-label="Statistiques de collection">
+          <div className="hero-box-stats" aria-label={t("heroBox.statsLabel", "Statistiques de collection")}>
             <div>
-              <span>Possedes</span>
+              <span>{t("heroBox.owned", "Possedes")}</span>
               <strong>{stats.owned}/{heroCards.length}</strong>
             </div>
             <div>
-              <span>Eveils leg.</span>
+              <span>{t("heroBox.legendaryAwakenings", "Eveils leg.")}</span>
               <strong>{stats.awakening}</strong>
             </div>
             <div>
-              <span>A5 leg.</span>
+              <span>{t("heroBox.legendaryA5", "A5 leg.")}</span>
               <strong>{stats.a5}</strong>
             </div>
           </div>
@@ -1743,9 +1859,9 @@ function HeroBoxView({ session }) {
 
         <div className="hero-box-player-panel">
           <div className="hero-box-player-current">
-            <span>Box consultee</span>
-            <strong>{selectedPlayer ? getMemberDisplayName(selectedPlayer) : "Aucun joueur"}</strong>
-            <small>{selectedPlayer ? getMemberGuildLabel(selectedPlayer) : "Selectionne un joueur"}</small>
+            <span>{t("heroBox.viewedBox", "Box consultee")}</span>
+            <strong>{selectedPlayer ? getMemberDisplayName(selectedPlayer) : t("common.none", "Aucun joueur")}</strong>
+            <small>{selectedPlayer ? getMemberGuildLabel(selectedPlayer) : t("heroBox.selectPlayer", "Selectionne un joueur")}</small>
           </div>
 
           <label className="hero-box-player-search">
@@ -1754,8 +1870,8 @@ function HeroBoxView({ session }) {
               type="search"
               value={playerQuery}
               onChange={(event) => setPlayerQuery(event.target.value)}
-              placeholder="Rechercher un joueur"
-              aria-label="Rechercher un joueur"
+              placeholder={t("heroBox.searchPlayer", "Rechercher un joueur")}
+              aria-label={t("heroBox.searchPlayer", "Rechercher un joueur")}
             />
           </label>
 
@@ -1783,11 +1899,14 @@ function HeroBoxView({ session }) {
 
           <p className={`hero-box-readonly-note ${canEdit ? "can-edit" : "is-readonly"}`}>
             {canEdit
-              ? "Edition autorisee pour cette box."
-              : "Lecture seule : tu peux consulter cette box, mais seules ta box ou les admins sont modifiables."}
+              ? t("heroBox.editAllowed", "Edition autorisee pour cette box.")
+              : t(
+                  "heroBox.readOnly",
+                  "Lecture seule : tu peux consulter cette box, mais seules ta box ou les admins sont modifiables.",
+                )}
           </p>
 
-          {heroBoxLoading ? <p className="hero-box-sync-note">Synchronisation Supabase...</p> : null}
+          {heroBoxLoading ? <p className="hero-box-sync-note">{t("heroBox.sync", "Synchronisation Supabase...")}</p> : null}
           {heroBoxError ? <p className="hero-box-error">{heroBoxError}</p> : null}
         </div>
 
@@ -1798,16 +1917,16 @@ function HeroBoxView({ session }) {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Rechercher un heros"
-              aria-label="Rechercher un heros"
+              placeholder={t("heroBox.searchHero", "Rechercher un heros")}
+              aria-label={t("heroBox.searchHero", "Rechercher un heros")}
             />
           </label>
 
-          <div className="hero-box-filter-group" aria-label="Filtrer les heros">
+          <div className="hero-box-filter-group" aria-label={t("heroBox.filterHeroes", "Filtrer les heros")}>
             {[
-              ["all", "Tous"],
-              ["owned", "Possedes"],
-              ["locked", "Verrouilles"],
+              ["all", t("heroBox.filterAll", "Tous")],
+              ["owned", t("heroBox.filterOwned", "Possedes")],
+              ["locked", t("heroBox.filterLocked", "Verrouilles")],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -1821,7 +1940,7 @@ function HeroBoxView({ session }) {
           </div>
         </div>
 
-        <div className="hero-box-filter-row" aria-label="Filtres de rarete">
+        <div className="hero-box-filter-row" aria-label={t("heroBox.rarityFilters", "Filtres de rarete")}>
           {hasLatestHeroes ? (
             <button
               type="button"
@@ -1829,25 +1948,30 @@ function HeroBoxView({ session }) {
               style={{ "--rarity-color": "#38bdf8" }}
               aria-pressed={latestOnly}
               onClick={() => setLatestOnly((value) => !value)}
-              title="Afficher les dernieres sorties ingame"
+              title={t("heroBox.latestTitle", "Afficher les dernieres sorties ingame")}
             >
               <Clock3 className="h-4 w-4" />
-              Dernieres sorties
+              {t("heroBox.latest", "Dernieres sorties")}
             </button>
           ) : null}
-          {heroRarityFilters.map((filter) => (
-            <button
-              key={filter.id}
-              type="button"
-              className="hero-rarity-filter"
-              style={{ "--rarity-color": filter.color }}
-              aria-pressed={rarityFilter === filter.id}
-              onClick={() => setRarityFilter(filter.id)}
-            >
-              <span className="hero-rarity-dot" />
-              {filter.label}
-            </button>
-          ))}
+          {heroRarityFilters.map((filter) => {
+            const label =
+              filter.id === "all" ? t("heroBox.filterAll", filter.label) : t(`rarity.${filter.id}`, filter.label);
+
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                className="hero-rarity-filter"
+                style={{ "--rarity-color": filter.color }}
+                aria-pressed={rarityFilter === filter.id}
+                onClick={() => setRarityFilter(filter.id)}
+              >
+                <span className="hero-rarity-dot" />
+                {label}
+              </button>
+            );
+          })}
         </div>
 
         {bulkAwakeningRarities.has(rarityFilter) && bulkAwakeningHeroes.length > 0 ? (
@@ -1859,23 +1983,29 @@ function HeroBoxView({ session }) {
               onClick={setBulkAwakeningToA5}
               title={
                 bulkAwakeningPendingCount > 0
-                  ? `Passer les ${selectedRarityFilter?.label || "heros"} en A5`
-                  : `Tous les ${selectedRarityFilter?.label || "heros"} sont deja A5`
+                  ? `${t("heroBox.bulkApply", "Tout ce filtre A5")} (${t(
+                      `rarity.${selectedRarityFilter?.id || ""}`,
+                      selectedRarityFilter?.label || "heros",
+                    )})`
+                  : `${t("heroBox.bulkDone", "Filtre deja A5")} (${t(
+                      `rarity.${selectedRarityFilter?.id || ""}`,
+                      selectedRarityFilter?.label || "heros",
+                    )})`
               }
             >
               <CheckCircle2 className="h-4 w-4" />
               {bulkSavingRarity === rarityFilter
-                ? "Mise a jour A5..."
+                ? t("heroBox.bulkSaving", "Mise a jour A5...")
                 : bulkAwakeningPendingCount > 0
-                  ? "Tout ce filtre A5"
-                  : "Filtre deja A5"}
+                  ? t("heroBox.bulkApply", "Tout ce filtre A5")
+                  : t("heroBox.bulkDone", "Filtre deja A5")}
               <span>{bulkAwakeningHeroes.length}</span>
             </button>
           </div>
         ) : null}
 
         <div className="hero-box-icon-filter-grid">
-          <div className="hero-box-icon-filters" aria-label="Filtres de roles">
+          <div className="hero-box-icon-filters" aria-label={t("heroBox.roleFilters", "Filtres de roles")}>
             {heroRoleFilters.map((filter) => (
               <button
                 key={filter.id}
@@ -1895,7 +2025,7 @@ function HeroBoxView({ session }) {
             ))}
           </div>
 
-          <div className="hero-box-icon-filters" aria-label="Filtres de factions">
+          <div className="hero-box-icon-filters" aria-label={t("heroBox.factionFilters", "Filtres de factions")}>
             {heroFactionFilters.map((filter) => (
               <button
                 key={filter.id}
@@ -1917,14 +2047,14 @@ function HeroBoxView({ session }) {
         </div>
 
         <div className="hero-box-result-count">
-          {visibleHeroes.length} heros affiches
-          {latestOnly ? <span>Dernieres sorties ingame</span> : null}
+          {visibleHeroes.length} {t("heroBox.displayedHeroes", "heros affiches")}
+          {latestOnly ? <span>{t("heroBox.latestBadge", "Dernieres sorties ingame")}</span> : null}
         </div>
 
         {heroImagesAreWarming ? (
           <div className="hero-box-image-loader" role="status" aria-live="polite">
             <div>
-              <strong>Chargement des vignettes</strong>
+              <strong>{t("heroBox.loadingImages", "Chargement des vignettes")}</strong>
               <span>{loadedPriorityHeroImageCount}/{priorityHeroImageCount}</span>
             </div>
             <div className="hero-box-image-loader-bar" aria-hidden="true">
@@ -1946,6 +2076,7 @@ function HeroBoxView({ session }) {
               onImageReady={markHeroImageReady}
               canEdit={canEdit}
               saving={savingHeroId === hero.id || bulkSavingRarity === hero.rarity}
+              language={language}
             />
           ))}
         </div>
@@ -1964,9 +2095,12 @@ function HeroLayerCard({
   onImageReady,
   canEdit = false,
   saving = false,
+  language = "fr",
 }) {
+  const { t } = usePortalLanguage();
   const [fallbackImageIndex, setFallbackImageIndex] = useState(-1);
   const imageSrc = fallbackImageIndex === -1 ? hero.image : hero.fallbackImages?.[fallbackImageIndex] || hero.image;
+  const displayName = getPortalHeroDisplayName(hero, language);
 
   function handleImageReady() {
     onImageReady?.(hero.id);
@@ -1991,7 +2125,7 @@ function HeroLayerCard({
       <div className="hero-layer-skeleton" aria-hidden="true" />
       <img
         src={imageSrc}
-        alt={hero.name}
+        alt={displayName}
         loading={priority ? "eager" : "lazy"}
         decoding="async"
         fetchPriority={priority ? "high" : "auto"}
@@ -2004,9 +2138,9 @@ function HeroLayerCard({
         <button
           type="button"
           className="hero-layer-lock"
-          aria-label={`Marquer ${hero.name} comme possede`}
+          aria-label={`${t("heroBox.markOwned", "Marquer comme possede")} ${displayName}`}
           disabled={!canEdit || saving}
-          title={canEdit ? `Marquer ${hero.name} comme possede` : "Lecture seule"}
+          title={canEdit ? `${t("heroBox.markOwned", "Marquer comme possede")} ${displayName}` : t("heroBox.readOnlyShort", "Lecture seule")}
           onClick={() => onUnlock(hero.id)}
         >
           <Lock className="h-7 w-7" />
@@ -2015,16 +2149,20 @@ function HeroLayerCard({
 
       <div
         className="hero-layer-stars"
-        aria-label={state.owned ? `${hero.name} eveil A${state.awakening}` : `${hero.name} non possede`}
+        aria-label={
+          state.owned
+            ? `${displayName} ${t("heroBox.awakening", "eveil")} A${state.awakening}`
+            : `${displayName} ${t("heroBox.notOwned", "non possede")}`
+        }
       >
         {[1, 2, 3, 4, 5].map((level) => (
           <button
             key={level}
             type="button"
             className={state.owned && state.awakening >= level ? "is-active" : ""}
-            aria-label={`Regler ${hero.name} en eveil ${level}`}
+            aria-label={`${t("heroBox.setAwakening", "Regler en eveil")} ${displayName} ${level}`}
             disabled={!canEdit || !state.owned || saving}
-            title={canEdit ? `Regler ${hero.name} en eveil ${level}` : "Lecture seule"}
+            title={canEdit ? `${t("heroBox.setAwakening", "Regler en eveil")} ${displayName} ${level}` : t("heroBox.readOnlyShort", "Lecture seule")}
             onClick={() => onAwakening(hero.id, level)}
           >
             <Star className="h-full w-full" />
@@ -2033,20 +2171,21 @@ function HeroLayerCard({
       </div>
 
       <div className="hero-layer-name">
-        <strong>{hero.name}</strong>
+        <strong>{displayName}</strong>
       </div>
     </article>
   );
 }
 
 function GvgView({ session }) {
+  const { t } = usePortalLanguage();
   const [activeGvgView, setActiveGvgView] = useState("current");
   const canUseGvgAdminViews = isAdminSession(session);
 
   const views = [
-    { id: "current", label: "GVG en cours" },
-    { id: "panel", label: "Pilotage", adminOnly: true },
-    { id: "admin", label: "Imports VPS", adminOnly: true },
+    { id: "current", label: "GVG en cours", labelKey: "gvg.current" },
+    { id: "panel", label: "Pilotage", labelKey: "gvg.panel", adminOnly: true },
+    { id: "admin", label: "Imports VPS", labelKey: "gvg.imports", adminOnly: true },
   ];
 
   useEffect(() => {
@@ -2071,7 +2210,7 @@ function GvgView({ session }) {
                 if (!disabled) setActiveGvgView(view.id);
               }}
               disabled={disabled}
-              title={disabled ? "Reserve aux admins et leaders" : view.label}
+              title={disabled ? t("gvg.adminReserved", "Reserve aux admins et leaders") : t(view.labelKey, view.label)}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                 selected
                   ? "bg-violet-500/20 text-violet-100 shadow-[0_0_18px_rgba(168,85,247,0.22)]"
@@ -2080,7 +2219,7 @@ function GvgView({ session }) {
                     : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
               }`}
             >
-              {view.label}
+              {t(view.labelKey, view.label)}
             </button>
           );
         })}
@@ -4648,6 +4787,14 @@ function SettingsView({ session, onLogout }) {
 }
 
 export default function SaasPortal() {
+  return (
+    <PortalLanguageProvider>
+      <SaasPortalContent />
+    </PortalLanguageProvider>
+  );
+}
+
+function SaasPortalContent() {
   const [session, setSession] = useState(() => readStoredPortalSession());
 
   useEffect(() => {

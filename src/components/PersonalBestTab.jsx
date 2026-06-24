@@ -7,12 +7,14 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { getChampionDisplayName, getChampionEnglishName } from "@/lib/championDisplay";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
   filterByGuildScope,
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const PB_SORT_OPTIONS = [
   { id: "top1", label: "Top 1" },
@@ -123,7 +125,18 @@ function buildMemberAwakenings(memberAwakenings) {
   return awakenings;
 }
 
+function getPbChampionDisplayName(championName, championEnglishName, language) {
+  return getChampionDisplayName(
+    {
+      name: championName,
+      "English name": championEnglishName,
+    },
+    language,
+  );
+}
+
 export default function PersonalBestTab({ session }) {
+  const { language, t } = usePortalLanguage();
   const [members, setMembers] = useState([]);
   const [allHeroesData, setAllHeroesData] = useState([]);
   const [pbEntries, setPbEntries] = useState([]);
@@ -181,13 +194,11 @@ export default function PersonalBestTab({ session }) {
             member_awakenings (
               awakening_level,
               champion_id,
-              champions (
-                name
-              )
+              champions (*)
             )
           `)
           .order("watcher_name", { ascending: true }),
-        supabase.from("champions").select("id, name, lord").order("name", { ascending: true }),
+        supabase.from("champions").select("*").order("name", { ascending: true }),
       ]);
 
       if (cancelled) return;
@@ -229,6 +240,7 @@ export default function PersonalBestTab({ session }) {
         (heroesResult.data || []).map((row) => ({
           id: row.id,
           name: row.name,
+          englishName: getChampionEnglishName(row),
           lord: row.lord || "non-lord",
         })),
       );
@@ -262,11 +274,7 @@ export default function PersonalBestTab({ session }) {
           pb_raw,
           champion_id,
           updated_at,
-          champions (
-            id,
-            name,
-            lord
-          )
+          champions (*)
         `)
         .in("member_id", memberIds)
         .order("member_name", { ascending: true })
@@ -289,6 +297,7 @@ export default function PersonalBestTab({ session }) {
           pbRaw: Number(row.pb_raw || 0),
           championId: row.champion_id || null,
           championName: row.champions?.name || "",
+          championEnglishName: getChampionEnglishName(row.champions),
           championLord: row.champions?.lord || "non-lord",
           updatedAt: row.updated_at || null,
         })),
@@ -337,6 +346,7 @@ export default function PersonalBestTab({ session }) {
         pbRaw: Number(entry.pbRaw || 0),
         championId: entry.championId,
         championName: entry.championName,
+        championEnglishName: entry.championEnglishName,
         championLord: entry.championLord || "non-lord",
       };
     });
@@ -373,12 +383,19 @@ export default function PersonalBestTab({ session }) {
 
   const filteredPbHeroResults = useMemo(() => {
     const q = normalizeText(pbHeroSearch);
-    const heroes = allHeroesData.map((hero) => hero.name).filter(Boolean);
+    const heroes = allHeroesData
+      .map((hero) => ({
+        ...hero,
+        displayName: getChampionDisplayName(hero, language),
+      }))
+      .filter((hero) => hero.name);
 
     if (!q) return heroes.slice(0, 20);
 
-    return heroes.filter((hero) => normalizeText(hero).includes(q)).slice(0, 20);
-  }, [pbHeroSearch, allHeroesData]);
+    return heroes
+      .filter((hero) => normalizeText(`${hero.name} ${hero.displayName} ${hero.englishName || ""}`).includes(q))
+      .slice(0, 20);
+  }, [pbHeroSearch, allHeroesData, language]);
 
   const summary = useMemo(() => {
     const rowsWithPb = pbRows.filter((row) => row.top1 > 0);
@@ -415,18 +432,18 @@ export default function PersonalBestTab({ session }) {
       slotIndex: slot.slotIndex,
       currentChampionId: slot.championId,
       currentChampionName: slot.championName || "",
+      currentChampionEnglishName: slot.championEnglishName || "",
       currentPbRaw: Number(slot.pbRaw || 0),
     });
 
-    setPbHeroSearch(slot.championName || "");
+    setPbHeroSearch(getPbChampionDisplayName(slot.championName || "", slot.championEnglishName || "", language));
     setPbRawInput(String(Number(slot.pbRaw || 0)));
     setPbEditDialogOpen(true);
   }
 
-  async function selectPbHero(heroName) {
+  async function selectPbHero(champion) {
     if (!pbSlotToEdit?.entryId) return;
 
-    const champion = allHeroesData.find((hero) => hero.name === heroName);
     if (!champion) return;
     const targetMember = members.find((member) => String(member.id) === String(pbSlotToEdit.memberId));
     const previousHeroName = pbSlotToEdit.currentChampionName || "";
@@ -452,6 +469,7 @@ export default function PersonalBestTab({ session }) {
               ...entry,
               championId: champion.id,
               championName: champion.name,
+              championEnglishName: champion.englishName || "",
               championLord: champion.lord || "non-lord",
               updatedAt: new Date().toISOString(),
             }
@@ -465,10 +483,11 @@ export default function PersonalBestTab({ session }) {
             ...previous,
             currentChampionId: champion.id,
             currentChampionName: champion.name,
+            currentChampionEnglishName: champion.englishName || "",
           }
         : previous,
     );
-    setPbHeroSearch(heroName);
+    setPbHeroSearch(getChampionDisplayName(champion, language));
     void logPortalActivity(session, {
       targetMemberId: pbSlotToEdit.memberId,
       targetName: targetMember?.name || "",
@@ -480,6 +499,7 @@ export default function PersonalBestTab({ session }) {
         slotIndex: pbSlotToEdit.slotIndex,
         previousHeroName,
         nextHeroName: champion.name,
+        nextHeroDisplayName: getChampionDisplayName(champion, language),
         championId: champion.id,
       },
     });
@@ -572,29 +592,29 @@ export default function PersonalBestTab({ session }) {
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100">
               <BarChart3 className="h-4 w-4" />
-              Tableur PB
+              {t("pb.kicker", "Tableur PB")}
             </div>
             <h2 className="mt-4 text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Mes PB
+              {t("pb.title", "Mes PB")}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-300 md:text-base">
-              Classement des meilleurs scores, affis, top 1, top 3 et top 5 de la guilde.
+              {t("pb.description", "Classement des meilleurs scores, affis, top 1, top 3 et top 5 de la guilde.")}
             </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3 xl:w-[600px]">
             <div className="rounded-2xl border border-zinc-800 bg-black/40 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Joueurs</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("pb.players", "Joueurs")}</div>
               <div className="mt-2 text-2xl font-semibold text-zinc-50">{summary.rowCount}</div>
             </div>
             <div className="rounded-2xl border border-emerald-300/20 bg-black/40 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Mon Top 1</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("pb.myTop1", "Mon Top 1")}</div>
               <div className="mt-2 text-2xl font-semibold text-emerald-200">
                 {formatPbAverage(summary.connectedTop1)}
               </div>
             </div>
             <div className="rounded-2xl border border-amber-300/20 bg-black/40 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Top 3 moyen</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("pb.averageTop3", "Top 3 moyen")}</div>
               <div className="mt-2 text-2xl font-semibold text-amber-200">{formatPbAverage(summary.averageTop3)}</div>
             </div>
           </div>
@@ -605,8 +625,8 @@ export default function PersonalBestTab({ session }) {
         <CardHeader className="border-b border-zinc-800 pb-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className="text-lg font-semibold text-zinc-50">Classement PB</div>
-              <div className="text-sm text-zinc-500">Clique une ligne pour le detail, clique une affi pour modifier.</div>
+              <div className="text-lg font-semibold text-zinc-50">{t("pb.ranking", "Classement PB")}</div>
+              <div className="text-sm text-zinc-500">{t("pb.rowHelp", "Clique une ligne pour le detail, clique une affi pour modifier.")}</div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -633,7 +653,7 @@ export default function PersonalBestTab({ session }) {
                   className="rounded-2xl"
                   onClick={() => setPbSortMode(option.id)}
                 >
-                  Trier {option.label}
+                  {t("pb.sort", "Trier")} {option.label}
                 </Button>
               ))}
             </div>
@@ -648,12 +668,12 @@ export default function PersonalBestTab({ session }) {
           ) : null}
 
           {loading ? (
-            <div className="p-8 text-sm text-zinc-400">Chargement des PB...</div>
+            <div className="p-8 text-sm text-zinc-400">{t("pb.loading", "Chargement des PB...")}</div>
           ) : (
             <div className="overflow-x-auto">
               <div className="min-w-[1080px]">
                 <div className="grid grid-cols-[190px_repeat(5,142px)_82px_82px_82px_82px] border-b border-zinc-800 bg-zinc-950/70">
-                  <div className="p-3 text-lg font-semibold text-zinc-50">Nom</div>
+                  <div className="p-3 text-lg font-semibold text-zinc-50">{t("pb.name", "Nom")}</div>
                   {Array.from({ length: 5 }, (_, index) => (
                     <div key={index} className="p-3 text-center text-lg font-semibold text-zinc-50">
                       Affi {index + 1}
@@ -662,7 +682,7 @@ export default function PersonalBestTab({ session }) {
                   <div className="p-3 text-center text-sm font-semibold text-zinc-50">Top 1</div>
                   <div className="p-3 text-center text-sm font-semibold text-zinc-50">Top 3</div>
                   <div className="p-3 text-center text-sm font-semibold text-zinc-50">Top 5</div>
-                  <div className="p-3 text-center text-sm font-semibold text-zinc-50">Date</div>
+                  <div className="p-3 text-center text-sm font-semibold text-zinc-50">{t("pb.date", "Date")}</div>
                 </div>
 
                 {pbRows.map((row, rowIndex) => {
@@ -707,13 +727,18 @@ export default function PersonalBestTab({ session }) {
                           return (
                             <div key={`${row.memberId}-empty-${slotIndex}`} className="p-2">
                               <div className="flex h-[58px] items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-950 text-xs text-zinc-500">
-                                Vide
+                                {t("common.empty", "Vide")}
                               </div>
                             </div>
                           );
                         }
 
                         const isLord = slot.championLord === "lord";
+                        const slotDisplayName = getPbChampionDisplayName(
+                          slot.championName,
+                          slot.championEnglishName,
+                          language,
+                        );
 
                         return (
                           <div key={slot.id} className="p-2">
@@ -737,7 +762,7 @@ export default function PersonalBestTab({ session }) {
                                 {slot.championName ? (
                                   <img
                                     src={getHeroImageUrl(slot.championName)}
-                                    alt={slot.championName}
+                                    alt={slotDisplayName}
                                     className="h-8 w-8 rounded-full object-cover"
                                   />
                                 ) : (
@@ -788,12 +813,12 @@ export default function PersonalBestTab({ session }) {
       >
         <DialogContent className="w-[95vw] !max-w-[1400px] rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
           <DialogHeader>
-            <DialogTitle>Detail PB - {pbSelectedMember?.name || "Membre"}</DialogTitle>
+            <DialogTitle>{t("pb.detail", "Detail PB")} - {pbSelectedMember?.name || "Membre"}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-6">
             <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-              <div className="text-sm text-zinc-400">Profil</div>
+              <div className="text-sm text-zinc-400">{t("home.profile", "Profil")}</div>
               <div className="mt-1 flex items-center gap-2 text-lg font-semibold text-zinc-50">
                 <UserRound className="h-5 w-5" />
                 {pbSelectedMember?.name || "-"}
@@ -808,6 +833,11 @@ export default function PersonalBestTab({ session }) {
                     slot?.championName && pbSelectedMember?.awakenings
                       ? pbSelectedMember.awakenings[slot.championName] ?? -1
                       : -1;
+                  const slotDisplayName = getPbChampionDisplayName(
+                    slot?.championName || "",
+                    slot?.championEnglishName || "",
+                    language,
+                  );
 
                   return (
                     <div key={slot?.id || `detail-slot-${index}`} className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
@@ -819,11 +849,14 @@ export default function PersonalBestTab({ session }) {
                             <div className="flex min-w-0 items-center gap-3">
                               <img
                                 src={getHeroImageUrl(slot.championName)}
-                                alt={slot.championName}
+                                alt={slotDisplayName}
                                 className="h-14 w-14 rounded-full object-cover"
                               />
                               <div className="min-w-0">
-                                <div className="truncate font-medium text-zinc-50">{slot.championName}</div>
+                                <div className="truncate font-medium text-zinc-50">{slotDisplayName}</div>
+                                {language === "en" && slotDisplayName !== slot.championName ? (
+                                  <div className="truncate text-xs text-zinc-500">{slot.championName}</div>
+                                ) : null}
                                 {slot.championLord === "lord" ? (
                                   <Badge className="mt-1 rounded-lg bg-yellow-500/15 text-yellow-300">
                                     <Crown className="mr-1 h-3.5 w-3.5" />
@@ -840,10 +873,10 @@ export default function PersonalBestTab({ session }) {
 
                           <div className="mt-4 space-y-1 text-sm">
                             <div className="text-zinc-400">
-                              Brut : <span className="font-semibold text-zinc-100">{formatPbAverage(Number(slot.pbRaw || 0))}</span>
+                              {t("pb.raw", "Brut")} : <span className="font-semibold text-zinc-100">{formatPbAverage(Number(slot.pbRaw || 0))}</span>
                             </div>
                             <div className="text-zinc-400">
-                              Calcule :{" "}
+                              {t("pb.calculated", "Calcule")} :{" "}
                               <span className="font-semibold text-zinc-100">
                                 {formatPbAverage(getDisplayedPbValue(slot, pbSelectedMember))}
                               </span>
@@ -852,7 +885,7 @@ export default function PersonalBestTab({ session }) {
                         </>
                       ) : (
                         <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-950 p-4 text-sm text-zinc-500">
-                          Aucun heros
+                          {t("pb.noHero", "Aucun heros")}
                         </div>
                       )}
                     </div>
@@ -863,7 +896,7 @@ export default function PersonalBestTab({ session }) {
 
             <div className="flex justify-end">
               <Button className="rounded-2xl" onClick={() => setPbRowDetailOpen(false)}>
-                Fermer
+                {t("common.close", "Fermer")}
               </Button>
             </div>
           </div>
@@ -873,18 +906,18 @@ export default function PersonalBestTab({ session }) {
       <Dialog open={pbEditDialogOpen} onOpenChange={setPbEditDialogOpen}>
         <DialogContent className="max-w-xl rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
           <DialogHeader>
-            <DialogTitle>Modifier PB</DialogTitle>
+            <DialogTitle>{t("pb.editTitle", "Modifier PB")}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <div className="text-sm text-zinc-400">Heros</div>
+              <div className="text-sm text-zinc-400">{t("common.hero", "Heros")}</div>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                 <Input
                   value={pbHeroSearch}
                   onChange={(event) => setPbHeroSearch(event.target.value)}
-                  placeholder="Rechercher un heros..."
+                  placeholder={t("heroBox.searchHero", "Rechercher un heros...")}
                   className="h-11 rounded-2xl border-zinc-700 bg-zinc-900 pl-9 text-zinc-100"
                 />
               </div>
@@ -893,13 +926,18 @@ export default function PersonalBestTab({ session }) {
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                   {filteredPbHeroResults.map((hero) => (
                     <button
-                      key={hero}
+                      key={hero.id || hero.name}
                       type="button"
                       onClick={() => selectPbHero(hero)}
                       className="flex items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 p-3 text-left hover:bg-zinc-800"
                     >
-                      <img src={getHeroImageUrl(hero)} alt={hero} className="h-10 w-10 rounded-full object-cover" />
-                      <div className="truncate text-zinc-100">{hero}</div>
+                      <img src={getHeroImageUrl(hero.name)} alt={hero.displayName} className="h-10 w-10 rounded-full object-cover" />
+                      <div className="min-w-0">
+                        <div className="truncate text-zinc-100">{hero.displayName}</div>
+                        {language === "en" && hero.displayName !== hero.name ? (
+                          <div className="truncate text-xs text-zinc-500">{hero.name}</div>
+                        ) : null}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -907,7 +945,7 @@ export default function PersonalBestTab({ session }) {
             </div>
 
             <div className="space-y-2">
-              <div className="text-sm text-zinc-400">PB brut</div>
+              <div className="text-sm text-zinc-400">{t("pb.raw", "PB brut")}</div>
               <Input
                 type="text"
                 inputMode="decimal"
@@ -929,11 +967,11 @@ export default function PersonalBestTab({ session }) {
                   setPbRawInput("");
                 }}
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </Button>
 
               <Button className="rounded-2xl" onClick={savePbEdit}>
-                Enregistrer
+                {t("common.save", "Enregistrer")}
               </Button>
             </div>
           </div>

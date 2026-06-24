@@ -1,0 +1,281 @@
+import React, { createContext, useContext, useMemo, useState } from "react";
+
+const PORTAL_LANGUAGE_STORAGE_KEY = "portal_language";
+
+export const PORTAL_LANGUAGES = [
+  { code: "fr", label: "Francais", shortLabel: "FR", flagLabel: "France" },
+  { code: "en", label: "English", shortLabel: "EN", flagLabel: "United Kingdom" },
+];
+
+const PortalLanguageContext = createContext({
+  language: "fr",
+  setLanguage: () => {},
+  currentLanguage: PORTAL_LANGUAGES[0],
+  t: (_key, fallback) => fallback || "",
+});
+
+const PORTAL_TRANSLATIONS = {
+  "nav.home": "Home",
+  "nav.heroBox": "My heroes",
+  "nav.soulStones": "Soul stones",
+  "nav.demonMonsters": "Demonic monsters",
+  "nav.personalBest": "My PB",
+  "nav.defenses": "My defenses",
+  "nav.gvg": "GVG",
+  "nav.runSearch": "Run search",
+  "nav.settings": "Settings",
+  "nav.guildManagement": "Guild management",
+  "nav.adminDefenses": "Defense management",
+  "nav.intersaison": "Off-season",
+  "nav.runAdd": "Add run",
+  "nav.runEdit": "Edit run",
+  "nav.templates": "Add hero",
+  "nav.guilds": "Guilds",
+  "nav.billing": "Licenses",
+  "nav.launcher": "Launcher",
+  "nav.validation": "Validation",
+  "nav.logs": "Logs",
+  "nav.playerAccess": "Player access",
+  "nav.admin": "Admin",
+  "portal.label": "Portal",
+  "portal.apiReady": "VPS API ready",
+  "home.playerHome": "Player home",
+  "home.guild": "Guild",
+  "home.role": "Role",
+  "home.profile": "Profile",
+  "home.notValidated": "Not validated",
+  "home.welcome": "Welcome",
+  "home.description": "Manage your tools, track your activity and prepare your battles for glory.",
+  "home.profileCard": "Player profile",
+  "home.heroesCard": "Heroes",
+  "home.myProfile.title": "My profile",
+  "home.myProfile.description": "Manage your personal information and preferences.",
+  "home.heroBox.title": "My heroes",
+  "home.heroBox.description": "Open your collection and manage your heroes.",
+  "home.soulStones.title": "Soul stones",
+  "home.soulStones.description": "Manage and optimize your soul stones.",
+  "home.demonMonsters.title": "Demonic monsters",
+  "home.demonMonsters.description": "Fight dark forces and tame them.",
+  "home.personalBest.title": "My PB",
+  "home.personalBest.description": "Check your records and personal performance.",
+  "home.defenses.title": "My defenses",
+  "home.defenses.description": "Configure and strengthen your defenses.",
+  "heroBox.title": "My heroes",
+  "heroBox.description": "Collection powered by Supabase, with layers served by the VPS and awakenings linked to champions.",
+  "heroBox.statsLabel": "Collection statistics",
+  "heroBox.owned": "Owned",
+  "heroBox.legendaryAwakenings": "Leg. awakenings",
+  "heroBox.legendaryA5": "A5 leg.",
+  "heroBox.viewedBox": "Viewed box",
+  "heroBox.selectPlayer": "Select a player",
+  "heroBox.searchPlayer": "Search player",
+  "heroBox.editAllowed": "Editing allowed for this box.",
+  "heroBox.readOnly": "Read only: you can view this box, but only your own box or admins can edit it.",
+  "heroBox.sync": "Syncing Supabase...",
+  "heroBox.searchHero": "Search hero",
+  "heroBox.filterHeroes": "Filter heroes",
+  "heroBox.filterAll": "All",
+  "heroBox.filterOwned": "Owned",
+  "heroBox.filterLocked": "Locked",
+  "heroBox.rarityFilters": "Rarity filters",
+  "heroBox.roleFilters": "Role filters",
+  "heroBox.factionFilters": "Faction filters",
+  "heroBox.latest": "Latest releases",
+  "heroBox.latestTitle": "Show the latest in-game releases",
+  "heroBox.bulkSaving": "Updating A5...",
+  "heroBox.bulkApply": "Set this filter A5",
+  "heroBox.bulkDone": "Filter already A5",
+  "heroBox.latestBadge": "Latest in-game releases",
+  "heroBox.loadingImages": "Loading thumbnails",
+  "heroBox.readOnlyShort": "Read only",
+  "heroBox.displayedHeroes": "heroes displayed",
+  "heroBox.markOwned": "Mark as owned",
+  "heroBox.awakening": "awakening",
+  "heroBox.notOwned": "not owned",
+  "heroBox.setAwakening": "Set awakening",
+  "heroBox.allRoles": "All roles",
+  "heroBox.allRolesShort": "All",
+  "heroBox.allFactions": "All factions",
+  "heroBox.allFactionsShort": "All",
+  "rarity.legendary": "Legendary",
+  "rarity.epic": "Epic",
+  "rarity.rare": "Rare",
+  "rarity.ordinary": "Ordinary",
+  "rarity.basic": "Basic",
+  "gvg.current": "Current GVG",
+  "gvg.panel": "Control",
+  "gvg.imports": "VPS imports",
+  "gvg.adminReserved": "Reserved for admins and leaders",
+  "gvg.chooseGuild": "Choose the guild to display.",
+  "gvg.selectedGuild": "Selected guild",
+  "gvg.changeGuild": "Change guild",
+  "gvg.loading": "Loading GVG...",
+  "common.loading": "Loading...",
+  "common.loadingParenthesis": "(loading...)",
+  "common.search": "Search",
+  "common.reset": "Reset",
+  "common.save": "Save",
+  "common.cancel": "Cancel",
+  "common.close": "Close",
+  "common.none": "None",
+  "common.empty": "Empty",
+  "common.ready": "Ready",
+  "common.edit": "Edit",
+  "common.delete": "Delete",
+  "common.add": "Add",
+  "common.remove": "Remove",
+  "common.all": "All",
+  "common.position": "Position",
+  "common.direction": "Direction",
+  "common.hero": "Hero",
+  "common.heroes": "Heroes",
+  "run.search.title": "Run search",
+  "run.add.title": "Add run",
+  "run.edit.title": "Edit run",
+  "run.helper": "Click up to 5 squares, then enter hero and direction.",
+  "run.mapReference": "Reference",
+  "run.rows": "rows",
+  "run.columns": "columns",
+  "run.clickGrid": "Click a square in the grid.",
+  "run.startTyping": "Start typing...",
+  "run.emptyHero": "(hero)",
+  "run.emptyDirection": "(dir)",
+  "run.editor": "Edit",
+  "run.currentSelection": "Current selection",
+  "run.results": "Results",
+  "run.noResult": "No result displayed.",
+  "run.searching": "Searching...",
+  "run.selectedMap": "Map",
+  "run.idPlaceholder": "Run ID",
+  "run.load": "Load",
+  "run.update": "Update",
+  "run.updating": "Updating...",
+  "run.saving": "Saving...",
+  "run.deleting": "Deleting...",
+  "run.delete": "Delete",
+  "run.info": "Run information",
+  "run.youtubeLink": "YouTube link",
+  "run.attackCode": "Attack code",
+  "run.comment": "Comment",
+  "run.scopeNoticeAdd": "The run will be saved in the connected space's bank.",
+  "run.scopeNoticeEdit": "Loading, editing and deleting are limited to the connected space's bank.",
+  "run.botSearch": "Bot command search",
+  "run.botSearchHelp": "Paste the command generated by their bot, then refine it if needed.",
+  "run.launchSearch": "Start search",
+  "pb.title": "My PB",
+  "pb.kicker": "PB spreadsheet",
+  "pb.description": "Ranking of the best scores, affis, top 1, top 3 and top 5 in the guild.",
+  "pb.players": "Players",
+  "pb.myTop1": "My Top 1",
+  "pb.averageTop3": "Average Top 3",
+  "pb.ranking": "PB ranking",
+  "pb.rowHelp": "Click a row for details, click an affi to edit.",
+  "pb.sort": "Sort",
+  "pb.name": "Name",
+  "pb.date": "Date",
+  "pb.loading": "Loading PB...",
+  "pb.detail": "PB detail",
+  "pb.raw": "Raw PB",
+  "pb.calculated": "Calculated",
+  "pb.noHero": "No hero",
+  "pb.editTitle": "Edit PB",
+  "pb.rawPlaceholder": "Ex: 125.5",
+  "defenses.title": "My defenses",
+  "defenses.loading": "Loading your defenses...",
+  "defenses.playerSpace": "Player space",
+  "defenses.description": "Choose your two defenses and check whether your current box can play them.",
+  "defenses.maxScore": "Max score",
+  "defenses.noProfile": "No player profile found for this session.",
+  "defenses.openEdit": "editing open",
+  "defenses.player": "Player",
+  "defenses.noPlayer": "No player found.",
+  "defenses.choose": "Choose a defense",
+  "defenses.search": "Search defense...",
+  "defenses.duplicates": "Hero duplicates are flagged before assignment.",
+  "defenses.noDuplicate": "No hero duplicate",
+  "defenses.duplicate": "Duplicate",
+  "defenses.defense": "Defense",
+  "defenses.noneSelected": "No defense selected",
+  "defenses.selectBelow": "Select a defense from the list below to fill this slot.",
+  "defenses.info": "Defense info",
+  "defenses.heroesAwakenings": "Heroes / Awakenings",
+  "defenses.missingHeroes": "Missing heroes",
+  "defenses.conditions": "Conditions",
+  "defenses.awakeningScore": "Awakening score",
+  "defenses.noImage": "No image",
+  "validation.title": "GVG recognition validation",
+  "validation.targetGuild": "Target guild",
+  "validation.scopeHelp": "This screen only shows jobs from the selected guild.",
+  "validation.loadJobs": "Load jobs",
+  "validation.loadingJobs": "Loading...",
+  "validation.jobs": "Available jobs",
+  "validation.noHiddenJob": "No hidden out-of-guild job.",
+  "validation.noJob": "No job",
+  "validation.loaded": "loaded.",
+  "validation.control": "Defense check",
+  "validation.selectedDefense": "Selected defense",
+  "validation.selectJob": "Select a job",
+  "validation.selectJobHelp": "Load VPS jobs, pick a completed recognition, then check all 48 defenses before import.",
+  "validation.payloadLoading": "Loading payload...",
+  "validation.noImage": "No image available.",
+  "validation.recognizedComp": "Recognized composition",
+  "validation.compHelp": "5 slots required. Editing a line puts the defense back into pending validation.",
+  "validation.validateOne": "Validate this defense",
+  "validation.validateAll": "Validate all",
+  "validation.import": "Import",
+  "validation.importing": "Importing...",
+  "validation.complete": "Complete",
+  "validation.toFill": "To fill",
+  "validation.heroName": "Hero name",
+  "validation.noPayloadItem": "No item in this payload.",
+  "settings.logout": "Logout",
+};
+
+function translate(language, key, fallback) {
+  if (language !== "en") return fallback || key;
+  return PORTAL_TRANSLATIONS[key] || fallback || key;
+}
+
+function readStoredLanguage() {
+  if (typeof window === "undefined") return "fr";
+
+  try {
+    const storedLanguage = window.localStorage.getItem(PORTAL_LANGUAGE_STORAGE_KEY);
+    return PORTAL_LANGUAGES.some((language) => language.code === storedLanguage) ? storedLanguage : "fr";
+  } catch {
+    return "fr";
+  }
+}
+
+export function PortalLanguageProvider({ children }) {
+  const [language, setLanguageState] = useState(readStoredLanguage);
+
+  function setLanguage(nextLanguage) {
+    const normalizedLanguage = PORTAL_LANGUAGES.some((item) => item.code === nextLanguage) ? nextLanguage : "fr";
+    setLanguageState(normalizedLanguage);
+
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(PORTAL_LANGUAGE_STORAGE_KEY, normalizedLanguage);
+      } catch {
+        // Local storage can be unavailable in private or embedded contexts.
+      }
+    }
+  }
+
+  const value = useMemo(
+    () => ({
+      language,
+      setLanguage,
+      currentLanguage: PORTAL_LANGUAGES.find((item) => item.code === language) || PORTAL_LANGUAGES[0],
+      t: (key, fallback) => translate(language, key, fallback),
+    }),
+    [language],
+  );
+
+  return <PortalLanguageContext.Provider value={value}>{children}</PortalLanguageContext.Provider>;
+}
+
+export function usePortalLanguage() {
+  return useContext(PortalLanguageContext);
+}

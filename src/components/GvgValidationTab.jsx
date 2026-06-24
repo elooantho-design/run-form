@@ -4,7 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
+import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { getGvgGuildLabel, getVisibleGvgGuildCodes, normalizeGvgGuildCode } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const DIRECTIONS = ["N", "S", "E", "O"];
 const DEFENSE_SLOT_COUNT = 5;
@@ -219,6 +221,7 @@ function isGuildAllowed(guild, visibleGuilds) {
 
 export default function GvgValidationTab({ session }) {
   const apiBase = useMemo(() => getApiBase(), []);
+  const { language, t } = usePortalLanguage();
   const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
 
   const [guild, setGuild] = useState(() => getDefaultValidationGuild(session));
@@ -232,6 +235,7 @@ export default function GvgValidationTab({ session }) {
   const [deletingJobId, setDeletingJobId] = useState(null);
   const [message, setMessage] = useState("");
   const [championPool, setChampionPool] = useState([]);
+  const [championDisplayMap, setChampionDisplayMap] = useState(() => new Map());
 
   const visibleJobs = useMemo(
     () => jobs.filter((job) => isJobForGuild(job, guild)),
@@ -289,12 +293,13 @@ export default function GvgValidationTab({ session }) {
       try {
         const { data, error } = await supabase
           .from("champions")
-          .select("name")
+          .select("*")
           .order("name", { ascending: true });
 
         if (error) throw error;
         if (!cancelled) {
           setChampionPool((data || []).map((row) => row.name).filter(Boolean));
+          setChampionDisplayMap(buildChampionDisplayMap(data || []));
         }
       } catch (error) {
         console.warn("champions autocomplete unavailable:", error);
@@ -570,7 +575,7 @@ export default function GvgValidationTab({ session }) {
         <CardHeader className="border-b border-zinc-800">
           <CardTitle className="flex items-center gap-2 text-lg text-zinc-100">
             <SearchCheck className="h-5 w-5 text-cyan-300" />
-            Validation reconnaissance GVG
+            {t("validation.title", "Validation reconnaissance GVG")}
           </CardTitle>
         </CardHeader>
 
@@ -578,9 +583,9 @@ export default function GvgValidationTab({ session }) {
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="text-sm text-zinc-400">Guilde ciblee</div>
+                <div className="text-sm text-zinc-400">{t("validation.targetGuild", "Guilde ciblee")}</div>
                 <div className="mt-1 text-xs text-zinc-500">
-                  L'ecran ne montre que les jobs de la guilde selectionnee.
+                  {t("validation.scopeHelp", "L'ecran ne montre que les jobs de la guilde selectionnee.")}
                 </div>
               </div>
 
@@ -592,7 +597,7 @@ export default function GvgValidationTab({ session }) {
                 onClick={loadJobs}
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
-                {loadingJobs ? "Chargement..." : "Charger les jobs"}
+                {loadingJobs ? t("validation.loadingJobs", "Chargement...") : t("validation.loadJobs", "Charger les jobs")}
               </Button>
             </div>
 
@@ -627,9 +632,11 @@ export default function GvgValidationTab({ session }) {
               <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-zinc-100">Jobs disponibles</div>
+                    <div className="text-sm font-semibold text-zinc-100">{t("validation.jobs", "Jobs disponibles")}</div>
                     <div className="text-xs text-zinc-500">
-                      {hiddenJobsCount > 0 ? `${hiddenJobsCount} job(s) hors ${guild} masques.` : "Aucun job hors guilde affiche."}
+                      {hiddenJobsCount > 0
+                        ? `${hiddenJobsCount} job(s) hors ${guild} masques.`
+                        : t("validation.noHiddenJob", "Aucun job hors guilde affiche.")}
                     </div>
                   </div>
                   <Shield className="h-5 w-5 text-zinc-500" />
@@ -685,7 +692,7 @@ export default function GvgValidationTab({ session }) {
                     ))
                   ) : (
                     <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm text-zinc-400">
-                      Aucun job {guild} charge.
+                      {t("validation.noJob", "Aucun job")} {guild} {t("validation.loaded", "charge.")}
                     </div>
                   )}
                 </div>
@@ -695,7 +702,7 @@ export default function GvgValidationTab({ session }) {
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-zinc-100">Controle des defenses</div>
+                      <div className="text-sm font-semibold text-zinc-100">{t("validation.control", "Controle des defenses")}</div>
                       <div className="text-xs text-zinc-500">
                         {validatedCount}/{items.length} validees · {editedCount} corrigee(s)
                         {suspiciousCount ? ` · ${suspiciousCount} a verifier` : ""}
@@ -753,21 +760,21 @@ export default function GvgValidationTab({ session }) {
                 <div className="flex min-h-[480px] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/60 p-8 text-center">
                   <SearchCheck className="h-10 w-10 text-zinc-600" />
                   <div className="mt-4 text-lg font-semibold text-zinc-100">
-                    Selectionne un job {guild}
+                    {t("validation.selectJob", "Selectionne un job")} {guild}
                   </div>
                   <div className="mt-2 max-w-md text-sm text-zinc-400">
-                    Charge les jobs VPS, choisis une reconnaissance terminee, puis controle les 48 defenses avant import.
+                    {t("validation.selectJobHelp", "Charge les jobs VPS, choisis une reconnaissance terminee, puis controle les 48 defenses avant import.")}
                   </div>
                 </div>
               ) : loadingPayload ? (
                 <div className="flex min-h-[480px] items-center justify-center text-sm text-zinc-400">
-                  Chargement du payload...
+                  {t("validation.payloadLoading", "Chargement du payload...")}
                 </div>
               ) : selectedItem ? (
                 <div className="space-y-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm text-zinc-500">Defense selectionnee</div>
+                      <div className="text-sm text-zinc-500">{t("validation.selectedDefense", "Defense selectionnee")}</div>
                       <h2 className="mt-1 text-2xl font-semibold text-zinc-100">
                         {getDefenseLabel(selectedItem)}
                       </h2>
@@ -790,7 +797,7 @@ export default function GvgValidationTab({ session }) {
                         onClick={validateSelected}
                       >
                         <CheckCircle2 className="mr-2 h-4 w-4" />
-                        Valider cette defense
+                        {t("validation.validateOne", "Valider cette defense")}
                       </Button>
                       <Button
                         type="button"
@@ -798,7 +805,7 @@ export default function GvgValidationTab({ session }) {
                         className="rounded-2xl border-zinc-700 text-zinc-200"
                         onClick={validateAll}
                       >
-                        Tout valider
+                        {t("validation.validateAll", "Tout valider")}
                       </Button>
                       <Button
                         type="button"
@@ -807,7 +814,7 @@ export default function GvgValidationTab({ session }) {
                         onClick={importValidated}
                       >
                         <UploadCloud className="mr-2 h-4 w-4" />
-                        {importing ? "Import..." : "Importer"}
+                        {importing ? t("validation.importing", "Import...") : t("validation.import", "Importer")}
                       </Button>
                     </div>
                   </div>
@@ -822,7 +829,7 @@ export default function GvgValidationTab({ session }) {
                         />
                       ) : (
                         <div className="flex min-h-[360px] items-center justify-center text-sm text-zinc-500">
-                          Aucune image disponible.
+                          {t("validation.noImage", "Aucune image disponible.")}
                         </div>
                       )}
                     </div>
@@ -830,9 +837,9 @@ export default function GvgValidationTab({ session }) {
                     <div className="rounded-2xl border border-zinc-800 bg-zinc-950/75 p-4">
                       <div className="mb-4 flex items-center justify-between gap-3">
                         <div>
-                          <div className="text-sm font-semibold text-zinc-100">Composition reconnue</div>
+                          <div className="text-sm font-semibold text-zinc-100">{t("validation.recognizedComp", "Composition reconnue")}</div>
                           <div className="text-xs text-zinc-500">
-                            5 slots obligatoires. Modifier une ligne remet la defense en attente de validation.
+                            {t("validation.compHelp", "5 slots obligatoires. Modifier une ligne remet la defense en attente de validation.")}
                           </div>
                         </div>
                         <Edit3 className="h-5 w-5 text-zinc-500" />
@@ -864,11 +871,11 @@ export default function GvgValidationTab({ session }) {
                                 Slot {heroIndex + 1}
                               </span>
                               {isHeroSlotComplete(hero) ? (
-                                <span className="text-emerald-300">Complet</span>
+                                <span className="text-emerald-300">{t("validation.complete", "Complet")}</span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 text-amber-200">
                                   <AlertTriangle className="h-3.5 w-3.5" />
-                                  A remplir
+                                  {t("validation.toFill", "A remplir")}
                                 </span>
                               )}
                             </div>
@@ -878,8 +885,13 @@ export default function GvgValidationTab({ session }) {
                               onChange={(event) => updateHero(heroIndex, "champion", event.target.value)}
                               list="gvg-validation-heroes"
                               className="rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-cyan-300/80"
-                              placeholder="Nom du heros"
+                              placeholder={t("validation.heroName", "Nom du heros")}
                             />
+                            {language === "en" && hero.champion ? (
+                              <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-xs text-zinc-300">
+                                EN: {translateChampionName(hero.champion, championDisplayMap, language)}
+                              </div>
+                            ) : null}
 
                             <div className="grid grid-cols-2 gap-2">
                               <input
@@ -911,7 +923,7 @@ export default function GvgValidationTab({ session }) {
                 </div>
               ) : (
                 <div className="flex min-h-[480px] items-center justify-center text-sm text-zinc-400">
-                  Aucun item dans ce payload.
+                  {t("validation.noPayloadItem", "Aucun item dans ce payload.")}
                 </div>
               )}
             </div>
