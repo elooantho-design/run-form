@@ -3,6 +3,7 @@ import { Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
 
@@ -76,10 +77,10 @@ function isJobExpired(job) {
   return timestamp !== null && Date.now() - timestamp > JOB_STALE_MS;
 }
 
-function getJobAgeLabel(job) {
+function getJobAgeLabel(job, t) {
   const timestamp = getJobTimestamp(job);
-  if (timestamp === null) return "Age inconnu";
-  return isJobExpired(job) ? "Caduc +48h" : "Valide -48h";
+  if (timestamp === null) return t("gvgAdmin.unknownAge", "Age inconnu");
+  return isJobExpired(job) ? t("gvgAdmin.expired48h", "Caduc +48h") : t("gvgAdmin.valid48h", "Valide -48h");
 }
 
 function getJobTone(job) {
@@ -91,6 +92,7 @@ function getJobTone(job) {
 }
 
 export default function GvgAdminTab({ session } = {}) {
+  const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
 
@@ -455,12 +457,12 @@ export default function GvgAdminTab({ session } = {}) {
     <div className="space-y-6">
       <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
         <CardHeader className="border-b border-zinc-800">
-          <CardTitle className="text-lg text-zinc-100">Admin GVG</CardTitle>
+          <CardTitle className="text-lg text-zinc-100">{t("gvgAdmin.title", "Admin GVG")}</CardTitle>
         </CardHeader>
 
         <CardContent className="space-y-6 p-4 md:p-6">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
-            <div className="text-sm text-zinc-400">Guilde ciblee</div>
+            <div className="text-sm text-zinc-400">{t("gvgAdmin.targetGuild", "Guilde ciblee")}</div>
 
             <div className="mt-3 flex flex-wrap gap-3">
                 {visibleGuilds.map((item) => (
@@ -482,7 +484,7 @@ export default function GvgAdminTab({ session } = {}) {
                 disabled={loadingImport || loadingReset || !selectedGuildAllowed}
                 onClick={handleReset}
               >
-                {loadingReset ? "Reset..." : `Reset ${getGvgGuildLabel(guild)}`}
+                {loadingReset ? t("gvgAdmin.resetting", "Reset...") : `${t("gvgAdmin.reset", "Reset")} ${getGvgGuildLabel(guild)}`}
               </Button>
             </div>
           </div>
@@ -490,10 +492,10 @@ export default function GvgAdminTab({ session } = {}) {
           <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/5 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-cyan-100">Jobs VPS</div>
+                <div className="text-sm font-semibold text-cyan-100">{t("gvgAdmin.vpsJobs", "Jobs VPS")}</div>
                 <div className="text-xs text-zinc-400">
-                  Captures envoyees par les launchers joueurs et traitees cote serveur.
-                  {hiddenServerJobsCount > 0 ? ` ${hiddenServerJobsCount} job(s) hors ${getGvgGuildLabel(guild)} masques.` : ""}
+                  {t("gvgAdmin.vpsJobsHelp", "Captures envoyees par les launchers joueurs et traitees cote serveur.")}
+                  {hiddenServerJobsCount > 0 ? ` ${hiddenServerJobsCount} ${t("gvgAdmin.hiddenJobs", "job(s) hors guilde masques")}.` : ""}
                 </div>
               </div>
 
@@ -504,7 +506,7 @@ export default function GvgAdminTab({ session } = {}) {
                 disabled={loadingJobs || !selectedGuildAllowed}
                 onClick={loadServerJobs}
               >
-                {loadingJobs ? "Chargement..." : "Rafraichir"}
+                {loadingJobs ? t("common.loading", "Chargement...") : t("common.refresh", "Rafraichir")}
               </Button>
             </div>
 
@@ -521,12 +523,12 @@ export default function GvgAdminTab({ session } = {}) {
                           {job.guild} · {job.mode?.toUpperCase()} · {job.side || "-"}
                         </div>
                         <div className="mt-1 text-xs text-zinc-400">
-                          {job.job_id} · {formatDate(job.created_at)} · {job.files_count} captures · {job.size_mb} Mo
+                          {job.job_id} · {formatDate(job.created_at)} · {job.files_count} {t("gvgAdmin.captures", "captures")} · {job.size_mb} Mo
                         </div>
                         <div className="mt-2 text-xs text-zinc-300">
-                          Etat : <span className="font-semibold">{job.state}</span>
+                          {t("gvgAdmin.state", "Etat")} : <span className="font-semibold">{job.state}</span>
                           {job.processing?.summary?.reco_ok !== undefined
-                            ? ` · Reco OK : ${job.processing.summary.reco_ok}/${job.processing.summary.captures}`
+                            ? ` · ${t("gvgAdmin.recoOk", "Reco OK")} : ${job.processing.summary.reco_ok}/${job.processing.summary.captures}`
                             : ""}
                         </div>
                         <div className={`mt-2 inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${
@@ -534,7 +536,7 @@ export default function GvgAdminTab({ session } = {}) {
                             ? "border-red-400/40 bg-red-500/15 text-red-200"
                             : "border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
                         }`}>
-                          {getJobAgeLabel(job)}
+                          {getJobAgeLabel(job, t)}
                         </div>
                       </div>
 
@@ -548,7 +550,7 @@ export default function GvgAdminTab({ session } = {}) {
                         }
                         onClick={() => importServerJob(job)}
                       >
-                        {jobImportingId === getJobId(job) ? "Import..." : `Importer dans ${getGvgGuildLabel(guild)}`}
+                        {jobImportingId === getJobId(job) ? t("gvgAdmin.importing", "Import...") : `${t("gvgAdmin.importInto", "Importer dans")} ${getGvgGuildLabel(guild)}`}
                       </Button>
                       <Button
                         type="button"
@@ -556,17 +558,17 @@ export default function GvgAdminTab({ session } = {}) {
                         variant="outline"
                         disabled={jobDeletingId === getJobId(job)}
                         onClick={() => deleteServerJob(job)}
-                        title="Supprimer ce probe du serveur"
+                        title={t("gvgAdmin.deleteProbeTitle", "Supprimer ce probe du serveur")}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
-                        {jobDeletingId === getJobId(job) ? "Suppression..." : "Supprimer"}
+                        {jobDeletingId === getJobId(job) ? t("gvgAdmin.deleting", "Suppression...") : t("common.delete", "Supprimer")}
                       </Button>
                     </div>
                   </div>
                 ))
               ) : (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
-                  Aucun job charge pour {getGvgGuildLabel(guild)}.
+                  {t("gvgAdmin.noJobLoaded", "Aucun job charge pour")} {getGvgGuildLabel(guild)}.
                 </div>
               )}
             </div>
@@ -574,7 +576,7 @@ export default function GvgAdminTab({ session } = {}) {
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
             <div className="text-sm text-zinc-400">
-              Import manuel JSON ennemi
+              {t("gvgAdmin.manualEnemyJson", "Import manuel JSON ennemi")}
             </div>
 
             <textarea
@@ -590,7 +592,7 @@ export default function GvgAdminTab({ session } = {}) {
               disabled={loadingImport || loadingReset || !selectedGuildAllowed}
               onClick={handleImport}
             >
-              {loadingImport ? "Import en cours..." : `Importer ${getGvgGuildLabel(guild)}`}
+              {loadingImport ? t("gvgAdmin.importInProgress", "Import en cours...") : `${t("gvgAdmin.import", "Importer")} ${getGvgGuildLabel(guild)}`}
             </Button>
           </div>
 
@@ -602,7 +604,7 @@ export default function GvgAdminTab({ session } = {}) {
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
             <div className="text-sm text-zinc-300">
-              Upload manuel des images GVG
+              {t("gvgAdmin.manualImageUpload", "Upload manuel des images GVG")}
             </div>
 
             <input
@@ -615,7 +617,7 @@ export default function GvgAdminTab({ session } = {}) {
             />
 
             {uploadingImages ? (
-              <div className="text-sm text-zinc-400">Upload en cours...</div>
+              <div className="text-sm text-zinc-400">{t("gvgAdmin.uploading", "Upload en cours...")}</div>
             ) : null}
 
             {uploadResult ? (
@@ -627,14 +629,14 @@ export default function GvgAdminTab({ session } = {}) {
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
             <div className="mb-2 text-sm text-zinc-400">
-              Import groupes identiques
+              {t("gvgAdmin.importIdenticalGroups", "Import groupes identiques")}
             </div>
 
             <textarea
               value={groupJson}
               onChange={(e) => setGroupJson(e.target.value)}
               className="h-40 w-full rounded-xl border border-zinc-700 bg-zinc-900 p-2 text-xs text-zinc-200"
-              placeholder='Colle ici ton JSON "map" des groupes'
+              placeholder={t("gvgAdmin.groupJsonPlaceholder", 'Colle ici ton JSON "map" des groupes')}
             />
 
             <Button
@@ -644,19 +646,19 @@ export default function GvgAdminTab({ session } = {}) {
               disabled={!selectedGuildAllowed}
               onClick={handleImportGroups}
             >
-              Import groupes
+              {t("gvgAdmin.importGroups", "Import groupes")}
             </Button>
           </div>
 
           <div className="rounded-2xl border-2 border-red-500/60 bg-red-500/5 p-5 text-center">
             <div className="text-sm font-semibold tracking-wide text-red-300">
-              MODE ALLIE
+              {t("gvgAdmin.allyMode", "MODE ALLIE")}
             </div>
           </div>
 
           <div className="rounded-2xl border border-red-500/40 bg-red-500/5 p-4">
             <div className="text-sm text-red-300">
-              Import manuel JSON allie
+              {t("gvgAdmin.manualAllyJson", "Import manuel JSON allie")}
             </div>
 
             <textarea
@@ -672,7 +674,7 @@ export default function GvgAdminTab({ session } = {}) {
               disabled={loadingImport || !selectedGuildAllowed}
               onClick={handleImportAlly}
             >
-              {loadingImport ? "Import allie..." : `Importer ALLIE ${getGvgGuildLabel(guild)}`}
+              {loadingImport ? t("gvgAdmin.importingAlly", "Import allie...") : `${t("gvgAdmin.importAlly", "Importer ALLIE")} ${getGvgGuildLabel(guild)}`}
             </Button>
           </div>
         </CardContent>

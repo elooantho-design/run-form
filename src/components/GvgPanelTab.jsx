@@ -7,6 +7,7 @@ import {
   isPaladinGuildCode,
   isPaladinSession,
 } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 function normalizeGuildInput(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24);
@@ -129,6 +130,7 @@ function normalizeDir(dir) {
 }
 
 export default function GvgPanelTab({ session: portalSession } = {}) {
+  const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const dashboardSession = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -517,8 +519,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "push") {
     return {
-      label: "Push base",
-      title: "La defense a ete envoyee dans la base definitive.",
+      label: t("gvgPanel.recordStatePush", "Push base"),
+      title: t("gvgPanel.recordStatePushTitle", "La defense a ete envoyee dans la base definitive."),
       badgeClass: "border-purple-400 bg-purple-500/15 text-purple-100",
       cardClass: "border-purple-400/70 bg-purple-500/10",
     };
@@ -526,8 +528,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "record") {
     return {
-      label: "YouTube OK",
-      title: "La video YouTube est liee a cette defense.",
+      label: t("gvgPanel.recordStateYoutubeOk", "YouTube OK"),
+      title: t("gvgPanel.recordStateYoutubeOkTitle", "La video YouTube est liee a cette defense."),
       badgeClass: "border-emerald-400 bg-emerald-500/15 text-emerald-100",
       cardClass: "border-emerald-500/70 bg-emerald-500/10",
     };
@@ -535,8 +537,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "a_record" && uploadStatus === "youtube_error") {
     return {
-      label: "Erreur YouTube",
-      title: upload?.item?.youtube_error || "Upload YouTube en erreur.",
+      label: t("gvgPanel.recordStateYoutubeError", "Erreur YouTube"),
+      title: upload?.item?.youtube_error || t("gvgPanel.recordStateYoutubeErrorTitle", "Upload YouTube en erreur."),
       badgeClass: "border-red-400 bg-red-500/15 text-red-100",
       cardClass: "border-red-500/70 bg-red-500/10",
     };
@@ -544,8 +546,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "a_record" && uploadStatus === "youtube_uploading") {
     return {
-      label: "Upload YouTube...",
-      title: "La video est en cours d'envoi sur YouTube.",
+      label: t("gvgPanel.recordStateYoutubeUploading", "Upload YouTube..."),
+      title: t("gvgPanel.recordStateYoutubeUploadingTitle", "La video est en cours d'envoi sur YouTube."),
       badgeClass: "border-blue-400 bg-blue-500/15 text-blue-100",
       cardClass: "border-blue-500/70 bg-blue-500/10",
     };
@@ -553,8 +555,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "a_record" && uploadStatus === "youtube_uploaded") {
     return {
-      label: "YouTube VPS OK",
-      title: "Le VPS a recu le lien YouTube; rafraichis pour synchroniser Supabase.",
+      label: t("gvgPanel.recordStateYoutubeVpsOk", "YouTube VPS OK"),
+      title: t("gvgPanel.recordStateYoutubeVpsOkTitle", "Le VPS a recu le lien YouTube; rafraichis pour synchroniser Supabase."),
       badgeClass: "border-emerald-400 bg-emerald-500/15 text-emerald-100",
       cardClass: "border-emerald-500/70 bg-emerald-500/10",
     };
@@ -562,8 +564,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "a_record" && isRecordVideoReceived(upload)) {
     return {
-      label: "Video VPS recue",
-      title: `Video recue par le VPS (${upload.session?.session_id || "session record"}).`,
+      label: t("gvgPanel.recordStateVpsReceived", "Video VPS recue"),
+      title: `${t("gvgPanel.recordStateVpsReceivedTitle", "Video recue par le VPS")} (${upload.session?.session_id || "session record"}).`,
       badgeClass: "border-cyan-400 bg-cyan-500/15 text-cyan-100",
       cardClass: "border-cyan-400/70 bg-cyan-500/10",
     };
@@ -571,8 +573,8 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "a_record") {
     return {
-      label: "A record",
-      title: "Cette defense est dans le prochain plan record.",
+      label: t("gvgPanel.recordStateToRecord", "A record"),
+      title: t("gvgPanel.recordStateToRecordTitle", "Cette defense est dans le prochain plan record."),
       badgeClass: "border-amber-400 bg-amber-500/15 text-amber-100",
       cardClass: "border-amber-500/60 bg-amber-500/10",
     };
@@ -580,16 +582,16 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "pas_record") {
     return {
-      label: "Pas record",
-      title: "Cette defense est ouverte dans le panel mais pas demandee en record.",
+      label: t("gvgPanel.recordStateNotRecord", "Pas record"),
+      title: t("gvgPanel.recordStateNotRecordTitle", "Cette defense est ouverte dans le panel mais pas demandee en record."),
       badgeClass: "border-zinc-600 bg-zinc-800/60 text-zinc-300",
       cardClass: "border-zinc-800 bg-zinc-950/60",
     };
   }
 
   return {
-    label: "A ouvrir",
-    title: "Clique la ligne pour ouvrir cette defense dans le panel.",
+    label: t("gvgPanel.recordStateOpen", "A ouvrir"),
+    title: t("gvgPanel.recordStateOpenTitle", "Clique la ligne pour ouvrir cette defense dans le panel."),
     badgeClass: "border-zinc-700 bg-zinc-900/60 text-zinc-400",
     cardClass: "border-zinc-800 bg-zinc-950/60",
   };
@@ -1240,14 +1242,14 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                         : "text-zinc-200"
                     }`}
                     disabled={!defense}
-                    title={defense ? "Renvoyer dans GVG en cours" : ""}
+                    title={defense ? t("gvgPanel.returnToCurrent", "Renvoyer dans GVG en cours") : ""}
                   >
                     <span className="flex items-center gap-2">
                       <span>{buildSlotLabel(bastion, slot.type, slot.tower, slot.team)}</span>
                       {defense?.group_num ? (
                         <span
                           className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-sky-300/70 bg-sky-500/25 px-1.5 text-[10px] font-bold text-sky-100 no-underline"
-                          title="Groupe de defenses ennemies identiques"
+                          title={t("gvgPanel.enemyMirrorGroup", "Groupe de defenses ennemies identiques")}
                         >
                           {getGroupLabel(defense.group_num)}
                         </span>
@@ -1255,7 +1257,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                       {mirrorGroup?.num ? (
                         <span
                           className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-emerald-300/70 bg-emerald-500/25 px-1.5 text-[10px] font-bold text-emerald-100 no-underline"
-                          title="Composition presente aussi entre ennemi et allie"
+                          title={t("gvgPanel.crossSideMirrorGroup", "Composition presente aussi entre ennemi et allie")}
                         >
                           {getGroupLabel(mirrorGroup.num)}
                         </span>
@@ -1289,7 +1291,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                             defense.record_status === "record" ||
                             defense.record_status === "push"
                           }
-                          title="Basculer a record / pas record"
+                          title={t("gvgPanel.toggleRecord", "Basculer a record / pas record")}
                         >
                           📹
                         </button>
@@ -1301,7 +1303,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                               ? "border-green-500 bg-green-500/15"
                               : "border-red-500 bg-red-500/15"
                           }`}
-                          title="Commentaire"
+                          title={t("gvgPanel.comment", "Commentaire")}
                         >
                           💬
                         </button>
@@ -1313,7 +1315,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                               ? "border-green-500 bg-green-500/15"
                               : "border-red-500 bg-red-500/15"
                           }`}
-                          title="Code d'attaque"
+                          title={t("gvgPanel.attackCode", "Code d'attaque")}
                         >
                           ⚔️
                         </button>
@@ -1325,7 +1327,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                               ? "border-green-500 bg-green-500/15"
                               : "border-red-500 bg-red-500/15"
                           }`}
-                          title="Statut record"
+                          title={t("gvgPanel.recordStatus", "Statut record")}
                         >
                           ✅
                         </button>
@@ -1338,7 +1340,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                               : "border-red-500 bg-red-500/15 opacity-50 cursor-not-allowed"
                           }`}
                           disabled={!(defense.status === "strat" || defense.record_status === "push")}
-                          title="Voir les runs"
+                          title={t("gvgPanel.viewRuns", "Voir les runs")}
                         >
                           👍
                         </button>
@@ -1376,7 +1378,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       onChange={(event) => setGuild(normalizeGuildInput(event.target.value))}
       className="w-24 rounded border border-zinc-700 bg-zinc-950 px-3 py-1 text-sm uppercase text-white outline-none focus:border-cyan-400"
       placeholder="MAD"
-      title="Code guilde"
+      title={t("gvgPanel.guildCode", "Code guilde")}
     />
   ) : null}
 
@@ -1392,7 +1394,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       : "cursor-not-allowed bg-zinc-700 opacity-50"
   }`}
 >
-  Lancer record
+  {t("gvgPanel.startRecord", "Lancer record")}
 </button>
 
 <button
@@ -1404,7 +1406,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       : "cursor-not-allowed bg-zinc-700 opacity-50"
   }`}
 >
-  Reparer record
+  {t("gvgPanel.repairRecord", "Reparer record")}
 </button>
 
 <button
@@ -1416,7 +1418,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       : "cursor-not-allowed bg-zinc-700 opacity-50"
   }`}
 >
-  {groupCalculating ? "Calcul..." : "Calcul groupes"}
+  {groupCalculating ? t("gvgPanel.calculating", "Calcul...") : t("gvgPanel.calculateGroups", "Calcul groupes")}
 </button>
 
 <button
@@ -1440,7 +1442,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       : "cursor-not-allowed bg-zinc-700 opacity-50"
   }`}
 >
-  📦 Push en base
+  📦 {t("gvgPanel.pushToBase", "Push en base")}
 </button>
 </div>
 
@@ -1448,17 +1450,16 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
         <div className="text-sm text-red-400">{message}</div>
       ) : null}
 
-      {loading && <div>Chargement…</div>}
+      {loading && <div>{t("common.loading", "Chargement...")}</div>}
 
       <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold uppercase tracking-wide text-cyan-100">
-              Suivi record VPS
+              {t("gvgPanel.vpsRecordTracking", "Suivi record VPS")}
             </div>
             <div className="mt-1 text-xs text-zinc-400">
-              Plan actif seulement : marque les defenses en A record, lance le record, attends le message de fin,
-              puis rafraichis. Le reset GVG nettoie les videos VPS de cette guilde.
+              {t("gvgPanel.vpsRecordHelp", "Plan actif seulement : marque les defenses en A record, lance le record, attends le message de fin, puis rafraichis. Le reset GVG nettoie les videos VPS de cette guilde.")}
             </div>
           </div>
 
@@ -1468,25 +1469,25 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
             disabled={recordSessionsLoading}
             className="rounded-lg border border-cyan-500/40 px-3 py-1 text-xs font-semibold text-cyan-100 hover:border-cyan-300 disabled:opacity-50"
           >
-            {recordSessionsLoading ? "Rafraichissement..." : "Rafraichir records VPS"}
+            {recordSessionsLoading ? t("gvgPanel.refreshingRecords", "Rafraichissement...") : t("gvgPanel.refreshVpsRecords", "Rafraichir records VPS")}
           </button>
         </div>
 
         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-4">
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-            <div className="text-zinc-500">A record</div>
+            <div className="text-zinc-500">{t("gvgPanel.toRecord", "A record")}</div>
             <div className="text-lg font-semibold text-amber-200">
               {recordFlowStats.toRecord}
             </div>
           </div>
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-            <div className="text-zinc-500">Videos VPS recues</div>
+            <div className="text-zinc-500">{t("gvgPanel.vpsVideosReceived", "Videos VPS recues")}</div>
             <div className="text-lg font-semibold text-cyan-100">
               {recordFlowStats.uploaded}/{recordFlowStats.toRecord}
             </div>
           </div>
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-            <div className="text-zinc-500">Encore attendues</div>
+            <div className="text-zinc-500">{t("gvgPanel.stillWaiting", "Encore attendues")}</div>
             <div className="text-lg font-semibold text-emerald-200">
               {recordFlowStats.pending}
             </div>
@@ -1506,7 +1507,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 {!loading && !message && (
   <>
     <div className="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-400">
-      Défenses adverses
+      {t("gvgPanel.enemyDefenses", "Defenses adverses")}
     </div>
 
     {renderPanelGrid(
@@ -1518,7 +1519,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 
     <div className="mt-10 mb-4 rounded-2xl border-2 border-red-500 bg-red-500/5 p-4 text-center">
       <div className="text-sm font-semibold uppercase tracking-[0.2em] text-red-400">
-        Défenses alliées
+        {t("gvgPanel.allyDefenses", "Defenses alliees")}
       </div>
     </div>
 
@@ -1533,28 +1534,28 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
       {recordModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-2xl rounded-xl border border-cyan-500/40 bg-zinc-950 p-5 shadow-[0_0_30px_rgba(34,211,238,0.18)]">
-            <div className="mb-1 text-lg font-semibold text-white">Lancer un record GVG</div>
+            <div className="mb-1 text-lg font-semibold text-white">{t("gvgPanel.startGvgRecord", "Lancer un record GVG")}</div>
             <div className="mb-4 text-sm text-zinc-400">
-              Guilde {getGvgGuildLabel(guild)}. Le plan sera limite a cette guilde et aux defenses marquees a record.
+              {t("gvgPanel.recordPlanGuild", "Guilde")} {getGvgGuildLabel(guild)}. {t("gvgPanel.recordPlanHelp", "Le plan sera limite a cette guilde et aux defenses marquees a record.")}
             </div>
 
             <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 text-xs text-zinc-300">
               <div className="mb-2 font-semibold uppercase tracking-wide text-cyan-100">
-                Ce que le joueur doit faire
+                {t("gvgPanel.playerInstructions", "Ce que le joueur doit faire")}
               </div>
               <ol className="list-decimal space-y-1 pl-4">
-                <li>Choisir Ennemies, Alliees ou Les deux selon le record demande.</li>
-                <li>Cliquer sur Ouvrir le launcher record et accepter l'autorisation Windows.</li>
-                <li>Ne pas toucher a la souris pendant le record.</li>
-                <li>Quand le launcher annonce la fin, revenir ici et cliquer sur Rafraichir records VPS.</li>
+                <li>{t("gvgPanel.instructionScope", "Choisir Ennemies, Alliees ou Les deux selon le record demande.")}</li>
+                <li>{t("gvgPanel.instructionLauncher", "Cliquer sur Ouvrir le launcher record et accepter l'autorisation Windows.")}</li>
+                <li>{t("gvgPanel.instructionNoTouch", "Ne pas toucher a la souris pendant le record.")}</li>
+                <li>{t("gvgPanel.instructionRefresh", "Quand le launcher annonce la fin, revenir ici et cliquer sur Rafraichir records VPS.")}</li>
               </ol>
             </div>
 
             <div className="grid gap-3 md:grid-cols-3">
               {[
-                ["enemy", "Ennemies", recordCounts.enemy],
-                ["ally", "Alliees", recordCounts.ally],
-                ["both", "Les deux", recordCounts.enemy + recordCounts.ally],
+                ["enemy", t("gvgPanel.enemies", "Ennemies"), recordCounts.enemy],
+                ["ally", t("gvgPanel.allies", "Alliees"), recordCounts.ally],
+                ["both", t("gvgPanel.both", "Les deux"), recordCounts.enemy + recordCounts.ally],
               ].map(([scope, label, count]) => (
                 <button
                   key={scope}
@@ -1568,21 +1569,21 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                   }`}
                 >
                   <div className="text-sm font-semibold text-white">{label}</div>
-                  <div className="text-xs text-zinc-400">{count} defense(s) a record</div>
+                  <div className="text-xs text-zinc-400">{count} {t("gvgPanel.defensesToRecord", "defense(s) a record")}</div>
                 </button>
               ))}
             </div>
 
             {recordCreating ? (
               <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-sm text-zinc-300">
-                Creation de la session record sur le VPS...
+                {t("gvgPanel.creatingRecordSession", "Creation de la session record sur le VPS...")}
               </div>
             ) : null}
 
             {recordSession ? (
               <div className="mt-4 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-100">
-                <div className="font-semibold">Session creee</div>
-                <div>{recordSession.count} defense(s) dans le plan {recordSession.scope}.</div>
+                <div className="font-semibold">{t("gvgPanel.sessionCreated", "Session creee")}</div>
+                <div>{recordSession.count} {t("gvgPanel.defensesInPlan", "defense(s) dans le plan")} {recordSession.scope}.</div>
                 <div className="mt-1 break-all text-xs text-emerald-200/80">{recordSession.session_id}</div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button
@@ -1590,18 +1591,17 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                     onClick={launchRecordProtocol}
                     className="rounded bg-emerald-600 px-3 py-1 text-sm text-white hover:bg-emerald-500"
                   >
-                    Ouvrir le launcher record
+                    {t("gvgPanel.openRecordLauncher", "Ouvrir le launcher record")}
                   </button>
                   <a
                     href={`${apiBase}/api/gvg-server?action=record-launcher-download`}
                     className="rounded border border-emerald-500/40 px-3 py-1 text-sm text-emerald-100 hover:border-emerald-300"
                   >
-                    Telecharger / installer
+                    {t("gvgPanel.downloadInstall", "Telecharger / installer")}
                   </a>
                 </div>
                 <div className="mt-2 text-xs text-emerald-200/70">
-                  Si rien ne s'ouvre, installe le launcher record une fois, puis reclique sur ouvrir.
-                  A la fin du record, ferme le message du launcher et clique sur Rafraichir records VPS dans le panel.
+                  {t("gvgPanel.recordLauncherHelp", "Si rien ne s'ouvre, installe le launcher record une fois, puis reclique sur ouvrir. A la fin du record, ferme le message du launcher et clique sur Rafraichir records VPS dans le panel.")}
                 </div>
               </div>
             ) : null}
@@ -1612,7 +1612,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                 onClick={() => setRecordModalOpen(false)}
                 className="rounded bg-zinc-800 px-3 py-1 text-sm text-white hover:bg-zinc-700"
               >
-                Fermer
+                {t("common.close", "Fermer")}
               </button>
             </div>
           </div>
@@ -1623,7 +1623,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-4">
             <div className="mb-2 text-sm text-zinc-200">
-              Commentaire · {buildSlotLabel(
+              {t("gvgPanel.comment", "Commentaire")} · {buildSlotLabel(
                 commentModal.bastion,
                 commentModal.type,
                 commentModal.tower,
@@ -1635,7 +1635,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
               value={commentValue}
               onChange={(e) => setCommentValue(e.target.value)}
               className="h-28 w-full rounded bg-zinc-800 p-2 text-sm text-white outline-none"
-              placeholder="Saisis ton commentaire..."
+              placeholder={t("gvgPanel.commentPlaceholder", "Saisis ton commentaire...")}
             />
 
             <div className="mt-3 flex justify-end gap-2">
@@ -1643,14 +1643,14 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                 onClick={() => setCommentModal(null)}
                 className="rounded bg-zinc-700 px-3 py-1 text-sm text-white"
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </button>
 
               <button
                 onClick={saveComment}
                 className="rounded bg-green-600 px-3 py-1 text-sm text-white"
               >
-                Enregistrer
+                {t("common.save", "Enregistrer")}
               </button>
             </div>
           </div>
@@ -1661,7 +1661,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-4">
             <div className="mb-2 text-sm text-zinc-200">
-              Code d'attaque · {buildSlotLabel(
+              {t("gvgPanel.attackCode", "Code d'attaque")} · {buildSlotLabel(
                 attackModal.bastion,
                 attackModal.type,
                 attackModal.tower,
@@ -1673,7 +1673,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
               value={attackValue}
               onChange={(e) => setAttackValue(e.target.value)}
               className="h-28 w-full rounded bg-zinc-800 p-2 text-sm text-white outline-none"
-              placeholder="Saisis le code d'attaque..."
+              placeholder={t("gvgPanel.attackCodePlaceholder", "Saisis le code d'attaque...")}
             />
 
             <div className="mt-3 flex justify-end gap-2">
@@ -1681,14 +1681,14 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                 onClick={() => setAttackModal(null)}
                 className="rounded bg-zinc-700 px-3 py-1 text-sm text-white"
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </button>
 
               <button
                 onClick={saveAttackCode}
                 className="rounded bg-green-600 px-3 py-1 text-sm text-white"
               >
-                Enregistrer
+                {t("common.save", "Enregistrer")}
               </button>
             </div>
           </div>
@@ -1699,11 +1699,11 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <div className="w-full max-w-md rounded-xl border border-zinc-700 bg-zinc-900 p-4">
             <div className="mb-2 text-sm text-zinc-200">
-              Renvoyer dans GVG en cours
+              {t("gvgPanel.returnToCurrent", "Renvoyer dans GVG en cours")}
             </div>
 
             <div className="text-sm text-zinc-300">
-              Veux-tu renvoyer la défense{" "}
+              {t("gvgPanel.returnQuestionStart", "Veux-tu renvoyer la defense")}{" "}
               <span className="font-semibold text-white">
                 {buildSlotLabel(
                   returnModal.bastion,
@@ -1712,7 +1712,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                   returnModal.team
                 )}
               </span>{" "}
-              dans GVG en cours ?
+              {t("gvgPanel.returnQuestionEnd", "dans GVG en cours ?")}
             </div>
 
             <div className="mt-4 flex justify-end gap-2">
@@ -1720,14 +1720,14 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                 onClick={() => setReturnModal(null)}
                 className="rounded bg-zinc-700 px-3 py-1 text-sm text-white"
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </button>
 
               <button
                 onClick={confirmReturnToCurrent}
                 className="rounded bg-red-600 px-3 py-1 text-sm text-white"
               >
-                Confirmer
+                {t("common.confirm", "Confirmer")}
               </button>
             </div>
           </div>
@@ -1748,9 +1748,9 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
               </div>
 
               {runsLoading ? (
-                <div className="text-zinc-400">Chargement...</div>
+                <div className="text-zinc-400">{t("common.loading", "Chargement...")}</div>
               ) : runs.length === 0 ? (
-                <div className="text-zinc-500">Aucun run trouvé</div>
+                <div className="text-zinc-500">{t("gvgPanel.noRunFound", "Aucun run trouve")}</div>
               ) : (
                 <div className="grid grid-cols-1 gap-4">
                   {runs.map((run, i) => (
@@ -1769,7 +1769,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                             onClick={() => handleBoycottStrat(run)}
                             className="rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-white hover:bg-amber-700"
                           >
-                            Boycotter pour {getGvgGuildLabel(runsModal.guild || guild)}
+                            {t("gvgPanel.boycottFor", "Boycotter pour")} {getGvgGuildLabel(runsModal.guild || guild)}
                           </button>
 
                           <button
@@ -1777,8 +1777,8 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                             disabled={!canDeleteRunFromPanel(run)}
                             title={
                               canDeleteRunFromPanel(run)
-                                ? "Supprimer la strat"
-                                : "Suppression limitee a la banque modifiable"
+                                ? t("gvgPanel.deleteStrat", "Supprimer la strat")
+                                : t("gvgPanel.deleteLimited", "Suppression limitee a la banque modifiable")
                             }
                             className={`rounded px-2 py-1 text-xs ${
                               canDeleteRunFromPanel(run)
@@ -1786,7 +1786,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                                 : "cursor-not-allowed bg-zinc-700 opacity-50"
                             }`}
                           >
-                            Supprimer
+                            {t("common.delete", "Supprimer")}
                           </button>
                         </div>
                       </div>
@@ -1811,7 +1811,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                   onClick={() => setRunsModal(null)}
                   className="rounded bg-zinc-700 px-3 py-1 text-sm text-white"
                 >
-                  Fermer
+                  {t("common.close", "Fermer")}
                 </button>
               </div>
             </div>
