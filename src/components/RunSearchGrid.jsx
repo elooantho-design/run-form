@@ -19,6 +19,7 @@ import {
 const MAX_SLOTS = 5;
 
 const HEROES_FALLBACK = ["laya"];
+const SPECIAL_EXTERNAL_DISCORD_ID = "266913883170668545";
 
 const DIRS = [
   { v: "N", label: "N" },
@@ -247,6 +248,8 @@ export default function RunSearchGrid({ session: portalSession } = {}) {
     }
   }, []);
   const session = portalSession || dashboardSession;
+  const isSpecialExternal =
+    String(session?.discordId || session?.discord_id || "") === SPECIAL_EXTERNAL_DISCORD_ID;
 
   const [heroPool, setHeroPool] = useState(HEROES_FALLBACK);
   const [championDisplayMap, setChampionDisplayMap] = useState(() => new Map());
