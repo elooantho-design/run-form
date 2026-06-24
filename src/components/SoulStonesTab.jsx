@@ -6,11 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { filterByGuildScope, isLeaderSession } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const SOUL_STONE_TABS = [
-  { id: "mes-pierres", label: "Mes pierres", icon: Gem },
-  { id: "historique", label: "Historique", icon: History },
-  { id: "classement", label: "Classement", icon: Trophy },
+  { id: "mes-pierres", label: "Mes pierres", labelKey: "soul.tabs.stones", icon: Gem },
+  { id: "historique", label: "Historique", labelKey: "soul.tabs.history", icon: History },
+  { id: "classement", label: "Classement", labelKey: "soul.tabs.ranking", icon: Trophy },
 ];
 
 function normalizeText(value) {
@@ -44,6 +45,7 @@ function SoulStoneCounterCard({
   onAdd,
   onRemove,
 }) {
+  const { t } = usePortalLanguage();
   const isLord = type === "lord";
 
   return (
@@ -68,7 +70,7 @@ function SoulStoneCounterCard({
             {isLord ? <Crown className="h-5 w-5 text-yellow-200" /> : <Gem className="h-5 w-5 text-sky-100" />}
             {title}
           </div>
-          <div className="mt-1 text-sm text-zinc-400">Total : {total}</div>
+          <div className="mt-1 text-sm text-zinc-400">{t("soul.total", "Total")} : {total}</div>
         </div>
 
         <div className="flex gap-2">
@@ -78,7 +80,7 @@ function SoulStoneCounterCard({
             className="h-10 w-10 rounded-xl border-zinc-700 bg-zinc-900 p-0"
             onClick={onRemove}
             disabled={disabled}
-            title="Retirer la derniere pierre"
+            title={t("soul.removeLast", "Retirer la derniere pierre")}
           >
             <Minus className="h-4 w-4" />
           </Button>
@@ -88,7 +90,7 @@ function SoulStoneCounterCard({
             className="h-10 w-10 rounded-xl p-0"
             onClick={onAdd}
             disabled={disabled}
-            title="Ajouter une pierre"
+            title={t("soul.addStone", "Ajouter une pierre")}
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -101,13 +103,14 @@ function SoulStoneCounterCard({
       </div>
 
       <div className="relative z-10 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-300">
-        Derniere pierre recue : <span className="font-semibold text-zinc-100">{formatDate(lastDate)}</span>
+        {t("soul.lastReceived", "Derniere pierre recue")} : <span className="font-semibold text-zinc-100">{formatDate(lastDate)}</span>
       </div>
     </article>
   );
 }
 
 export default function SoulStonesTab({ session }) {
+  const { t } = usePortalLanguage();
   const [members, setMembers] = useState([]);
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [memberQuery, setMemberQuery] = useState("");
@@ -397,13 +400,13 @@ export default function SoulStonesTab({ session }) {
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100">
               <Gem className="h-4 w-4" />
-              Inventaire mystique
+              {t("soul.eyebrow", "Inventaire mystique")}
             </div>
             <h2 className="mt-4 text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Pierre d'ame
+              {t("soul.title", "Pierre d'ame")}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-300 md:text-base">
-              Gestion des pierres Lord et Brute avec historique joueur et classement du cluster.
+              {t("soul.description", "Gestion des pierres Lord et Brute avec historique joueur et classement du cluster.")}
             </p>
           </div>
 
@@ -431,8 +434,8 @@ export default function SoulStonesTab({ session }) {
           <div className="grid min-h-[680px] grid-cols-1 xl:grid-cols-[260px_1fr]">
             <aside className="border-b border-zinc-800 p-5 xl:border-b-0 xl:border-r">
               <div>
-                <div className="text-lg font-semibold text-zinc-50">Navigation</div>
-                <div className="mt-1 text-sm text-zinc-500">Pierres, historique et cluster</div>
+                <div className="text-lg font-semibold text-zinc-50">{t("soul.navigation", "Navigation")}</div>
+                <div className="mt-1 text-sm text-zinc-500">{t("soul.navigationHelp", "Pierres, historique et cluster")}</div>
               </div>
 
               <div className="mt-5 space-y-3">
@@ -452,7 +455,7 @@ export default function SoulStonesTab({ session }) {
                       }`}
                     >
                       <Icon className="h-4 w-4" />
-                      {tab.label}
+                      {t(tab.labelKey, tab.label)}
                     </button>
                   );
                 })}
@@ -460,7 +463,7 @@ export default function SoulStonesTab({ session }) {
 
               <div className="mt-6 space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="soul-member">
-                  Joueur du cluster
+                  {t("soul.clusterPlayer", "Joueur du cluster")}
                 </label>
                 <div className="flex h-10 items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 ring-white/20 transition focus-within:border-white/50 focus-within:ring-2">
                   <Search className="h-4 w-4 shrink-0 text-zinc-500" />
@@ -469,14 +472,14 @@ export default function SoulStonesTab({ session }) {
                     type="search"
                     value={memberQuery}
                     onChange={(event) => setMemberQuery(event.target.value)}
-                    placeholder="Rechercher un joueur"
+                    placeholder={t("common.searchPlayer", "Rechercher un joueur")}
                     className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                   />
                 </div>
 
                 <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/80 p-2">
                   {memberSuggestions.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-zinc-500">Aucun joueur trouve.</div>
+                    <div className="px-3 py-2 text-sm text-zinc-500">{t("common.noPlayerFound", "Aucun joueur trouve.")}</div>
                   ) : (
                     memberSuggestions.map((member) => {
                       const selected = String(member.id) === String(selectedMemberId);
@@ -497,7 +500,7 @@ export default function SoulStonesTab({ session }) {
                         >
                           <span className="block truncate text-sm font-semibold">{member.name}</span>
                           <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                            {member.guildCode || "Cluster"} {member.discordId ? `- ${member.discordId}` : ""}
+                            {member.guildCode || t("common.cluster", "Cluster")} {member.discordId ? `- ${member.discordId}` : ""}
                           </span>
                         </button>
                       );
@@ -507,18 +510,18 @@ export default function SoulStonesTab({ session }) {
               </div>
 
               <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-5 text-amber-100">
-                <span className="font-semibold text-amber-200">Important :</span> renseigner le total reel, inventaire
-                plus pierres deja utilisees sur vos heros.
+                <span className="font-semibold text-amber-200">{t("common.important", "Important")} :</span>{" "}
+                {t("soul.importantHelp", "renseigner le total reel, inventaire plus pierres deja utilisees sur vos heros.")}
               </div>
 
               <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-400">
                 <div className="flex items-center gap-2 font-medium text-zinc-200">
                   <Shield className="h-4 w-4 text-zinc-100" />
-                  {selectedMember?.name || "Aucun membre"}
+                  {selectedMember?.name || t("common.noMember", "Aucun membre")}
                 </div>
-                <div className="mt-1 text-xs text-zinc-500">{selectedMember?.guildCode || "Cluster"}</div>
+                <div className="mt-1 text-xs text-zinc-500">{selectedMember?.guildCode || t("common.cluster", "Cluster")}</div>
                 <p className="mt-2 leading-5">
-                  Les boutons + et - ajoutent une entree ou retirent la derniere entree du type choisi.
+                  {t("soul.buttonsHelp", "Les boutons + et - ajoutent une entree ou retirent la derniere entree du type choisi.")}
                 </p>
               </div>
             </aside>
@@ -532,11 +535,11 @@ export default function SoulStonesTab({ session }) {
 
               {!selectedMember ? (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 text-sm text-zinc-400">
-                  Aucun membre selectionne.
+                  {t("common.noMemberSelected", "Aucun membre selectionne.")}
                 </div>
               ) : soulStonesLoading ? (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 text-sm text-zinc-400">
-                  Chargement des pierres d'ame...
+                  {t("soul.loading", "Chargement des pierres d'ame...")}
                 </div>
               ) : (
                 <>
@@ -544,7 +547,7 @@ export default function SoulStonesTab({ session }) {
                     <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                       <SoulStoneCounterCard
                         type="lord"
-                        title="Pierre Lord"
+                        title={t("soul.lordStone", "Pierre Lord")}
                         total={totalLordSoulStones}
                         lastDate={lastLordSoulStoneDate}
                         image="/soul-stones/lord.png"
@@ -555,7 +558,7 @@ export default function SoulStonesTab({ session }) {
 
                       <SoulStoneCounterCard
                         type="brute"
-                        title="Pierre Brute"
+                        title={t("soul.bruteStone", "Pierre Brute")}
                         total={totalBruteSoulStones}
                         lastDate={lastBruteSoulStoneDate}
                         image="/soul-stones/brute.png"
@@ -570,8 +573,8 @@ export default function SoulStonesTab({ session }) {
                     <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
                       <div className="mb-5 flex items-center justify-between gap-3">
                         <div>
-                          <div className="text-lg font-semibold text-zinc-50">Historique</div>
-                          <div className="text-sm text-zinc-500">{soulStones.length} entree(s)</div>
+                          <div className="text-lg font-semibold text-zinc-50">{t("soul.history", "Historique")}</div>
+                          <div className="text-sm text-zinc-500">{soulStones.length} {t("common.entries", "entree(s)")}</div>
                         </div>
                         <Badge className="rounded-xl border-white/20 bg-white/10 text-zinc-100">
                           {selectedMember.name}
@@ -596,7 +599,7 @@ export default function SoulStonesTab({ session }) {
                                   {stone.type === "lord" ? <Crown className="h-5 w-5" /> : <Gem className="h-5 w-5" />}
                                 </div>
                                 <div className="font-medium text-zinc-100">
-                                  {stone.type === "lord" ? "Pierre Lord" : "Pierre Brute"}
+                                  {stone.type === "lord" ? t("soul.lordStone", "Pierre Lord") : t("soul.bruteStone", "Pierre Brute")}
                                 </div>
                               </div>
 
@@ -605,7 +608,7 @@ export default function SoulStonesTab({ session }) {
                           ))
                         ) : (
                           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-sm text-zinc-400">
-                            Aucun historique.
+                            {t("soul.noHistory", "Aucun historique.")}
                           </div>
                         )}
                       </div>
@@ -616,15 +619,15 @@ export default function SoulStonesTab({ session }) {
                     <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
                       <div className="mb-5 flex items-center justify-between gap-3">
                         <div>
-                          <div className="text-lg font-semibold text-zinc-50">Classement du cluster</div>
-                          <div className="text-sm text-zinc-500">Tri par total puis pierres Lord</div>
+                          <div className="text-lg font-semibold text-zinc-50">{t("soul.clusterRanking", "Classement du cluster")}</div>
+                          <div className="text-sm text-zinc-500">{t("soul.rankingSort", "Tri par total puis pierres Lord")}</div>
                         </div>
                         <Trophy className="h-6 w-6 text-amber-200" />
                       </div>
 
                       <div className="space-y-4">
                         <div className="grid grid-cols-[1fr_82px_82px_82px] gap-3 px-4 text-sm text-zinc-400 md:grid-cols-[1fr_100px_100px_100px]">
-                          <div>Joueur</div>
+                          <div>{t("common.player", "Joueur")}</div>
                           <div className="text-center">Lord</div>
                           <div className="text-center">Brute</div>
                           <div className="text-center">Total</div>
@@ -632,7 +635,7 @@ export default function SoulStonesTab({ session }) {
 
                         {clusterSoulStonesLoading ? (
                           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-sm text-zinc-400">
-                            Chargement du classement...
+                            {t("soul.rankingLoading", "Chargement du classement...")}
                           </div>
                         ) : clusterSoulStoneRows.length > 0 ? (
                           clusterSoulStoneRows.map((row, index) => (
@@ -652,7 +655,7 @@ export default function SoulStonesTab({ session }) {
                           ))
                         ) : (
                           <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-sm text-zinc-400">
-                            Aucun classement disponible.
+                            {t("soul.noRanking", "Aucun classement disponible.")}
                           </div>
                         )}
                       </div>

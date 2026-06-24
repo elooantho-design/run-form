@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import MonSuiviTab from "./MonSuiviTab";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 import {
   getMemberDefenseCompletion,
   getMemberTrackedDefenseScore,
@@ -35,6 +36,27 @@ export default function GestionDefenseTab({
   defenseVoteByRootId,
   getDefenseLikeTargetId,
 }) {
+  const { t } = usePortalLanguage();
+  const formatDefenseTypeLabel = (value) => {
+    const normalizedType = String(value || "").trim().toLowerCase();
+
+    if (normalizedType === "tour") return t("defenses.tower", "Tour");
+    if (normalizedType === "bastion") return t("defenses.bastion", "Bastion");
+    if (normalizedType === "bulle") return t("defenses.bubble", "Bulle");
+    return value || "";
+  };
+  const formatDefenseStatusLabel = (value) => {
+    const normalizedStatus = String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
+    if (normalizedStatus.includes("valid")) return t("guildManagement.statusValid", "Valide");
+    if (normalizedStatus.includes("verifier")) return t("guildManagement.statusVerify", "A verifier");
+    if (normalizedStatus.includes("faire")) return t("guildManagement.statusTodo", "A faire");
+    return value || "";
+  };
   const [selectedMemberId, setSelectedMemberId] = useState(null);
   const [memberView, setMemberView] = useState("defenses");
   const [roleSortMode, setRoleSortMode] = useState("alpha");
@@ -207,7 +229,7 @@ return (
             }}
             className="text-sm text-zinc-400 hover:text-white"
           >
-            ← Retour
+            ← {t("common.back", "Retour")}
           </button>
         </div>
 
@@ -220,7 +242,7 @@ return (
                 : "pb-1 text-zinc-400 hover:text-white"
             }
           >
-            Mes défenses
+            {t("defenses.title", "Mes defenses")}
           </button>
 
           <button
@@ -231,7 +253,7 @@ return (
                 : "pb-1 text-zinc-400 hover:text-white"
             }
           >
-            Mon suivi
+            {t("guildManagement.followup", "Mon suivi")}
           </button>
         </div>
 
@@ -242,7 +264,7 @@ return (
               onClick={() => clearAssignedDefense(1)}
               className="rounded-xl border border-red-700 bg-red-900/30 px-3 py-1 text-xs text-red-300 hover:bg-red-800/50"
             >
-              Clean Def 1
+              {t("defenses.clearDefense", "Clean Def")} 1
             </button>
 
             <button
@@ -250,7 +272,7 @@ return (
               onClick={() => clearAssignedDefense(2)}
               className="rounded-xl border border-red-700 bg-red-900/30 px-3 py-1 text-xs text-red-300 hover:bg-red-800/50"
             >
-              Clean Def 2
+              {t("defenses.clearDefense", "Clean Def")} 2
             </button>
           </div>
         )}
@@ -287,7 +309,7 @@ return (
 
                   let cardColor = "bg-zinc-900 border-zinc-800";
 
-                  let defenseBadge = "Secondaire";
+                  let defenseBadge = t("defenses.secondary", "Secondaire");
                   let defenseBadgeClass = "bg-zinc-800 text-zinc-300";
 
                   if (isMetaS) {
@@ -297,11 +319,11 @@ return (
                     defenseBadge = "Meta A";
                     defenseBadgeClass = "bg-emerald-500/20 text-emerald-300";
                   }
-                    let typeBadge = "Tour";
+                    let typeBadge = formatDefenseTypeLabel("Tour");
                     let typeBadgeClass = "bg-zinc-800 text-zinc-300";
 
                     if ((defense?.type || "").toLowerCase() === "bastion") {
-                      typeBadge = "Bastion";
+                      typeBadge = formatDefenseTypeLabel("Bastion");
                       typeBadgeClass = "bg-violet-500/20 text-violet-300";
                     }
                   if (hasError) {
@@ -319,7 +341,7 @@ return (
                     >
 <div className="mb-3 flex items-center justify-between">
   <div className="text-sm text-zinc-400">
-    Défense {index + 1}
+    {t("defenses.defense", "Defense")} {index + 1}
   </div>
 
   <div className="flex flex-wrap items-center gap-2">
@@ -374,7 +396,7 @@ return (
       clearAssignedDefense(index + 1);
     }}
     className="rounded-lg bg-red-500/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30"
-    title="Retirer cette défense"
+    title={t("defenses.removeDefense", "Retirer cette defense")}
   >
     -
   </button>
@@ -384,7 +406,7 @@ return (
 
                       {!defense ? (
                         <div className="rounded-2xl border border-dashed border-zinc-700 bg-zinc-950/60 p-6 text-sm text-zinc-500">
-                          Aucune défense sélectionnée
+                          {t("defenses.noneSelected", "Aucune defense selectionnee")}
                         </div>
                       ) : (
                         <>
@@ -399,7 +421,7 @@ return (
     }}
     className="rounded-lg border border-blue-700 bg-blue-900/30 px-2 py-1 text-xs text-blue-300 hover:bg-blue-800/50"
   >
-    💬 Infos
+    {t("adminDefenses.infoButton", "Infos")}
   </button>
 </div>
 
@@ -412,13 +434,13 @@ return (
                                   className="w-full aspect-video object-contain"
                                 />
                               ) : (
-                                <div className="text-sm text-zinc-500">Aucune image</div>
+                                <div className="text-sm text-zinc-500">{t("common.noImage", "Aucune image")}</div>
                               )}
                             </div>
 
                             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
                               <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                Héros / Éveils
+                                {t("defenses.heroesAwakenings", "Heros / Eveils")}
                               </div>
 
                               <div className="space-y-2">
@@ -456,7 +478,7 @@ return (
 
                           <div className="mt-4 space-y-2">
                             <div className="flex items-start justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3">
-                              <span className="text-sm text-zinc-400">Conditions</span>
+                              <span className="text-sm text-zinc-400">{t("defenses.conditions", "Conditions")}</span>
 
                               <span
                                 className={`ml-4 text-right text-sm ${
@@ -475,7 +497,7 @@ return (
                             </div>
 
 <div className="flex items-start justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3">
-  <span className="text-sm text-zinc-400">Score d’éveil</span>
+  <span className="text-sm text-zinc-400">{t("defenses.awakeningScore", "Score d'eveil")}</span>
 
   <span className="ml-4 text-right text-sm text-zinc-100">
     {getMemberTrackedDefenseScore(selectedMember, defense) ?? "--"}
@@ -492,7 +514,7 @@ return (
 <div className="border-t border-zinc-800 pt-6">
   <div className="mb-4 flex items-center justify-between gap-4">
     <div className="text-lg font-semibold text-zinc-50">
-      Liste des défenses
+      {t("defenses.defenseList", "Liste des defenses")}
     </div>
 
     <div className="flex flex-wrap gap-2">
@@ -505,7 +527,7 @@ return (
             : "bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
         }`}
       >
-        Tours
+        {t("defenses.towers", "Tours")}
       </button>
 
       <button
@@ -517,7 +539,7 @@ return (
             : "bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
         }`}
       >
-        Bastions
+        {t("defenses.bastions", "Bastions")}
       </button>
 
       <button
@@ -529,7 +551,7 @@ return (
             : "bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
         }`}
       >
-        Toutes
+        {t("common.allPlural", "Toutes")}
       </button>
     </div>
   </div>
@@ -558,7 +580,7 @@ return (
 
     let cardColor = "bg-zinc-900 border-zinc-800";
 
-    let defenseBadge = "Secondaire";
+    let defenseBadge = t("defenses.secondary", "Secondaire");
     let defenseBadgeClass = "bg-zinc-800 text-zinc-300";
 
     if (isMetaS) {
@@ -569,11 +591,11 @@ return (
       defenseBadgeClass = "bg-emerald-500/20 text-emerald-300";
     }
 
-        let typeBadge = "Tour";
+        let typeBadge = formatDefenseTypeLabel("Tour");
         let typeBadgeClass = "bg-zinc-800 text-zinc-300";
 
         if ((defense?.type || "").toLowerCase() === "bastion") {
-          typeBadge = "Bastion";
+          typeBadge = formatDefenseTypeLabel("Bastion");
           typeBadgeClass = "bg-violet-500/20 text-violet-300";
         }
 
@@ -594,11 +616,11 @@ return (
   <div className="text-sm text-zinc-400">{defense.name}</div>
 {defense.duplicateCount > 0 ? (
   <div className="mt-1 text-xs text-amber-300">
-    Doublon : {defense.duplicateHeroes.join(", ")}
+    {t("defenses.duplicate", "Doublon")} : {defense.duplicateHeroes.join(", ")}
   </div>
 ) : (
   <div className="mt-1 text-xs text-emerald-300">
-    Aucun doublon héros
+    {t("defenses.noDuplicate", "Aucun doublon heros")}
   </div>
 )}
   <div className="flex flex-wrap items-center gap-2">
@@ -616,7 +638,7 @@ return (
             ? "text-emerald-400"
             : "text-zinc-500"
         }`}
-        title="Liker cette défense"
+        title={t("guildManagement.likeDefense", "Liker cette defense")}
       >
         👍 {defenseLikesCountByRootId?.get(getDefenseLikeTargetId(defense)) || 0}
       </button>
@@ -632,7 +654,7 @@ return (
             ? "text-red-400"
             : "text-zinc-500"
         }`}
-        title="Disliker cette défense"
+        title={t("guildManagement.dislikeDefense", "Disliker cette defense")}
       >
         👎 {defenseDislikesCountByRootId?.get(getDefenseLikeTargetId(defense)) || 0}
       </button>
@@ -670,7 +692,7 @@ return (
           }
         }}
         className="rounded-lg bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30"
-        title="Ajouter cette défense"
+        title={t("defenses.addDefense", "Ajouter cette defense")}
       >
         +
       </button>
@@ -688,13 +710,13 @@ return (
                 className="w-full aspect-video object-contain"
               />
             ) : (
-              <div className="text-sm text-zinc-500">Aucune image</div>
+              <div className="text-sm text-zinc-500">{t("common.noImage", "Aucune image")}</div>
             )}
           </div>
 
           <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
             <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Héros / Éveils
+              {t("defenses.heroesAwakenings", "Heros / Eveils")}
             </div>
 
             <div className="space-y-2">
@@ -732,7 +754,7 @@ return (
 
         <div className="mt-4 space-y-2">
           <div className="flex items-start justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3">
-            <span className="text-sm text-zinc-400">Conditions</span>
+            <span className="text-sm text-zinc-400">{t("defenses.conditions", "Conditions")}</span>
 
             <span
               className={`ml-4 text-right text-sm ${
@@ -751,7 +773,7 @@ return (
           </div>
 
 <div className="flex items-start justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3">
-  <span className="text-sm text-zinc-400">Score d’éveil</span>
+  <span className="text-sm text-zinc-400">{t("defenses.awakeningScore", "Score d'eveil")}</span>
 
   <span className="ml-4 text-right text-sm text-zinc-100">
     {getMemberTrackedDefenseScore(selectedMember, defense) ?? "--"}
@@ -888,31 +910,31 @@ return (
 
           <div className="rounded-3xl border border-zinc-800 bg-zinc-900/70 p-5 shadow-2xl">
             <div className="mb-4 text-lg font-semibold text-zinc-50">
-              Liste des membres {activeGuildCode}
+              {t("guildManagement.memberList", "Liste des membres")} {activeGuildCode}
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-zinc-800">
               <div className="grid grid-cols-[200px_220px_140px_200px_100px_140px_100px] gap-3 border-b border-zinc-800 px-5 py-4 text-xs uppercase tracking-[0.2em] text-zinc-500">
-                <div>Joueur</div>
-                <div>Def1 / Def2</div>
+                <div>{t("common.player", "Joueur")}</div>
+                <div>{t("guildManagement.def1Def2", "Def1 / Def2")}</div>
                 <button
   type="button"
   onClick={cycleRoleSortMode}
   className="text-left hover:text-white"
 >
-  Rôle
+  {t("guildManagement.role", "Role")}
   <span className="ml-2 text-[10px] text-zinc-400">
     {roleSortMode === "alpha"
       ? "A→Z"
       : roleSortMode === "tour_first"
-      ? "Tours"
-      : "Bastions"}
+      ? t("defenses.towers", "Tours")
+      : t("defenses.bastions", "Bastions")}
   </span>
 </button>
-                <div>Complétion</div>
-                <div>Score</div>
-                <div>Statut</div>
-                <div>Transfert</div>
+                <div>{t("guildManagement.completion", "Completion")}</div>
+                <div>{t("guildManagement.score", "Score")}</div>
+                <div>{t("guildManagement.status", "Statut")}</div>
+                <div>{t("guildManagement.transfer", "Transfert")}</div>
               </div>
 
 <div className="divide-y divide-zinc-800">
@@ -975,11 +997,11 @@ onClick={() => {
       }}
       className="inline-flex cursor-pointer rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-1 text-sm text-zinc-200 hover:bg-zinc-800"
     >
-      {member.assignment || "Tour"}
+      {formatDefenseTypeLabel(member.assignment || "Tour")}
     </div>
   ) : (
     <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1 text-sm text-zinc-400">
-      {member.assignment || "Tour"}
+      {formatDefenseTypeLabel(member.assignment || "Tour")}
     </div>
   )}
 </div>
@@ -1018,11 +1040,11 @@ onClick={() => {
         member.status
       )}`}
     >
-      {member.status}
+      {formatDefenseStatusLabel(member.status)}
     </div>
   ) : (
     <div className={`inline-flex px-2 py-1 text-xs ${statusClass(member.status)}`}>
-      {member.status}
+      {formatDefenseStatusLabel(member.status)}
     </div>
   )}
 </div>
@@ -1058,7 +1080,7 @@ onClick={() => {
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <div className="text-lg font-bold">{infoDefense.name}</div>
-          <div className="text-sm text-zinc-400">Informations défense</div>
+          <div className="text-sm text-zinc-400">{t("adminDefenses.defenseInfo", "Informations defense")}</div>
         </div>
 
         <button
@@ -1066,16 +1088,16 @@ onClick={() => {
           onClick={() => setInfoModalOpen(false)}
           className="rounded-xl border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
         >
-          Fermer
+          {t("common.close", "Fermer")}
         </button>
       </div>
 
       <div className="min-h-0 overflow-y-auto rounded-xl bg-zinc-950 p-4">
         {infoBlocksLoading ? (
-          <div className="text-sm text-zinc-400">Chargement...</div>
+          <div className="text-sm text-zinc-400">{t("common.loading", "Chargement...")}</div>
         ) : infoBlocks.length === 0 ? (
           <div className="text-sm text-zinc-500">
-            Aucune information disponible pour cette défense.
+            {t("adminDefenses.noInfo", "Aucune information disponible pour cette defense.")}
           </div>
         ) : (
           <div className="space-y-5 leading-relaxed text-zinc-200">
@@ -1084,7 +1106,7 @@ onClick={() => {
                 <img
                   key={block.id}
                   src={block.content}
-                  alt="Info défense"
+                  alt={t("adminDefenses.infoImageAlt", "Info defense")}
                   className="mx-auto max-h-[420px] w-full rounded-xl object-contain"
                 />
               ) : (

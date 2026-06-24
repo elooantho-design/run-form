@@ -2259,6 +2259,7 @@ function launcherEventLabel(event) {
 }
 
 function LauncherView({ session: portalSession }) {
+  const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const pollRef = useRef(null);
   const detectionDeadlineRef = useRef(0);
@@ -2317,12 +2318,12 @@ function LauncherView({ session: portalSession }) {
       setDetected(true);
       setInstallModalOpen(false);
       setLaunching(false);
-      setMessage(nextSession?.message || "Launcher detecte, capture prete a demarrer.");
+      setMessage(nextSession?.message || t("launcher.detectedReady", "Launcher detecte, capture prete a demarrer."));
     } else if (Date.now() > detectionDeadlineRef.current) {
       setLaunching(false);
       setDetected(false);
       setInstallModalOpen(true);
-      setMessage("Launcher Paladin GVG non detecte sur ce PC.");
+      setMessage(t("launcher.notDetected", "Launcher Paladin GVG non detecte sur ce PC."));
       if (pollRef.current) window.clearInterval(pollRef.current);
     }
 
@@ -2338,14 +2339,14 @@ function LauncherView({ session: portalSession }) {
 
     pollRef.current = window.setInterval(() => {
       fetchSessionStatus(nextSessionId).catch((error) => {
-        setMessage(error?.message || "Erreur suivi launcher.");
+        setMessage(error?.message || t("launcher.followError", "Erreur suivi launcher."));
       });
     }, 1000);
   }
 
   async function launchCapture() {
     if (!visibleGvgGuilds.includes(guild)) {
-      setMessage("Guilde non autorisee pour cette session.");
+      setMessage(t("launcher.guildDenied", "Guilde non autorisee pour cette session."));
       return;
     }
 
@@ -2357,7 +2358,7 @@ function LauncherView({ session: portalSession }) {
       setInstallModalOpen(false);
       setSessionId(nextSessionId);
       setLauncherSession(null);
-      setMessage("Ouverture du launcher Paladin GVG...");
+      setMessage(t("launcher.opening", "Ouverture du launcher Paladin GVG..."));
 
       const response = await fetch(`${apiBase}/api/gvg-server`, {
         method: "POST",
@@ -2373,7 +2374,7 @@ function LauncherView({ session: portalSession }) {
       const data = await readJson(response, "creation session launcher");
 
       if (!response.ok) {
-        throw new Error(data?.error || "Impossible de creer la session launcher.");
+        throw new Error(data?.error || t("launcher.createError", "Impossible de creer la session launcher."));
       }
 
       setLauncherSession(data?.session || null);
@@ -2396,7 +2397,7 @@ function LauncherView({ session: portalSession }) {
       )}&side=${encodeURIComponent(side)}&session=${encodeURIComponent(nextSessionId)}`;
     } catch (error) {
       setLaunching(false);
-      setMessage(error?.message || "Erreur lancement launcher.");
+      setMessage(error?.message || t("launcher.launchError", "Erreur lancement launcher."));
     }
   }
 
@@ -2406,11 +2407,11 @@ function LauncherView({ session: portalSession }) {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100">
-              Capture GVG
+              {t("launcher.eyebrow", "Capture GVG")}
             </div>
-            <h2 className="mt-4 text-2xl font-semibold text-zinc-50">Lancer la capture GVG</h2>
+            <h2 className="mt-4 text-2xl font-semibold text-zinc-50">{t("launcher.title", "Lancer la capture GVG")}</h2>
             <p className="mt-2 max-w-2xl text-sm text-zinc-300">
-              Le site ouvre le launcher installe sur le PC, puis suit la capture jusqu'au resultat disponible dans Validation.
+              {t("launcher.description", "Le site ouvre le launcher installe sur le PC, puis suit la capture jusqu'au resultat disponible dans Validation.")}
             </p>
           </div>
 
@@ -2422,21 +2423,21 @@ function LauncherView({ session: portalSession }) {
               onClick={launchCapture}
             >
               <Play className="mr-2 h-5 w-5" />
-              {launching ? "Ouverture..." : "Lancer la capture GVG"}
+              {launching ? t("launcher.openingShort", "Ouverture...") : t("launcher.startCapture", "Lancer la capture GVG")}
             </Button>
             <a
               href={`${apiBase}/api/gvg-server?action=launcher-download`}
               className="inline-flex items-center rounded-2xl border border-zinc-700 bg-zinc-950/70 px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-cyan-300/60 hover:text-cyan-100"
             >
               <UploadCloud className="mr-2 h-4 w-4" />
-              Telecharger / reinstaller
+              {t("launcher.download", "Telecharger / reinstaller")}
             </a>
           </div>
         </div>
 
         <div className="mt-6 grid gap-3 md:grid-cols-[1fr_1fr_1.4fr]">
           <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
-            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Guilde</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">{t("home.guild", "Guilde")}</div>
             <div className="mt-3 flex flex-wrap gap-2">
               {visibleGvgGuilds.map((item) => (
                 <button
@@ -2456,11 +2457,11 @@ function LauncherView({ session: portalSession }) {
           </div>
 
           <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
-            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Type</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">{t("common.type", "Type")}</div>
             <div className="mt-3 grid grid-cols-2 gap-2">
               {[
-                ["enemy", "Ennemi"],
-                ["ally", "Allie"],
+                ["enemy", t("gvg.enemy", "Ennemi")],
+                ["ally", t("gvg.ally", "Allie")],
               ].map(([value, label]) => (
                 <button
                   key={value}
@@ -2481,9 +2482,13 @@ function LauncherView({ session: portalSession }) {
           <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Etat</div>
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">{t("launcher.state", "Etat")}</div>
                 <div className="mt-2 font-semibold text-zinc-100">
-                  {detected ? "Launcher detecte" : launching ? "Detection en cours" : launcherEventLabel(state)}
+                  {detected
+                    ? t("launcher.detected", "Launcher detecte")
+                    : launching
+                      ? t("launcher.detecting", "Detection en cours")
+                      : t(`launcher.event.${state}`, launcherEventLabel(state))}
                 </div>
               </div>
               {detected ? (
@@ -2495,7 +2500,7 @@ function LauncherView({ session: portalSession }) {
               )}
             </div>
             <div className="mt-3 text-sm text-zinc-400">
-              {message || "Pret a lancer une session de capture."}
+              {message || t("launcher.readyMessage", "Pret a lancer une session de capture.")}
             </div>
             {sessionId ? (
               <div className="mt-2 truncate text-xs text-zinc-600">Session {sessionId}</div>
@@ -2506,16 +2511,16 @@ function LauncherView({ session: portalSession }) {
 
       <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-3xl border border-zinc-800 bg-zinc-950/75 p-5">
-          <h3 className="text-lg font-semibold text-zinc-100">Etapes joueur</h3>
+          <h3 className="text-lg font-semibold text-zinc-100">{t("launcher.playerSteps", "Etapes joueur")}</h3>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             {[
-              "Ouvre Watcher of Realms.",
-              "Va sur l'ecran GVG.",
-              "Quand tu es pret, appuie sur F9.",
-              "Ne touche plus a la souris ni au clavier pendant la capture.",
+              t("launcher.step1", "Ouvre Watcher of Realms."),
+              t("launcher.step2", "Va sur l'ecran GVG."),
+              t("launcher.step3", "Quand tu es pret, appuie sur F9."),
+              t("launcher.step4", "Ne touche plus a la souris ni au clavier pendant la capture."),
             ].map((item, index) => (
               <div key={item} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
-                <div className="text-xs text-zinc-500">Etape {index + 1}</div>
+                <div className="text-xs text-zinc-500">{t("launcher.step", "Etape")} {index + 1}</div>
                 <div className="mt-2 text-sm font-medium text-zinc-100">{item}</div>
               </div>
             ))}
@@ -2523,13 +2528,13 @@ function LauncherView({ session: portalSession }) {
         </div>
 
         <div className="rounded-3xl border border-zinc-800 bg-zinc-950/75 p-5">
-          <h3 className="text-lg font-semibold text-zinc-100">Suivi session</h3>
+          <h3 className="text-lg font-semibold text-zinc-100">{t("launcher.sessionTracking", "Suivi session")}</h3>
           <div className="mt-4 space-y-3">
             {events.length ? (
               events.slice(-8).reverse().map((event, index) => (
                 <div key={`${event.event}-${event.at}-${index}`} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-3">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="font-medium text-zinc-100">{launcherEventLabel(event.event)}</div>
+                    <div className="font-medium text-zinc-100">{t(`launcher.event.${event.event}`, launcherEventLabel(event.event))}</div>
                     <div className="text-xs text-zinc-500">
                       {event.at ? new Date(event.at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : ""}
                     </div>
@@ -2539,7 +2544,7 @@ function LauncherView({ session: portalSession }) {
               ))
             ) : (
               <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-500">
-                Les statuts apparaitront ici des que le launcher repondra.
+                {t("launcher.noEvent", "Les statuts apparaitront ici des que le launcher repondra.")}
               </div>
             )}
           </div>
@@ -2547,7 +2552,7 @@ function LauncherView({ session: portalSession }) {
           {progress.total ? (
             <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-zinc-400">Progression capture</span>
+                <span className="text-zinc-400">{t("launcher.captureProgress", "Progression capture")}</span>
                 <span className="font-semibold text-zinc-100">
                   {progress.current || 0} / {progress.total || 48}
                 </span>
@@ -2569,9 +2574,9 @@ function LauncherView({ session: portalSession }) {
             <div className="flex items-start gap-3">
               <XCircle className="mt-1 h-6 w-6 text-amber-300" />
               <div>
-                <h3 className="text-xl font-semibold text-zinc-50">Launcher Paladin GVG non detecte sur votre PC.</h3>
+                <h3 className="text-xl font-semibold text-zinc-50">{t("launcher.notDetected", "Launcher Paladin GVG non detecte sur votre PC.")}</h3>
                 <p className="mt-3 text-sm text-zinc-300">
-                  Vous devez l'installer une seule fois pour pouvoir lancer les captures depuis le site.
+                  {t("launcher.installHelp", "Vous devez l'installer une seule fois pour pouvoir lancer les captures depuis le site.")}
                 </p>
               </div>
             </div>
@@ -2582,7 +2587,7 @@ function LauncherView({ session: portalSession }) {
                 className="inline-flex items-center rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
               >
                 <UploadCloud className="mr-2 h-4 w-4" />
-                Telecharger et installer le launcher
+                {t("launcher.downloadInstall", "Telecharger et installer le launcher")}
               </a>
               <Button
                 type="button"
@@ -2590,7 +2595,7 @@ function LauncherView({ session: portalSession }) {
                 className="rounded-2xl border-zinc-700 text-zinc-200"
                 onClick={() => setInstallModalOpen(false)}
               >
-                Fermer
+                {t("common.close", "Fermer")}
               </Button>
             </div>
           </div>
@@ -2717,6 +2722,7 @@ function compressPortalDefenseImage(file, maxWidth = 1400, quality = 0.86) {
 }
 
 function PortalAdminDefensesView({ session }) {
+  const { t } = usePortalLanguage();
   const [activeGuildCode, setActiveGuildCode] = useState(getPortalSessionGuildCode(session));
   const [defenses, setDefenses] = useState([]);
   const [champions, setChampions] = useState([]);
@@ -3216,8 +3222,8 @@ function PortalAdminDefensesView({ session }) {
   if (!isAdminUser) {
     return (
       <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-xl font-semibold text-zinc-50">Gestion défense</h2>
-        <p className="mt-2 text-sm text-zinc-400">Cet onglet est reserve aux administrateurs.</p>
+        <h2 className="text-xl font-semibold text-zinc-50">{t("adminDefenses.title", "Gestion defense")}</h2>
+        <p className="mt-2 text-sm text-zinc-400">{t("common.adminReserved", "Cet onglet est reserve aux administrateurs.")}</p>
       </section>
     );
   }
@@ -3227,9 +3233,9 @@ function PortalAdminDefensesView({ session }) {
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-zinc-50">Gestion défense</h2>
+            <h2 className="text-xl font-semibold text-zinc-50">{t("adminDefenses.title", "Gestion defense")}</h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Gestion admin des defenses disponibles dans Mes defenses.
+              {t("adminDefenses.portalDescription", "Gestion admin des defenses disponibles dans Mes defenses.")}
             </p>
           </div>
 
@@ -3242,7 +3248,7 @@ function PortalAdminDefensesView({ session }) {
               disabled={loading || saving}
             >
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              Actualiser
+              {t("common.refresh", "Actualiser")}
             </Button>
           </div>
         </div>
@@ -3263,7 +3269,7 @@ function PortalAdminDefensesView({ session }) {
             </button>
           ))}
           <Badge className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
-            {defenses.length} defenses visibles
+            {defenses.length} {t("adminDefenses.visibleDefenses", "defenses visibles")}
           </Badge>
         </div>
       </div>
@@ -3282,7 +3288,7 @@ function PortalAdminDefensesView({ session }) {
 
       {loading ? (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-400">
-          Chargement des defenses...
+          {t("adminDefenses.loading", "Chargement des defenses...")}
         </div>
       ) : (
         <AdminDefensesTab
@@ -3311,17 +3317,17 @@ function PortalAdminDefensesView({ session }) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold">
-                  {draft.id ? "Modifier une defense" : "Ajouter une defense"}
+                  {draft.id ? t("adminDefenses.editDefense", "Modifier une defense") : t("adminDefenses.addDefense", "Ajouter une defense")}
                 </h3>
                 <p className="mt-1 text-sm text-zinc-500">
-                  Les heros doivent correspondre au champ Name de Supabase.
+                  {t("adminDefenses.heroNameHelp", "Les heros doivent correspondre au champ Name de Supabase.")}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setDraftOpen(false)}
                 className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
-                aria-label="Fermer"
+                aria-label={t("common.close", "Fermer")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -3330,7 +3336,7 @@ function PortalAdminDefensesView({ session }) {
             <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_260px]">
               <div className="space-y-4">
                 <label className="block text-sm font-medium text-zinc-300">
-                  Nom de la defense
+                  {t("adminDefenses.defenseName", "Nom de la defense")}
                   <input
                     type="text"
                     value={draft.name}
@@ -3350,7 +3356,7 @@ function PortalAdminDefensesView({ session }) {
                     >
                       <option value="meta_s">Meta S</option>
                       <option value="meta_a">Meta A</option>
-                      <option value="secondaire">Secondaire</option>
+                      <option value="secondaire">{t("defenses.secondary", "Secondaire")}</option>
                     </select>
                   </label>
 
@@ -3361,9 +3367,9 @@ function PortalAdminDefensesView({ session }) {
                       onChange={(event) => setDraft((previous) => ({ ...previous, type: event.target.value }))}
                       className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
                     >
-                      <option value="Tour">Tour</option>
-                      <option value="Bastion">Bastion</option>
-                      <option value="Bulle">Bulle</option>
+                      <option value="Tour">{t("defenses.tower", "Tour")}</option>
+                      <option value="Bastion">{t("defenses.bastion", "Bastion")}</option>
+                      <option value="Bulle">{t("defenses.bubble", "Bulle")}</option>
                     </select>
                   </label>
 
@@ -3381,7 +3387,7 @@ function PortalAdminDefensesView({ session }) {
                 <div className="grid gap-3 sm:grid-cols-2">
                   {draft.slots.map((slot, index) => (
                     <label key={`slot-${index}`} className="block text-sm font-medium text-zinc-300">
-                      Hero {index + 1}
+                      {t("common.hero", "Hero")} {index + 1}
                       <input
                         type="text"
                         list="portal-admin-defense-heroes"
@@ -3401,22 +3407,22 @@ function PortalAdminDefensesView({ session }) {
                     <img src={draft.image} alt={draft.name || "Defense"} className="h-52 w-full object-contain" />
                   ) : (
                     <div className="flex h-52 items-center justify-center text-sm text-zinc-500">
-                      Aucune image
+                      {t("common.noImage", "Aucune image")}
                     </div>
                   )}
                 </div>
 
                 <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800">
                   <ImagePlus className="h-4 w-4" />
-                  Image defense
+                  {t("adminDefenses.defenseImage", "Image defense")}
                   <input type="file" accept="image/*" className="hidden" onChange={handleDefenseImageChange} />
                 </label>
 
                 {draft.isGlobal && isPaladinGuildCode(draft.guildCode || activeGuildCode) ? (
-                  <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-200">Defense globale</Badge>
+                  <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-200">{t("adminDefenses.globalDefense", "Defense globale")}</Badge>
                 ) : (
                   <Badge className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
-                    Guilde {activeGuildCode}
+                    {t("home.guild", "Guilde")} {activeGuildCode}
                   </Badge>
                 )}
               </div>
@@ -3430,10 +3436,10 @@ function PortalAdminDefensesView({ session }) {
                 onClick={() => setDraftOpen(false)}
                 disabled={saving}
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </Button>
               <Button type="submit" className="rounded-lg bg-emerald-600 text-white hover:bg-emerald-500" disabled={saving}>
-                {saving ? "Sauvegarde..." : "Sauvegarder"}
+                {saving ? t("common.saving", "Sauvegarde...") : t("common.save", "Sauvegarder")}
               </Button>
             </div>
           </form>
@@ -3448,14 +3454,14 @@ function PortalAdminDefensesView({ session }) {
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-lg font-semibold">Ajouter une condition</h3>
+                <h3 className="text-lg font-semibold">{t("adminDefenses.addCondition", "Ajouter une condition")}</h3>
                 <p className="mt-1 text-sm text-zinc-500">{selectedConditionDefense.name}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setConditionOpen(false)}
                 className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
-                aria-label="Fermer"
+                aria-label={t("common.close", "Fermer")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -3478,7 +3484,7 @@ function PortalAdminDefensesView({ session }) {
               </label>
 
               <label className="block text-sm font-medium text-zinc-300">
-                Eveil min
+                {t("adminDefenses.minAwakening", "Eveil min")}
                 <select
                   value={newCondition.minAwakening}
                   onChange={(event) =>
@@ -3503,10 +3509,10 @@ function PortalAdminDefensesView({ session }) {
                 onClick={() => setConditionOpen(false)}
                 disabled={saving}
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </Button>
               <Button type="submit" className="rounded-lg bg-emerald-600 text-white hover:bg-emerald-500" disabled={saving}>
-                Ajouter
+                {t("common.add", "Ajouter")}
               </Button>
             </div>
           </form>
@@ -4195,6 +4201,7 @@ function PasswordChangeRequiredView({ session, onPasswordChanged, onLogout }) {
 }
 
 function PlayerAccessView({ session }) {
+  const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const actorMemberId = session?.memberId || session?.id || "";
   const isAdminUser = isAdminSession(session);
@@ -4237,7 +4244,7 @@ function PlayerAccessView({ session }) {
       } catch (error) {
         console.error("[portal-access-members]", error);
         setMembers([]);
-        setErrorMessage("Impossible de charger les joueurs.");
+        setErrorMessage(t("playerAccess.loadPlayersError", "Impossible de charger les joueurs."));
       } finally {
         setLoadingMembers(false);
       }
@@ -4293,9 +4300,9 @@ function PlayerAccessView({ session }) {
 
       setSelectedMember(payload.member || selectedMember);
       setTemporaryPassword(payload.temporaryPassword || "");
-      setSuccessMessage("Mot de passe temporaire genere. Le joueur devra le changer a la prochaine connexion.");
+      setSuccessMessage(t("playerAccess.resetSuccess", "Mot de passe temporaire genere. Le joueur devra le changer a la prochaine connexion."));
     } catch (error) {
-      setErrorMessage(error.message || "Reset impossible.");
+      setErrorMessage(error.message || t("playerAccess.resetError", "Reset impossible."));
     } finally {
       setResetting(false);
     }
@@ -4304,9 +4311,9 @@ function PlayerAccessView({ session }) {
   if (!isAdminUser) {
     return (
       <section className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-xl font-semibold text-zinc-50">Acces joueurs</h2>
+        <h2 className="text-xl font-semibold text-zinc-50">{t("playerAccess.title", "Acces joueurs")}</h2>
         <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-          Reserve aux administrateurs.
+          {t("common.adminReserved", "Reserve aux administrateurs.")}
         </div>
       </section>
     );
@@ -4317,9 +4324,9 @@ function PlayerAccessView({ session }) {
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-xl font-semibold text-zinc-50">Acces joueurs</h2>
+            <h2 className="text-xl font-semibold text-zinc-50">{t("playerAccess.title", "Acces joueurs")}</h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Recherche joueur, identifiant et reset temporaire.
+              {t("playerAccess.description", "Recherche joueur, identifiant et reset temporaire.")}
             </p>
           </div>
           <Badge className="rounded-md border-amber-500/30 bg-amber-500/10 text-amber-200">Admin</Badge>
@@ -4329,7 +4336,7 @@ function PlayerAccessView({ session }) {
           <div className="space-y-4">
             <div>
               <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="player-access-search">
-                Joueur
+                {t("common.player", "Joueur")}
               </label>
               <div className="mt-2 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
                 <Search className="h-4 w-4 text-zinc-500" />
@@ -4343,7 +4350,7 @@ function PlayerAccessView({ session }) {
                     setSuccessMessage("");
                   }}
                   className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
-                  placeholder="Nom ou identifiant"
+                  placeholder={t("playerAccess.searchPlaceholder", "Nom ou identifiant")}
                   autoComplete="off"
                 />
               </div>
@@ -4351,11 +4358,11 @@ function PlayerAccessView({ session }) {
               <div className="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
                 {loadingMembers ? (
                   <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-500">
-                    Chargement...
+                    {t("common.loading", "Chargement...")}
                   </div>
                 ) : suggestions.length === 0 ? (
                   <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-500">
-                    {query.trim().length < 2 ? "Tape au moins 2 lettres." : "Aucun joueur trouve."}
+                    {query.trim().length < 2 ? t("common.typeAtLeast2", "Tape au moins 2 lettres.") : t("common.noPlayerFound", "Aucun joueur trouve.")}
                   </div>
                 ) : (
                   suggestions.map((member) => {
@@ -4392,16 +4399,16 @@ function PlayerAccessView({ session }) {
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
             {!selectedMember ? (
               <div className="flex h-full min-h-64 items-center justify-center text-sm text-zinc-500">
-                Selectionne un joueur.
+                {t("playerAccess.selectPlayer", "Selectionne un joueur.")}
               </div>
             ) : (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Profil</div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("home.profile", "Profil")}</div>
                     <div className="mt-1 text-2xl font-semibold text-zinc-50">{selectedMember.name}</div>
                     <div className="mt-1 text-sm text-zinc-500">
-                      {selectedMember.guildCode || "Cluster"} - {selectedMember.role || "Joueur"}
+                      {selectedMember.guildCode || t("common.cluster", "Cluster")} - {selectedMember.role || t("common.player", "Joueur")}
                     </div>
                   </div>
                   <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-300">
@@ -4411,7 +4418,7 @@ function PlayerAccessView({ session }) {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Identifiant</div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("playerAccess.identifier", "Identifiant")}</div>
                     <div className="mt-2 break-all text-lg font-semibold text-zinc-50">
                       {selectedMember.discordId || "-"}
                     </div>
@@ -4422,12 +4429,12 @@ function PlayerAccessView({ session }) {
                       onClick={() => copyValue(selectedMember.discordId, "login")}
                       disabled={!selectedMember.discordId}
                     >
-                      {copiedField === "login" ? "Copie" : "Copier"}
+                      {copiedField === "login" ? t("common.copied", "Copie") : t("common.copy", "Copier")}
                     </Button>
                   </div>
 
                   <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Mot de passe temporaire</div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("playerAccess.temporaryPassword", "Mot de passe temporaire")}</div>
                     <div className="mt-2 break-all text-lg font-semibold text-zinc-50">
                       {temporaryPassword || "-"}
                     </div>
@@ -4438,14 +4445,14 @@ function PlayerAccessView({ session }) {
                       onClick={() => copyValue(temporaryPassword, "password")}
                       disabled={!temporaryPassword}
                     >
-                      {copiedField === "password" ? "Copie" : "Copier"}
+                      {copiedField === "password" ? t("common.copied", "Copie") : t("common.copy", "Copier")}
                     </Button>
                   </div>
                 </div>
 
                 <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
                   <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="player-access-password">
-                    Confirmation admin
+                    {t("playerAccess.adminConfirmation", "Confirmation admin")}
                   </label>
                   <div className="mt-2 flex flex-col gap-3 sm:flex-row">
                     <input
@@ -4454,7 +4461,7 @@ function PlayerAccessView({ session }) {
                       value={adminPassword}
                       onChange={(event) => setAdminPassword(event.target.value)}
                       className="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
-                      placeholder="Ton mot de passe"
+                      placeholder={t("playerAccess.yourPassword", "Ton mot de passe")}
                       autoComplete="current-password"
                     />
                     <Button
@@ -4463,12 +4470,12 @@ function PlayerAccessView({ session }) {
                       onClick={resetPassword}
                       disabled={resetting || !adminPassword.trim() || selectedMemberIsProtected}
                     >
-                      {resetting ? "Generation..." : "Generer"}
+                      {resetting ? t("playerAccess.generating", "Generation...") : t("playerAccess.generate", "Generer")}
                     </Button>
                   </div>
                 </div>
                 {selectedMemberIsProtected ? (
-                  <div className="text-sm text-amber-300">Compte admin protege.</div>
+                  <div className="text-sm text-amber-300">{t("playerAccess.protectedAdmin", "Compte admin protege.")}</div>
                 ) : null}
               </div>
             )}
@@ -4491,22 +4498,22 @@ function PlayerAccessView({ session }) {
 }
 
 const logActionFilters = [
-  { id: "all", label: "Tout" },
-  { id: "hero_box_update", label: "Box heros" },
-  { id: "hero_box_bulk_a5", label: "Box A5" },
+  { id: "all", label: "Tout", labelKey: "common.all" },
+  { id: "hero_box_update", label: "Box heros", labelKey: "logs.filter.heroBox" },
+  { id: "hero_box_bulk_a5", label: "Box A5", labelKey: "logs.filter.heroBoxA5" },
   { id: "pb_update", label: "PB" },
-  { id: "pb_hero_update", label: "Heros PB" },
-  { id: "demon_monster_update", label: "Monstres" },
-  { id: "soul_stone_add", label: "Pierres +" },
-  { id: "soul_stone_remove", label: "Pierres -" },
-  { id: "defense_assign", label: "Defense +" },
-  { id: "defense_unassign", label: "Defense -" },
+  { id: "pb_hero_update", label: "Heros PB", labelKey: "logs.filter.pbHeroes" },
+  { id: "demon_monster_update", label: "Monstres", labelKey: "logs.filter.monsters" },
+  { id: "soul_stone_add", label: "Pierres +", labelKey: "logs.filter.stonesAdd" },
+  { id: "soul_stone_remove", label: "Pierres -", labelKey: "logs.filter.stonesRemove" },
+  { id: "defense_assign", label: "Defense +", labelKey: "logs.filter.defenseAdd" },
+  { id: "defense_unassign", label: "Defense -", labelKey: "logs.filter.defenseRemove" },
   { id: "gvg_launcher_start", label: "GVG" },
-  { id: "gvg_validation_import", label: "Import GVG" },
-  { id: "gvg_job_delete", label: "Jobs GVG" },
-  { id: "player_password_reset", label: "Acces joueurs" },
-  { id: "player_password_change", label: "Mot de passe" },
-  { id: "portal_tab_view", label: "Vues" },
+  { id: "gvg_validation_import", label: "Import GVG", labelKey: "logs.filter.gvgImport" },
+  { id: "gvg_job_delete", label: "Jobs GVG", labelKey: "logs.filter.gvgJobs" },
+  { id: "player_password_reset", label: "Acces joueurs", labelKey: "logs.filter.playerAccess" },
+  { id: "player_password_change", label: "Mot de passe", labelKey: "logs.filter.password" },
+  { id: "portal_tab_view", label: "Vues", labelKey: "logs.filter.views" },
 ];
 
 function formatLogDate(value) {
@@ -4522,6 +4529,7 @@ function formatLogDate(value) {
 }
 
 function LogsView({ session }) {
+  const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const [members, setMembers] = useState([]);
   const [memberQuery, setMemberQuery] = useState("");
@@ -4559,7 +4567,7 @@ function LogsView({ session }) {
       if (cancelled) return;
 
       if (error) {
-        setErrorMessage(error.message || "Impossible de charger les joueurs.");
+        setErrorMessage(error.message || t("playerAccess.loadPlayersError", "Impossible de charger les joueurs."));
         return;
       }
 
@@ -4599,14 +4607,14 @@ function LogsView({ session }) {
         const data = await response.json().catch(() => null);
 
         if (!response.ok) {
-          throw new Error(data?.error || "Impossible de charger les logs.");
+          throw new Error(data?.error || t("logs.loadError", "Impossible de charger les logs."));
         }
 
         if (!cancelled) setLogs(data?.logs || []);
       } catch (error) {
         if (!cancelled) {
           setLogs([]);
-          setErrorMessage(error?.message || "Impossible de charger les logs.");
+          setErrorMessage(error?.message || t("logs.loadError", "Impossible de charger les logs."));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -4625,22 +4633,22 @@ function LogsView({ session }) {
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <div className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">Journal d'activite</div>
-            <h2 className="mt-2 text-2xl font-semibold text-zinc-50">Logs joueur</h2>
+            <div className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">{t("logs.eyebrow", "Journal d'activite")}</div>
+            <h2 className="mt-2 text-2xl font-semibold text-zinc-50">{t("logs.title", "Logs joueur")}</h2>
             <p className="mt-2 max-w-2xl text-sm text-zinc-400">
-              Recherche un joueur pour voir ses dernieres actions Portal : box, PB, monstres, pierres, defenses et GVG.
+              {t("logs.description", "Recherche un joueur pour voir ses dernieres actions Portal : box, PB, monstres, pierres, defenses et GVG.")}
             </p>
           </div>
 
           <Badge className="w-fit rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
-            {logs.length} evenement(s)
+            {logs.length} {t("logs.events", "evenement(s)")}
           </Badge>
         </div>
 
         <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(280px,420px)_1fr]">
           <div>
             <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="log-member-search">
-              Joueur
+              {t("common.player", "Joueur")}
             </label>
             <div className="mt-2 flex h-11 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 ring-emerald-400/20 transition focus-within:border-emerald-400/60 focus-within:ring-2">
               <Search className="h-4 w-4 shrink-0 text-zinc-500" />
@@ -4649,14 +4657,14 @@ function LogsView({ session }) {
                 type="search"
                 value={memberQuery}
                 onChange={(event) => setMemberQuery(event.target.value)}
-                placeholder="Taper un nom de joueur"
+                placeholder={t("logs.searchPlayer", "Taper un nom de joueur")}
                 className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
               />
             </div>
 
             <div className="mt-2 max-h-64 space-y-2 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/80 p-2">
               {memberSuggestions.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-zinc-500">Aucun joueur trouve.</div>
+                <div className="px-3 py-2 text-sm text-zinc-500">{t("common.noPlayerFound", "Aucun joueur trouve.")}</div>
               ) : (
                 memberSuggestions.map((member) => {
                   const selected = String(member.id) === String(selectedMemberId);
@@ -4685,7 +4693,7 @@ function LogsView({ session }) {
           </div>
 
           <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Type d'action</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">{t("logs.actionType", "Type d'action")}</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {logActionFilters.map((filter) => (
                 <button
@@ -4698,15 +4706,15 @@ function LogsView({ session }) {
                       : "border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
                   }`}
                 >
-                  {filter.label}
+                  {t(filter.labelKey || `logs.filter.${filter.id}`, filter.label)}
                 </button>
               ))}
             </div>
 
             <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
-              Profil consulte :{" "}
+              {t("logs.viewedProfile", "Profil consulte")} :{" "}
               <span className="font-semibold text-zinc-100">
-                {selectedMember ? getMemberDisplayName(selectedMember) : "Aucun joueur"}
+                {selectedMember ? getMemberDisplayName(selectedMember) : t("common.noPlayer", "Aucun joueur")}
               </span>
             </div>
           </div>
@@ -4721,9 +4729,9 @@ function LogsView({ session }) {
 
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
         {loading ? (
-          <div className="text-sm text-zinc-500">Chargement des logs...</div>
+          <div className="text-sm text-zinc-500">{t("logs.loading", "Chargement des logs...")}</div>
         ) : logs.length === 0 ? (
-          <div className="text-sm text-zinc-500">Aucun log trouve pour ce filtre.</div>
+          <div className="text-sm text-zinc-500">{t("logs.noLog", "Aucun log trouve pour ce filtre.")}</div>
         ) : (
           <div className="space-y-3">
             {logs.map((log) => (
@@ -4732,8 +4740,8 @@ function LogsView({ session }) {
                   <div>
                     <div className="text-sm font-semibold text-zinc-50">{log.summary}</div>
                     <div className="mt-1 text-xs text-zinc-500">
-                      Acteur : {log.actor_name || "Systeme"}
-                      {log.target_name ? ` - Cible : ${log.target_name}` : ""}
+                      {t("logs.actor", "Acteur")} : {log.actor_name || t("logs.system", "Systeme")}
+                      {log.target_name ? ` - ${t("logs.target", "Cible")} : ${log.target_name}` : ""}
                     </div>
                   </div>
                   <div className="text-right text-xs text-zinc-500">{formatLogDate(log.created_at)}</div>
@@ -4754,20 +4762,22 @@ function LogsView({ session }) {
 }
 
 function SettingsView({ session, onLogout }) {
+  const { t } = usePortalLanguage();
+
   return (
     <section className="space-y-5">
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-        <h2 className="text-xl font-semibold text-zinc-50">Parametres</h2>
-        <p className="mt-2 text-sm text-zinc-500">Gestion de la session Portal.</p>
+        <h2 className="text-xl font-semibold text-zinc-50">{t("settings.title", "Parametres")}</h2>
+        <p className="mt-2 text-sm text-zinc-500">{t("settings.description", "Gestion de la session Portal.")}</p>
       </div>
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-sm font-semibold uppercase tracking-[0.16em] text-zinc-500">Compte connecte</div>
-            <div className="mt-2 text-lg font-semibold text-zinc-50">{session?.watcherName || session?.name || "Joueur"}</div>
+            <div className="text-sm font-semibold uppercase tracking-[0.16em] text-zinc-500">{t("settings.connectedAccount", "Compte connecte")}</div>
+            <div className="mt-2 text-lg font-semibold text-zinc-50">{session?.watcherName || session?.name || t("common.player", "Joueur")}</div>
             <div className="mt-1 text-sm text-zinc-500">
-              {session?.role || "Membre"} {session?.guildCode ? `- ${session.guildCode}` : ""}
+              {session?.role || t("common.member", "Membre")} {session?.guildCode ? `- ${session.guildCode}` : ""}
             </div>
           </div>
 
@@ -4778,7 +4788,7 @@ function SettingsView({ session, onLogout }) {
             className="w-full rounded-lg border-red-500/35 bg-red-500/10 text-red-100 hover:bg-red-500/20 md:w-auto"
           >
             <LogOut className="mr-2 h-4 w-4" />
-            Se deconnecter
+            {t("settings.logoutAction", "Se deconnecter")}
           </Button>
         </div>
       </div>

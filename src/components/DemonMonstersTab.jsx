@@ -8,13 +8,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { filterByGuildScope } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const DEMON_RARITY_FILTERS = [
-  { id: "Tous", label: "Tous", tone: "border-zinc-600 bg-zinc-900 text-zinc-100" },
-  { id: "mythique", label: "Mythique", tone: "border-fuchsia-300 bg-fuchsia-300 text-black" },
-  { id: "legendaire", label: "Legendaire", tone: "border-yellow-300 bg-yellow-300 text-black" },
-  { id: "epique", label: "Epique", tone: "border-violet-300 bg-violet-300 text-black" },
-  { id: "rare", label: "Rare", tone: "border-sky-300 bg-sky-300 text-black" },
+  { id: "Tous", label: "Tous", labelKey: "common.all", tone: "border-zinc-600 bg-zinc-900 text-zinc-100" },
+  { id: "mythique", label: "Mythique", labelKey: "demon.rarity.mythic", tone: "border-fuchsia-300 bg-fuchsia-300 text-black" },
+  { id: "legendaire", label: "Legendaire", labelKey: "demon.rarity.legendary", tone: "border-yellow-300 bg-yellow-300 text-black" },
+  { id: "epique", label: "Epique", labelKey: "demon.rarity.epic", tone: "border-violet-300 bg-violet-300 text-black" },
+  { id: "rare", label: "Rare", labelKey: "demon.rarity.rare", tone: "border-sky-300 bg-sky-300 text-black" },
 ];
 
 const DEMON_RARITY_TONES = {
@@ -60,6 +61,7 @@ function getSessionRole(session) {
 }
 
 export default function DemonMonstersTab({ session }) {
+  const { t } = usePortalLanguage();
   const [members, setMembers] = useState([]);
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [memberQuery, setMemberQuery] = useState("");
@@ -384,27 +386,27 @@ export default function DemonMonstersTab({ session }) {
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 rounded-full border border-red-400/30 bg-red-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-red-100">
               <Skull className="h-4 w-4" />
-              Bibliotheque demoniaque
+              {t("demon.eyebrow", "Bibliotheque demoniaque")}
             </div>
             <h2 className="mt-4 text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Monstres demoniaques
+              {t("demon.title", "Monstres demoniaques")}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-300 md:text-base">
-              Reprend le fonctionnement de l'ancien dashboard : bibliotheque, raretes, niveaux et sauvegarde par joueur.
+              {t("demon.description", "Reprend le fonctionnement de l'ancien dashboard : bibliotheque, raretes, niveaux et sauvegarde par joueur.")}
             </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3 xl:w-[520px]">
             <div className="rounded-2xl border border-zinc-800 bg-black/35 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Possedes</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("demon.owned", "Possedes")}</div>
               <div className="mt-2 text-2xl font-semibold text-zinc-50">{ownedCount}</div>
             </div>
             <div className="rounded-2xl border border-zinc-800 bg-black/35 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Niveau 20</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("demon.level20", "Niveau 20")}</div>
               <div className="mt-2 text-2xl font-semibold text-amber-200">{maxLevelCount}</div>
             </div>
             <div className="rounded-2xl border border-zinc-800 bg-black/35 p-4">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Affiches</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{t("demon.displayed", "Affiches")}</div>
               <div className="mt-2 text-2xl font-semibold text-red-100">{demonicMonsterCards.length}</div>
             </div>
           </div>
@@ -416,8 +418,8 @@ export default function DemonMonstersTab({ session }) {
           <div className="grid min-h-[720px] grid-cols-1 xl:grid-cols-[260px_1fr]">
             <aside className="border-b border-zinc-800 p-5 xl:border-b-0 xl:border-r">
               <div>
-                <div className="text-lg font-semibold text-zinc-50">Filtres</div>
-                <div className="mt-1 text-sm text-zinc-500">Rarete et joueur actif</div>
+                <div className="text-lg font-semibold text-zinc-50">{t("common.filters", "Filtres")}</div>
+                <div className="mt-1 text-sm text-zinc-500">{t("demon.filtersHelp", "Rarete et joueur actif")}</div>
               </div>
 
               <div className="mt-5 space-y-3">
@@ -435,7 +437,7 @@ export default function DemonMonstersTab({ session }) {
                           : "border-zinc-800 bg-zinc-900/70 text-zinc-300 hover:border-red-400/50 hover:bg-zinc-900"
                       }`}
                     >
-                      {filter.label}
+                      {t(filter.labelKey, filter.label)}
                     </button>
                   );
                 })}
@@ -443,7 +445,7 @@ export default function DemonMonstersTab({ session }) {
 
               <div className="mt-6 space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-member">
-                  Joueur du cluster
+                  {t("common.clusterPlayer", "Joueur du cluster")}
                 </label>
                 <div className="flex h-10 items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 ring-red-400/30 transition focus-within:border-red-400 focus-within:ring-2">
                   <Search className="h-4 w-4 shrink-0 text-zinc-500" />
@@ -452,14 +454,14 @@ export default function DemonMonstersTab({ session }) {
                     type="search"
                     value={memberQuery}
                     onChange={(event) => setMemberQuery(event.target.value)}
-                    placeholder="Rechercher un joueur"
+                    placeholder={t("common.searchPlayer", "Rechercher un joueur")}
                     className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
                   />
                 </div>
 
                 <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/80 p-2">
                   {memberSuggestions.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-zinc-500">Aucun joueur trouve.</div>
+                    <div className="px-3 py-2 text-sm text-zinc-500">{t("common.noPlayerFound", "Aucun joueur trouve.")}</div>
                   ) : (
                     memberSuggestions.map((member) => {
                       const selected = String(member.id) === String(selectedMemberId);
@@ -480,7 +482,7 @@ export default function DemonMonstersTab({ session }) {
                         >
                           <span className="block truncate text-sm font-semibold">{member.name}</span>
                           <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                            {member.guildCode || "Cluster"} {member.discordId ? `- ${member.discordId}` : ""}
+                            {member.guildCode || t("common.cluster", "Cluster")} {member.discordId ? `- ${member.discordId}` : ""}
                           </span>
                         </button>
                       );
@@ -492,11 +494,11 @@ export default function DemonMonstersTab({ session }) {
               <div className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 text-sm text-zinc-400">
                 <div className="flex items-center gap-2 font-medium text-zinc-200">
                   <Shield className="h-4 w-4 text-red-200" />
-                  {selectedMember?.name || "Aucun membre"}
+                  {selectedMember?.name || t("common.noMember", "Aucun membre")}
                 </div>
-                <div className="mt-1 text-xs text-zinc-500">{selectedMember?.guildCode || "Cluster"}</div>
+                <div className="mt-1 text-xs text-zinc-500">{selectedMember?.guildCode || t("common.cluster", "Cluster")}</div>
                 <p className="mt-2 leading-5">
-                  Clique sur le niveau au centre d'une carte pour renseigner ou corriger le niveau du monstre.
+                  {t("demon.levelHelp", "Clique sur le niveau au centre d'une carte pour renseigner ou corriger le niveau du monstre.")}
                 </p>
               </div>
             </aside>
@@ -504,9 +506,11 @@ export default function DemonMonstersTab({ session }) {
             <div className="p-5">
               <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <div className="text-lg font-semibold text-zinc-50">Box monstres demoniaques</div>
+                  <div className="text-lg font-semibold text-zinc-50">{t("demon.boxTitle", "Box monstres demoniaques")}</div>
                   <div className="text-sm text-zinc-500">
-                    {loading || entriesLoading ? "Chargement..." : `${demonicMonsterCards.length} monstre(s) affiche(s)`}
+                    {loading || entriesLoading
+                      ? t("common.loading", "Chargement...")
+                      : `${demonicMonsterCards.length} ${t("demon.monstersDisplayed", "monstre(s) affiche(s)")}`}
                   </div>
                 </div>
 
@@ -515,7 +519,7 @@ export default function DemonMonstersTab({ session }) {
                   <Input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Rechercher un monstre"
+                    placeholder={t("demon.searchMonster", "Rechercher un monstre")}
                     className="h-11 rounded-xl border-zinc-800 bg-zinc-950 pl-9 text-zinc-100"
                   />
                 </div>
@@ -529,7 +533,7 @@ export default function DemonMonstersTab({ session }) {
 
               {loading ? (
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-8 text-sm text-zinc-400">
-                  Chargement de la bibliotheque...
+                  {t("demon.libraryLoading", "Chargement de la bibliotheque...")}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
@@ -551,7 +555,7 @@ export default function DemonMonstersTab({ session }) {
                           />
                           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black via-black/55 to-transparent" />
                           <Badge className={`absolute left-3 top-3 rounded-full ${tone.badge}`}>
-                            {tone.label}
+                            {t(`demon.rarity.${monster.rarity}`, tone.label)}
                           </Badge>
                           <button
                             type="button"
@@ -562,7 +566,7 @@ export default function DemonMonstersTab({ session }) {
                                 ? "border-zinc-500 bg-zinc-800/95 hover:scale-105 hover:border-red-200 hover:bg-red-950"
                                 : "cursor-not-allowed border-zinc-700 bg-zinc-800 opacity-60"
                             }`}
-                            title={canEditDemonicMonsters ? "Renseigner le niveau" : "Modification non autorisee"}
+                            title={canEditDemonicMonsters ? t("demon.setLevel", "Renseigner le niveau") : t("common.editNotAllowed", "Modification non autorisee")}
                           >
                             {monster.level > 0 ? monster.level : "?"}
                           </button>
@@ -574,7 +578,7 @@ export default function DemonMonstersTab({ session }) {
                           </div>
                           <div className="flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                             <Sparkles className="h-4 w-4" />
-                            Niv. {monster.level || 0}
+                            {t("demon.levelShort", "Niv.")} {monster.level || 0}
                           </div>
                         </div>
                       </article>
@@ -590,21 +594,21 @@ export default function DemonMonstersTab({ session }) {
       <Dialog open={levelDialogOpen} onOpenChange={setLevelDialogOpen}>
         <DialogContent className="max-w-md rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
           <DialogHeader>
-            <DialogTitle>Renseigner le niveau</DialogTitle>
+            <DialogTitle>{t("demon.setLevel", "Renseigner le niveau")}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-              <div className="text-sm text-zinc-400">Monstre selectionne</div>
+              <div className="text-sm text-zinc-400">{t("demon.selectedMonster", "Monstre selectionne")}</div>
               <div className="mt-1 font-medium text-zinc-50">
                 {selectedMonster?.name || selectedMonster?.slug || "-"}
               </div>
-              <div className="text-sm text-zinc-400">Niveau actuel : {selectedMonster?.level || 0}</div>
+              <div className="text-sm text-zinc-400">{t("demon.currentLevel", "Niveau actuel")} : {selectedMonster?.level || 0}</div>
             </div>
 
             <div className="space-y-2">
               <label className="text-sm text-zinc-400" htmlFor="demon-level-input">
-                Niveau du monstre
+                {t("demon.monsterLevel", "Niveau du monstre")}
               </label>
               <Input
                 id="demon-level-input"
@@ -613,7 +617,7 @@ export default function DemonMonstersTab({ session }) {
                 max="20"
                 value={levelInput}
                 onChange={(event) => setLevelInput(event.target.value)}
-                placeholder="Entre 0 et 20"
+                placeholder={t("demon.levelPlaceholder", "Entre 0 et 20")}
                 className="h-11 rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100"
               />
             </div>
@@ -629,11 +633,11 @@ export default function DemonMonstersTab({ session }) {
                 }}
                 disabled={levelSaving}
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </Button>
 
               <Button className="rounded-2xl" onClick={saveDemonLevel} disabled={levelSaving}>
-                {levelSaving ? "Enregistrement..." : "Enregistrer"}
+                {levelSaving ? t("common.saving", "Enregistrement...") : t("common.save", "Enregistrer")}
               </Button>
             </div>
           </div>

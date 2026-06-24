@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Shield, Plus, Pencil, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 export default function AdminDefensesTab({
   defenses = [],
@@ -9,6 +10,7 @@ export default function AdminDefensesTab({
   onAdd,
   onAddCondition,
 }) {
+  const { t } = usePortalLanguage();
   const [typeFilter, setTypeFilter] = useState("all");
 const [blocksModalOpen, setBlocksModalOpen] = useState(false);
 const [selectedDefenseForBlocks, setSelectedDefenseForBlocks] = useState(null);
@@ -91,6 +93,15 @@ const openDefenseBlocksModal = async (defense) => {
         : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
     }`;
 
+  const formatDefenseTypeLabel = (value) => {
+    const normalizedType = String(value || "").trim().toLowerCase();
+
+    if (normalizedType === "tour") return t("defenses.tower", "Tour");
+    if (normalizedType === "bastion") return t("defenses.bastion", "Bastion");
+    if (normalizedType === "bulle") return t("defenses.bubble", "Bulle");
+    return value || "";
+  };
+
 const defenseCardClass = (tier) => {
   const normalizedTier = String(tier || "").trim().toLowerCase();
 
@@ -128,7 +139,7 @@ const moveBlock = async (index, direction) => {
 };
 
 const deleteBlock = async (block) => {
-  const confirmDelete = window.confirm("Supprimer ce bloc ?");
+  const confirmDelete = window.confirm(t("adminDefenses.deleteBlockConfirm", "Supprimer ce bloc ?"));
   if (!confirmDelete) return;
 
   // 🔥 si c’est une image → supprimer du storage
@@ -298,10 +309,10 @@ const addImageBlock = async (event) => {
         <div>
           <h2 className="flex items-center gap-2 text-xl font-bold text-white">
             <Shield className="h-5 w-5" />
-            Gestion défense
+            {t("adminDefenses.title", "Gestion defense")}
           </h2>
           <p className="text-sm text-zinc-400">
-            Gestion des défenses disponibles dans Mes défenses.
+            {t("adminDefenses.description", "Gestion des defenses disponibles dans Mes defenses.")}
           </p>
         </div>
 
@@ -311,7 +322,7 @@ const addImageBlock = async (event) => {
           className="flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800"
         >
           <Plus className="h-4 w-4" />
-          Ajouter une défense
+          {t("adminDefenses.addDefense", "Ajouter une defense")}
         </button>
       </div>
 
@@ -321,7 +332,7 @@ const addImageBlock = async (event) => {
           onClick={() => setTypeFilter("all")}
           className={filterButtonClass("all")}
         >
-          Toutes
+          {t("common.allPlural", "Toutes")}
         </button>
 
         <button
@@ -329,7 +340,7 @@ const addImageBlock = async (event) => {
           onClick={() => setTypeFilter("tour")}
           className={filterButtonClass("tour")}
         >
-          Tour
+          {t("defenses.tower", "Tour")}
         </button>
 
         <button
@@ -337,7 +348,7 @@ const addImageBlock = async (event) => {
           onClick={() => setTypeFilter("bastion")}
           className={filterButtonClass("bastion")}
         >
-          Bastion
+          {t("defenses.bastion", "Bastion")}
         </button>
 
         <button
@@ -345,14 +356,14 @@ const addImageBlock = async (event) => {
           onClick={() => setTypeFilter("bulle")}
           className={filterButtonClass("bulle")}
         >
-          Bulle
+          {t("defenses.bubble", "Bulle")}
         </button>
       </div>
 
       <div className="grid gap-3">
         {displayedDefenses.length === 0 ? (
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
-            Aucune défense chargée.
+            {t("adminDefenses.noDefenseLoaded", "Aucune defense chargee.")}
           </div>
         ) : (
           displayedDefenses.map((defense) => {
@@ -372,20 +383,20 @@ const addImageBlock = async (event) => {
                       {defense.name}
                     </div>
                     <div className="mt-1 text-xs text-zinc-300">
-                      {defense.tier} · {defense.type}
+                      {defense.tier} · {formatDefenseTypeLabel(defense.type)}
                     </div>
                   </div>
 
                   <div className="mt-3 text-sm text-zinc-200">
-                    Héros :{" "}
+                    {t("common.heroes", "Heros")} :{" "}
                     {(defense.slots || []).filter(Boolean).join(", ") ||
-                      "Non renseigné"}
+                      t("common.notFilled", "Non renseigne")}
                   </div>
 
                   <div className="mt-2 text-sm text-zinc-300">
-                    Conditions :
+                    {t("defenses.conditions", "Conditions")} :
                     {(defense.conditions || []).length === 0 ? (
-                      <span className="ml-2 text-zinc-400">Aucune</span>
+                      <span className="ml-2 text-zinc-400">{t("common.none", "Aucune")}</span>
                     ) : (
                       <ul className="mt-1 space-y-1">
                         {defense.conditions.slice(0, 5).map((cond, i) => (
@@ -402,9 +413,9 @@ const addImageBlock = async (event) => {
 
                   <div className="mt-3 rounded-xl border border-zinc-900/60 bg-black/20 p-3 text-sm text-zinc-300">
                     <div>
-                      Infos :
+                      {t("adminDefenses.info", "Infos")} :
                       {infoBlocks.length === 0 ? (
-                        <span className="ml-2 text-zinc-400">Aucune</span>
+                        <span className="ml-2 text-zinc-400">{t("common.none", "Aucune")}</span>
                       ) : null}
                     </div>
 
@@ -420,7 +431,7 @@ const addImageBlock = async (event) => {
                             >
                               <img
                                 src={block.content}
-                                alt="Info defense"
+                                alt={t("adminDefenses.infoImageAlt", "Info defense")}
                                 className="max-h-24 w-full object-contain"
                               />
                             </div>
@@ -436,7 +447,7 @@ const addImageBlock = async (event) => {
 
                         {infoBlocks.length > 3 ? (
                           <div className="text-xs text-zinc-400">
-                            +{infoBlocks.length - 3} info{infoBlocks.length - 3 > 1 ? "s" : ""} dans le modal
+                            +{infoBlocks.length - 3} {t("adminDefenses.moreInfo", "info(s) dans le modal")}
                           </div>
                         ) : null}
                       </div>
@@ -452,7 +463,7 @@ const addImageBlock = async (event) => {
                       className="h-full w-full object-cover"
                     />
                   ) : (
-                    <div className="text-xs text-zinc-500">Aucune image</div>
+                    <div className="text-xs text-zinc-500">{t("common.noImage", "Aucune image")}</div>
                   )}
                 </div>
 
@@ -478,14 +489,14 @@ const addImageBlock = async (event) => {
                     onClick={() => onAddCondition?.(defense)}
                     className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
                   >
-                    + Condition
+                    + {t("defenses.conditions", "Condition")}
                   </button>
                   <button
   type="button"
   onClick={() => openDefenseBlocksModal(defense)}
   className="rounded-xl border border-blue-700 bg-blue-900/30 px-2 py-1 text-xs text-blue-300 hover:bg-blue-800/50"
 >
-  💬 Infos
+  {t("adminDefenses.infoButton", "Infos")}
 </button>
                 </div>
               </div>
@@ -498,7 +509,7 @@ const addImageBlock = async (event) => {
     <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <div className="text-lg font-bold">Infos défense</div>
+          <div className="text-lg font-bold">{t("adminDefenses.defenseInfo", "Infos defense")}</div>
           <div className="text-sm text-zinc-400">
             {selectedDefenseForBlocks.name}
           </div>
@@ -509,21 +520,21 @@ const addImageBlock = async (event) => {
           onClick={() => setBlocksModalOpen(false)}
           className="rounded-xl border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
         >
-          Fermer
+          {t("common.close", "Fermer")}
         </button>
       </div>
 
       <div className="min-h-0 overflow-y-auto rounded-xl border border-dashed border-zinc-700 p-4 text-sm text-zinc-400">
         <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
           <div className="mb-2 text-sm font-semibold text-zinc-200">
-            Ajouter un bloc texte
+            {t("adminDefenses.addTextBlock", "Ajouter un bloc texte")}
           </div>
 
           <textarea
             value={newTextBlock}
             onChange={(e) => setNewTextBlock(e.target.value)}
             rows={4}
-            placeholder="Écris ton commentaire ici..."
+            placeholder={t("adminDefenses.textPlaceholder", "Ecris ton commentaire ici...")}
             className="w-full resize-none rounded-xl border border-zinc-700 bg-zinc-950 p-3 text-sm text-white outline-none focus:border-blue-500"
           />
 
@@ -533,11 +544,11 @@ const addImageBlock = async (event) => {
     onClick={addTextBlock}
     className="rounded-xl border border-emerald-700 bg-emerald-900/30 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-800/50"
   >
-    Enregistrer le texte
+    {t("adminDefenses.saveText", "Enregistrer le texte")}
   </button>
 
   <label className="cursor-pointer rounded-xl border border-blue-700 bg-blue-900/30 px-3 py-1.5 text-xs text-blue-300 hover:bg-blue-800/50">
-    Ajouter un fichier
+    {t("adminDefenses.addFile", "Ajouter un fichier")}
     <input
       type="file"
       accept="image/*"
@@ -549,9 +560,9 @@ const addImageBlock = async (event) => {
         </div>
 
         {blocksLoading ? (
-          "Chargement..."
+          t("common.loading", "Chargement...")
         ) : defenseBlocks.length === 0 ? (
-          "Aucun bloc pour cette défense."
+          t("adminDefenses.noBlock", "Aucun bloc pour cette defense.")
         ) : (
           <div className="space-y-2">
             {defenseBlocks.map((block, index) => (
@@ -561,7 +572,7 @@ const addImageBlock = async (event) => {
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="text-xs uppercase tracking-wide text-zinc-500">
-                    {block.block_type === "image" ? "Image" : "Texte"}
+                    {block.block_type === "image" ? t("common.image", "Image") : t("common.text", "Texte")}
                   </div>
 
                   <div className="flex gap-1">
@@ -588,7 +599,7 @@ const addImageBlock = async (event) => {
                       onClick={() => deleteBlock(block)}
                       className="rounded-lg border border-red-800 px-2 py-1 text-xs text-red-300 hover:bg-red-950/40"
                     >
-                      Supprimer
+                      {t("common.delete", "Supprimer")}
                     </button>
                   </div>
                 </div>
@@ -597,7 +608,7 @@ const addImageBlock = async (event) => {
                   <div className="overflow-hidden rounded-xl border border-zinc-800 bg-black">
                     <img
                       src={block.content}
-                      alt="Bloc défense"
+                      alt={t("adminDefenses.blockImageAlt", "Bloc defense")}
                       className="max-h-[320px] w-full object-contain"
                     />
                   </div>

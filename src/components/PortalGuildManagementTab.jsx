@@ -15,6 +15,7 @@ import {
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
 
@@ -88,6 +89,7 @@ function isAdminSession(session) {
 }
 
 export default function PortalGuildManagementTab({ session }) {
+  const { t } = usePortalLanguage();
   const [activeGuildCode, setActiveGuildCode] = useState(getSessionGuildCode(session));
   const [members, setMembers] = useState([]);
   const [defenses, setDefenses] = useState([]);
@@ -828,20 +830,20 @@ export default function PortalGuildManagementTab({ session }) {
           <div>
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-emerald-300" />
-              <h2 className="text-xl font-semibold text-zinc-50">Gestion des guildes</h2>
+              <h2 className="text-xl font-semibold text-zinc-50">{t("guildManagement.title", "Gestion des guildes")}</h2>
             </div>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
-              Pilotage des defenses meta, statuts de preparation, roles Tour/Bulle/Bastion et transferts entre guildes.
+              {t("guildManagement.description", "Pilotage des defenses meta, statuts de preparation, roles Tour/Bulle/Bastion et transferts entre guildes.")}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <Badge className="rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
               <Users className="mr-1 h-3.5 w-3.5" />
-              {activeMembers.length} joueurs
+              {activeMembers.length} {t("guildManagement.players", "joueurs")}
             </Badge>
             <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-300">
-              {activeDefenses.length} defenses
+              {activeDefenses.length} {t("guildManagement.defenses", "defenses")}
             </Badge>
             <Button
               type="button"
@@ -850,7 +852,7 @@ export default function PortalGuildManagementTab({ session }) {
               onClick={() => setAddMemberOpen(true)}
             >
               <UserPlus className="mr-2 h-4 w-4" />
-              Ajouter un membre
+              {t("guildManagement.addMember", "Ajouter un membre")}
             </Button>
             <Button
               type="button"
@@ -859,7 +861,7 @@ export default function PortalGuildManagementTab({ session }) {
               onClick={() => setRefreshTick((value) => value + 1)}
             >
               <RefreshCw className="mr-2 h-4 w-4" />
-              Rafraichir
+              {t("common.refresh", "Rafraichir")}
             </Button>
           </div>
         </div>
@@ -900,7 +902,7 @@ export default function PortalGuildManagementTab({ session }) {
 
       {loading ? (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-400">
-          Chargement de la gestion des guildes...
+          {t("guildManagement.loading", "Chargement de la gestion des guildes...")}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/70">
@@ -944,9 +946,9 @@ export default function PortalGuildManagementTab({ session }) {
                   <UserPlus className="h-5 w-5 text-emerald-200" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-zinc-50">Ajouter un membre</h3>
+                  <h3 className="text-lg font-semibold text-zinc-50">{t("guildManagement.addMember", "Ajouter un membre")}</h3>
                   <p className="mt-1 text-sm text-zinc-400">
-                    Le joueur sera ajoute dans {activeGuildCode} avec le mot de passe par defaut membre.
+                    {t("guildManagement.addMemberHelp", "Le joueur sera ajoute dans {guild} avec le mot de passe par defaut membre.").replace("{guild}", activeGuildCode)}
                   </p>
                 </div>
               </div>
@@ -958,7 +960,7 @@ export default function PortalGuildManagementTab({ session }) {
                   if (addingMember) return;
                   setAddMemberOpen(false);
                 }}
-                title="Fermer"
+                title={t("common.close", "Fermer")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -966,7 +968,7 @@ export default function PortalGuildManagementTab({ session }) {
 
             <div className="mt-5 grid gap-4">
               <label className="block">
-                <span className="text-sm text-zinc-400">Nom joueur</span>
+                <span className="text-sm text-zinc-400">{t("guildManagement.playerName", "Nom joueur")}</span>
                 <input
                   type="text"
                   value={newMember.name}
@@ -988,7 +990,7 @@ export default function PortalGuildManagementTab({ session }) {
               </label>
 
               <label className="block">
-                <span className="text-sm text-zinc-400">Lien forum personnel</span>
+                <span className="text-sm text-zinc-400">{t("guildManagement.personalForumLink", "Lien forum personnel")}</span>
                 <input
                   type="url"
                   value={newMember.forumPostUrl}
@@ -999,8 +1001,9 @@ export default function PortalGuildManagementTab({ session }) {
               </label>
 
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 p-4 text-sm leading-6 text-zinc-400">
-                Creation automatique : profil joueur, box heros initialisee a non possede, 5 slots PB vides,
-                role defense <span className="text-zinc-100">Tour</span> et statut <span className="text-zinc-100">À faire</span>.
+                {t("guildManagement.autoCreatePrefix", "Creation automatique : profil joueur, box heros initialisee a non possede, 5 slots PB vides, role defense")}{" "}
+                <span className="text-zinc-100">{t("defenses.tower", "Tour")}</span> {t("common.and", "et")} {t("guildManagement.status", "statut")}{" "}
+                <span className="text-zinc-100">{t("guildManagement.todo", "A faire")}</span>.
               </div>
             </div>
 
@@ -1012,7 +1015,7 @@ export default function PortalGuildManagementTab({ session }) {
                 disabled={addingMember}
                 onClick={() => setAddMemberOpen(false)}
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </Button>
               <Button
                 type="button"
@@ -1021,7 +1024,7 @@ export default function PortalGuildManagementTab({ session }) {
                 onClick={addMember}
               >
                 <Plus className="mr-2 h-4 w-4" />
-                {addingMember ? "Ajout..." : "Confirmer"}
+                {addingMember ? t("guildManagement.adding", "Ajout...") : t("common.confirm", "Confirmer")}
               </Button>
             </div>
           </div>
@@ -1036,7 +1039,7 @@ export default function PortalGuildManagementTab({ session }) {
                 <ArrowRightLeft className="h-5 w-5 text-amber-200" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-zinc-50">Transferer un joueur</h3>
+                <h3 className="text-lg font-semibold text-zinc-50">{t("guildManagement.transferPlayer", "Transferer un joueur")}</h3>
                 <p className="mt-1 text-sm text-zinc-400">
                   {memberToTransfer.name} est actuellement dans {memberToTransfer.guildCode || activeGuildCode}.
                 </p>
@@ -1077,7 +1080,7 @@ export default function PortalGuildManagementTab({ session }) {
                   setTargetGuildCode("");
                 }}
               >
-                Annuler
+                {t("common.cancel", "Annuler")}
               </Button>
               <Button
                 type="button"
@@ -1090,7 +1093,7 @@ export default function PortalGuildManagementTab({ session }) {
                 }
                 onClick={transferMemberToGuild}
               >
-                Transferer
+                {t("guildManagement.transferAction", "Transferer")}
               </Button>
             </div>
           </div>
