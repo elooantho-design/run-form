@@ -16,6 +16,8 @@ import {
   LayoutDashboard,
   Lock,
   LogOut,
+  Menu,
+  Monitor,
   Play,
   PlusCircle,
   RefreshCw,
@@ -24,6 +26,7 @@ import {
   Server,
   Settings,
   Shield,
+  Smartphone,
   Sparkles,
   Star,
   UploadCloud,
@@ -93,6 +96,17 @@ const adminNavigation = [
   { id: "logs", label: "Logs", labelKey: "nav.logs", icon: Activity },
   { id: "player-access", label: "Acces joueurs", labelKey: "nav.playerAccess", icon: Lock, adminOnly: true },
 ];
+
+const PORTAL_VIEW_MODE_STORAGE_KEY = "portalViewMode";
+
+function getInitialPortalViewMode() {
+  if (typeof window === "undefined") return "desktop";
+
+  const stored = window.localStorage.getItem(PORTAL_VIEW_MODE_STORAGE_KEY);
+  if (stored === "desktop" || stored === "mobile") return stored;
+
+  return window.matchMedia?.("(max-width: 767px)")?.matches ? "mobile" : "desktop";
+}
 
 const categoryCards = [
   {
@@ -1020,10 +1034,13 @@ function PortalShell({ session, onLogout }) {
   const { t } = usePortalLanguage();
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
+  const [viewMode, setViewMode] = useState(getInitialPortalViewMode);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
   const isLeaderUser = isLeaderSession(session);
   const isPaladinUser = isPaladinSession(session);
+  const isMobileMode = viewMode === "mobile";
   const controlBrand = getControlBrand(session);
   const guildScopeDescription = getGuildScopeDescription(session);
   const visibleAdminNavigation = useMemo(
@@ -1071,10 +1088,192 @@ function PortalShell({ session, onLogout }) {
     if (activeAdminItem) setAdminNavOpen(true);
   }, [activeAdminItem]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PORTAL_VIEW_MODE_STORAGE_KEY, viewMode);
+    if (viewMode !== "mobile") setMobileNavOpen(false);
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+
+    document.body.classList.toggle("portal-mobile-active", isMobileMode);
+
+    return () => {
+      document.body.classList.remove("portal-mobile-active");
+    };
+  }, [isMobileMode]);
+
+  useEffect(() => {
+    if (!isMobileMode || !mobileNavOpen || typeof document === "undefined") return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMobileMode, mobileNavOpen]);
+
+  const selectTab = (tabId) => {
+    setActive(tabId);
+    setMobileNavOpen(false);
+  };
+
+  const toggleViewMode = () => {
+    setViewMode((current) => (current === "mobile" ? "desktop" : "mobile"));
+  };
+
+  const renderNavigation = (variant = "desktop") => {
+    const itemClass = (selected) =>
+      variant === "mobile"
+        ? `flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-base transition ${
+            selected
+              ? "bg-zinc-800 text-zinc-50"
+              : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+          }`
+        : `flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+            selected
+              ? "bg-zinc-800 text-zinc-50"
+              : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+          }`;
+
+    const adminItemClass = (selected) =>
+      variant === "mobile"
+        ? `flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+            selected
+              ? "bg-zinc-800 text-zinc-50"
+              : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+          }`
+        : `flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${
+            selected
+              ? "bg-zinc-800 text-zinc-50"
+              : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+          }`;
+
+    return (
+      <>
+        {navigation.map((item) => {
+          const Icon = item.icon;
+          const selected = active === item.id;
+
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => selectTab(item.id)}
+              className={itemClass(selected)}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{t(item.labelKey, item.label)}</span>
+            </button>
+          );
+        })}
+
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => setAdminNavOpen((value) => !value)}
+            className={`flex w-full items-center gap-3 rounded-xl px-3 ${
+              variant === "mobile" ? "py-3 text-base" : "py-2.5 text-sm"
+            } text-left transition ${
+              activeAdminItem
+                ? "bg-zinc-900 text-zinc-50"
+                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+            }`}
+            aria-expanded={adminNavOpen}
+          >
+            <Lock className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{t("nav.admin", "Admin")}</span>
+            <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${adminNavOpen ? "rotate-90" : ""}`} />
+          </button>
+
+          {adminNavOpen ? (
+            <div className="mt-1 space-y-1 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+              {visibleAdminNavigation.map((item) => {
+                const Icon = item.icon;
+                const selected = active === item.id;
+
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => selectTab(item.id)}
+                    className={adminItemClass(selected)}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{t(item.labelKey, item.label)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      </>
+    );
+  };
+
   return (
-    <div className="min-h-screen bg-[#11100d] text-zinc-100">
+    <div className={`min-h-screen bg-[#11100d] text-zinc-100 ${isMobileMode ? "portal-mobile-mode" : "portal-desktop-mode"}`}>
       <ElectricBorderFilter />
-      <aside className="fixed inset-y-0 left-0 hidden w-72 flex-col border-r border-zinc-800 bg-zinc-950/95 px-4 py-5 lg:flex">
+      {isMobileMode ? (
+        <div className={`fixed inset-0 z-50 ${mobileNavOpen ? "" : "pointer-events-none"}`} aria-hidden={!mobileNavOpen}>
+          <button
+            type="button"
+            className={`absolute inset-0 bg-black/65 transition-opacity ${mobileNavOpen ? "opacity-100" : "opacity-0"}`}
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Fermer le menu"
+          />
+          <aside
+            className={`absolute inset-y-0 left-0 flex w-[min(88vw,340px)] max-w-full flex-col border-r border-zinc-800 bg-zinc-950 px-4 py-4 shadow-2xl transition-transform duration-200 ${
+              mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+            }`}
+          >
+            <div className="flex flex-none items-start justify-between gap-3 border-b border-zinc-800 pb-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/10">
+                  <Compass className="h-5 w-5 text-emerald-300" />
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-zinc-50">{controlBrand}</div>
+                  <div className="truncate text-xs text-zinc-500">{guildScopeDescription}</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(false)}
+                className="rounded-lg border border-zinc-800 bg-zinc-900 p-2 text-zinc-300"
+                aria-label="Fermer le menu"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto py-4 pr-1">
+              {renderNavigation("mobile")}
+            </nav>
+
+            <div className="flex-none rounded-xl border border-zinc-800 bg-zinc-900 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-zinc-100">{session.name}</div>
+                  <div className="truncate text-xs text-zinc-500">{session.role}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="rounded-md p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                  title={t("settings.logout", "Deconnexion")}
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      ) : null}
+
+      <aside className={`${isMobileMode ? "hidden" : "fixed inset-y-0 left-0 hidden w-72 flex-col border-r border-zinc-800 bg-zinc-950/95 px-4 py-5 lg:flex"}`}>
         <div className="flex flex-none items-center gap-3 px-2">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/10">
             <Compass className="h-5 w-5 text-emerald-300" />
@@ -1086,68 +1285,7 @@ function PortalShell({ session, onLogout }) {
         </div>
 
         <nav className="mt-8 min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 pb-3">
-          {navigation.map((item) => {
-            const Icon = item.icon;
-            const selected = active === item.id;
-
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActive(item.id)}
-                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
-                  selected
-                    ? "bg-zinc-800 text-zinc-50"
-                    : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                <span>{t(item.labelKey, item.label)}</span>
-              </button>
-            );
-          })}
-
-          <div className="pt-2">
-            <button
-              type="button"
-              onClick={() => setAdminNavOpen((value) => !value)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
-                activeAdminItem
-                  ? "bg-zinc-900 text-zinc-50"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-              }`}
-              aria-expanded={adminNavOpen}
-            >
-              <Lock className="h-4 w-4" />
-              <span className="flex-1">{t("nav.admin", "Admin")}</span>
-              <ChevronRight className={`h-4 w-4 transition-transform ${adminNavOpen ? "rotate-90" : ""}`} />
-            </button>
-
-            {adminNavOpen ? (
-              <div className="mt-1 space-y-1 rounded-lg border border-zinc-800 bg-zinc-950/80 p-1">
-                {visibleAdminNavigation.map((item) => {
-                  const Icon = item.icon;
-                  const selected = active === item.id;
-
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => setActive(item.id)}
-                      className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${
-                        selected
-                          ? "bg-zinc-800 text-zinc-50"
-                          : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
-                      }`}
-                    >
-                      <Icon className="h-4 w-4" />
-                      <span>{t(item.labelKey, item.label)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
+          {renderNavigation("desktop")}
         </nav>
 
         <div className="mt-4 flex-none rounded-lg border border-zinc-800 bg-zinc-900 p-3">
@@ -1168,18 +1306,42 @@ function PortalShell({ session, onLogout }) {
         </div>
       </aside>
 
-      <div className="lg:pl-72">
-        <header className="sticky top-0 z-20 border-b border-zinc-800 bg-[#11100d]/95 px-4 py-4 backdrop-blur md:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+      <div className={isMobileMode ? "min-w-0" : "lg:pl-72"}>
+        <header className={`sticky top-0 z-20 border-b border-zinc-800 bg-[#11100d]/95 backdrop-blur ${isMobileMode ? "px-3 py-3" : "px-4 py-4 md:px-6"}`}>
+          <div className={`flex gap-3 ${isMobileMode ? "flex-col" : "flex-wrap items-center justify-between"}`}>
+            <div className={isMobileMode ? "flex min-w-0 items-center gap-3" : ""}>
+              {isMobileMode ? (
+                <button
+                  type="button"
+                  onClick={() => setMobileNavOpen(true)}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-700 bg-zinc-950 text-zinc-100"
+                  aria-label="Ouvrir le menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+              ) : null}
+              <div className="min-w-0">
               <div className="text-sm text-zinc-500">{t("portal.label", "Portail")}</div>
-              <h1 className="text-2xl font-semibold text-zinc-50">{activeTitle}</h1>
+                <h1 className={`${isMobileMode ? "truncate text-2xl" : "text-2xl"} font-semibold text-zinc-50`}>{activeTitle}</h1>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Badge className="rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+            <div className={`flex items-center gap-2 ${isMobileMode ? "overflow-x-auto pb-1" : ""}`}>
+              <Badge className="shrink-0 rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
                 {t("portal.apiReady", "API VPS prete")}
               </Badge>
               <PortalLanguageSelector />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={toggleViewMode}
+                className="shrink-0 rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                title={isMobileMode ? "Passer en mode ordinateur" : "Passer en mode telephone"}
+              >
+                {isMobileMode ? <Monitor className="h-4 w-4" /> : <Smartphone className="h-4 w-4" />}
+                <span className={isMobileMode ? "ml-2 text-xs font-semibold" : "sr-only"}>
+                  {isMobileMode ? "PC" : "Mobile"}
+                </span>
+              </Button>
               <Button variant="outline" className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800">
                 <Bell className="h-4 w-4" />
               </Button>
@@ -1187,7 +1349,34 @@ function PortalShell({ session, onLogout }) {
           </div>
         </header>
 
-        <main className="space-y-6 px-4 py-6 md:px-6">
+        {isMobileMode ? (
+          <div className="border-b border-zinc-800 bg-[#0d0c0a]/95 px-3 py-2">
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {[...navigation, ...visibleAdminNavigation].map((item) => {
+                const Icon = item.icon;
+                const selected = active === item.id;
+
+                return (
+                  <button
+                    key={`mobile-quick-${item.id}`}
+                    type="button"
+                    onClick={() => selectTab(item.id)}
+                    className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition ${
+                      selected
+                        ? "border-cyan-300/60 bg-cyan-400/15 text-cyan-100"
+                        : "border-zinc-800 bg-zinc-950/70 text-zinc-400"
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span>{t(item.labelKey, item.label)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        <main className={`${isMobileMode ? "portal-mobile-main space-y-5 px-3 py-4" : "space-y-6 px-4 py-6 md:px-6"}`}>
           {active === "home" ? <HomeView session={session} setActive={setActive} /> : null}
           {active === "hero-box" ? <HeroBoxView session={session} /> : null}
           {active === "soul-stones" ? <SoulStonesTab session={session} /> : null}
