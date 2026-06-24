@@ -1,4 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  getRunScopeForGvgGuild,
+  isMissingGuildCodeColumn,
+  stratMatchesRunScope,
+} from "../src/lib/runScopeServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -140,7 +145,42 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
   return all;
 }
 
-async function hasMatchingStrat(supabaseClient, heroes) {
+function makeMissingGuildCodeError() {
+  const error = new Error(
+    "Colonne defence_strat.guild_code manquante. Ajoute-la dans Supabase pour isoler les banques de runs externes."
+  );
+  error.statusCode = 500;
+  return error;
+}
+
+async function fetchScopedStratIds(supabaseClient, stratIds, runScope) {
+  if (!stratIds?.length) return [];
+
+  let { data, error } = await supabaseClient
+    .from("defence_strat")
+    .select("id, guild_code")
+    .in("id", stratIds);
+
+  if (error) {
+    if (!isMissingGuildCodeColumn(error)) throw error;
+    if (!runScope?.isPaladin) throw makeMissingGuildCodeError();
+
+    const fallback = await supabaseClient
+      .from("defence_strat")
+      .select("id")
+      .in("id", stratIds);
+
+    if (fallback.error) throw fallback.error;
+    data = (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
+  }
+
+  return (data || [])
+    .filter((strat) => stratMatchesRunScope(strat, runScope))
+    .map((strat) => strat.id)
+    .filter(Boolean);
+}
+
+async function hasMatchingStrat(supabaseClient, heroes, runScope) {
   const queryItems = buildQueryItemsFromHeroes(heroes);
   if (!queryItems.length) return false;
 
@@ -153,7 +193,10 @@ async function hasMatchingStrat(supabaseClient, heroes) {
 
   if (!stratIds.length) return false;
 
-  const slots = await fetchAllSlotsForStratIds(supabaseClient, stratIds, 1000);
+  const scopedStratIds = await fetchScopedStratIds(supabaseClient, stratIds, runScope);
+  if (!scopedStratIds.length) return false;
+
+  const slots = await fetchAllSlotsForStratIds(supabaseClient, scopedStratIds, 1000);
 
   const slotsByStrat = new Map();
   for (const slot of slots || []) {
@@ -165,7 +208,7 @@ async function hasMatchingStrat(supabaseClient, heroes) {
     });
   }
 
-  for (const stratId of stratIds) {
+  for (const stratId of scopedStratIds) {
     const stratSlots = slotsByStrat.get(stratId) || [];
     if (stratMatchesAllQueries(stratSlots, queryItems)) {
       return true;
@@ -191,6 +234,7 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
   }
 
   const normalizedGuild = normalizeGuildCode(guild);
+  const runScope = getRunScopeForGvgGuild(normalizedGuild);
   const rows = [];
 
   for (const item of items) {
@@ -201,7 +245,7 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
     }
 
     const heroes = Array.isArray(item?.compo) ? item.compo : [];
-    const stratFound = await hasMatchingStrat(supabase, heroes);
+    const stratFound = await hasMatchingStrat(supabase, heroes, runScope);
 
     rows.push({
       guild: normalizedGuild,
@@ -271,6 +315,7 @@ export default async function handler(req, res) {
     }
 
     const normalizedGuild = normalizeGuildCode(guild);
+    const runScope = getRunScopeForGvgGuild(normalizedGuild);
 
     const rows = [];
 
@@ -282,7 +327,7 @@ export default async function handler(req, res) {
       }
 
       const heroes = Array.isArray(item?.compo) ? item.compo : [];
-      const stratFound = await hasMatchingStrat(supabase, heroes);
+      const stratFound = await hasMatchingStrat(supabase, heroes, runScope);
 
       rows.push({
         guild: normalizedGuild,
