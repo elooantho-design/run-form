@@ -2,7 +2,6 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import * as Sentry from '@sentry/react';
 import App from './App.jsx';
-import GuildDashboard from './GuildDashboard.jsx';
 import SaasPortal from './SaasPortal.jsx';
 import './index.css';
 
@@ -17,11 +16,38 @@ Sentry.init({
   replaysOnErrorSampleRate: 1.0,
 });
 
-const path = window.location.pathname;
+const PORTAL_URL = 'https://run-form-tau.vercel.app/portal';
 
-// Redirection automatique de /dashboard/G1 vers /dashboard
-if (path === '/dashboard/G1') {
-  window.history.replaceState({}, '', '/dashboard');
+function DashboardRetiredPage() {
+  return (
+    <main className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col items-center justify-center px-6 py-12 text-center">
+        <div className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-1 text-sm font-semibold uppercase tracking-[0.2em] text-emerald-200">
+          Nouveau portail disponible
+        </div>
+
+        <h1 className="mt-6 text-4xl font-bold tracking-tight text-white sm:text-5xl">
+          L'ancien dashboard est desactive
+        </h1>
+
+        <p className="mt-4 max-w-2xl text-base leading-7 text-zinc-300">
+          Le suivi des guildes, les box, les defenses, les runs et la GVG sont maintenant centralises sur Portal.
+          Utilise la nouvelle adresse ci-dessous pour te connecter.
+        </p>
+
+        <a
+          href={PORTAL_URL}
+          className="mt-8 inline-flex rounded-2xl bg-emerald-500 px-6 py-3 text-base font-semibold text-zinc-950 transition hover:bg-emerald-400"
+        >
+          Ouvrir Portal
+        </a>
+
+        <div className="mt-5 w-full rounded-2xl border border-zinc-800 bg-zinc-900/70 px-4 py-3 font-mono text-sm text-emerald-100">
+          {PORTAL_URL}
+        </div>
+      </div>
+    </main>
+  );
 }
 
 const finalPath = window.location.pathname;
@@ -35,5 +61,5 @@ if (isDashboard || isPortal) {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  isPortal ? <SaasPortal /> : isDashboard ? <GuildDashboard /> : <App />
+  isPortal ? <SaasPortal /> : isDashboard ? <DashboardRetiredPage /> : <App />
 );
