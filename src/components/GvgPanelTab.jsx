@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  getGuildSpaceKey,
   getGvgGuildLabel,
+  getSessionGuildCode,
   getVisibleGvgGuildCodes,
+  isPaladinGuildCode,
   isPaladinSession,
 } from "@/lib/guildScope";
 
@@ -1025,7 +1028,12 @@ const response = await fetch(`${apiBase}/api/run?action=search`, {
   headers: {
     "Content-Type": "application/json",
   },
-  body: JSON.stringify({ queryItems, session: getRunSessionPayload(session) }),
+  body: JSON.stringify({
+    queryItems,
+    includeBoycotted: false,
+    session: getRunSessionPayload(session),
+    targetGuildCode: defense.guild || guild,
+  }),
 });
 
 const rawText = await response.text();
@@ -1072,19 +1080,115 @@ const handleDeleteStrat = async (run) => {
   if (!confirmDelete) return;
 
   try {
-    await fetch(`${apiBase}/api/delete-strat`, {
+    const response = await fetch(`${apiBase}/api/run?action=delete`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ id: stratId }),
+      body: JSON.stringify({
+        session: getRunSessionPayload(session),
+        strat_id: stratId,
+      }),
     });
 
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setMessage(`Suppression impossible : reponse non JSON (${response.status})`);
+      return;
+    }
+
+    if (!response.ok) {
+      setMessage(`Suppression impossible : ${data?.error || "run hors perimetre"}`);
+      return;
+    }
+
     setRuns((prev) => prev.filter((r) => r.strat_id !== stratId));
+    setMessage(`Strat #${stratId} supprimee.`);
   } catch (err) {
     console.error("Erreur suppression strat:", err);
+    setMessage(`Suppression impossible : ${err?.message || "erreur inconnue"}`);
   }
 };
+
+const handleBoycottStrat = async (run) => {
+  const stratId = run?.strat_id;
+  const targetGuildCode = runsModal?.guild || guild;
+
+  if (!stratId || !targetGuildCode) {
+    setMessage("Boycott impossible : strat ou guilde manquante.");
+    return;
+  }
+
+  try {
+    const response = await fetch(`${apiBase}/api/run?action=boycott`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session: getRunSessionPayload(session),
+        strat_id: stratId,
+        targetGuildCode,
+        gvgDefenseId: runsModal?.id || null,
+        boycott: true,
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setMessage(`Boycott impossible : reponse non JSON (${response.status})`);
+      return;
+    }
+
+    if (!response.ok) {
+      setMessage(`Boycott impossible : ${data?.error || "run hors perimetre"}`);
+      return;
+    }
+
+    const remainingRuns = runs.filter((r) => r.strat_id !== stratId);
+    setRuns(remainingRuns);
+
+    if (runsModal?.id && data?.gvg_status) {
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === runsModal.id
+            ? { ...item, status: data.gvg_status }
+            : item
+        )
+      );
+    }
+
+    setMessage(
+      `Strat #${stratId} boycottee pour ${getGvgGuildLabel(data?.guild_code || targetGuildCode)}.`
+    );
+  } catch (err) {
+    console.error("Erreur boycott strat:", err);
+    setMessage(`Boycott impossible : ${err?.message || "erreur inconnue"}`);
+  }
+};
+
+function canDeleteRunFromPanel(run) {
+  if (!canUsePanelActions) return false;
+
+  const runGuildCode = run?.guild_code || "";
+
+  if (isPaladinSession(session)) {
+    return !runGuildCode || isPaladinGuildCode(runGuildCode);
+  }
+
+  return Boolean(
+    runGuildCode &&
+      getGuildSpaceKey(runGuildCode) === getGuildSpaceKey(getSessionGuildCode(session))
+  );
+}
 
 function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
   return (
@@ -1654,17 +1758,37 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                       key={i}
                       className="rounded-xl border border-zinc-700 bg-zinc-800/60 p-3"
                     >
-                      <div className="mb-2 flex items-center justify-between">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-white">
                         Strat #{run.strat_id}
                         </span>
 
-                        <button
-                          onClick={() => handleDeleteStrat(run)}
-                          className="rounded bg-red-600 px-2 py-1 text-xs hover:bg-red-700"
-                        >
-                          Supprimer
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleBoycottStrat(run)}
+                            className="rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+                          >
+                            Boycotter pour {getGvgGuildLabel(runsModal.guild || guild)}
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteStrat(run)}
+                            disabled={!canDeleteRunFromPanel(run)}
+                            title={
+                              canDeleteRunFromPanel(run)
+                                ? "Supprimer la strat"
+                                : "Suppression limitee a la banque modifiable"
+                            }
+                            className={`rounded px-2 py-1 text-xs ${
+                              canDeleteRunFromPanel(run)
+                                ? "bg-red-600 hover:bg-red-700"
+                                : "cursor-not-allowed bg-zinc-700 opacity-50"
+                            }`}
+                          >
+                            Supprimer
+                          </button>
+                        </div>
                       </div>
 
                       <div className="w-full aspect-video overflow-hidden rounded-xl border border-zinc-800">

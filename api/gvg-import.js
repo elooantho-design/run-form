@@ -2,7 +2,8 @@ import { createClient } from "@supabase/supabase-js";
 import {
   getRunScopeForGvgGuild,
   isMissingGuildCodeColumn,
-  stratMatchesRunScope,
+  isMissingRunBoycottTable,
+  stratMatchesRunReadScope,
 } from "../src/lib/runScopeServer.js";
 
 const supabase = createClient(
@@ -174,10 +175,26 @@ async function fetchScopedStratIds(supabaseClient, stratIds, runScope) {
     data = (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
   }
 
-  return (data || [])
-    .filter((strat) => stratMatchesRunScope(strat, runScope))
+  const scopedIds = (data || [])
+    .filter((strat) => stratMatchesRunReadScope(strat, runScope))
     .map((strat) => strat.id)
     .filter(Boolean);
+
+  if (!scopedIds.length) return [];
+
+  const { data: boycottRows, error: boycottError } = await supabaseClient
+    .from("defence_strat_boycotts")
+    .select("strat_id")
+    .eq("guild_code", runScope.guildCode)
+    .in("strat_id", scopedIds);
+
+  if (boycottError) {
+    if (isMissingRunBoycottTable(boycottError)) return scopedIds;
+    throw boycottError;
+  }
+
+  const boycottedIds = new Set((boycottRows || []).map((row) => String(row.strat_id)));
+  return scopedIds.filter((stratId) => !boycottedIds.has(String(stratId)));
 }
 
 async function hasMatchingStrat(supabaseClient, heroes, runScope) {

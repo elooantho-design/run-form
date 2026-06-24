@@ -2,7 +2,8 @@ import { createClient } from "@supabase/supabase-js";
 import {
   getRunScopeForGvgGuild,
   isMissingGuildCodeColumn,
-  stratMatchesRunScope,
+  isMissingRunBoycottTable,
+  stratMatchesRunReadScope,
 } from "../src/lib/runScopeServer.js";
 
 const supabase = createClient(
@@ -131,7 +132,7 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
 async function searchDefenceStrict(
   supabaseClient,
   queryItems,
-  { limit = 10, maxCandidates = 50000, scope = null } = {}
+  { limit = 10, maxCandidates = 50000, scope = null, targetGuildCode = "" } = {}
 ) {
   if (!queryItems?.length) return [];
 
@@ -175,7 +176,24 @@ async function searchDefenceStrict(
     strats = (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
   }
 
-  strats = (strats || []).filter((strat) => stratMatchesRunScope(strat, scope));
+  strats = (strats || []).filter((strat) => stratMatchesRunReadScope(strat, scope));
+
+  if (targetGuildCode && strats.length) {
+    const scopedIds = strats.map((strat) => strat.id).filter(Boolean);
+    const { data: boycottRows, error: boycottError } = await supabaseClient
+      .from("defence_strat_boycotts")
+      .select("strat_id")
+      .eq("guild_code", targetGuildCode)
+      .in("strat_id", scopedIds);
+
+    if (boycottError) {
+      if (!isMissingRunBoycottTable(boycottError)) throw boycottError;
+    } else {
+      const boycottedIds = new Set((boycottRows || []).map((row) => String(row.strat_id)));
+      strats = strats.filter((strat) => !boycottedIds.has(String(strat.id)));
+    }
+  }
+
   const scopedStratIds = strats.map((strat) => strat.id).filter(Boolean);
 
   if (!scopedStratIds.length) return [];
@@ -204,6 +222,8 @@ async function searchDefenceStrict(
         youtube_url: s.youtube_url,
         created_at: s.created_at,
         attack_code: s.attack_code ?? null,
+        guild_code: s.guild_code ?? null,
+        boycott: false,
         slots: stratSlots,
       };
     })
@@ -265,6 +285,7 @@ export default async function handler(req, res) {
     const results = await searchDefenceStrict(supabase, queryItems, {
       limit: 10,
       scope: getRunScopeForGvgGuild(defense.guild),
+      targetGuildCode: defense.guild,
     });
 
     return res.status(200).json({

@@ -237,6 +237,9 @@ export default function RunSearchGrid({ session: portalSession } = {}) {
   const [botCommand, setBotCommand] = useState("");
   const [botModalOpen, setBotModalOpen] = useState(false);
   const [botQueryItems, setBotQueryItems] = useState([]);
+  const [includeBoycotted, setIncludeBoycotted] = useState(false);
+  const [resultMessage, setResultMessage] = useState("");
+  const [boycottUpdatingId, setBoycottUpdatingId] = useState(null);
 
   const dashboardSession = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -248,6 +251,8 @@ export default function RunSearchGrid({ session: portalSession } = {}) {
     }
   }, []);
   const session = portalSession || dashboardSession;
+  const runSessionPayload = useMemo(() => getRunSessionPayload(session), [session]);
+  const targetGuildCode = runSessionPayload.guildCode || "G1";
   const isSpecialExternal =
     String(session?.discordId || session?.discord_id || "") === SPECIAL_EXTERNAL_DISCORD_ID;
 
@@ -290,13 +295,19 @@ const gridSpec = useMemo(() => {
 
   try {
     setLoadingSearch(true);
+    setResultMessage("");
 
     const res = await fetch(`${apiBase}/api/run?action=search`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ queryItems, session: getRunSessionPayload(session) }),
+      body: JSON.stringify({
+        queryItems,
+        includeBoycotted,
+        session: runSessionPayload,
+        targetGuildCode,
+      }),
     });
 
         if (!res.ok) {
@@ -339,13 +350,19 @@ async function runBotCommandSearch() {
 
   try {
     setLoadingSearch(true);
+    setResultMessage("");
 
     const res = await fetch(`${apiBase}/api/run?action=search`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ queryItems, session: getRunSessionPayload(session) }),
+      body: JSON.stringify({
+        queryItems,
+        includeBoycotted,
+        session: runSessionPayload,
+        targetGuildCode,
+      }),
     });
 
     if (!res.ok) {
@@ -542,6 +559,65 @@ function copyToClipboard(text) {
     });
 }
 
+async function toggleResultBoycott(result, nextBoycott) {
+  const stratId = result?.strat_id;
+  if (!stratId) return;
+
+  try {
+    setBoycottUpdatingId(stratId);
+    setResultMessage("");
+
+    const response = await fetch(`${apiBase}/api/run?action=boycott`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session: runSessionPayload,
+        strat_id: stratId,
+        targetGuildCode,
+        boycott: nextBoycott,
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setResultMessage(`Erreur boycott : reponse non JSON (${response.status})`);
+      return;
+    }
+
+    if (!response.ok) {
+      setResultMessage(`Erreur boycott : ${data?.error || "action refusee"}`);
+      return;
+    }
+
+    setResults((prev) => {
+      if (nextBoycott && !includeBoycotted) {
+        return prev.filter((item) => item.strat_id !== stratId);
+      }
+
+      return prev.map((item) =>
+        item.strat_id === stratId ? { ...item, boycott: nextBoycott } : item
+      );
+    });
+
+    setResultMessage(
+      nextBoycott
+        ? `Strat #${stratId} masquee pour ${data?.guild_code || targetGuildCode}.`
+        : `Strat #${stratId} reactivee pour ${data?.guild_code || targetGuildCode}.`
+    );
+  } catch (error) {
+    console.error("Erreur toggle boycott:", error);
+    setResultMessage(`Erreur boycott : ${error?.message || "erreur inconnue"}`);
+  } finally {
+    setBoycottUpdatingId(null);
+  }
+}
+
   return (
     <div className="space-y-6">
       <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
@@ -563,6 +639,16 @@ function copyToClipboard(text) {
               >
                 <RotateCcw className="mr-2 h-4 w-4" />
                 {t("common.reset", "Reset")}
+              </Button>
+              <Button
+                type="button"
+                variant={includeBoycotted ? "default" : "outline"}
+                onClick={() => setIncludeBoycotted((current) => !current)}
+                className="rounded-2xl"
+              >
+                {includeBoycotted
+                  ? t("run.showingBoycotted", "Boycottes visibles")
+                  : t("run.includeBoycotted", "Inclure boycottes")}
               </Button>
                 <Button
                 onClick={runSearch}
@@ -931,6 +1017,12 @@ function copyToClipboard(text) {
             </CardHeader>
 
             <CardContent className="p-4">
+              {resultMessage ? (
+                <div className="mb-3 rounded-2xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-sm text-zinc-300">
+                  {resultMessage}
+                </div>
+              ) : null}
+
               {loadingSearch ? (
                 <div className="text-sm text-zinc-400">{t("run.searching", "Recherche en cours...")}</div>
               ) : results.length === 0 ? (
@@ -942,10 +1034,35 @@ function copyToClipboard(text) {
                       key={result.strat_id}
                       className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
                     >
-                    <div className="flex flex-wrap items-center gap-2">
-                    <div className="text-sm font-semibold text-zinc-100">
-                        Strat #{result.strat_id}
-                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-semibold text-zinc-100">
+                            Strat #{result.strat_id}
+                        </div>
+                        <Badge className="border-zinc-600 bg-zinc-900 text-zinc-200">
+                          {result.guild_code || "PALADIN"}
+                        </Badge>
+                        {result.boycott ? (
+                          <Badge className="border-red-500/40 bg-red-500/15 text-red-200">
+                            {t("run.boycottBadge", "Boycott")}
+                          </Badge>
+                        ) : null}
+                      </div>
+
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={result.boycott ? "default" : "outline"}
+                        disabled={boycottUpdatingId === result.strat_id}
+                        onClick={() => toggleResultBoycott(result, !result.boycott)}
+                        className="rounded-xl"
+                      >
+                        {boycottUpdatingId === result.strat_id
+                          ? t("common.loading", "Chargement...")
+                          : result.boycott
+                            ? t("run.reactivateForGuild", "Repasser actif")
+                            : t("run.boycottForGuild", "Boycotter")}
+                      </Button>
                     </div>
 
 {result.youtube_url ? (

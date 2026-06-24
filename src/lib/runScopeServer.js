@@ -2,6 +2,7 @@ import {
   getGuildSpaceKey,
   isPaladinGuildCode,
   normalizeGuildCode,
+  normalizeGvgGuildCode,
   normalizeGuildCodeKey,
   PALADIN_CLUSTER_GUILD_CODES,
   PALADIN_SPACE_KEY,
@@ -39,6 +40,15 @@ export function isMissingGuildCodeColumn(error) {
   );
 }
 
+export function isMissingRunBoycottTable(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    message.includes("defence_strat_boycotts")
+  );
+}
+
 export async function resolveRunScope(supabase, req) {
   const memberId = readSessionField(req, ["memberId", "member_id"]);
   const discordId = readSessionField(req, ["discordId", "discord_id"]);
@@ -67,6 +77,8 @@ export async function resolveRunScope(supabase, req) {
   const isPaladin = isLeader || spaceKey === PALADIN_SPACE_KEY;
 
   return {
+    memberId: member?.id || memberId || "",
+    actorName: member?.watcher_name || "",
     guildCode,
     role,
     spaceKey: isPaladin ? PALADIN_SPACE_KEY : spaceKey,
@@ -81,6 +93,8 @@ export function getRunScopeForGvgGuild(guild) {
   const isPaladin = isPaladinGuildCode(guildCode);
 
   return {
+    memberId: "",
+    actorName: "",
     guildCode,
     role: "",
     spaceKey: isPaladin ? PALADIN_SPACE_KEY : getGuildSpaceKey(guildCode),
@@ -98,4 +112,28 @@ export function stratMatchesRunScope(strat, scope) {
   }
 
   return Boolean(stratGuildCode && getGuildSpaceKey(stratGuildCode) === scope?.spaceKey);
+}
+
+export function stratMatchesRunReadScope(strat, scope) {
+  const stratGuildCode = normalizeGuildCode(strat?.guild_code);
+
+  if (scope?.isPaladin) {
+    return true;
+  }
+
+  return Boolean(stratGuildCode && getGuildSpaceKey(stratGuildCode) === scope?.spaceKey);
+}
+
+export function canUseRunTargetGuild(scope, guildCode) {
+  const targetGuildCode = normalizeGuildCode(guildCode || scope?.guildCode);
+  if (!targetGuildCode) return false;
+  if (scope?.isLeader) return true;
+  if (scope?.isPaladin) return PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(targetGuildCode));
+  return getGuildSpaceKey(targetGuildCode) === scope?.spaceKey;
+}
+
+export function getRunTargetGuildCode(scope, guildCode) {
+  const targetGuildCode = normalizeGuildCode(guildCode || scope?.guildCode);
+  if (canUseRunTargetGuild(scope, targetGuildCode)) return normalizeGvgGuildCode(targetGuildCode);
+  return normalizeGvgGuildCode(scope?.guildCode || "G1");
 }
