@@ -22,6 +22,29 @@ const PB_SORT_OPTIONS = [
   { id: "top5", label: "Top 5" },
 ];
 
+const PB_BOX_AWAKENING_VALUE = "__box__";
+const PB_ENTRY_SELECT_WITH_AWAKENING = `
+  id,
+  member_id,
+  member_name,
+  slot_index,
+  pb_raw,
+  awakening_level,
+  champion_id,
+  updated_at,
+  champions (*)
+`;
+const PB_ENTRY_SELECT_FALLBACK = `
+  id,
+  member_id,
+  member_name,
+  slot_index,
+  pb_raw,
+  champion_id,
+  updated_at,
+  champions (*)
+`;
+
 function normalizeText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -49,9 +72,75 @@ function getSessionRole(session) {
   return normalizeText(session?.role || "");
 }
 
+function normalizeStoredPbRaw(value) {
+  let number = Number(value || 0);
+
+  if (!Number.isFinite(number) || number <= 0) return 0;
+
+  while (number >= 1000) {
+    number /= 1000;
+  }
+
+  return number;
+}
+
+function truncatePbValue(value) {
+  const number = normalizeStoredPbRaw(value);
+
+  if (!number) return 0;
+
+  return Math.trunc((number + Number.EPSILON) * 1000) / 1000;
+}
+
 function formatPbAverage(value) {
-  if (!value || Number.isNaN(value)) return "-";
-  return Number(value).toFixed(1);
+  const truncated = truncatePbValue(value);
+
+  if (!truncated) return "-";
+
+  return truncated.toFixed(3).replace(".", ",");
+}
+
+function formatPbInputValue(value) {
+  const formatted = formatPbAverage(value);
+
+  return formatted === "-" ? "" : formatted;
+}
+
+function normalizePbRawInput(value) {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 6);
+
+  if (!digits) return NaN;
+
+  if (digits.length <= 3) return Number(digits);
+
+  return Number(`${digits.slice(0, 3)}.${digits.slice(3)}`);
+}
+
+function normalizePbAwakeningValue(value) {
+  if (value === PB_BOX_AWAKENING_VALUE || value === undefined) return null;
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 5) return null;
+
+  return parsed;
+}
+
+function hasPbSlotAwakening(value) {
+  if (value === null || value === undefined || value === "") return false;
+
+  return Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 5;
+}
+
+function isMissingPbAwakeningColumn(error) {
+  const message = normalizeText(`${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`);
+
+  return (
+    error?.code === "42703" ||
+    error?.code === "PGRST204" ||
+    (message.includes("awakening_level") &&
+      (message.includes("schema cache") || message.includes("does not exist") || message.includes("column")))
+  );
 }
 
 function formatShortDate(value) {
@@ -85,16 +174,13 @@ function getAwakeningLabel(value) {
 function getDisplayedPbValue(slot, member) {
   if (!slot) return 0;
 
-  const raw = Number(slot.pbRaw || 0);
+  const raw = normalizeStoredPbRaw(slot.pbRaw);
 
   if (slot.championLord !== "lord") {
     return raw;
   }
 
-  const awakeningLevel =
-    slot.championName && member?.awakenings
-      ? Number(member.awakenings[slot.championName] ?? -1)
-      : -1;
+  const awakeningLevel = getSlotAwakeningLevel(slot, member);
 
   if (awakeningLevel < 0) {
     return raw;
@@ -110,6 +196,16 @@ function getDisplayedPbValue(slot, member) {
   };
 
   return raw * (multiplierMap[awakeningLevel] ?? 1);
+}
+
+function getSlotAwakeningLevel(slot, member) {
+  if (!slot) return -1;
+
+  if (hasPbSlotAwakening(slot.pbAwakeningLevel)) {
+    return Number(slot.pbAwakeningLevel);
+  }
+
+  return slot.championName && member?.awakenings ? Number(member.awakenings[slot.championName] ?? -1) : -1;
 }
 
 function buildMemberAwakenings(memberAwakenings) {
@@ -147,6 +243,8 @@ export default function PersonalBestTab({ session }) {
   const [pbHeroSearch, setPbHeroSearch] = useState("");
   const [pbSlotToEdit, setPbSlotToEdit] = useState(null);
   const [pbRawInput, setPbRawInput] = useState("");
+  const [pbAwakeningInput, setPbAwakeningInput] = useState(PB_BOX_AWAKENING_VALUE);
+  const [pbAwakeningColumnReady, setPbAwakeningColumnReady] = useState(true);
   const [pbRowDetailOpen, setPbRowDetailOpen] = useState(false);
   const [pbSelectedMember, setPbSelectedMember] = useState(null);
   const [activeGuildCode, setActiveGuildCode] = useState(() => getSessionGuildCode(session));
@@ -264,23 +362,30 @@ export default function PersonalBestTab({ session }) {
         return;
       }
 
-      const { data, error } = await supabase
+      let hasAwakeningColumn = true;
+      let { data, error } = await supabase
         .from("member_pb_entries")
-        .select(`
-          id,
-          member_id,
-          member_name,
-          slot_index,
-          pb_raw,
-          champion_id,
-          updated_at,
-          champions (*)
-        `)
+        .select(PB_ENTRY_SELECT_WITH_AWAKENING)
         .in("member_id", memberIds)
         .order("member_name", { ascending: true })
         .order("slot_index", { ascending: true });
 
+      if (error && isMissingPbAwakeningColumn(error)) {
+        hasAwakeningColumn = false;
+        const fallbackResult = await supabase
+          .from("member_pb_entries")
+          .select(PB_ENTRY_SELECT_FALLBACK)
+          .in("member_id", memberIds)
+          .order("member_name", { ascending: true })
+          .order("slot_index", { ascending: true });
+
+        data = fallbackResult.data;
+        error = fallbackResult.error;
+      }
+
       if (cancelled) return;
+
+      setPbAwakeningColumnReady(hasAwakeningColumn);
 
       if (error) {
         console.error("Erreur chargement PB entries:", error);
@@ -294,7 +399,8 @@ export default function PersonalBestTab({ session }) {
           memberId: row.member_id,
           memberName: row.member_name || "",
           slotIndex: row.slot_index,
-          pbRaw: Number(row.pb_raw || 0),
+          pbRaw: normalizeStoredPbRaw(row.pb_raw),
+          pbAwakeningLevel: hasPbSlotAwakening(row.awakening_level) ? Number(row.awakening_level) : null,
           championId: row.champion_id || null,
           championName: row.champions?.name || "",
           championEnglishName: getChampionEnglishName(row.champions),
@@ -343,7 +449,8 @@ export default function PersonalBestTab({ session }) {
       row.slots[slotPosition] = {
         id: entry.id,
         slotIndex: entry.slotIndex,
-        pbRaw: Number(entry.pbRaw || 0),
+        pbRaw: normalizeStoredPbRaw(entry.pbRaw),
+        pbAwakeningLevel: hasPbSlotAwakening(entry.pbAwakeningLevel) ? Number(entry.pbAwakeningLevel) : null,
         championId: entry.championId,
         championName: entry.championName,
         championEnglishName: entry.championEnglishName,
@@ -433,11 +540,13 @@ export default function PersonalBestTab({ session }) {
       currentChampionId: slot.championId,
       currentChampionName: slot.championName || "",
       currentChampionEnglishName: slot.championEnglishName || "",
-      currentPbRaw: Number(slot.pbRaw || 0),
+      currentPbRaw: normalizeStoredPbRaw(slot.pbRaw),
+      currentPbAwakeningLevel: hasPbSlotAwakening(slot.pbAwakeningLevel) ? Number(slot.pbAwakeningLevel) : null,
     });
 
     setPbHeroSearch(getPbChampionDisplayName(slot.championName || "", slot.championEnglishName || "", language));
-    setPbRawInput(String(Number(slot.pbRaw || 0)));
+    setPbRawInput(formatPbInputValue(slot.pbRaw));
+    setPbAwakeningInput(hasPbSlotAwakening(slot.pbAwakeningLevel) ? String(slot.pbAwakeningLevel) : PB_BOX_AWAKENING_VALUE);
     setPbEditDialogOpen(true);
   }
 
@@ -505,8 +614,9 @@ export default function PersonalBestTab({ session }) {
     });
   }
 
-  async function updatePbRaw(entryId, nextValue) {
-    const normalizedValue = Number(String(nextValue).replace(",", "."));
+  async function updatePbRaw(entryId, nextValue, nextAwakeningValue) {
+    const normalizedValue = normalizePbRawInput(nextValue);
+    const normalizedAwakening = normalizePbAwakeningValue(nextAwakeningValue);
     const currentEntry = pbEntries.find((entry) => String(entry.id) === String(entryId));
     const targetMember = currentEntry
       ? members.find((member) => String(member.id) === String(currentEntry.memberId))
@@ -518,17 +628,30 @@ export default function PersonalBestTab({ session }) {
     }
 
     const now = new Date().toISOString();
+    const updatePayload = {
+      pb_raw: normalizedValue,
+      updated_at: now,
+    };
+
+    if (pbAwakeningColumnReady) {
+      updatePayload.awakening_level = normalizedAwakening;
+    }
+
     const { error } = await supabase
       .from("member_pb_entries")
-      .update({
-        pb_raw: normalizedValue,
-        updated_at: now,
-      })
+      .update(updatePayload)
       .eq("id", entryId);
 
     if (error) {
+      if (isMissingPbAwakeningColumn(error)) {
+        setPbAwakeningColumnReady(false);
+      }
       console.error("Erreur mise a jour PB brut:", error);
-      setErrorMessage("Impossible de mettre a jour le PB brut.");
+      setErrorMessage(
+        isMissingPbAwakeningColumn(error)
+          ? "La colonne Supabase awakening_level manque sur member_pb_entries."
+          : "Impossible de mettre a jour le PB brut.",
+      );
       return false;
     }
 
@@ -538,6 +661,7 @@ export default function PersonalBestTab({ session }) {
           ? {
               ...entry,
               pbRaw: normalizedValue,
+              pbAwakeningLevel: pbAwakeningColumnReady ? normalizedAwakening : entry.pbAwakeningLevel,
               updatedAt: now,
             }
           : entry,
@@ -551,12 +675,14 @@ export default function PersonalBestTab({ session }) {
         actionType: "pb_update",
         entityType: "pb",
         entityId: String(entryId),
-        summary: `${targetMember?.name || currentEntry.memberName || "Joueur"} : affi ${currentEntry.slotIndex} PB ${Number(currentEntry.pbRaw || 0)} -> ${normalizedValue}`,
+        summary: `${targetMember?.name || currentEntry.memberName || "Joueur"} : affi ${currentEntry.slotIndex} PB ${formatPbAverage(currentEntry.pbRaw)} -> ${formatPbAverage(normalizedValue)}`,
         metadata: {
           slotIndex: currentEntry.slotIndex,
           championName: currentEntry.championName,
-          previousPbRaw: Number(currentEntry.pbRaw || 0),
+          previousPbRaw: normalizeStoredPbRaw(currentEntry.pbRaw),
           nextPbRaw: normalizedValue,
+          previousAwakeningLevel: currentEntry.pbAwakeningLevel,
+          nextAwakeningLevel: pbAwakeningColumnReady ? normalizedAwakening : currentEntry.pbAwakeningLevel,
         },
       });
     }
@@ -567,13 +693,14 @@ export default function PersonalBestTab({ session }) {
   async function savePbEdit() {
     if (!pbSlotToEdit) return;
 
-    const saved = await updatePbRaw(pbSlotToEdit.entryId, pbRawInput);
+    const saved = await updatePbRaw(pbSlotToEdit.entryId, pbRawInput, pbAwakeningInput);
     if (!saved) return;
 
     setPbEditDialogOpen(false);
     setPbSlotToEdit(null);
     setPbHeroSearch("");
     setPbRawInput("");
+    setPbAwakeningInput(PB_BOX_AWAKENING_VALUE);
   }
 
   return (
@@ -734,6 +861,7 @@ export default function PersonalBestTab({ session }) {
                         }
 
                         const isLord = slot.championLord === "lord";
+                        const slotAwakening = getSlotAwakeningLevel(slot, member);
                         const slotDisplayName = getPbChampionDisplayName(
                           slot.championName,
                           slot.championEnglishName,
@@ -773,8 +901,15 @@ export default function PersonalBestTab({ session }) {
                               </div>
 
                               <div className="flex flex-1 items-center justify-end pr-2">
-                                <div className="text-lg font-semibold tracking-tight text-white">
-                                  {formatPbAverage(getDisplayedPbValue(slot, member))}
+                                <div className="text-right">
+                                  {isLord && slotAwakening >= 0 ? (
+                                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-yellow-300">
+                                      A{slotAwakening}
+                                    </div>
+                                  ) : null}
+                                  <div className="text-lg font-semibold tracking-tight text-white">
+                                    {formatPbAverage(getDisplayedPbValue(slot, member))}
+                                  </div>
                                 </div>
                               </div>
                             </button>
@@ -829,10 +964,7 @@ export default function PersonalBestTab({ session }) {
             <div className="grid gap-4 lg:grid-cols-5">
               {(pbRows.find((row) => String(row.memberId) === String(pbSelectedMember?.id))?.slots || []).map(
                 (slot, index) => {
-                  const awakeningValue =
-                    slot?.championName && pbSelectedMember?.awakenings
-                      ? pbSelectedMember.awakenings[slot.championName] ?? -1
-                      : -1;
+                  const awakeningValue = getSlotAwakeningLevel(slot, pbSelectedMember);
                   const slotDisplayName = getPbChampionDisplayName(
                     slot?.championName || "",
                     slot?.championEnglishName || "",
@@ -951,9 +1083,47 @@ export default function PersonalBestTab({ session }) {
                 inputMode="decimal"
                 value={pbRawInput}
                 onChange={(event) => setPbRawInput(event.target.value)}
-                placeholder="Ex: 125.5"
+                placeholder={t("pb.rawPlaceholder", "Ex: 138485")}
                 className="h-11 rounded-2xl border-zinc-700 bg-zinc-900 text-zinc-100"
               />
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm text-zinc-400">{t("pb.slotAwakening", "Eveil utilise pour ce PB")}</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={!pbAwakeningColumnReady}
+                  onClick={() => setPbAwakeningInput(PB_BOX_AWAKENING_VALUE)}
+                  className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                    pbAwakeningInput === PB_BOX_AWAKENING_VALUE
+                      ? "border-emerald-300/70 bg-emerald-400/15 text-emerald-100"
+                      : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500"
+                  } ${!pbAwakeningColumnReady ? "cursor-not-allowed opacity-50" : ""}`}
+                >
+                  {t("pb.boxAwakening", "Box")}
+                </button>
+                {[0, 1, 2, 3, 4, 5].map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    disabled={!pbAwakeningColumnReady}
+                    onClick={() => setPbAwakeningInput(String(level))}
+                    className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                      pbAwakeningInput === String(level)
+                        ? "border-yellow-300/70 bg-yellow-400/15 text-yellow-100"
+                        : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500"
+                    } ${!pbAwakeningColumnReady ? "cursor-not-allowed opacity-50" : ""}`}
+                  >
+                    A{level}
+                  </button>
+                ))}
+              </div>
+              <div className="text-xs text-zinc-500">
+                {pbAwakeningColumnReady
+                  ? t("pb.slotAwakeningHelp", "Box garde l'eveil renseigne dans Ma box heros. A0-A5 force l'eveil de cet affi uniquement.")
+                  : "Colonne Supabase awakening_level manquante sur member_pb_entries."}
+              </div>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
@@ -965,6 +1135,7 @@ export default function PersonalBestTab({ session }) {
                   setPbSlotToEdit(null);
                   setPbHeroSearch("");
                   setPbRawInput("");
+                  setPbAwakeningInput(PB_BOX_AWAKENING_VALUE);
                 }}
               >
                 {t("common.cancel", "Annuler")}
