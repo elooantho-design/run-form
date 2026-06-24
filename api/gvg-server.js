@@ -1,6 +1,7 @@
 import { importGvgItems } from "./gvg-import.js";
 import http from "node:http";
 import https from "node:https";
+import { createClient } from "@supabase/supabase-js";
 
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
 const VPS_REQUEST_TIMEOUT_MS = 12000;
@@ -11,6 +12,19 @@ const CALQUE_FOLDERS = {
 };
 const LAUNCHER_DOWNLOAD_FILE = "PaladinGVGLauncher.zip";
 const RECORD_LAUNCHER_DOWNLOAD_FILE = "PaladinGVGRecordLauncher.zip";
+const LAUNCHER_SCOPE_CACHE_MS = 15_000;
+const LAUNCHER_SCOPE_LOG_LIMIT = 50;
+const LAUNCHER_SCOPE_FALLBACK_LOOKBACK_HOURS = 12;
+const LAUNCHER_SCOPE_JOB_BEFORE_MS = 90 * 60 * 1000;
+const LAUNCHER_SCOPE_JOB_AFTER_MS = 15 * 60 * 1000;
+const LAUNCHER_SCOPE_CANDIDATES_PER_JOB = 5;
+
+let supabaseAdmin = null;
+let launcherScopeCache = {
+  expiresAt: 0,
+  key: "",
+  overrides: new Map(),
+};
 
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -29,8 +43,25 @@ function getServerConfig() {
   return { serverUrl, token };
 }
 
+function getSupabaseAdmin() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) return null;
+
+  if (!supabaseAdmin) {
+    supabaseAdmin = createClient(url, key, { auth: { persistSession: false } });
+  }
+
+  return supabaseAdmin;
+}
+
 function normalizeGuildCode(value) {
-  const code = String(value || "").trim().toUpperCase();
+  const code = String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Z0-9_-]/g, "");
   return /^[A-Z0-9_-]{2,24}$/.test(code) ? code : null;
 }
 
@@ -97,11 +128,256 @@ function normalizeJob(job) {
   };
 }
 
+async function mapWithConcurrency(items, limit, worker) {
+  const results = [];
+  let index = 0;
+
+  async function next() {
+    while (index < items.length) {
+      const currentIndex = index;
+      index += 1;
+      results[currentIndex] = await worker(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => next())
+  );
+
+  return results;
+}
+
+function withTimeout(promise, timeoutMs, fallbackValue) {
+  let timeoutId = null;
+
+  return new Promise((resolve) => {
+    timeoutId = setTimeout(() => {
+      resolve(fallbackValue);
+    }, timeoutMs);
+
+    promise
+      .then((value) => resolve(value))
+      .catch((error) => {
+        console.warn("[gvg-server] operation skipped after error:", error.message);
+        resolve(fallbackValue);
+      })
+      .finally(() => {
+        if (timeoutId) clearTimeout(timeoutId);
+      });
+  });
+}
+
+function getLogSessionId(log) {
+  return String(log?.metadata?.sessionId || log?.entity_id || "").trim();
+}
+
+function getLogTargetGuild(log) {
+  return normalizeTargetGuild(log?.metadata?.guild);
+}
+
+function getJobTimeRange(jobs) {
+  const timestamps = jobs
+    .flatMap((job) => [job?.created_at, job?.updated_at])
+    .map((value) => {
+      const timestamp = value ? new Date(value).getTime() : Number.NaN;
+      return Number.isFinite(timestamp) ? timestamp : null;
+    })
+    .filter((value) => value !== null);
+
+  if (!timestamps.length) {
+    const now = Date.now();
+    return {
+      since: new Date(
+        now - LAUNCHER_SCOPE_FALLBACK_LOOKBACK_HOURS * 60 * 60 * 1000
+      ).toISOString(),
+      until: new Date(now + LAUNCHER_SCOPE_JOB_AFTER_MS).toISOString(),
+    };
+  }
+
+  return {
+    since: new Date(Math.min(...timestamps) - LAUNCHER_SCOPE_JOB_BEFORE_MS).toISOString(),
+    until: new Date(Math.max(...timestamps) + LAUNCHER_SCOPE_JOB_AFTER_MS).toISOString(),
+  };
+}
+
+async function fetchRecentLauncherLogs(jobs) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return [];
+
+  const { since, until } = getJobTimeRange(jobs);
+
+  const { data, error } = await supabase
+    .from("portal_activity_logs")
+    .select("created_at, actor_name, entity_id, summary, metadata")
+    .eq("action_type", "gvg_launcher_start")
+    .gte("created_at", since)
+    .lte("created_at", until)
+    .order("created_at", { ascending: false })
+    .limit(LAUNCHER_SCOPE_LOG_LIMIT);
+
+  if (error) {
+    console.warn("[gvg-server] launcher logs unavailable:", error.message);
+    return [];
+  }
+
+  return data || [];
+}
+
+async function fetchLauncherScope(log) {
+  const sessionId = getLogSessionId(log);
+  const targetGuild = getLogTargetGuild(log);
+
+  if (!isValidSessionId(sessionId) || !targetGuild) return null;
+
+  try {
+    const data = await requestVpsJson(
+      `/api/v1/launcher/sessions/${encodeURIComponent(sessionId)}`,
+      { timeoutMs: 1500 }
+    );
+    const session = data?.session || data || {};
+    const jobId = getJobId(session);
+
+    if (!jobId) return null;
+
+    return {
+      jobId,
+      targetGuild,
+      sessionId,
+      actorName: String(log?.actor_name || "").trim(),
+      side: String(log?.metadata?.side || session?.side || "").trim(),
+      createdAt: log?.created_at || null,
+    };
+  } catch (error) {
+    if (Number(error.statusCode) !== 404) {
+      console.warn("[gvg-server] launcher session scope unavailable:", error.message);
+    }
+    return null;
+  }
+}
+
+function getLauncherScopeCacheKey(jobs) {
+  return jobs.map(getJobId).filter(Boolean).sort().join("|");
+}
+
+function getEventTimestamp(value) {
+  const timestamp = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function getJobCreatedTimestamp(job) {
+  return getEventTimestamp(job?.created_at || job?.updated_at);
+}
+
+function pickLauncherCandidateLogs(logs, jobs) {
+  const candidatesBySession = new Map();
+
+  for (const job of jobs) {
+    const jobTimestamp = getJobCreatedTimestamp(job);
+    if (jobTimestamp === null) continue;
+
+    logs
+      .map((log) => {
+        const logTimestamp = getEventTimestamp(log?.created_at);
+        if (logTimestamp === null) return null;
+
+        const delta = jobTimestamp - logTimestamp;
+        if (delta < -LAUNCHER_SCOPE_JOB_AFTER_MS || delta > LAUNCHER_SCOPE_JOB_BEFORE_MS) {
+          return null;
+        }
+
+        return { log, distance: Math.abs(delta) };
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.distance - right.distance)
+      .slice(0, LAUNCHER_SCOPE_CANDIDATES_PER_JOB)
+      .forEach(({ log }) => {
+        const sessionId = getLogSessionId(log);
+        if (sessionId && !candidatesBySession.has(sessionId)) {
+          candidatesBySession.set(sessionId, log);
+        }
+      });
+  }
+
+  if (candidatesBySession.size) {
+    return [...candidatesBySession.values()];
+  }
+
+  return logs.slice(0, LAUNCHER_SCOPE_CANDIDATES_PER_JOB);
+}
+
+async function getLauncherJobScopeOverrides(jobs) {
+  const cacheKey = getLauncherScopeCacheKey(jobs);
+
+  if (cacheKey && launcherScopeCache.key === cacheKey && Date.now() < launcherScopeCache.expiresAt) {
+    return launcherScopeCache.overrides;
+  }
+
+  const wantedJobIds = new Set(jobs.map(getJobId).filter(Boolean));
+  const logs = await fetchRecentLauncherLogs(jobs);
+  const seenSessions = new Set();
+  const scopedLogs = logs.filter((log) => {
+    const sessionId = getLogSessionId(log);
+    const targetGuild = getLogTargetGuild(log);
+
+    if (!sessionId || !targetGuild || seenSessions.has(sessionId)) return false;
+    seenSessions.add(sessionId);
+    return true;
+  });
+
+  const candidateLogs = pickLauncherCandidateLogs(scopedLogs, jobs);
+  const scopes = await mapWithConcurrency(candidateLogs, 8, fetchLauncherScope);
+  const overrides = new Map();
+
+  for (const scope of scopes) {
+    if (scope?.jobId && scope.targetGuild && wantedJobIds.has(scope.jobId)) {
+      overrides.set(scope.jobId, scope);
+    }
+  }
+
+  launcherScopeCache = {
+    expiresAt: Date.now() + LAUNCHER_SCOPE_CACHE_MS,
+    key: cacheKey,
+    overrides,
+  };
+
+  return overrides;
+}
+
+async function applyLauncherSessionScopes(jobs) {
+  const normalizedJobs = jobs.map(normalizeJob);
+  if (!normalizedJobs.length) return normalizedJobs;
+
+  const overrides = await getLauncherJobScopeOverrides(normalizedJobs);
+  if (!overrides.size) return normalizedJobs;
+
+  return normalizedJobs.map((job) => {
+    const jobId = getJobId(job);
+    const scope = overrides.get(jobId);
+
+    if (!scope) return job;
+
+    const reportedGuild = getJobGuildCode(job);
+
+    return {
+      ...job,
+      target_guild: scope.targetGuild,
+      launcher_session_id: scope.sessionId,
+      launcher_actor: scope.actorName || null,
+      launcher_side: scope.side || null,
+      launcher_created_at: scope.createdAt,
+      launcher_reported_guild: reportedGuild,
+      launcher_scope_corrected: reportedGuild !== scope.targetGuild,
+    };
+  });
+}
+
 function filterJobsByGuild(data, guild) {
-  const jobs = Array.isArray(data?.jobs) ? data.jobs.map(normalizeJob) : [];
+  const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
   if (!guild) return jobs;
 
-  const wanted = String(guild).toUpperCase();
+  const wanted = normalizeTargetGuild(guild);
+  if (!wanted) return [];
+
   return jobs.filter((job) => getJobGuildCode(job) === wanted);
 }
 
@@ -326,9 +602,10 @@ async function deleteVpsJob(sourceGuild, jobId) {
 }
 
 async function handleJobs(req, res) {
-  const targetGuild = String(req.query?.guild || "").toUpperCase();
+  const rawGuild = req.query?.guild || "";
+  const targetGuild = rawGuild ? normalizeTargetGuild(rawGuild) : "";
 
-  if (targetGuild && !isValidGuild(targetGuild)) {
+  if (rawGuild && !targetGuild) {
     return res.status(400).json({ error: "guild invalide" });
   }
 
@@ -338,13 +615,22 @@ async function handleJobs(req, res) {
   );
 
   const data = await requestVpsJson(`/api/v1/jobs?limit=${limit}`);
-  const jobs = filterJobsByGuild(data, targetGuild);
+  const rawJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+  let scopedJobs = rawJobs.map(normalizeJob);
+
+  scopedJobs = await withTimeout(
+    applyLauncherSessionScopes(rawJobs),
+    4500,
+    scopedJobs
+  );
+
+  const jobs = filterJobsByGuild({ jobs: scopedJobs }, targetGuild);
 
   return res.status(200).json({
     ...data,
     jobs,
     filtered_guild: targetGuild || null,
-    total_before_filter: Array.isArray(data?.jobs) ? data.jobs.length : 0,
+    total_before_filter: rawJobs.length,
   });
 }
 
@@ -507,7 +793,7 @@ async function fetchPayload(sourceGuild, jobId) {
 
 async function handleImport(req, res) {
   const body = req.body || {};
-  const targetGuild = String(body.targetGuild || body.guild || "").toUpperCase();
+  const targetGuild = normalizeTargetGuild(body.targetGuild || body.guild || "");
   const sourceGuild = String(body.sourceGuild || body.resolved_guild || "").trim();
   const jobId = String(body.jobId || "");
   const side = String(body.side || "enemy").toLowerCase();
