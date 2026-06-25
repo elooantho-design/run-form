@@ -166,6 +166,7 @@ const [groupCalc, setGroupCalc] = useState(null);
 const [groupCalculating, setGroupCalculating] = useState(false);
 
 const [items, setItems] = useState([]);
+const [recordTogglingIds, setRecordTogglingIds] = useState(() => new Set());
 const enemyItems = useMemo(
   () => items.filter((d) => d.is_ally !== true),
   [items]
@@ -653,6 +654,23 @@ function getMirrorGroup(defense) {
             );
             }
   async function toggleRecord(defense) {
+  if (!defense?.id || recordTogglingIds.has(defense.id)) return;
+  if (defense.record_status === "record" || defense.record_status === "push") return;
+
+  const previousStatus = defense.record_status;
+  const optimisticStatus = previousStatus === "a_record" ? "pas_record" : "a_record";
+
+  setRecordTogglingIds((current) => {
+    const next = new Set(current);
+    next.add(defense.id);
+    return next;
+  });
+  setItems((current) =>
+    current.map((item) =>
+      item.id === defense.id ? { ...item, record_status: optimisticStatus } : item
+    )
+  );
+
   try {
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
@@ -672,18 +690,45 @@ function getMirrorGroup(defense) {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
       setMessage("Erreur réponse toggle");
+      setItems((current) =>
+        current.map((item) =>
+          item.id === defense.id ? { ...item, record_status: previousStatus } : item
+        )
+      );
       return;
     }
 
     if (!response.ok) {
       setMessage(data?.error || "Erreur toggle");
+      setItems((current) =>
+        current.map((item) =>
+          item.id === defense.id ? { ...item, record_status: previousStatus } : item
+        )
+      );
       return;
     }
 
-    load(); // refresh
+    if (data?.item?.record_status) {
+      setItems((current) =>
+        current.map((item) =>
+          item.id === defense.id ? { ...item, record_status: data.item.record_status } : item
+        )
+      );
+    }
   } catch (e) {
     console.error(e);
     setMessage("Erreur toggle");
+    setItems((current) =>
+      current.map((item) =>
+        item.id === defense.id ? { ...item, record_status: previousStatus } : item
+      )
+    );
+  } finally {
+    setRecordTogglingIds((current) => {
+      const next = new Set(current);
+      next.delete(defense.id);
+      return next;
+    });
   }
 }
 
@@ -1289,7 +1334,8 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                           }`}
                           disabled={
                             defense.record_status === "record" ||
-                            defense.record_status === "push"
+                            defense.record_status === "push" ||
+                            recordTogglingIds.has(defense.id)
                           }
                           title={t("gvgPanel.toggleRecord", "Basculer a record / pas record")}
                         >
