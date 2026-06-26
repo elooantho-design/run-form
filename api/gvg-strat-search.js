@@ -1,8 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 import {
-  getRunScopeForGvgGuild,
+  canUseRunTargetGuild,
   isMissingGuildCodeColumn,
   isMissingRunBoycottTable,
+  resolveRunScope,
   stratMatchesRunReadScope,
 } from "../src/lib/runScopeServer.js";
 
@@ -282,9 +283,15 @@ export default async function handler(req, res) {
       }))
       .filter((hero) => hero.champion);
 
+    const scope = await resolveRunScope(supabase, req);
+
+    if (!canUseRunTargetGuild(scope, defense.guild)) {
+      return res.status(403).json({ error: "guilde hors perimetre" });
+    }
+
     const results = await searchDefenceStrict(supabase, queryItems, {
       limit: 10,
-      scope: getRunScopeForGvgGuild(defense.guild),
+      scope,
       targetGuildCode: defense.guild,
     });
 

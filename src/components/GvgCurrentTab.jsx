@@ -21,6 +21,14 @@ function getApiBase() {
   return "";
 }
 
+function getRunSessionParams(session) {
+  return {
+    memberId: session?.memberId || session?.member_id || session?.id || "",
+    discordId: session?.discordId || session?.discord_id || "",
+    guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
+  };
+}
+
 function getStatusClasses(status) {
   if (status === "repro") {
     return "border-blue-500/40 bg-blue-500/10 text-blue-200";
@@ -415,9 +423,15 @@ async function openStratView(defenseId) {
     setStratModalMessage("");
     setStratModalItems([]);
 
-    const response = await fetch(
-      `${apiBase}/api/gvg-strat-search?gvgDefenseId=${encodeURIComponent(defenseId)}`
-    );
+    const params = new URLSearchParams({
+      gvgDefenseId: String(defenseId),
+    });
+
+    Object.entries(getRunSessionParams(session)).forEach(([key, value]) => {
+      if (value) params.set(key, String(value));
+    });
+
+    const response = await fetch(`${apiBase}/api/gvg-strat-search?${params.toString()}`);
 
     const rawText = await response.text();
     let data = null;

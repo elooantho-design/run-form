@@ -16,6 +16,10 @@ function normalizeRoleValue(role) {
     .toLowerCase();
 }
 
+function isAdminRoleValue(roleValue) {
+  return ["admin", "administrateur", "leader"].includes(roleValue);
+}
+
 function readSessionField(req, keys) {
   const bodySession = req?.body?.session && typeof req.body.session === "object" ? req.body.session : {};
   const sources = [bodySession, req?.body || {}, req?.query || {}];
@@ -72,9 +76,11 @@ export async function resolveRunScope(supabase, req) {
   const guildCode = normalizeGuildCode(member?.guild_code || fallbackGuildCode || "G1");
   const role = member?.role || fallbackRole || "";
   const roleValue = normalizeRoleValue(role);
-  const isLeader = roleValue === "leader";
+  const hasTrustedMemberRole = Boolean(member);
   const spaceKey = getGuildSpaceKey(guildCode);
-  const isPaladin = isLeader || spaceKey === PALADIN_SPACE_KEY;
+  const isPaladin = spaceKey === PALADIN_SPACE_KEY;
+  const isLeader = hasTrustedMemberRole && isPaladin && roleValue === "leader";
+  const isAdmin = hasTrustedMemberRole && isPaladin && isAdminRoleValue(roleValue);
 
   return {
     memberId: member?.id || memberId || "",
@@ -83,6 +89,7 @@ export async function resolveRunScope(supabase, req) {
     role,
     spaceKey: isPaladin ? PALADIN_SPACE_KEY : spaceKey,
     isLeader,
+    isAdmin,
     isPaladin,
     stratGuildCode: isPaladin ? null : guildCode,
   };
@@ -99,6 +106,7 @@ export function getRunScopeForGvgGuild(guild) {
     role: "",
     spaceKey: isPaladin ? PALADIN_SPACE_KEY : getGuildSpaceKey(guildCode),
     isLeader: false,
+    isAdmin: isPaladin,
     isPaladin,
     stratGuildCode: isPaladin ? null : guildCode,
   };
@@ -118,7 +126,8 @@ export function stratMatchesRunReadScope(strat, scope) {
   const stratGuildCode = normalizeGuildCode(strat?.guild_code);
 
   if (scope?.isPaladin) {
-    return true;
+    if (scope?.isAdmin || scope?.isLeader) return true;
+    return !stratGuildCode || PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(stratGuildCode));
   }
 
   return Boolean(stratGuildCode && getGuildSpaceKey(stratGuildCode) === scope?.spaceKey);
