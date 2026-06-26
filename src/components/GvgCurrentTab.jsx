@@ -297,13 +297,19 @@ function getYoutubeEmbedUrl(url) {
   }
 }
 
-function openDefenseImage(defense) {
-  if (!defense?.image_url) return;
+function getDefenseImageUrl(defense) {
+  if (!defense?.image_url) return "";
 
-  const imageUrl =
+  return (
     defense.image_url.startsWith("/api/") && apiBase
       ? `${apiBase}${defense.image_url}`
-      : defense.image_url;
+      : defense.image_url
+  );
+}
+
+function openDefenseImage(defense) {
+  const imageUrl = getDefenseImageUrl(defense);
+  if (!imageUrl) return;
 
   setImageModalUrl(imageUrl);
   setImageModalTitle(buildDefenseTitle(defense));
@@ -834,7 +840,7 @@ async function markDefenseAsOpened(defenseId) {
                     </Button>
                   </div>
 
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
                     {filteredDefenses.length === 0 ? (
                       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
                         Aucune défense pour ce filtre.
@@ -887,7 +893,8 @@ async function markDefenseAsOpened(defenseId) {
                           </div>
                         </div>
 
-                          <div className="mt-3 flex flex-wrap gap-2">
+                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,42%)] md:items-start">
+                            <div className="flex flex-wrap gap-2">
                         <button
                         type="button"
                         onClick={() => openReproModal(defense.id)}
@@ -951,6 +958,24 @@ async function markDefenseAsOpened(defenseId) {
   C’est ouvert
 </button>
                           </div>
+
+                            {defense.image_url ? (
+                              <button
+                                type="button"
+                                onClick={() => openDefenseImage(defense)}
+                                className="group block w-full overflow-hidden rounded-xl border border-zinc-700/80 bg-black/40 shadow-sm transition hover:border-zinc-400/80"
+                                title="Voir l'image de la defense en grand"
+                              >
+                                <img
+                                  src={getDefenseImageUrl(defense)}
+                                  alt={buildDefenseTitle(defense)}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="h-36 w-full object-contain object-center transition duration-200 group-hover:scale-[1.02] sm:h-44 md:h-36 2xl:h-44"
+                                />
+                              </button>
+                            ) : null}
+                        </div>
                         </div>
                       ))
                     )}
