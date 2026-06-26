@@ -4,6 +4,8 @@ import {
   getGvgGuildLabel,
   getSessionGuildCode,
   getVisibleGvgGuildCodes,
+  isExternalRunGuildCode,
+  isPaladinAdminSession,
   isPaladinGuildCode,
   isPaladinSession,
 } from "@/lib/guildScope";
@@ -143,6 +145,7 @@ export default function GvgPanelTab({ session: portalSession } = {}) {
   }, []);
   const session = portalSession || dashboardSession;
   const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
+  const showExternalRunAlerts = useMemo(() => isPaladinAdminSession(session), [session]);
   const canUseCustomGuildInput = isPaladinSession(session);
 
   const sessionRole = String(session?.role || "")
@@ -1805,9 +1808,16 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                       className="rounded-xl border border-zinc-700 bg-zinc-800/60 p-3"
                     >
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-white">
-                        Strat #{run.strat_id}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-white">
+                          Strat #{run.strat_id}
+                          </span>
+                          {showExternalRunAlerts && isExternalRunGuildCode(run.guild_code) ? (
+                            <span className="rounded-full border border-amber-400/50 bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-amber-100">
+                              Run externe - {getGvgGuildLabel(run.guild_code)}
+                            </span>
+                          ) : null}
+                        </div>
 
                         <div className="flex flex-wrap items-center gap-2">
                           <button

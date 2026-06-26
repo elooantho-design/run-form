@@ -3,7 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
-import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
+import {
+  getGvgGuildLabel,
+  getVisibleGvgGuildCodes,
+  isExternalRunGuildCode,
+  isPaladinAdminSession,
+} from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 function getApiBase() {
@@ -130,6 +135,7 @@ const [refreshTick, setRefreshTick] = useState(0);
     }
   }, []);
   const session = portalSession || dashboardSession;
+  const showExternalRunAlerts = useMemo(() => isPaladinAdminSession(session), [session]);
   const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
   const [selectedGuild, setSelectedGuild] = useState(() => {
     return localStorage.getItem("gvg_selected_guild") || "";
@@ -1207,8 +1213,15 @@ async function markDefenseAsOpened(defenseId) {
               key={strat.strat_id || index}
               className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
             >
-              <div className="text-sm text-zinc-400">
-                Strat #{strat.strat_id}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-sm text-zinc-400">
+                  Strat #{strat.strat_id}
+                </div>
+                {showExternalRunAlerts && isExternalRunGuildCode(strat.guild_code) ? (
+                  <span className="rounded-full border border-amber-400/50 bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-amber-100">
+                    Run externe - {getGvgGuildLabel(strat.guild_code)}
+                  </span>
+                ) : null}
               </div>
 
 {strat.youtube_url ? (

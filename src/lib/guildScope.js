@@ -61,6 +61,34 @@ export function isPaladinSession(session) {
   return getSessionGuildSpaceKey(session) === PALADIN_SPACE_KEY;
 }
 
+export function isExternalRunGuildCode(guildCode) {
+  const code = normalizeGuildCode(guildCode);
+  return Boolean(code && !isPaladinGuildCode(code));
+}
+
+export function isPaladinAdminSession(session) {
+  const rawGuildCode = normalizeGuildCode(
+    session?.guildCode || session?.guild_code || session?.guild || ""
+  );
+  if (!isPaladinGuildCode(rawGuildCode)) return false;
+
+  const role = String(session?.role || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  return Boolean(
+    session?.isAdmin === true ||
+      session?.admin === true ||
+      session?.isLeader === true ||
+      session?.leader === true ||
+      role.includes("admin") ||
+      role.includes("administrateur") ||
+      role === "leader"
+  );
+}
+
 export function getVisibleGvgGuildCodes(session) {
   if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
 

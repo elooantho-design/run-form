@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { getGvgGuildLabel, isExternalRunGuildCode, isPaladinAdminSession } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 import {
@@ -253,6 +254,7 @@ export default function RunSearchGrid({ session: portalSession } = {}) {
   const session = portalSession || dashboardSession;
   const runSessionPayload = useMemo(() => getRunSessionPayload(session), [session]);
   const targetGuildCode = runSessionPayload.guildCode || "G1";
+  const showExternalRunAlerts = useMemo(() => isPaladinAdminSession(session), [session]);
   const isSpecialExternal =
     String(session?.discordId || session?.discord_id || "") === SPECIAL_EXTERNAL_DISCORD_ID;
 
@@ -1042,6 +1044,11 @@ async function toggleResultBoycott(result, nextBoycott) {
                         <Badge className="border-zinc-600 bg-zinc-900 text-zinc-200">
                           {result.guild_code || "PALADIN"}
                         </Badge>
+                        {showExternalRunAlerts && isExternalRunGuildCode(result.guild_code) ? (
+                          <Badge className="border-amber-400/50 bg-amber-400/10 text-amber-100">
+                            Run externe - {getGvgGuildLabel(result.guild_code)}
+                          </Badge>
+                        ) : null}
                         {result.boycott ? (
                           <Badge className="border-red-500/40 bg-red-500/15 text-red-200">
                             {t("run.boycottBadge", "Boycott")}
