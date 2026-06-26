@@ -2000,6 +2000,10 @@ function HeroBoxView({ session }) {
     saveHeroAwakening(heroId, 0);
   }
 
+  function lockHero(heroId) {
+    saveHeroAwakening(heroId, -1);
+  }
+
   function setAwakening(heroId, level) {
     const currentState = heroStates[heroId] || { owned: false, awakening: -1 };
     const nextAwakening = level === 1 && currentState.awakening === 1 ? 0 : level;
@@ -2259,6 +2263,7 @@ function HeroBoxView({ session }) {
               hero={hero}
               state={heroStates[hero.id] || { owned: false, awakening: -1 }}
               onUnlock={unlockHero}
+              onLock={lockHero}
               onAwakening={setAwakening}
               priority={index < 24}
               imageReady={loadedHeroImages.has(hero.id)}
@@ -2278,6 +2283,7 @@ function HeroLayerCard({
   hero,
   state,
   onUnlock,
+  onLock,
   onAwakening,
   priority = false,
   imageReady = false,
@@ -2288,8 +2294,42 @@ function HeroLayerCard({
 }) {
   const { t } = usePortalLanguage();
   const [fallbackImageIndex, setFallbackImageIndex] = useState(-1);
+  const [lockPressing, setLockPressing] = useState(false);
+  const lockTimerRef = useRef(null);
   const imageSrc = fallbackImageIndex === -1 ? hero.image : hero.fallbackImages?.[fallbackImageIndex] || hero.image;
   const displayName = getPortalHeroDisplayName(hero, language);
+  const canLongPressLock = canEdit && state.owned && !saving;
+
+  function clearLockPress() {
+    if (lockTimerRef.current) {
+      clearTimeout(lockTimerRef.current);
+      lockTimerRef.current = null;
+    }
+    setLockPressing(false);
+  }
+
+  useEffect(
+    () => () => {
+      if (lockTimerRef.current) clearTimeout(lockTimerRef.current);
+    },
+    [],
+  );
+
+  function startLockPress(event) {
+    if (!canLongPressLock || event.button > 0 || event.target.closest?.("button")) return;
+
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture is only a comfort feature here; the long press still works without it.
+    }
+    setLockPressing(true);
+    lockTimerRef.current = window.setTimeout(() => {
+      lockTimerRef.current = null;
+      setLockPressing(false);
+      onLock?.(hero.id);
+    }, 650);
+  }
 
   function handleImageReady() {
     onImageReady?.(hero.id);
@@ -2309,7 +2349,17 @@ function HeroLayerCard({
     <article
       className={`hero-layer-card ${state.owned ? "is-owned" : "is-locked"} ${
         imageReady ? "is-image-ready" : "is-image-loading"
-      } ${canEdit ? "is-editable" : "is-readonly"} ${saving ? "is-saving" : ""}`}
+      } ${canEdit ? "is-editable" : "is-readonly"} ${saving ? "is-saving" : ""} ${
+        lockPressing ? "is-long-pressing" : ""
+      }`}
+      title={canLongPressLock ? t("heroBox.longPressLock", "Maintenir pour regriser") : undefined}
+      onPointerDown={startLockPress}
+      onPointerUp={clearLockPress}
+      onPointerCancel={clearLockPress}
+      onPointerLeave={clearLockPress}
+      onContextMenu={(event) => {
+        if (canLongPressLock) event.preventDefault();
+      }}
     >
       <div className="hero-layer-skeleton" aria-hidden="true" />
       <img

@@ -846,8 +846,32 @@ body {
   transform: none;
 }
 
+.hero-layer-card.is-editable.is-owned {
+  cursor: pointer;
+}
+
 .hero-layer-card.is-saving {
   opacity: 0.72;
+  pointer-events: none;
+}
+
+.hero-layer-card.is-long-pressing {
+  transform: translateY(-3px) scale(0.985);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.46),
+    0 0 34px rgba(250, 204, 21, 0.32);
+}
+
+.hero-layer-card.is-long-pressing::after {
+  content: "";
+  position: absolute;
+  z-index: 6;
+  inset: 4%;
+  border: 2px solid rgba(250, 204, 21, 0.86);
+  border-radius: 14px;
+  box-shadow:
+    0 0 22px rgba(250, 204, 21, 0.4),
+    inset 0 0 22px rgba(250, 204, 21, 0.16);
   pointer-events: none;
 }
 
