@@ -1034,10 +1034,16 @@ async function handleDiscordReproInteraction(req, res, supabase, rawBody) {
 }
 
 async function handleDiscordReproInternal(req, res, supabase, rawBody) {
-  const expectedToken = String(process.env.DISCORD_REPRO_INTERNAL_TOKEN || "").trim();
+  const expectedTokens = [
+    process.env.DISCORD_REPRO_INTERNAL_TOKEN,
+    process.env.GVG_API_TOKEN,
+    process.env.GVG_SERVER_TOKEN,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
   const receivedToken = String(getHeader(req, "x-discord-repro-token") || "").trim();
 
-  if (!expectedToken || receivedToken !== expectedToken) {
+  if (!receivedToken || !expectedTokens.includes(receivedToken)) {
     return res.status(401).json({ error: "unauthorized" });
   }
 
