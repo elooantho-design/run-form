@@ -142,21 +142,9 @@ function formatDefenseTitle(defense) {
   return `${bastion} - ${type} - ${team}`;
 }
 
-function formatHeroSummary(heroes) {
-  return (Array.isArray(heroes) ? heroes : [])
-    .map((hero, index) => {
-      const name = String(hero?.champion || hero?.name || `hero ${index + 1}`).trim();
-      const position = String(hero?.position || "?").trim().toUpperCase();
-      const direction = String(hero?.direction || "?").trim().toUpperCase();
-      return `${index + 1}. ${name} ${position} ${direction}`;
-    })
-    .join("\n");
-}
-
 function buildDiscordRequestPayload(defense, requestRow) {
   const title = formatDefenseTitle(defense);
   const rawName = String(defense?.raw_name || "").trim();
-  const heroes = formatHeroSummary(defense?.heroes);
   const portalBaseUrl = getPortalBaseUrl();
   const dashboardUrl = portalBaseUrl ? `${portalBaseUrl}/portal` : "";
   const imageUrl = resolveDiscordImageUrl(defense?.image_url);
@@ -165,7 +153,6 @@ function buildDiscordRequestPayload(defense, requestRow) {
     title: `Demande de repro - ${title}`,
     description: [
       rawName ? `Defense: ${rawName}` : null,
-      heroes ? `Composition:\n${heroes}` : null,
       "Reponds a cette demande en cliquant sur le bouton, puis remplis les informations.",
     ]
       .filter(Boolean)
