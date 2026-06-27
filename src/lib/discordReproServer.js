@@ -48,6 +48,21 @@ function getPortalBaseUrl() {
     .replace(/\/$/, "");
 }
 
+function resolveDiscordImageUrl(imageUrl) {
+  const value = String(imageUrl || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+
+  const portalBaseUrl = getPortalBaseUrl();
+  if (!portalBaseUrl || !value.startsWith("/")) return "";
+
+  try {
+    return new URL(value, `${portalBaseUrl}/`).toString();
+  } catch {
+    return "";
+  }
+}
+
 function isMissingReproRequestTable(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
@@ -144,7 +159,7 @@ function buildDiscordRequestPayload(defense, requestRow) {
   const heroes = formatHeroSummary(defense?.heroes);
   const portalBaseUrl = getPortalBaseUrl();
   const dashboardUrl = portalBaseUrl ? `${portalBaseUrl}/portal` : "";
-  const imageUrl = String(defense?.image_url || "").trim();
+  const imageUrl = resolveDiscordImageUrl(defense?.image_url);
 
   const embed = {
     title: `Demande de repro - ${title}`,
@@ -158,7 +173,7 @@ function buildDiscordRequestPayload(defense, requestRow) {
     color: 0x22c55e,
   };
 
-  if (/^https?:\/\//i.test(imageUrl)) {
+  if (imageUrl) {
     embed.image = { url: imageUrl };
   }
 
