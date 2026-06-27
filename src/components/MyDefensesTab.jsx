@@ -28,6 +28,7 @@ import {
   getMemberTrackedDefenseScore,
   normalizeDefenseTier,
 } from "@/calculations";
+import { resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
@@ -186,7 +187,10 @@ export default function MyDefensesTab({ session }) {
   const memberDefenses = useMemo(() => {
     const memberGuildCode = member?.guildCode || guildCode;
 
-    return defenses.filter((defense) => defenseMatchesMemberGuild(defense, memberGuildCode));
+    return resolveDefenseVariantsForGuild(
+      defenses.filter((defense) => defenseMatchesMemberGuild(defense, memberGuildCode)),
+      memberGuildCode,
+    );
   }, [defenses, guildCode, member?.guildCode]);
 
   const selectedDefenseNames = useMemo(() => {
@@ -311,17 +315,7 @@ export default function MyDefensesTab({ session }) {
         supabase
           .from("guild_defenses")
           .select(`
-            id,
-            name,
-            tier,
-            type,
-            faction,
-            image_url,
-            guild_code,
-            is_global,
-            source_defense_id,
-            sort_order,
-            created_at,
+            *,
             guild_defense_slots (
               slot_index,
               champion_id,
@@ -434,6 +428,7 @@ export default function MyDefensesTab({ session }) {
             faction: row.faction || "",
             guildCode: row.guild_code,
             isGlobal: row.is_global,
+            isHidden: Boolean(row.is_hidden),
             sourceDefenseId: row.source_defense_id,
             sortOrder: row.sort_order ?? 9999,
             slots,

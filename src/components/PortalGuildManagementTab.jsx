@@ -15,6 +15,7 @@ import {
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
+import { resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
@@ -49,6 +50,7 @@ function mapDefenseRow(row, blocksByDefenseId = new Map()) {
     faction: row.faction || "",
     guildCode: row.guild_code,
     isGlobal: row.is_global,
+    isHidden: Boolean(row.is_hidden),
     sourceDefenseId: row.source_defense_id,
     sortOrder: row.sort_order ?? 9999,
     slots,
@@ -128,11 +130,12 @@ export default function PortalGuildManagementTab({ session }) {
 
   const activeDefenses = useMemo(
     () =>
-      defenses.filter(
-        (defense) => {
+      resolveDefenseVariantsForGuild(
+        defenses.filter((defense) => {
           if (defense.isGlobal || !defense.guildCode) return activeGuildIsPaladin;
           return normalizeGuildCodeKey(defense.guildCode) === normalizeGuildCodeKey(activeGuildCode);
-        }
+        }),
+        activeGuildCode,
       ),
     [activeGuildCode, activeGuildIsPaladin, defenses]
   );
@@ -225,17 +228,7 @@ export default function PortalGuildManagementTab({ session }) {
         supabase
           .from("guild_defenses")
           .select(`
-            id,
-            name,
-            tier,
-            type,
-            faction,
-            image_url,
-            guild_code,
-            is_global,
-            source_defense_id,
-            sort_order,
-            created_at,
+            *,
             guild_defense_slots (
               slot_index,
               champion_id,

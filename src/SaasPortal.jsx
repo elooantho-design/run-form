@@ -69,6 +69,11 @@ import {
   normalizeGuildCodeKey,
   PALADIN_CLUSTER_GUILD_CODES,
 } from "@/lib/guildScope";
+import {
+  getDefenseRootId,
+  isInheritedDefense,
+  resolveDefenseVariantsForGuild,
+} from "@/lib/defenseVariants";
 
 const navigation = [
   { id: "home", label: "Accueil", labelKey: "nav.home", icon: LayoutDashboard },
@@ -2855,6 +2860,7 @@ const emptyPortalDefenseDraft = {
   image: "",
   guildCode: "G1",
   isGlobal: false,
+  sourceDefenseId: null,
   slots: ["", "", "", "", ""],
 };
 
@@ -2883,6 +2889,7 @@ function mapPortalAdminDefenseRow(row, blocksByDefenseId = new Map()) {
     faction: row.faction || "",
     guildCode: row.guild_code || "G1",
     isGlobal: Boolean(row.is_global),
+    isHidden: Boolean(row.is_hidden),
     sourceDefenseId: row.source_defense_id || null,
     sortOrder: row.sort_order ?? 9999,
     slots,
@@ -3021,17 +3028,7 @@ function PortalAdminDefensesView({ session }) {
       let defensesQuery = supabase
         .from("guild_defenses")
         .select(`
-          id,
-          name,
-          tier,
-          type,
-          faction,
-          image_url,
-          guild_code,
-          is_global,
-          source_defense_id,
-          sort_order,
-          created_at,
+          *,
           guild_defense_slots (
             slot_index,
             champion_id,
@@ -3106,8 +3103,10 @@ function PortalAdminDefensesView({ session }) {
         }
       }
 
-      const nextDefenses = defenseRows
-        .map((row) => mapPortalAdminDefenseRow(row, blocksByDefenseId))
+      const nextDefenses = resolveDefenseVariantsForGuild(
+        defenseRows.map((row) => mapPortalAdminDefenseRow(row, blocksByDefenseId)),
+        activeGuildCode,
+      )
         .sort((left, right) => {
           if ((left.sortOrder ?? 9999) !== (right.sortOrder ?? 9999)) {
             return (left.sortOrder ?? 9999) - (right.sortOrder ?? 9999);
@@ -3139,19 +3138,161 @@ function PortalAdminDefensesView({ session }) {
     setDraftOpen(true);
   }
 
-  function openEditDefense(defense) {
-    setMessage("");
-    setErrorMessage("");
-    setDraft({
-      id: defense.id,
+  function addOrReplaceLocalDefense(localDefense) {
+    if (!localDefense?.id) return;
+
+    setDefenses((previous) =>
+      resolveDefenseVariantsForGuild(
+        [
+          ...previous.filter((item) => String(item.id) !== String(localDefense.id)),
+          localDefense,
+        ],
+        activeGuildCode,
+      ).sort((left, right) => {
+        if ((left.sortOrder ?? 9999) !== (right.sortOrder ?? 9999)) {
+          return (left.sortOrder ?? 9999) - (right.sortOrder ?? 9999);
+        }
+
+        return String(left.name || "").localeCompare(String(right.name || ""), "fr", { sensitivity: "base" });
+      }),
+    );
+  }
+
+  async function createLocalDefenseVariant(defense, { hidden = false } = {}) {
+    if (!defense?.id) return null;
+
+    const rootId = getDefenseRootId(defense);
+    if (!rootId) return null;
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from("guild_defenses")
+      .select("*")
+      .eq("source_defense_id", rootId)
+      .eq("guild_code", activeGuildCode)
+      .limit(1);
+
+    if (existingError) throw existingError;
+
+    const existing = existingRows?.[0] || null;
+    const localPayload = {
       name: defense.name || "",
       tier: defense.tier || "meta_s",
       type: defense.type || "Tour",
-      faction: defense.faction || "",
-      image: defense.image || defense.image_url || "",
-      guildCode: defense.guildCode || activeGuildCode,
-      isGlobal: Boolean(defense.isGlobal),
-      slots: [...(defense.slots || []), "", "", "", "", ""].slice(0, 5),
+      faction: defense.faction || null,
+      image_url: defense.image || defense.image_url || null,
+      guild_code: activeGuildCode,
+      is_global: false,
+      source_defense_id: rootId,
+      sort_order: defense.sortOrder ?? 9999,
+      is_hidden: hidden,
+    };
+
+    const { data: localRow, error: localError } = existing
+      ? await supabase
+          .from("guild_defenses")
+          .update(localPayload)
+          .eq("id", existing.id)
+          .select("*")
+          .single()
+      : await supabase
+          .from("guild_defenses")
+          .insert(localPayload)
+          .select("*")
+          .single();
+
+    if (localError) throw localError;
+
+    if (!existing && !hidden) {
+      const slotChampions = (defense.slots || [])
+        .map((heroName) => championByName.get(normalizeDefenseChampionName(heroName)))
+        .filter(Boolean);
+
+      if (slotChampions.length > 0) {
+        const { error: slotsError } = await supabase.from("guild_defense_slots").insert(
+          slotChampions.map((champion, index) => ({
+            defense_id: localRow.id,
+            champion_id: champion.id,
+            slot_index: index + 1,
+          })),
+        );
+
+        if (slotsError) throw slotsError;
+      }
+
+      const conditionRows = (defense.conditions || [])
+        .filter((condition) => condition.championId)
+        .map((condition) => ({
+          defense_id: localRow.id,
+          champion_id: condition.championId,
+          min_awakening: condition.minAwakening,
+        }));
+
+      if (conditionRows.length > 0) {
+        const { error: conditionsError } = await supabase.from("guild_defense_conditions").insert(conditionRows);
+        if (conditionsError) throw conditionsError;
+      }
+
+      const blockRows = (defense.infoBlocks || []).map((block, index) => ({
+        defense_id: localRow.id,
+        block_type: block.block_type || block.blockType || "text",
+        content: block.content,
+        sort_order: block.sort_order ?? block.sortOrder ?? index + 1,
+      }));
+
+      if (blockRows.length > 0) {
+        const { error: blocksError } = await supabase.from("guild_defense_blocks").insert(blockRows);
+        if (blocksError) throw blocksError;
+      }
+    }
+
+    const localDefense = {
+      ...defense,
+      id: localRow.id,
+      guildCode: localRow.guild_code || activeGuildCode,
+      isGlobal: false,
+      isHidden: Boolean(localRow.is_hidden),
+      sourceDefenseId: localRow.source_defense_id || rootId,
+    };
+
+    addOrReplaceLocalDefense(localDefense);
+    return localDefense;
+  }
+
+  async function ensureEditableDefense(defense) {
+    if (!isInheritedDefense(defense, activeGuildCode)) return defense;
+
+    setSaving(true);
+    setErrorMessage("");
+
+    try {
+      const localDefense = await createLocalDefenseVariant(defense);
+      setMessage(`Copie locale creee pour ${activeGuildCode} : ${defense.name}.`);
+      return localDefense || defense;
+    } catch (error) {
+      setErrorMessage(error?.message || "Creation de la copie locale impossible.");
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openEditDefense(defense) {
+    setMessage("");
+    setErrorMessage("");
+    const editableDefense = await ensureEditableDefense(defense);
+    if (!editableDefense) return;
+
+    setDraft({
+      id: editableDefense.id,
+      name: editableDefense.name || "",
+      tier: editableDefense.tier || "meta_s",
+      type: editableDefense.type || "Tour",
+      faction: editableDefense.faction || "",
+      image: editableDefense.image || editableDefense.image_url || "",
+      guildCode: editableDefense.guildCode || activeGuildCode,
+      isGlobal: Boolean(editableDefense.isGlobal),
+      sourceDefenseId: editableDefense.sourceDefenseId || null,
+      slots: [...(editableDefense.slots || []), "", "", "", "", ""].slice(0, 5),
     });
     setDraftOpen(true);
   }
@@ -3230,6 +3371,7 @@ function PortalAdminDefensesView({ session }) {
       image_url: draft.image || null,
       guild_code: nextGuildCode,
       is_global: nextIsGlobal,
+      source_defense_id: draft.sourceDefenseId || null,
     };
 
     try {
@@ -3238,12 +3380,12 @@ function PortalAdminDefensesView({ session }) {
             .from("guild_defenses")
             .update(defensePayload)
             .eq("id", draft.id)
-            .select("id, name, tier, type, faction, image_url, guild_code, is_global")
+            .select("*")
             .single()
         : await supabase
             .from("guild_defenses")
             .insert(defensePayload)
-            .select("id, name, tier, type, faction, image_url, guild_code, is_global")
+            .select("*")
             .single();
 
       if (defenseError) throw defenseError;
@@ -3290,9 +3432,12 @@ function PortalAdminDefensesView({ session }) {
     }
   }
 
-  function openConditionDialog(defense) {
-    const firstHero = defense?.slots?.[0] || "";
-    setConditionDefenseId(String(defense?.id || ""));
+  async function openConditionDialog(defense) {
+    const editableDefense = await ensureEditableDefense(defense);
+    if (!editableDefense) return;
+
+    const firstHero = editableDefense?.slots?.[0] || "";
+    setConditionDefenseId(String(editableDefense?.id || ""));
     setNewCondition({ hero: firstHero, minAwakening: 5 });
     setConditionOpen(true);
     setMessage("");
@@ -3370,7 +3515,12 @@ function PortalAdminDefensesView({ session }) {
   async function deleteDefense(defense) {
     if (!isAdminUser || saving || !defense?.id) return;
 
-    const confirmed = window.confirm(`Supprimer la defense "${defense.name}" ?`);
+    const shouldHideLocally = Boolean(defense.sourceDefenseId || isInheritedDefense(defense, activeGuildCode));
+    const confirmed = window.confirm(
+      shouldHideLocally
+        ? `Retirer la defense "${defense.name}" uniquement pour ${activeGuildCode} ?`
+        : `Supprimer la defense "${defense.name}" ?`,
+    );
     if (!confirmed) return;
 
     setSaving(true);
@@ -3378,6 +3528,55 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
 
     try {
+      const resetGuildCodes = shouldHideLocally
+        ? [activeGuildCode]
+        : defense.isGlobal || isPaladinGuildCode(defense.guildCode)
+          ? PALADIN_CLUSTER_GUILD_CODES
+          : [defense.guildCode || activeGuildCode].filter(Boolean);
+
+      let resetDefense1Query = supabase
+        .from("guild_members")
+        .update({ defense_1: EMPTY_DEFENSE_SLOT })
+        .eq("defense_1", defense.name);
+      let resetDefense2Query = supabase
+        .from("guild_members")
+        .update({ defense_2: EMPTY_DEFENSE_SLOT })
+        .eq("defense_2", defense.name);
+
+      if (resetGuildCodes.length > 0) {
+        resetDefense1Query = resetDefense1Query.in("guild_code", resetGuildCodes);
+        resetDefense2Query = resetDefense2Query.in("guild_code", resetGuildCodes);
+      }
+
+      if (shouldHideLocally) {
+        const localDefense = await createLocalDefenseVariant(defense, { hidden: true });
+        const [resetDefense1, resetDefense2] = await Promise.all([resetDefense1Query, resetDefense2Query]);
+
+        const mutationError = resetDefense1.error || resetDefense2.error;
+        if (mutationError) throw mutationError;
+
+        void logPortalActivity(session, {
+          actionType: "admin_defense_local_hide",
+          entityType: "defense",
+          entityId: String(localDefense?.id || defense.id),
+          summary: `${session?.watcherName || session?.name || "Admin"} a retire localement ${defense.name} pour ${activeGuildCode}`,
+          metadata: {
+            defenseName: defense.name,
+            guildCode: activeGuildCode,
+            sourceDefenseId: getDefenseRootId(defense),
+          },
+        });
+
+        setDefenses((previous) =>
+          resolveDefenseVariantsForGuild(previous, activeGuildCode).filter(
+            (item) => String(getDefenseRootId(item)) !== String(getDefenseRootId(defense)),
+          ),
+        );
+        setMessage(`Defense retiree uniquement pour ${activeGuildCode} : ${defense.name}.`);
+        setRefreshTick((value) => value + 1);
+        return;
+      }
+
       const { data: blocks, error: blocksError } = await supabase
         .from("guild_defense_blocks")
         .select("id, block_type, content")
@@ -3393,28 +3592,10 @@ function PortalAdminDefensesView({ session }) {
       ].filter(Boolean);
 
       const uniqueStoragePaths = [...new Set(storagePaths)];
-      const resetGuildCodes =
-        defense.isGlobal || isPaladinGuildCode(defense.guildCode)
-          ? PALADIN_CLUSTER_GUILD_CODES
-          : [defense.guildCode || activeGuildCode].filter(Boolean);
 
       if (uniqueStoragePaths.length > 0) {
         const { error: storageError } = await supabase.storage.from("defense-images").remove(uniqueStoragePaths);
         if (storageError) throw storageError;
-      }
-
-      let resetDefense1Query = supabase
-        .from("guild_members")
-        .update({ defense_1: EMPTY_DEFENSE_SLOT })
-        .eq("defense_1", defense.name);
-      let resetDefense2Query = supabase
-        .from("guild_members")
-        .update({ defense_2: EMPTY_DEFENSE_SLOT })
-        .eq("defense_2", defense.name);
-
-      if (resetGuildCodes.length > 0) {
-        resetDefense1Query = resetDefense1Query.in("guild_code", resetGuildCodes);
-        resetDefense2Query = resetDefense2Query.in("guild_code", resetGuildCodes);
       }
 
       const [resetDefense1, resetDefense2, blocksDelete, conditionsDelete, slotsDelete] = await Promise.all([
@@ -3536,6 +3717,7 @@ function PortalAdminDefensesView({ session }) {
           onEdit={openEditDefense}
           onDelete={deleteDefense}
           onAddCondition={openConditionDialog}
+          onEnsureEditable={ensureEditableDefense}
         />
       )}
 

@@ -9,6 +9,7 @@ export default function AdminDefensesTab({
   onDelete,
   onAdd,
   onAddCondition,
+  onEnsureEditable,
 }) {
   const { t } = usePortalLanguage();
   const [typeFilter, setTypeFilter] = useState("all");
@@ -46,14 +47,17 @@ const getDefenseInfoBlocks = (defense) =>
   sortInfoBlocks(defense.infoBlocks || []);
 
 const openDefenseBlocksModal = async (defense) => {
-  setSelectedDefenseForBlocks(defense);
+  const editableDefense = onEnsureEditable ? await onEnsureEditable(defense) : defense;
+  if (!editableDefense) return;
+
+  setSelectedDefenseForBlocks(editableDefense);
   setBlocksModalOpen(true);
   setBlocksLoading(true);
 
   const { data, error } = await supabase
     .from("guild_defense_blocks")
     .select("id, defense_id, block_type, content, sort_order")
-    .eq("defense_id", defense.id)
+    .eq("defense_id", editableDefense.id)
     .order("sort_order", { ascending: true });
 
   if (error) {
@@ -62,7 +66,7 @@ const openDefenseBlocksModal = async (defense) => {
   } else {
     const nextBlocks = sortInfoBlocks(data || []);
     setDefenseBlocks(nextBlocks);
-    cacheDefenseInfoBlocks(defense.id, nextBlocks);
+    cacheDefenseInfoBlocks(editableDefense.id, nextBlocks);
   }
 
   setBlocksLoading(false);
