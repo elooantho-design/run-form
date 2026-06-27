@@ -5,6 +5,7 @@ import {
   isMissingRunBoycottTable,
   stratMatchesRunReadScope,
 } from "../src/lib/runScopeServer.js";
+import { notifyDiscordReproRequestsForDefenses } from "../src/lib/discordReproServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -290,7 +291,7 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
   const { data, error } = await supabase
     .from("gvg_defense")
     .insert(rows)
-    .select("id, guild, bastion, type, tower, team, status");
+    .select("id, guild, bastion, type, tower, team, status, raw_name, heroes, image_url, is_ally");
 
   if (error) {
     console.error("[api/gvg-import:helper] insert error:", error);
@@ -299,10 +300,13 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
     throw wrapped;
   }
 
+  const discordRepro = await notifyDiscordReproRequestsForDefenses(supabase, data || []);
+
   return {
     success: true,
     guild: normalizedGuild,
     inserted: data?.length || 0,
+    discord_repro: discordRepro,
   };
 }
 
@@ -370,17 +374,20 @@ export default async function handler(req, res) {
     const { data, error } = await supabase
       .from("gvg_defense")
       .insert(rows)
-      .select("id, guild, bastion, type, tower, team, status");
+      .select("id, guild, bastion, type, tower, team, status, raw_name, heroes, image_url, is_ally");
 
     if (error) {
       console.error("[api/gvg-import] insert error:", error);
       return res.status(500).json({ error: "erreur insertion gvg" });
     }
 
+    const discordRepro = await notifyDiscordReproRequestsForDefenses(supabase, data || []);
+
     return res.status(200).json({
       success: true,
       guild: normalizedGuild,
       inserted: data?.length || 0,
+      discord_repro: discordRepro,
     });
   } catch (err) {
     console.error("[api/gvg-import]", err);

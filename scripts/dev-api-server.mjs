@@ -49,6 +49,8 @@ async function attachBody(req) {
 
   const bodyBuffer = await readBody(req);
   const rawBody = bodyBuffer.toString("utf8");
+  req.rawBody = bodyBuffer;
+  req.rawBodyText = rawBody;
 
   if (!rawBody) {
     req.body = {};

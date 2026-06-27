@@ -1,7 +1,22 @@
 import { importGvgItems } from "./gvg-import.js";
+import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import { createClient } from "@supabase/supabase-js";
+import {
+  buildDiscordReproModal,
+  buildReproTemplateData,
+  getDiscordReproRequestById,
+  handleDiscordReproReaction,
+  resolveMemberByDiscordUser,
+  saveDiscordModalSubmission,
+} from "../src/lib/discordReproServer.js";
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
 const VPS_REQUEST_TIMEOUT_MS = 12000;
@@ -29,7 +44,87 @@ let launcherScopeCache = {
 function setCorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-GVG-Token");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-GVG-Token, X-Discord-Repro-Token, X-Signature-Ed25519, X-Signature-Timestamp"
+  );
+}
+
+function getHeader(req, name) {
+  const lower = name.toLowerCase();
+  return req.headers?.[lower] || req.headers?.[name] || "";
+}
+
+async function readRawBody(req) {
+  if (typeof req.rawBodyText === "string") return req.rawBodyText;
+  if (Buffer.isBuffer(req.rawBody)) {
+    const rawText = req.rawBody.toString("utf8");
+    req.rawBodyText = rawText;
+    return rawText;
+  }
+
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.from(chunk));
+  }
+
+  const buffer = Buffer.concat(chunks);
+  const rawText = buffer.toString("utf8");
+  req.rawBody = buffer;
+  req.rawBodyText = rawText;
+  return rawText;
+}
+
+async function ensureJsonBody(req) {
+  if (req.body && typeof req.body === "object") return req.body;
+
+  const rawBody = await readRawBody(req);
+  req.body = rawBody ? JSON.parse(rawBody) : {};
+  return req.body;
+}
+
+function discordEphemeral(content) {
+  return {
+    type: 4,
+    data: {
+      content,
+      flags: 64,
+    },
+  };
+}
+
+function verifyDiscordSignature(req, rawBody) {
+  const publicKeyHex = String(process.env.DISCORD_PUBLIC_KEY || "").trim();
+  const signatureHex = String(getHeader(req, "x-signature-ed25519") || "").trim();
+  const timestamp = String(getHeader(req, "x-signature-timestamp") || "").trim();
+
+  if (!publicKeyHex || !signatureHex || !timestamp) return false;
+  if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return false;
+  if (!/^[0-9a-f]+$/i.test(signatureHex)) return false;
+
+  const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+  const publicKey = crypto.createPublicKey({
+    key: Buffer.concat([spkiPrefix, Buffer.from(publicKeyHex, "hex")]),
+    format: "der",
+    type: "spki",
+  });
+
+  return crypto.verify(
+    null,
+    Buffer.from(`${timestamp}${rawBody}`, "utf8"),
+    publicKey,
+    Buffer.from(signatureHex, "hex")
+  );
+}
+
+function getInteractionUser(interaction) {
+  return interaction?.member?.user || interaction?.user || null;
+}
+
+function parseRequestIdFromCustomId(customId, prefix) {
+  const value = String(customId || "");
+  if (!value.startsWith(prefix)) return "";
+  return value.slice(prefix.length).trim();
 }
 
 function getServerConfig() {
@@ -833,6 +928,7 @@ async function handleImport(req, res) {
     side,
     imported: result.inserted,
     guild: result.guild,
+    discord_repro: result.discord_repro || null,
   });
 }
 
@@ -855,6 +951,126 @@ async function handleDeleteJob(req, res) {
   });
 }
 
+async function handleDiscordReproButton(supabase, interaction) {
+  const customId = interaction?.data?.custom_id || "";
+  const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_take:");
+
+  if (!requestId) {
+    return discordEphemeral("Bouton de repro inconnu.");
+  }
+
+  const requestRow = await getDiscordReproRequestById(supabase, requestId);
+  if (!requestRow) {
+    return discordEphemeral("Cette demande de repro n'existe plus.");
+  }
+
+  const user = getInteractionUser(interaction);
+  const member = await resolveMemberByDiscordUser(supabase, user);
+
+  if (!member) {
+    return discordEphemeral(
+      "Ton ID Discord n'est pas relie a un joueur Portal. Demande a un admin de verifier ton profil."
+    );
+  }
+
+  const template = await buildReproTemplateData(supabase, {
+    gvgDefenseId: requestRow.gvg_defense_id,
+    memberId: member.id,
+    watcherName: member.watcher_name || user?.username || "Joueur",
+  });
+
+  return buildDiscordReproModal(requestRow, member, template);
+}
+
+async function handleDiscordReproModalSubmit(supabase, interaction) {
+  const customId = interaction?.data?.custom_id || "";
+  const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_submit:");
+
+  if (!requestId) {
+    return discordEphemeral("Modal de repro inconnu.");
+  }
+
+  try {
+    await saveDiscordModalSubmission(supabase, {
+      requestId,
+      user: getInteractionUser(interaction),
+      modalComponents: interaction?.data?.components || [],
+    });
+
+    return discordEphemeral("Repro enregistree dans Portal. Merci !");
+  } catch (error) {
+    console.error("[gvg-server:discord-repro-modal] save error:", error);
+    return discordEphemeral(error?.message || "Impossible d'enregistrer la repro.");
+  }
+}
+
+async function handleDiscordReproInteraction(req, res, supabase, rawBody) {
+  if (!verifyDiscordSignature(req, rawBody)) {
+    return res.status(401).json({ error: "invalid discord signature" });
+  }
+
+  let interaction = null;
+  try {
+    interaction = rawBody ? JSON.parse(rawBody) : null;
+  } catch {
+    return res.status(400).json({ error: "invalid json" });
+  }
+
+  if (interaction?.type === 1) {
+    return res.status(200).json({ type: 1 });
+  }
+
+  if (interaction?.type === 3) {
+    const response = await handleDiscordReproButton(supabase, interaction);
+    return res.status(200).json(response);
+  }
+
+  if (interaction?.type === 5) {
+    const response = await handleDiscordReproModalSubmit(supabase, interaction);
+    return res.status(200).json(response);
+  }
+
+  return res.status(200).json(discordEphemeral("Interaction Discord non geree."));
+}
+
+async function handleDiscordReproInternal(req, res, supabase, rawBody) {
+  const expectedToken = String(process.env.DISCORD_REPRO_INTERNAL_TOKEN || "").trim();
+  const receivedToken = String(getHeader(req, "x-discord-repro-token") || "").trim();
+
+  if (!expectedToken || receivedToken !== expectedToken) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  let payload = null;
+  try {
+    payload = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    return res.status(400).json({ error: "invalid json" });
+  }
+
+  if (payload?.action === "reaction_add") {
+    const result = await handleDiscordReproReaction(supabase, payload);
+    return res.status(200).json(result);
+  }
+
+  return res.status(400).json({ error: "action invalide" });
+}
+
+async function handleDiscordRepro(req, res) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: "configuration Supabase manquante" });
+  }
+
+  const rawBody = await readRawBody(req);
+
+  if (getHeader(req, "x-discord-repro-token")) {
+    return await handleDiscordReproInternal(req, res, supabase, rawBody);
+  }
+
+  return await handleDiscordReproInteraction(req, res, supabase, rawBody);
+}
+
 export default async function handler(req, res) {
   setCorsHeaders(res);
 
@@ -862,9 +1078,17 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  const action = String(req.query?.action || req.body?.action || "jobs").toLowerCase();
-
   try {
+    if (req.method !== "GET") {
+      await ensureJsonBody(req);
+    }
+
+    const action = String(req.query?.action || req.body?.action || "jobs").toLowerCase();
+
+    if (action === "discord-repro") {
+      return await handleDiscordRepro(req, res);
+    }
+
     if (req.method === "GET") {
       if (action === "jobs" || action === "list") return await handleJobs(req, res);
       if (action === "payload") return await handlePayload(req, res);

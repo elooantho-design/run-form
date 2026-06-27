@@ -7,6 +7,7 @@
     "dev": "vite",
     "api:dev": "node scripts/dev-api-server.mjs",
     "api:dev:3001": "set PORT=3001&& node scripts/dev-api-server.mjs",
+    "discord:repro-bot": "node scripts/discord-repro-bot.mjs",
     "dev:5174": "set VITE_API_BASE_URL=http://localhost:3001&& vite --host 127.0.0.1 --port 5174 --strictPort",
     "build": "vite build",
     "lint": "eslint .",
