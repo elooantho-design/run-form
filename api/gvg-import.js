@@ -3,7 +3,7 @@ import {
   getRunScopeForGvgGuild,
   isMissingGuildCodeColumn,
   isMissingRunBoycottTable,
-  stratMatchesRunReadScope,
+  stratMatchesRunScope,
 } from "../src/lib/runScopeServer.js";
 import { notifyDiscordReproRequestsForDefenses } from "../src/lib/discordReproServer.js";
 
@@ -177,7 +177,7 @@ async function fetchScopedStratIds(supabaseClient, stratIds, runScope) {
   }
 
   const scopedIds = (data || [])
-    .filter((strat) => stratMatchesRunReadScope(strat, runScope))
+    .filter((strat) => stratMatchesRunScope(strat, runScope))
     .map((strat) => strat.id)
     .filter(Boolean);
 

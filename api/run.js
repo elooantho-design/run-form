@@ -262,7 +262,14 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
 async function searchDefenceStrict(
   supabaseClient,
   queryItems,
-  { limit = 10, maxCandidates = 50000, scope = null, includeBoycotted = false, targetGuildCode = "" } = {}
+  {
+    limit = 10,
+    maxCandidates = 50000,
+    scope = null,
+    includeBoycotted = false,
+    targetGuildCode = "",
+    matcher = stratMatchesRunReadScope,
+  } = {}
 ) {
   if (!queryItems?.length) return [];
 
@@ -286,7 +293,7 @@ async function searchDefenceStrict(
   if (!stratIds.length) return [];
 
   const strats = await fetchScopedStratsByIds(supabaseClient, stratIds, scope, {
-    matcher: stratMatchesRunReadScope,
+    matcher,
   });
   const scopedStratsWithBoycott = await applyBoycottStatus(supabaseClient, strats, targetGuildCode);
   const visibleStrats = includeBoycotted
@@ -513,6 +520,7 @@ async function refreshGvgDefenseStatus(supabaseClient, gvgDefenseId, targetGuild
     scope: getRunScopeForGvgGuild(defense.guild),
     includeBoycotted: false,
     targetGuildCode: defense.guild,
+    matcher: stratMatchesRunScope,
   });
 
   const nextStatus = activeRuns.length ? "strat" : "def";

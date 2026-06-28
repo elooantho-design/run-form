@@ -194,9 +194,15 @@ async function loadGvg(cancelled = false) {
     setLoading(true);
     setMessage("");
 
-    const response = await fetch(
-      `${apiBase}/api/gvg-data?guild=${encodeURIComponent(selectedGuild)}`
-    );
+    const params = new URLSearchParams({
+      guild: selectedGuild,
+    });
+
+    Object.entries(getRunSessionParams(session)).forEach(([key, value]) => {
+      if (value) params.set(key, String(value));
+    });
+
+    const response = await fetch(`${apiBase}/api/gvg-data?${params.toString()}`);
 
     const rawText = await response.text();
     let data = null;
@@ -846,7 +852,13 @@ async function markDefenseAsOpened(defenseId) {
                         Aucune défense pour ce filtre.
                       </div>
                     ) : (
-                      filteredDefenses.map((defense) => (
+                      filteredDefenses.map((defense) => {
+                        const canOpenVisibleRuns =
+                          defense.has_visible_run === true ||
+                          Number(defense.visible_run_count || 0) > 0 ||
+                          defense.record_status === "push";
+
+                        return (
                         <div
                           key={defense.id}
                           className={`w-full rounded-2xl border px-4 py-3 ${getStatusClasses(
@@ -931,15 +943,23 @@ async function markDefenseAsOpened(defenseId) {
                               📸
                             </button>
                           ) : null}
-{defense.status === "strat" ? (
   <button
     type="button"
-    onClick={() => openStratView(defense.id)}
-    className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25"
+    onClick={() => canOpenVisibleRuns && openStratView(defense.id)}
+    disabled={!canOpenVisibleRuns}
+    className={`rounded-2xl border px-3 py-2 text-sm font-medium transition ${
+      canOpenVisibleRuns
+        ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+        : "cursor-not-allowed border-zinc-600 bg-zinc-800/40 text-zinc-500 opacity-60"
+    }`}
+    title={
+      canOpenVisibleRuns
+        ? "Voir les runs disponibles"
+        : "Aucun run visible pour ce compte"
+    }
   >
     👀
   </button>
-) : null}
 
 <button
   type="button"
@@ -977,7 +997,8 @@ async function markDefenseAsOpened(defenseId) {
                             ) : null}
                         </div>
                         </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>

@@ -4,8 +4,12 @@ import path from "path";
 import {
   getRunScopeForGvgGuild,
   isMissingGuildCodeColumn,
+  isMissingRunBoycottTable,
+  resolveRunScope,
+  stratMatchesRunReadScope,
   stratMatchesRunScope,
 } from "../src/lib/runScopeServer.js";
+import { notifyDiscordReproRequestsForDefenses } from "../src/lib/discordReproServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -143,6 +147,284 @@ function isValidGuild(value) {
   return normalizeGuildCode(value) !== null;
 }
 
+function normalizeRunChampionName(name) {
+  if (!name) return null;
+  return String(name)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\d+$/, "");
+}
+
+function normalizeRunPos(pos) {
+  if (!pos) return null;
+  return String(pos).trim().toUpperCase();
+}
+
+function normalizeRunDir(dir) {
+  if (!dir) return null;
+  const value = String(dir).trim().toUpperCase();
+
+  if (["N", "NORD", "NORTH", "UP"].includes(value)) return "N";
+  if (["S", "SUD", "SOUTH", "DOWN"].includes(value)) return "S";
+  if (["E", "EST", "EAST", "RIGHT"].includes(value)) return "E";
+  if (["O", "OUEST", "W", "WEST", "LEFT"].includes(value)) return "O";
+
+  return value || null;
+}
+
+function buildRunQueryItemsFromHeroes(heroes) {
+  return (Array.isArray(heroes) ? heroes : [])
+    .map((hero) => ({
+      champion: normalizeRunChampionName(hero?.champion || hero?.name),
+      position: normalizeRunPos(hero?.position),
+      direction: normalizeRunDir(hero?.direction),
+    }))
+    .filter((item) => item.champion && item.position && item.direction);
+}
+
+function runSlotMatchesQuery(slot, query) {
+  return (
+    normalizeRunChampionName(slot?.champion) === query.champion &&
+    normalizeRunPos(slot?.position) === query.position &&
+    normalizeRunDir(slot?.direction) === query.direction
+  );
+}
+
+function runStratMatchesAllQueries(stratSlots, queryItems) {
+  return (queryItems || []).every((query) =>
+    (stratSlots || []).some((slot) => runSlotMatchesQuery(slot, query))
+  );
+}
+
+async function fetchRunCandidateStratIdsByChampions(supabaseClient, champions) {
+  const uniq = [...new Set((champions || []).filter(Boolean))];
+  if (!uniq.length) return [];
+
+  const orFilter = uniq.map((champion) => `champion.eq.${champion}`).join(",");
+  const { data, error } = await supabaseClient
+    .from("defence_slot")
+    .select("strat_id, champion")
+    .or(orFilter);
+
+  if (error) throw error;
+
+  const hitMap = new Map();
+  for (const row of data || []) {
+    const stratId = row.strat_id;
+    const champion = normalizeRunChampionName(row.champion);
+    if (!hitMap.has(stratId)) hitMap.set(stratId, new Set());
+    hitMap.get(stratId).add(champion);
+  }
+
+  return [...hitMap.entries()]
+    .map(([stratId, hits]) => ({ stratId, hits: hits.size }))
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, 800)
+    .map((item) => item.stratId);
+}
+
+async function fetchRunScopedStratsByIds(supabaseClient, stratIds, scope, matcher) {
+  if (!stratIds?.length) return [];
+
+  let { data, error } = await supabaseClient
+    .from("defence_strat")
+    .select("id, guild_code")
+    .in("id", stratIds);
+
+  if (error) {
+    if (!isMissingGuildCodeColumn(error)) throw error;
+    if (!scope?.isPaladin) return [];
+
+    const fallback = await supabaseClient
+      .from("defence_strat")
+      .select("id")
+      .in("id", stratIds);
+
+    if (fallback.error) throw fallback.error;
+    data = (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
+  }
+
+  return (data || []).filter((strat) => matcher(strat, scope));
+}
+
+async function fetchRunBoycottedIds(supabaseClient, stratIds, targetGuildCode) {
+  if (!stratIds?.length || !targetGuildCode) return new Set();
+
+  const { data, error } = await supabaseClient
+    .from("defence_strat_boycotts")
+    .select("strat_id")
+    .eq("guild_code", targetGuildCode)
+    .in("strat_id", stratIds);
+
+  if (error) {
+    if (isMissingRunBoycottTable(error)) return new Set();
+    throw error;
+  }
+
+  return new Set((data || []).map((row) => String(row.strat_id)));
+}
+
+async function fetchRunSlotsByStratIds(supabaseClient, stratIds, pageSize = 1000) {
+  let all = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabaseClient
+      .from("defence_slot")
+      .select("strat_id, champion, position, direction")
+      .in("strat_id", stratIds)
+      .range(from, to);
+
+    if (error) throw error;
+
+    all = all.concat(data || []);
+    if (!data || data.length < pageSize) break;
+  }
+
+  return all;
+}
+
+async function countMatchingRunsForDefense(
+  supabaseClient,
+  defense,
+  scope,
+  targetGuildCode,
+  matcher,
+  { limit = 1 } = {}
+) {
+  const queryItems = buildRunQueryItemsFromHeroes(defense?.heroes);
+  if (!queryItems.length) return 0;
+
+  const stratIds = await fetchRunCandidateStratIdsByChampions(
+    supabaseClient,
+    queryItems.map((item) => item.champion)
+  );
+  if (!stratIds.length) return 0;
+
+  const scopedStrats = await fetchRunScopedStratsByIds(supabaseClient, stratIds, scope, matcher);
+  const scopedIds = scopedStrats.map((strat) => strat.id).filter(Boolean);
+  if (!scopedIds.length) return 0;
+
+  const boycottedIds = await fetchRunBoycottedIds(supabaseClient, scopedIds, targetGuildCode);
+  const activeIds = scopedIds.filter((stratId) => !boycottedIds.has(String(stratId)));
+  if (!activeIds.length) return 0;
+
+  const slots = await fetchRunSlotsByStratIds(supabaseClient, activeIds, 1000);
+  const slotsByStrat = new Map();
+
+  for (const slot of slots || []) {
+    if (!slotsByStrat.has(slot.strat_id)) slotsByStrat.set(slot.strat_id, []);
+    slotsByStrat.get(slot.strat_id).push(slot);
+  }
+
+  let count = 0;
+  for (const stratId of activeIds) {
+    const stratSlots = slotsByStrat.get(stratId) || [];
+    if (runStratMatchesAllQueries(stratSlots, queryItems)) {
+      count += 1;
+      if (count >= limit) return count;
+    }
+  }
+
+  return count;
+}
+
+async function enrichDefensesWithRunAvailability(req, defenses, guild) {
+  const items = Array.isArray(defenses) ? defenses : [];
+  if (!items.length) return [];
+
+  const ownerScope = getRunScopeForGvgGuild(guild);
+  const visibleScope = await resolveRunScope(supabase, req);
+
+  return Promise.all(
+    items.map(async (defense) => {
+      const ownedRunCount = await countMatchingRunsForDefense(
+        supabase,
+        defense,
+        ownerScope,
+        defense.guild || guild,
+        stratMatchesRunScope,
+        { limit: 1 }
+      );
+
+      const canReadExternalRuns =
+        visibleScope?.isPaladin && (visibleScope?.isAdmin || visibleScope?.isLeader);
+
+      const visibleRunCount = canReadExternalRuns
+        ? await countMatchingRunsForDefense(
+          supabase,
+          defense,
+          visibleScope,
+          defense.guild || guild,
+          stratMatchesRunReadScope,
+          { limit: 1 }
+        )
+        : ownedRunCount;
+
+      const currentStatus = String(defense.status || "").toLowerCase();
+      const effectiveStatus = ["def", "strat"].includes(currentStatus)
+        ? ownedRunCount > 0
+          ? "strat"
+          : "def"
+        : defense.status;
+
+      return {
+        ...defense,
+        stored_status: defense.status,
+        status: effectiveStatus,
+        owned_run_count: ownedRunCount,
+        visible_run_count: visibleRunCount,
+        has_owned_run: ownedRunCount > 0,
+        has_visible_run: visibleRunCount > 0,
+      };
+    })
+  );
+}
+
+async function syncDerivedGvgStatuses(items) {
+  const staleItems = (Array.isArray(items) ? items : []).filter((item) => {
+    const storedStatus = String(item?.stored_status || "").toLowerCase();
+    const effectiveStatus = String(item?.status || "").toLowerCase();
+    return (
+      item?.id &&
+      ["def", "strat"].includes(storedStatus) &&
+      ["def", "strat"].includes(effectiveStatus) &&
+      storedStatus !== effectiveStatus
+    );
+  });
+
+  if (!staleItems.length) return null;
+
+  const updated = [];
+  for (const item of staleItems) {
+    const { error } = await supabase
+      .from("gvg_defense")
+      .update({
+        status: item.status,
+        repro_by: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", item.id);
+
+    if (error) throw error;
+    updated.push(item);
+  }
+
+  const reproCandidates = updated.filter(
+    (item) => String(item.status || "").toLowerCase() === "def"
+  );
+  const discordRepro = reproCandidates.length
+    ? await notifyDiscordReproRequestsForDefenses(supabase, reproCandidates)
+    : null;
+
+  return {
+    updated: updated.length,
+    discord_repro: discordRepro,
+  };
+}
+
 function buildGvgDefenseListQuery(selectColumns, guild) {
   return supabase
     .from("gvg_defense")
@@ -180,10 +462,26 @@ async function handleList(req, res) {
     return res.status(500).json({ error: "erreur lecture gvg" });
   }
 
+  let items = data || [];
+
+  try {
+    items = await enrichDefensesWithRunAvailability(req, items, guild);
+  } catch (availabilityError) {
+    console.error("[gvg-data:list] run availability error:", availabilityError);
+  }
+
+  let statusSync = null;
+  try {
+    statusSync = await syncDerivedGvgStatuses(items);
+  } catch (syncError) {
+    console.error("[gvg-data:list] status sync error:", syncError);
+  }
+
   return res.status(200).json({
     success: true,
     guild,
-    items: data || [],
+    items,
+    status_sync: statusSync,
     mirror_group_schema_ready: mirrorGroupSchemaReady,
     schema_warning: mirrorGroupSchemaReady
       ? null

@@ -210,9 +210,13 @@ const recordCounts = useMemo(
       setLoading(true);
       setMessage("");
 
-      const response = await fetch(
-        `${apiBase}/api/gvg-data?guild=${encodeURIComponent(guild)}`
-      );
+      const params = new URLSearchParams({ guild });
+
+      Object.entries(getRunSessionPayload(session)).forEach(([key, value]) => {
+        if (value) params.set(key, String(value));
+      });
+
+      const response = await fetch(`${apiBase}/api/gvg-data?${params.toString()}`);
 
       const rawText = await response.text();
       let data = null;
@@ -1273,6 +1277,12 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
               );
               const recordState = getDefenseRecordState(defense);
               const mirrorGroup = getMirrorGroup(defense);
+              const canOpenVisibleRuns = Boolean(
+                defense &&
+                  (defense.has_visible_run === true ||
+                    Number(defense.visible_run_count || 0) > 0 ||
+                    defense.record_status === "push")
+              );
 
               return (
                 <div
@@ -1384,11 +1394,11 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                         <button
                           onClick={() => openRuns(defense)}
                           className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition ${
-                            defense.status === "strat" || defense.record_status === "push"
+                            canOpenVisibleRuns
                               ? "border-green-500 bg-green-500/15 hover:scale-110 cursor-pointer"
                               : "border-red-500 bg-red-500/15 opacity-50 cursor-not-allowed"
                           }`}
-                          disabled={!(defense.status === "strat" || defense.record_status === "push")}
+                          disabled={!canOpenVisibleRuns}
                           title={t("gvgPanel.viewRuns", "Voir les runs")}
                         >
                           👍
