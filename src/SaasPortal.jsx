@@ -1818,7 +1818,8 @@ function HeroBoxView({ session }) {
         const matchesState =
           ownedFilter === "all" ||
           (ownedFilter === "owned" && state.owned) ||
-          (ownedFilter === "locked" && !state.owned);
+          (ownedFilter === "locked" && !state.owned) ||
+          (ownedFilter === "a5" && state.owned && state.awakening === 5);
         const matchesRarity = rarityFilter === "all" || hero.rarity === rarityFilter;
         const matchesRole = roleFilter === "all" || hero.roles.includes(roleFilter);
         const matchesFaction = factionFilter === "all" || hero.factions.includes(factionFilter);
@@ -2125,6 +2126,7 @@ function HeroBoxView({ session }) {
               ["all", t("heroBox.filterAll", "Tous")],
               ["owned", t("heroBox.filterOwned", "Possedes")],
               ["locked", t("heroBox.filterLocked", "Verrouilles")],
+              ["a5", t("heroBox.filterAwakening5", "Eveil 5")],
             ].map(([id, label]) => (
               <button
                 key={id}

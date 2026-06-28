@@ -77,6 +77,7 @@ const PORTAL_TRANSLATIONS = {
   "heroBox.filterAll": "All",
   "heroBox.filterOwned": "Owned",
   "heroBox.filterLocked": "Locked",
+  "heroBox.filterAwakening5": "Awakening 5",
   "heroBox.rarityFilters": "Rarity filters",
   "heroBox.roleFilters": "Role filters",
   "heroBox.factionFilters": "Faction filters",
