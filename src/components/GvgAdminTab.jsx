@@ -221,7 +221,15 @@ export default function GvgAdminTab({ session } = {}) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ guild }),
+        body: JSON.stringify({
+          guild,
+          actor: {
+            memberId: session?.memberId || session?.id || null,
+            name: session?.watcherName || session?.memberName || session?.name || session?.discordId || "Inconnu",
+            role: session?.role || null,
+            guildCode: session?.guildCode || session?.guild_code || null,
+          },
+        }),
       });
 
       const data = await readJsonResponse(response, "reset");

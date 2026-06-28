@@ -9,7 +9,11 @@ import {
   stratMatchesRunReadScope,
   stratMatchesRunScope,
 } from "../src/lib/runScopeServer.js";
-import { notifyDiscordReproRequestsForDefenses } from "../src/lib/discordReproServer.js";
+import {
+  cleanupDiscordReproRequestForDefenseId,
+  notifyDiscordReproRequestsForDefenses,
+  reopenDiscordReproRequestForDefense,
+} from "../src/lib/discordReproServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -994,7 +998,7 @@ async function handlePanelOpen(req, res) {
 
   const { data: defense, error: readError } = await supabase
     .from("gvg_defense")
-    .select("id, record_status")
+    .select(GVG_DEFENSE_LIST_SELECT_BASE)
     .eq("id", id)
     .maybeSingle();
 
@@ -1007,11 +1011,27 @@ async function handlePanelOpen(req, res) {
     return res.status(404).json({ error: "défense introuvable" });
   }
 
+  let discordReproCleanup = null;
+  let discordReproWarning = null;
+
   if (defense.record_status) {
+    try {
+      discordReproCleanup = await cleanupDiscordReproRequestForDefenseId(supabase, id, {
+        reason: "portal_panel_open_already_open",
+        source: "gvg-data:panel_open",
+        notifyReproducer: true,
+      });
+    } catch (cleanupError) {
+      discordReproWarning = cleanupError?.message || "nettoyage Discord repro impossible";
+      console.error("[gvg-data:panel_open] discord repro cleanup error:", cleanupError);
+    }
+
     return res.status(200).json({
       success: true,
       item: defense,
       already_open: true,
+      discord_repro_cleanup: discordReproCleanup,
+      discord_repro_warning: discordReproWarning,
     });
   }
 
@@ -1030,9 +1050,22 @@ async function handlePanelOpen(req, res) {
     return res.status(500).json({ error: "update failed" });
   }
 
+  try {
+    discordReproCleanup = await cleanupDiscordReproRequestForDefenseId(supabase, id, {
+      reason: "portal_panel_open",
+      source: "gvg-data:panel_open",
+      notifyReproducer: true,
+    });
+  } catch (cleanupError) {
+    discordReproWarning = cleanupError?.message || "nettoyage Discord repro impossible";
+    console.error("[gvg-data:panel_open] discord repro cleanup error:", cleanupError);
+  }
+
   return res.status(200).json({
     success: true,
     item: data,
+    discord_repro_cleanup: discordReproCleanup,
+    discord_repro_warning: discordReproWarning,
   });
 }
 
@@ -1802,7 +1835,7 @@ async function handlePanelReturn(req, res) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", id)
-    .select("id, record_status")
+    .select(GVG_DEFENSE_LIST_SELECT_BASE)
     .maybeSingle();
 
   if (error) {
@@ -1814,9 +1847,25 @@ async function handlePanelReturn(req, res) {
     return res.status(404).json({ error: "défense introuvable" });
   }
 
+  let discordReproReopen = null;
+  let discordReproWarning = null;
+
+  try {
+    discordReproReopen = await reopenDiscordReproRequestForDefense(supabase, data, {
+      reason: "portal_panel_return",
+      source: "gvg-data:panel_return",
+      createIfMissing: true,
+    });
+  } catch (reopenError) {
+    discordReproWarning = reopenError?.message || "reouverture Discord repro impossible";
+    console.error("[gvg-data:panel_return] discord repro reopen error:", reopenError);
+  }
+
   return res.status(200).json({
     success: true,
     item: data,
+    discord_repro_reopen: discordReproReopen,
+    discord_repro_warning: discordReproWarning,
   });
 }
 

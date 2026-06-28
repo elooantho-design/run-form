@@ -241,7 +241,7 @@ async function sendReproRequestMessage(supabase, defense) {
   const channelId = getDiscordReproChannelId();
   const requestRow = await getOrCreateReproRequestRow(supabase, defense, channelId);
 
-  if (requestRow?.discord_message_id) {
+  if (requestRow?.discord_message_id && ["requested", "repro_active", "send_failed"].includes(requestRow.state)) {
     return { skipped: true, reason: "already_sent", request_id: requestRow.id };
   }
 
@@ -256,7 +256,9 @@ async function sendReproRequestMessage(supabase, defense) {
       .from(REPRO_REQUEST_TABLE)
       .update({
         discord_message_id: message?.id || null,
+        discord_response_message_id: null,
         state: "requested",
+        opened_at: null,
         last_error: null,
         updated_at: new Date().toISOString(),
       })
@@ -275,6 +277,64 @@ async function sendReproRequestMessage(supabase, defense) {
       error: error?.message || "send failed",
     };
   }
+}
+
+export async function reopenDiscordReproRequestForDefense(supabase, defense, options = {}) {
+  if (!defense?.id) return { skipped: true, reason: "missing_defense" };
+
+  const { data: requestRow, error } = await supabase
+    .from(REPRO_REQUEST_TABLE)
+    .select("*")
+    .eq("gvg_defense_id", defense.id)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingReproRequestTable(error)) {
+      return { enabled: false, reason: "missing_gvg_discord_repro_requests_table" };
+    }
+    throw error;
+  }
+
+  const shouldCreateFreshRequest = Boolean(options.createIfMissing && isG1EnemyDefRequest(defense));
+  if (!requestRow && !shouldCreateFreshRequest) {
+    return { skipped: true, reason: "request_not_found_or_not_eligible" };
+  }
+
+  if (requestRow?.discord_message_id && ["requested", "repro_active", "send_failed"].includes(requestRow.state)) {
+    return { skipped: true, reason: "already_active", request_id: requestRow.id };
+  }
+
+  const result = await sendReproRequestMessage(supabase, defense);
+
+  try {
+    await supabase.from("portal_activity_logs").insert({
+      actor_name: "Discord repro",
+      action_type: "gvg_discord_repro_reopen",
+      entity_type: "gvg_defense",
+      entity_id: defense.id,
+      summary: `Reouverture demande repro Discord (${options.reason || "panel_return"})`,
+      metadata: {
+        reason: options.reason || "panel_return",
+        source: options.source || "gvg-data:panel_return",
+        request_id: result?.request_id || requestRow?.id || null,
+        guild: defense.guild || requestRow?.guild || null,
+        state_before: requestRow?.state || null,
+        discord_message_id: result?.discord_message_id || null,
+        result,
+      },
+    });
+  } catch (logError) {
+    console.warn("[discord-repro:reopen] activity log failed:", logError?.message || logError);
+  }
+
+  console.log(
+    `[discord-repro:reopen] reason=${options.reason || "panel_return"} defense=${defense.id} result=${result?.sent ? "sent" : result?.reason || "skipped"}`
+  );
+
+  return {
+    enabled: true,
+    ...result,
+  };
 }
 
 export async function notifyDiscordReproRequestsForDefenses(supabase, defenses) {
@@ -346,15 +406,166 @@ async function deleteDiscordMessage(channelId, messageId) {
   return { deleted: true };
 }
 
+function getRequestMessageIds(requestRow) {
+  return [
+    requestRow?.discord_message_id,
+    requestRow?.discord_response_message_id,
+  ]
+    .filter(Boolean)
+    .map((id) => String(id))
+    .filter((id, index, list) => list.indexOf(id) === index);
+}
+
+async function logDiscordReproCleanup(supabase, { requestRow, reason, source, deletedMessages, deleteErrors, dm }) {
+  const metadata = {
+    reason,
+    source,
+    request_id: requestRow?.id || null,
+    guild: requestRow?.guild || null,
+    gvg_defense_id: requestRow?.gvg_defense_id || null,
+    discord_channel_id: requestRow?.discord_channel_id || null,
+    discord_message_id: requestRow?.discord_message_id || null,
+    discord_response_message_id: requestRow?.discord_response_message_id || null,
+    state_before: requestRow?.state || null,
+    deleted_messages: deletedMessages,
+    delete_errors: deleteErrors,
+    dm,
+  };
+
+  try {
+    const { error } = await supabase.from("portal_activity_logs").insert({
+      actor_name: "Discord repro",
+      action_type: "gvg_discord_repro_cleanup",
+      entity_type: "gvg_defense",
+      entity_id: requestRow?.gvg_defense_id || null,
+      summary: `Nettoyage demande repro Discord (${reason})`,
+      metadata,
+    });
+
+    if (error) {
+      console.warn("[discord-repro:cleanup] activity log unavailable:", error.message);
+    }
+  } catch (error) {
+    console.warn("[discord-repro:cleanup] activity log failed:", error?.message || error);
+  }
+}
+
+async function cleanupDiscordMessagesForRequest(supabase, requestRow, options = {}) {
+  const reason = options.reason || "unknown";
+  const source = options.source || "unknown";
+  const channelId = requestRow?.discord_channel_id || options.channelId || getDiscordReproChannelId();
+  const messageIds = getRequestMessageIds(requestRow);
+  const deleteErrors = [];
+  let deletedMessages = 0;
+
+  for (const messageId of messageIds) {
+    try {
+      const result = await deleteDiscordMessage(channelId, messageId);
+      if (result?.deleted) deletedMessages += 1;
+    } catch (error) {
+      const message = error?.message || "delete failed";
+      deleteErrors.push({ message_id: messageId, error: message });
+      console.error(`[discord-repro:cleanup] delete message error reason=${reason} message=${messageId}:`, error);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const updatePayload = {
+    updated_at: now,
+    last_error: deleteErrors.length
+      ? `cleanup ${reason}: ${deleteErrors.map((item) => item.error).join(" | ")}`.slice(0, 1000)
+      : null,
+  };
+
+  if (options.nextState) updatePayload.state = options.nextState;
+  if (options.markOpened) updatePayload.opened_at = now;
+
+  const { error: updateError } = await supabase
+    .from(REPRO_REQUEST_TABLE)
+    .update(updatePayload)
+    .eq("id", requestRow.id);
+
+  if (updateError) {
+    deleteErrors.push({ message_id: null, error: updateError.message || "db update failed" });
+    console.error(`[discord-repro:cleanup] db update error reason=${reason} request=${requestRow.id}:`, updateError);
+  }
+
+  await logDiscordReproCleanup(supabase, {
+    requestRow,
+    reason,
+    source,
+    deletedMessages,
+    deleteErrors,
+    dm: options.dm || null,
+  });
+
+  console.log(
+    `[discord-repro:cleanup] reason=${reason} source=${source} request=${requestRow.id} defense=${requestRow.gvg_defense_id} messages=${deletedMessages}/${messageIds.length} errors=${deleteErrors.length}`
+  );
+
+  return {
+    request_id: requestRow.id,
+    gvg_defense_id: requestRow.gvg_defense_id,
+    deleted_messages: deletedMessages,
+    message_count: messageIds.length,
+    errors: deleteErrors,
+  };
+}
+
+export async function cleanupDiscordReproRequestForDefenseId(supabase, defenseId, options = {}) {
+  if (!defenseId) return { skipped: true, reason: "missing_defense_id" };
+
+  const { data: requestRow, error } = await supabase
+    .from(REPRO_REQUEST_TABLE)
+    .select("*")
+    .eq("gvg_defense_id", defenseId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingReproRequestTable(error)) {
+      return { enabled: false, reason: "missing_gvg_discord_repro_requests_table" };
+    }
+    throw error;
+  }
+
+  if (!requestRow) return { skipped: true, reason: "request_not_found" };
+
+  let dm = null;
+  if (options.notifyReproducer && requestRow.reproducer_discord_id) {
+    try {
+      dm = await sendDiscordDm(
+        requestRow.reproducer_discord_id,
+        "Ta repro est ouverte. Tu peux passer a une autre repro si tu veux."
+      );
+    } catch (dmError) {
+      dm = { sent: false, error: dmError?.message || "dm failed" };
+    }
+  }
+
+  const cleanup = await cleanupDiscordMessagesForRequest(supabase, requestRow, {
+    reason: options.reason || "portal_panel_open",
+    source: options.source || "portal",
+    nextState: options.nextState || "opened",
+    markOpened: options.markOpened !== false,
+    dm,
+  });
+
+  return {
+    enabled: true,
+    ...cleanup,
+    dm,
+  };
+}
+
 export async function cleanupDiscordReproRequestsForDefenseIds(supabase, defenseIds) {
   const ids = (defenseIds || []).filter(Boolean);
   if (!ids.length) {
-    return { enabled: true, deleted_messages: 0, deleted_rows: 0 };
+    return { enabled: true, deleted_messages: 0, deleted_rows: 0, marked_rows: 0 };
   }
 
   const { data, error } = await supabase
     .from(REPRO_REQUEST_TABLE)
-    .select("id, discord_channel_id, discord_message_id, discord_response_message_id")
+    .select("*")
     .in("gvg_defense_id", ids);
 
   if (error) {
@@ -365,33 +576,25 @@ export async function cleanupDiscordReproRequestsForDefenseIds(supabase, defense
   }
 
   let deletedMessages = 0;
+  const results = [];
 
   for (const row of data || []) {
-    const channelId = row.discord_channel_id || getDiscordReproChannelId();
-    const messageIds = [row.discord_message_id, row.discord_response_message_id].filter(Boolean);
-    for (const messageId of messageIds) {
-      try {
-        await deleteDiscordMessage(channelId, messageId);
-        deletedMessages += 1;
-      } catch (error) {
-        console.error("[discord-repro:cleanup] delete message error:", error);
-      }
-    }
-  }
-
-  const rowIds = (data || []).map((row) => row.id).filter(Boolean);
-  if (rowIds.length) {
-    const { error: deleteError } = await supabase
-      .from(REPRO_REQUEST_TABLE)
-      .delete()
-      .in("id", rowIds);
-    if (deleteError) throw deleteError;
+    const result = await cleanupDiscordMessagesForRequest(supabase, row, {
+      reason: "gvg_reset",
+      source: "gvg-reset",
+      nextState: "deleted",
+      markOpened: false,
+    });
+    results.push(result);
+    deletedMessages += result.deleted_messages || 0;
   }
 
   return {
     enabled: true,
     deleted_messages: deletedMessages,
-    deleted_rows: rowIds.length,
+    deleted_rows: 0,
+    marked_rows: results.length,
+    items: results,
   };
 }
 
@@ -846,32 +1049,14 @@ export async function handleDiscordReproReaction(supabase, event) {
     }
   }
 
-  const channelId = requestRow.discord_channel_id || event?.channelId || getDiscordReproChannelId();
-  const messageIds = [
-    requestRow.discord_message_id,
-    requestRow.discord_response_message_id,
-  ].filter(Boolean);
-
-  let deletedMessages = 0;
-  for (const id of messageIds) {
-    try {
-      await deleteDiscordMessage(channelId, id);
-      deletedMessages += 1;
-    } catch (deleteError) {
-      console.error("[discord-repro:reaction] delete message error:", deleteError);
-    }
-  }
-
-  const now = new Date().toISOString();
-  await supabase
-    .from(REPRO_REQUEST_TABLE)
-    .update({
-      state: "opened",
-      opened_at: now,
-      updated_at: now,
-      last_error: null,
-    })
-    .eq("id", requestRow.id);
+  const cleanup = await cleanupDiscordMessagesForRequest(supabase, requestRow, {
+    reason: "discord_reaction",
+    source: "discord_gateway",
+    channelId: event?.channelId,
+    nextState: "opened",
+    markOpened: true,
+    dm,
+  });
 
   return {
     success: true,
@@ -879,6 +1064,7 @@ export async function handleDiscordReproReaction(supabase, event) {
     gvg_defense_id: requestRow.gvg_defense_id,
     opened,
     dm,
-    deleted_messages: deletedMessages,
+    deleted_messages: cleanup.deleted_messages,
+    cleanup,
   };
 }

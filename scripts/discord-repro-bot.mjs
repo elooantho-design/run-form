@@ -179,6 +179,10 @@ function connect() {
           console.log(
             `[discord-repro-bot] repro ouverte message=${event.message_id} defense=${result?.gvg_defense_id || "?"}`
           );
+        } else {
+          console.log(
+            `[discord-repro-bot] reaction ignoree message=${event.message_id} reason=${result?.reason || "unknown"}`
+          );
         }
       } catch (error) {
         console.error("[discord-repro-bot] reaction error:", error?.message || error);

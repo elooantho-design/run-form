@@ -18,6 +18,54 @@ function isValidGuild(value) {
   return normalizeGuildCode(value) !== null;
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || "").trim()
+  );
+}
+
+function getResetActor(body) {
+  const actor = body?.actor || {};
+  const memberId = actor.memberId || actor.id || null;
+  const name = String(actor.name || actor.watcherName || actor.discordId || "Inconnu").trim() || "Inconnu";
+
+  return {
+    memberId: isUuid(memberId) ? memberId : null,
+    name,
+    role: actor.role || null,
+    guildCode: actor.guildCode || actor.guild_code || null,
+  };
+}
+
+async function logGvgReset({
+  guild,
+  actor,
+  defenseIds,
+  storagePaths,
+  discordReproCleanup,
+  recordServerReset,
+}) {
+  const { error } = await supabase.from("portal_activity_logs").insert({
+    actor_member_id: actor.memberId,
+    actor_name: actor.name,
+    action_type: "gvg_reset",
+    entity_type: "gvg",
+    entity_id: guild,
+    summary: `${actor.name} a reset la GVG ${guild}`,
+    metadata: {
+      guild,
+      actorRole: actor.role,
+      actorGuildCode: actor.guildCode,
+      deletedDefenses: defenseIds.length,
+      deletedImages: storagePaths.length,
+      discordReproCleanup,
+      recordServerReset,
+    },
+  });
+
+  if (error) throw error;
+}
+
 function getGvgServerConfig() {
   const serverUrl = String(
     process.env.GVG_SERVER_URL ||
@@ -92,6 +140,7 @@ export default async function handler(req, res) {
 
   try {
     const guild = normalizeGuildCode(req.body?.guild);
+    const actor = getResetActor(req.body);
 
     if (!isValidGuild(guild)) {
       return res.status(400).json({ error: "guild manquante ou invalide" });
@@ -167,6 +216,7 @@ export default async function handler(req, res) {
 
     let recordServerReset = null;
     let recordServerWarning = null;
+    let activityLogWarning = null;
 
     try {
       recordServerReset = await requestGvgVps(
@@ -179,6 +229,20 @@ export default async function handler(req, res) {
         recordResetError?.message || "nettoyage records VPS impossible";
     }
 
+    try {
+      await logGvgReset({
+        guild,
+        actor,
+        defenseIds,
+        storagePaths,
+        discordReproCleanup,
+        recordServerReset,
+      });
+    } catch (activityError) {
+      console.error("[gvg-reset] activity log error:", activityError);
+      activityLogWarning = activityError?.message || "log reset impossible";
+    }
+
     return res.status(200).json({
       success: true,
       guild,
@@ -188,6 +252,7 @@ export default async function handler(req, res) {
       discord_repro_warning: discordReproWarning,
       record_server_reset: recordServerReset,
       record_server_warning: recordServerWarning,
+      activity_log_warning: activityLogWarning,
     });
   } catch (err) {
     console.error("[gvg-reset] server error:", err);
