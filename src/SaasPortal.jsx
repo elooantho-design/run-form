@@ -5115,6 +5115,199 @@ function formatLogDate(value) {
   });
 }
 
+const logActionLabelKeys = {
+  hero_box_update: ["logs.action.heroBoxUpdate", "Mise a jour box"],
+  hero_box_bulk_a5: ["logs.action.heroBoxBulkA5", "Box A5"],
+  pb_update: ["logs.action.pbUpdate", "Mise a jour PB"],
+  pb_hero_update: ["logs.action.pbHeroUpdate", "Heros PB"],
+  demon_monster_update: ["logs.action.demonMonsterUpdate", "Monstre demoniaque"],
+  soul_stone_add: ["logs.action.soulStoneAdd", "Pierre ajoutee"],
+  soul_stone_remove: ["logs.action.soulStoneRemove", "Pierre retiree"],
+  defense_assign: ["logs.action.defenseAssign", "Defense affectee"],
+  defense_unassign: ["logs.action.defenseUnassign", "Defense retiree"],
+  guild_management_defense_assign: ["logs.action.guildDefenseAssign", "Defense affectee"],
+  guild_management_defense_unassign: ["logs.action.guildDefenseUnassign", "Defense retiree"],
+  guild_management_assignment_update: ["logs.action.guildAssignmentUpdate", "Role defense"],
+  guild_management_status_update: ["logs.action.guildStatusUpdate", "Statut defense"],
+  guild_management_member_transfer: ["logs.action.guildMemberTransfer", "Transfert membre"],
+  guild_management_member_attach: ["logs.action.guildMemberAttach", "Membre rattache"],
+  guild_management_member_create: ["logs.action.guildMemberCreate", "Membre ajoute"],
+  gvg_launcher_start: ["logs.action.gvgLauncherStart", "Capture GVG"],
+  gvg_validation_import: ["logs.action.gvgValidationImport", "Import GVG"],
+  gvg_job_delete: ["logs.action.gvgJobDelete", "Job GVG supprime"],
+  player_password_reset: ["logs.action.playerPasswordReset", "Acces joueur"],
+  player_password_change: ["logs.action.playerPasswordChange", "Mot de passe"],
+  portal_tab_view: ["logs.action.portalTabView", "Onglet ouvert"],
+  admin_defense_create: ["logs.action.adminDefenseCreate", "Defense creee"],
+  admin_defense_update: ["logs.action.adminDefenseUpdate", "Defense modifiee"],
+  admin_defense_condition_add: ["logs.action.adminDefenseConditionAdd", "Condition ajoutee"],
+  admin_defense_local_hide: ["logs.action.adminDefenseLocalHide", "Defense masquee"],
+  admin_defense_delete: ["logs.action.adminDefenseDelete", "Defense supprimee"],
+  guild_external_create: ["logs.action.guildExternalCreate", "Guilde externe"],
+  guild_member_create: ["logs.action.guildMemberCreate", "Membre ajoute"],
+  intersaison_campaign_create: ["logs.action.intersaisonCampaignCreate", "Campagne intersaison"],
+  intersaison_campaign_cancel: ["logs.action.intersaisonCampaignCancel", "Campagne annulee"],
+  intersaison_transfers_apply: ["logs.action.intersaisonTransfersApply", "Transferts intersaison"],
+};
+
+const logEntityLabelKeys = {
+  tab: ["logs.entity.tab", "Onglet"],
+  champion: ["logs.entity.champion", "Heros"],
+  pb: ["logs.entity.pb", "PB"],
+  demonic_monster: ["logs.entity.demonicMonster", "Monstre"],
+  soul_stone: ["logs.entity.soulStone", "Pierre"],
+  defense: ["logs.entity.defense", "Defense"],
+  gvg: ["logs.entity.gvg", "GVG"],
+  member: ["logs.entity.member", "Membre"],
+  guild: ["logs.entity.guild", "Guilde"],
+  guild_members: ["logs.entity.guildMembers", "Joueurs"],
+};
+
+function getLogMetadata(log) {
+  if (!log?.metadata) return {};
+  if (typeof log.metadata === "object") return log.metadata;
+
+  try {
+    return JSON.parse(log.metadata);
+  } catch {
+    return {};
+  }
+}
+
+function formatLogTemplate(template, values) {
+  return Object.entries(values).reduce(
+    (text, [key, value]) => text.replace(new RegExp(`\\{${key}\\}`, "g"), value ?? ""),
+    template,
+  );
+}
+
+function translateLogTemplate(t, key, fallback, values = {}) {
+  return formatLogTemplate(t(key, fallback), values);
+}
+
+function getLogTargetName(log, t) {
+  return log?.target_name || log?.actor_name || t("logs.system", "Systeme");
+}
+
+function getLogActorName(log, t) {
+  return log?.actor_name || t("logs.system", "Systeme");
+}
+
+function getLogTabLabel(log, t) {
+  const metadata = getLogMetadata(log);
+  const tabId = metadata.tab || log?.entity_id || "";
+  const tabItem = [...navigation, ...adminNavigation].find((item) => item.id === tabId);
+
+  if (tabItem) return t(tabItem.labelKey, tabItem.label);
+  return metadata.title || tabId || t("logs.entity.tab", "Onglet");
+}
+
+function getLogDisplaySummary(log, t) {
+  const metadata = getLogMetadata(log);
+  const actor = getLogActorName(log, t);
+  const target = getLogTargetName(log, t);
+
+  switch (log?.action_type) {
+    case "portal_tab_view":
+      return translateLogTemplate(t, "logs.event.portalTabView", "{actor} a ouvert {tab}", {
+        actor,
+        tab: getLogTabLabel(log, t),
+      });
+    case "hero_box_update":
+      return translateLogTemplate(t, "logs.event.heroBoxUpdate", "{target} a mis a jour {hero} : A{from} -> A{to}", {
+        target,
+        hero: metadata.heroDisplayName || metadata.heroName || t("logs.entity.champion", "Heros"),
+        from: metadata.previousAwakening ?? "-",
+        to: metadata.nextAwakening ?? "-",
+      });
+    case "hero_box_bulk_a5":
+      return translateLogTemplate(t, "logs.event.heroBoxBulkA5", "{target} a passe {count} heros {rarity} en A5", {
+        target,
+        count: metadata.count ?? "-",
+        rarity: metadata.rarity || "",
+      });
+    case "pb_hero_update":
+      return translateLogTemplate(t, "logs.event.pbHeroUpdate", "{target} a change le heros PB {slot} : {from} -> {to}", {
+        target,
+        slot: metadata.slotIndex ?? "-",
+        from: metadata.previousHeroName || "-",
+        to: metadata.nextHeroDisplayName || metadata.nextHeroName || "-",
+      });
+    case "pb_update":
+      return translateLogTemplate(t, "logs.event.pbUpdate", "{target} a mis a jour le PB {slot}", {
+        target,
+        slot: metadata.slotIndex ?? "-",
+      });
+    case "demon_monster_update":
+      return translateLogTemplate(t, "logs.event.demonMonsterUpdate", "{target} a mis a jour {monster} : niveau {from} -> {to}", {
+        target,
+        monster: metadata.monsterName || t("logs.entity.demonicMonster", "Monstre"),
+        from: metadata.previousLevel ?? "-",
+        to: metadata.nextLevel ?? "-",
+      });
+    case "soul_stone_add":
+      return translateLogTemplate(t, "logs.event.soulStoneAdd", "{target} a ajoute une pierre {type}", {
+        target,
+        type: metadata.type || "",
+      });
+    case "soul_stone_remove":
+      return translateLogTemplate(t, "logs.event.soulStoneRemove", "{target} a retire une pierre {type}", {
+        target,
+        type: metadata.type || "",
+      });
+    case "defense_assign":
+    case "guild_management_defense_assign":
+      return translateLogTemplate(t, "logs.event.defenseAssign", "{target} a recu la defense {slot} : {defense}", {
+        target,
+        slot: metadata.slot ?? "-",
+        defense: metadata.defenseName || "-",
+      });
+    case "defense_unassign":
+    case "guild_management_defense_unassign":
+      return translateLogTemplate(t, "logs.event.defenseUnassign", "{target} a retire la defense {slot}", {
+        target,
+        slot: metadata.slot ?? "-",
+      });
+    case "gvg_launcher_start":
+      return translateLogTemplate(t, "logs.event.gvgLauncherStart", "{actor} a lance une capture GVG {guild} ({side})", {
+        actor,
+        guild: metadata.guild || "-",
+        side: metadata.side || "-",
+      });
+    case "gvg_validation_import":
+      return translateLogTemplate(t, "logs.event.gvgValidationImport", "{actor} a importe {count} defenses GVG dans {guild}", {
+        actor,
+        count: metadata.inserted ?? "-",
+        guild: metadata.guild || "-",
+      });
+    case "gvg_job_delete":
+      return translateLogTemplate(t, "logs.event.gvgJobDelete", "{actor} a supprime un job GVG {guild} / {job}", {
+        actor,
+        guild: metadata.sourceGuild || "-",
+        job: metadata.jobId || log?.entity_id || "-",
+      });
+    case "player_password_reset":
+      return translateLogTemplate(t, "logs.event.playerPasswordReset", "{actor} a genere un mot de passe temporaire pour {target}", {
+        actor,
+        target,
+      });
+    case "player_password_change":
+      return translateLogTemplate(t, "logs.event.playerPasswordChange", "{actor} a change son mot de passe", { actor });
+    default:
+      return log?.summary || t("logs.event.unknown", "Evenement");
+  }
+}
+
+function getLogActionLabel(actionType, t) {
+  const [key, fallback] = logActionLabelKeys[actionType] || [];
+  return key ? t(key, fallback) : actionType || t("logs.event.unknown", "Evenement");
+}
+
+function getLogEntityLabel(entityType, t) {
+  const [key, fallback] = logEntityLabelKeys[entityType] || [];
+  return key ? t(key, fallback) : entityType;
+}
+
 function LogsView({ session }) {
   const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
@@ -5325,7 +5518,7 @@ function LogsView({ session }) {
               <article key={log.id} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-zinc-50">{log.summary}</div>
+                    <div className="text-sm font-semibold text-zinc-50">{getLogDisplaySummary(log, t)}</div>
                     <div className="mt-1 text-xs text-zinc-500">
                       {t("logs.actor", "Acteur")} : {log.actor_name || t("logs.system", "Systeme")}
                       {log.target_name ? ` - ${t("logs.target", "Cible")} : ${log.target_name}` : ""}
@@ -5334,9 +5527,13 @@ function LogsView({ session }) {
                   <div className="text-right text-xs text-zinc-500">{formatLogDate(log.created_at)}</div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-300">{log.action_type}</Badge>
+                  <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-300" title={log.action_type}>
+                    {getLogActionLabel(log.action_type, t)}
+                  </Badge>
                   {log.entity_type ? (
-                    <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-400">{log.entity_type}</Badge>
+                    <Badge className="rounded-md border-zinc-700 bg-zinc-950 text-zinc-400" title={log.entity_type}>
+                      {getLogEntityLabel(log.entity_type, t)}
+                    </Badge>
                   ) : null}
                 </div>
               </article>
