@@ -161,7 +161,7 @@ export default async function handler(req, res) {
     let discordReproCleanup = null;
     let discordReproWarning = null;
 
-    if (guild === "G1" && defenseIds.length > 0) {
+    if (defenseIds.length > 0) {
       try {
         discordReproCleanup = await cleanupDiscordReproRequestsForDefenseIds(
           supabase,

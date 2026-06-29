@@ -1,5 +1,8 @@
 const DISCORD_API_BASE = "https://discord.com/api/v10";
-const DEFAULT_REPRO_CHANNEL_ID = "1501512158637457408";
+const DEFAULT_REPRO_CHANNEL_IDS = {
+  G1: "1501512158637457408",
+  G2: "1517470861354078338",
+};
 const REPRO_REQUEST_TABLE = "gvg_discord_repro_requests";
 
 function sleep(ms) {
@@ -10,9 +13,10 @@ function normalizeGuildCode(value) {
   return String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
 }
 
-function isG1EnemyDefRequest(defense) {
+function isDiscordReproEligibleDefense(defense) {
+  const guild = normalizeGuildCode(defense?.guild);
   return (
-    normalizeGuildCode(defense?.guild) === "G1" &&
+    Boolean(getDiscordReproChannelId(guild)) &&
     defense?.is_ally !== true &&
     String(defense?.status || "").toLowerCase() === "def"
   );
@@ -27,8 +31,20 @@ function getDiscordBotToken() {
   ).trim();
 }
 
-function getDiscordReproChannelId() {
-  return String(process.env.DISCORD_REPRO_CHANNEL_ID || DEFAULT_REPRO_CHANNEL_ID).trim();
+function getDiscordReproChannelId(guild) {
+  const normalizedGuild = normalizeGuildCode(guild);
+  const guildEnvKey = normalizedGuild ? `DISCORD_REPRO_CHANNEL_ID_${normalizedGuild}` : "";
+  const legacyG1ChannelId =
+    normalizedGuild === "G1" || !normalizedGuild
+      ? process.env.DISCORD_REPRO_CHANNEL_ID
+      : "";
+
+  return String(
+    (guildEnvKey ? process.env[guildEnvKey] : "") ||
+      legacyG1ChannelId ||
+      DEFAULT_REPRO_CHANNEL_IDS[normalizedGuild] ||
+      ""
+  ).trim();
 }
 
 function getDiscordSendDelayMs() {
@@ -144,6 +160,7 @@ function formatDefenseTitle(defense) {
 
 function buildDiscordRequestPayload(defense, requestRow) {
   const title = formatDefenseTitle(defense);
+  const guild = normalizeGuildCode(defense?.guild || requestRow?.guild) || "GVG";
   const rawName = String(defense?.raw_name || "").trim();
   const portalBaseUrl = getPortalBaseUrl();
   const dashboardUrl = portalBaseUrl ? `${portalBaseUrl}/portal` : "";
@@ -169,7 +186,7 @@ function buildDiscordRequestPayload(defense, requestRow) {
   }
 
   return {
-    content: "**Demande de repro G1**",
+    content: `**Demande de repro ${guild}**`,
     embeds: [embed],
     components: [
       {
@@ -199,7 +216,7 @@ async function getOrCreateReproRequestRow(supabase, defense, channelId) {
   if (existing) return existing;
 
   const payload = {
-    guild: "G1",
+    guild: normalizeGuildCode(defense?.guild) || "G1",
     gvg_defense_id: defense.id,
     discord_channel_id: channelId,
     state: "requested",
@@ -238,7 +255,12 @@ async function markRequestSendFailed(supabase, requestId, error) {
 }
 
 async function sendReproRequestMessage(supabase, defense) {
-  const channelId = getDiscordReproChannelId();
+  const guild = normalizeGuildCode(defense?.guild);
+  const channelId = getDiscordReproChannelId(guild);
+  if (!channelId) {
+    return { skipped: true, reason: "missing_repro_channel", guild };
+  }
+
   const requestRow = await getOrCreateReproRequestRow(supabase, defense, channelId);
 
   if (requestRow?.discord_message_id && ["requested", "repro_active", "send_failed"].includes(requestRow.state)) {
@@ -295,7 +317,7 @@ export async function reopenDiscordReproRequestForDefense(supabase, defense, opt
     throw error;
   }
 
-  const shouldCreateFreshRequest = Boolean(options.createIfMissing && isG1EnemyDefRequest(defense));
+  const shouldCreateFreshRequest = Boolean(options.createIfMissing && isDiscordReproEligibleDefense(defense));
   if (!requestRow && !shouldCreateFreshRequest) {
     return { skipped: true, reason: "request_not_found_or_not_eligible" };
   }
@@ -338,13 +360,13 @@ export async function reopenDiscordReproRequestForDefense(supabase, defense, opt
 }
 
 export async function notifyDiscordReproRequestsForDefenses(supabase, defenses) {
-  const eligibleDefenses = (defenses || []).filter(isG1EnemyDefRequest);
+  const eligibleDefenses = (defenses || []).filter(isDiscordReproEligibleDefense);
 
   if (!eligibleDefenses.length) {
     return { enabled: true, eligible: 0, sent: 0, skipped: 0, failed: 0 };
   }
 
-  if (!getDiscordBotToken() || !getDiscordReproChannelId()) {
+  if (!getDiscordBotToken()) {
     return {
       enabled: false,
       reason: "missing_discord_config",
@@ -453,7 +475,10 @@ async function logDiscordReproCleanup(supabase, { requestRow, reason, source, de
 async function cleanupDiscordMessagesForRequest(supabase, requestRow, options = {}) {
   const reason = options.reason || "unknown";
   const source = options.source || "unknown";
-  const channelId = requestRow?.discord_channel_id || options.channelId || getDiscordReproChannelId();
+  const channelId =
+    requestRow?.discord_channel_id ||
+    options.channelId ||
+    getDiscordReproChannelId(requestRow?.guild);
   const messageIds = getRequestMessageIds(requestRow);
   const deleteErrors = [];
   let deletedMessages = 0;
