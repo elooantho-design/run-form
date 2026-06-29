@@ -39,6 +39,16 @@ function getRunSessionPayload(session) {
   };
 }
 
+function formatTranslation(t, key, fallback, values = {}) {
+  let text = t(key, fallback);
+
+  Object.entries(values).forEach(([name, value]) => {
+    text = text.replaceAll(`{${name}}`, String(value ?? ""));
+  });
+
+  return text;
+}
+
 function parseYoutubeTimeToSeconds(value) {
   if (!value) return 0;
 
@@ -132,7 +142,7 @@ function normalizeDir(dir) {
 }
 
 export default function GvgPanelTab({ session: portalSession } = {}) {
-  const { t } = usePortalLanguage();
+  const { language, t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const dashboardSession = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -605,11 +615,13 @@ function getDefenseRecordState(defense) {
   };
 }
   function buildSlotLabel(bastion, type, tower, team) {
+    const keepPrefix = language === "en" ? "K" : "B";
+
     if (type === "fortress") {
-      return `B${bastion}_F_T${team}`;
+      return `${keepPrefix}${bastion}_F_T${team}`;
     }
 
-    return `B${bastion}_T${tower}_T${team}`;
+    return `${keepPrefix}${bastion}_T${tower}_T${team}`;
   }
 
 function getGroupEmoji(groupNum) {
@@ -1253,7 +1265,9 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
           className={wrapperClass}
         >
           <div className={`mb-3 text-sm font-semibold ${titleClass}`}>
-            Bastion {bastion}
+            {formatTranslation(t, "gvgCurrent.bastionNumber", "Bastion {number}", {
+              number: bastion,
+            })}
           </div>
 
           <div className="space-y-2">
