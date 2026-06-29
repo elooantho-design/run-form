@@ -46,24 +46,56 @@ function getStatusClasses(status) {
   return "border-orange-500/40 bg-orange-500/10 text-orange-200";
 }
 
-function getStatusLabel(status, reproBy) {
+function formatTranslation(t, key, fallback, values = {}) {
+  let text = t(key, fallback);
+
+  Object.entries(values).forEach(([name, value]) => {
+    text = text.replaceAll(`{${name}}`, String(value ?? ""));
+  });
+
+  return text;
+}
+
+function getStatusLabel(status, reproBy, t) {
   if (status === "repro") {
-    return reproBy ? `C’est repro sur ${reproBy}` : "Repro en cours";
+    return reproBy
+      ? formatTranslation(t, "gvgCurrent.statusReproBy", "C'est repro sur {player}", {
+          player: reproBy,
+        })
+      : t("gvgCurrent.statusRepro", "Repro en cours");
   }
 
   if (status === "strat") {
-    return "Strat disponible";
+    return t("gvgCurrent.statusStrat", "Strat disponible");
   }
 
-  return "À ouvrir";
+  return t("gvgCurrent.statusToOpen", "A ouvrir");
 }
 
-function buildDefenseTitle(defense) {
+function buildDefenseTitle(defense, t) {
   if (defense.type === "fortress") {
-    return `Forteresse · Team ${defense.team}`;
+    return formatTranslation(t, "gvgCurrent.fortressTeam", "Forteresse · Team {team}", {
+      team: defense.team,
+    });
   }
 
-  return `Tour ${defense.tower} · Team ${defense.team}`;
+  return formatTranslation(t, "gvgCurrent.towerTeam", "Tour {tower} · Team {team}", {
+    tower: defense.tower,
+    team: defense.team,
+  });
+}
+
+function buildDefenseShortTitle(defense, t) {
+  if (defense.type === "fortress") {
+    return formatTranslation(t, "gvgCurrent.teamOnly", "Team {team}", {
+      team: defense.team,
+    });
+  }
+
+  return formatTranslation(t, "gvgCurrent.shortTowerTeam", "T{tower} · Team {team}", {
+    tower: defense.tower,
+    team: defense.team,
+  });
 }
 
 function toGroupEmoji(value) {
@@ -211,14 +243,23 @@ async function loadGvg(cancelled = false) {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
       if (!cancelled) {
-        setMessage(`Réponse non JSON gvg-list (${response.status})`);
+        setMessage(
+          formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+            context: "gvg-list",
+            status: response.status,
+          })
+        );
       }
       return;
     }
 
     if (!response.ok) {
       if (!cancelled) {
-        setMessage(`Erreur chargement GVG : ${data?.error || "erreur inconnue"}`);
+        setMessage(
+          formatTranslation(t, "gvgCurrent.errorLoad", "Erreur chargement GVG : {error}", {
+            error: data?.error || t("common.unknownError", "erreur inconnue"),
+          })
+        );
       }
       return;
     }
@@ -231,7 +272,11 @@ async function loadGvg(cancelled = false) {
   } catch (error) {
     console.error("loadGvg error:", error);
     if (!cancelled) {
-      setMessage(`Erreur chargement GVG : ${error?.message || "erreur inconnue"}`);
+      setMessage(
+        formatTranslation(t, "gvgCurrent.errorLoad", "Erreur chargement GVG : {error}", {
+          error: error?.message || t("common.unknownError", "erreur inconnue"),
+        })
+      );
     }
   } finally {
     if (!cancelled) {
@@ -318,7 +363,7 @@ function openDefenseImage(defense) {
   if (!imageUrl) return;
 
   setImageModalUrl(imageUrl);
-  setImageModalTitle(buildDefenseTitle(defense));
+  setImageModalTitle(buildDefenseTitle(defense, t));
   setImageModalOpen(true);
 }
 
@@ -391,19 +436,32 @@ async function markDefenseAsRepro(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      setMessage(`Réponse non JSON gvg-update (${response.status})`);
+      setMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "gvg-update",
+          status: response.status,
+        })
+      );
       return;
     }
 
     if (!response.ok) {
-      setMessage(`Erreur repro : ${data?.error || "erreur inconnue"}`);
+      setMessage(
+        formatTranslation(t, "gvgCurrent.errorRepro", "Erreur repro : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
       return;
     }
 
 setRefreshTick((prev) => prev + 1);
   } catch (error) {
     console.error("markDefenseAsRepro error:", error);
-    setMessage(`Erreur repro : ${error?.message || "erreur inconnue"}`);
+    setMessage(
+      formatTranslation(t, "gvgCurrent.errorRepro", "Erreur repro : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
   }
 }
 
@@ -457,13 +515,22 @@ async function openStratView(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      setStratModalMessage(`Réponse non JSON gvg-strat-search (${response.status})`);
+      setStratModalMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "gvg-strat-search",
+          status: response.status,
+        })
+      );
       setStratModalOpen(true);
       return;
     }
 
     if (!response.ok) {
-      setStratModalMessage(`Erreur lecture strat : ${data?.error || "erreur inconnue"}`);
+      setStratModalMessage(
+        formatTranslation(t, "gvgCurrent.errorReadStrat", "Erreur lecture strat : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
       setStratModalOpen(true);
       return;
     }
@@ -471,7 +538,7 @@ async function openStratView(defenseId) {
     const items = Array.isArray(data?.items) ? data.items : [];
 
     if (!items.length) {
-      setStratModalMessage("Aucune strat trouvée.");
+      setStratModalMessage(t("gvgCurrent.noStratFound", "Aucune strat trouvee."));
       setStratModalOpen(true);
       return;
     }
@@ -480,7 +547,11 @@ async function openStratView(defenseId) {
     setStratModalOpen(true);
   } catch (error) {
     console.error("openStratView error:", error);
-    setStratModalMessage(`Erreur lecture strat : ${error?.message || "erreur inconnue"}`);
+    setStratModalMessage(
+      formatTranslation(t, "gvgCurrent.errorReadStrat", "Erreur lecture strat : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
     setStratModalOpen(true);
   } finally {
     setStratModalLoading(false);
@@ -503,19 +574,28 @@ async function openReproView(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      setReproViewMessage(`Réponse non JSON gvg-repro-get (${response.status})`);
+      setReproViewMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "gvg-repro-get",
+          status: response.status,
+        })
+      );
       setReproViewOpen(true);
       return;
     }
 
     if (!response.ok) {
-      setReproViewMessage(`Erreur lecture repro : ${data?.error || "erreur inconnue"}`);
+      setReproViewMessage(
+        formatTranslation(t, "gvgCurrent.errorReadRepro", "Erreur lecture repro : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
       setReproViewOpen(true);
       return;
     }
 
     if (!data?.item) {
-      setReproViewMessage("Aucune repro enregistrée.");
+      setReproViewMessage(t("gvgCurrent.noReproSaved", "Aucune repro enregistree."));
       setReproViewOpen(true);
       return;
     }
@@ -524,7 +604,11 @@ async function openReproView(defenseId) {
     setReproViewOpen(true);
   } catch (error) {
     console.error("openReproView error:", error);
-    setReproViewMessage(`Erreur lecture repro : ${error?.message || "erreur inconnue"}`);
+    setReproViewMessage(
+      formatTranslation(t, "gvgCurrent.errorReadRepro", "Erreur lecture repro : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
     setReproViewOpen(true);
   } finally {
     setReproViewLoading(false);
@@ -561,12 +645,21 @@ async function openReproModal(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      setReproMessage(`Réponse non JSON gvg-repro-template (${response.status})`);
+      setReproMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "gvg-repro-template",
+          status: response.status,
+        })
+      );
       return;
     }
 
     if (!response.ok) {
-      setReproMessage(`Erreur template repro : ${data?.error || "erreur inconnue"}`);
+      setReproMessage(
+        formatTranslation(t, "gvgCurrent.errorTemplateRepro", "Erreur template repro : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
       return;
     }
 
@@ -575,7 +668,11 @@ async function openReproModal(defenseId) {
     setReproModalOpen(true);
   } catch (error) {
     console.error("openReproModal error:", error);
-    setReproMessage(`Erreur template repro : ${error?.message || "erreur inconnue"}`);
+    setReproMessage(
+      formatTranslation(t, "gvgCurrent.errorTemplateRepro", "Erreur template repro : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
   } finally {
     setReproLoading(false);
   }
@@ -601,12 +698,21 @@ async function cancelDefenseRepro(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      setMessage(`Réponse non JSON gvg-update (${response.status})`);
+      setMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "gvg-update",
+          status: response.status,
+        })
+      );
       return;
     }
 
     if (!response.ok) {
-      setMessage(`Erreur annulation repro : ${data?.error || "erreur inconnue"}`);
+      setMessage(
+        formatTranslation(t, "gvgCurrent.errorCancelRepro", "Erreur annulation repro : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
       return;
     }
 
@@ -614,7 +720,11 @@ setRefreshTick((prev) => prev + 1);
 
   } catch (error) {
     console.error("cancelDefenseRepro error:", error);
-    setMessage(`Erreur annulation repro : ${error?.message || "erreur inconnue"}`);
+    setMessage(
+      formatTranslation(t, "gvgCurrent.errorCancelRepro", "Erreur annulation repro : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
   }
 }
 
@@ -637,25 +747,38 @@ async function markDefenseAsOpened(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      setMessage(`Réponse non JSON gvg-panel-open (${response.status})`);
+      setMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "gvg-panel-open",
+          status: response.status,
+        })
+      );
       return;
     }
 
     if (!response.ok) {
-      setMessage(`Erreur ouverture panel : ${data?.error || "erreur inconnue"}`);
+      setMessage(
+        formatTranslation(t, "gvgCurrent.errorPanelOpen", "Erreur ouverture panel : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
       return;
     }
 
     if (data?.already_open) {
-      setMessage("Cette défense est déjà ouverte dans le panel.");
+      setMessage(t("gvgCurrent.alreadyOpen", "Cette defense est deja ouverte dans le panel."));
     } else {
-      setMessage("Défense envoyée dans le panel.");
+      setMessage(t("gvgCurrent.sentToPanel", "Defense envoyee dans le panel."));
     }
 
     setRefreshTick((prev) => prev + 1);
   } catch (error) {
     console.error("markDefenseAsOpened error:", error);
-    setMessage(`Erreur ouverture panel : ${error?.message || "erreur inconnue"}`);
+    setMessage(
+      formatTranslation(t, "gvgCurrent.errorPanelOpen", "Erreur ouverture panel : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
   }
 }
 
@@ -762,7 +885,9 @@ async function markDefenseAsOpened(defenseId) {
                         className="w-full text-left"
                       >
                         <div className="text-lg font-semibold text-zinc-100">
-                          Bastion {bastion.id}
+                          {formatTranslation(t, "gvgCurrent.bastionNumber", "Bastion {number}", {
+                            number: bastion.id,
+                          })}
                         </div>
                       </button>
 
@@ -779,7 +904,9 @@ async function markDefenseAsOpened(defenseId) {
                               : "border-orange-500/30 bg-orange-500/10"
                           }`}
                         >
-                          <span className="text-sm text-orange-200">Déf</span>
+                          <span className="text-sm text-orange-200">
+                            {t("gvgCurrent.def", "Def")}
+                          </span>
                           <span className="text-base font-semibold text-orange-300">
                             {counters.def}
                           </span>
@@ -797,7 +924,9 @@ async function markDefenseAsOpened(defenseId) {
                               : "border-blue-500/30 bg-blue-500/10"
                           }`}
                         >
-                          <span className="text-sm text-blue-200">Repro</span>
+                          <span className="text-sm text-blue-200">
+                            {t("gvgCurrent.repro", "Repro")}
+                          </span>
                           <span className="text-base font-semibold text-blue-300">
                             {counters.repro}
                           </span>
@@ -815,7 +944,9 @@ async function markDefenseAsOpened(defenseId) {
                               : "border-emerald-500/30 bg-emerald-500/10"
                           }`}
                         >
-                          <span className="text-sm text-emerald-200">Strat</span>
+                          <span className="text-sm text-emerald-200">
+                            {t("gvgCurrent.strat", "Strat")}
+                          </span>
                           <span className="text-base font-semibold text-emerald-300">
                             {counters.strat}
                           </span>
@@ -830,9 +961,13 @@ async function markDefenseAsOpened(defenseId) {
                 <div className="rounded-3xl border border-zinc-800 bg-zinc-950/60 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <div className="text-sm text-zinc-400">Bastion sélectionné</div>
+                      <div className="text-sm text-zinc-400">
+                        {t("gvgCurrent.selectedBastion", "Bastion selectionne")}
+                      </div>
                       <div className="text-xl font-semibold text-zinc-100">
-                        Bastion {selectedBastion.id}
+                        {formatTranslation(t, "gvgCurrent.bastionNumber", "Bastion {number}", {
+                          number: selectedBastion.id,
+                        })}
                       </div>
                     </div>
 
@@ -842,14 +977,14 @@ async function markDefenseAsOpened(defenseId) {
                       className="rounded-2xl border-zinc-700 text-zinc-200"
                       onClick={() => setSelectedFilter("def")}
                     >
-                      Voir toutes les défenses
+                      {t("gvgCurrent.viewAllDefenses", "Voir toutes les defenses")}
                     </Button>
                   </div>
 
                   <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
                     {filteredDefenses.length === 0 ? (
                       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
-                        Aucune défense pour ce filtre.
+                        {t("gvgCurrent.noDefenseForFilter", "Aucune defense pour ce filtre.")}
                       </div>
                     ) : (
                       filteredDefenses.map((defense) => {
@@ -868,26 +1003,24 @@ async function markDefenseAsOpened(defenseId) {
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <div className="font-medium">
-                              {buildDefenseTitle(defense)}
+                              {buildDefenseTitle(defense, t)}
                             </div>
 
                             <div className="mt-1 text-sm opacity-80">
-                              {getStatusLabel(defense.status, defense.repro_by)}
+                              {getStatusLabel(defense.status, defense.repro_by, t)}
                             </div>
                           </div>
 
                           <div className="flex flex-col items-end gap-2">
                             <div className="text-sm font-semibold">
-                              {defense.type === "fortress"
-                                ? `Team ${defense.team}`
-                                : `T${defense.tower} · Team ${defense.team}`}
+                              {buildDefenseShortTitle(defense, t)}
                             </div>
 
                             <div className="flex flex-wrap justify-end gap-2">
                               {defense.group_num ? (
                                 <div
                                   className="rounded-2xl border border-zinc-600 bg-zinc-900/60 px-5 py-3 text-2xl font-bold leading-none text-zinc-100 shadow-sm"
-                                  title="Groupe de defenses ennemies identiques"
+                                  title={t("gvgCurrent.enemyGroupTitle", "Groupe de defenses ennemies identiques")}
                                 >
                                   {toGroupEmoji(defense.group_num)}
                                 </div>
@@ -896,7 +1029,10 @@ async function markDefenseAsOpened(defenseId) {
                               {defense.mirror_group_num ? (
                                 <div
                                   className="rounded-2xl border border-emerald-400/70 bg-emerald-500/15 px-5 py-3 text-2xl font-bold leading-none text-emerald-100 shadow-sm shadow-emerald-500/20"
-                                  title="Composition aussi presente cote allie : eviter en debut de GVG"
+                                  title={t(
+                                    "gvgCurrent.mirrorGroupTitle",
+                                    "Composition aussi presente cote allie : eviter en debut de GVG"
+                                  )}
                                 >
                                   {toGroupEmoji(defense.mirror_group_num)}
                                 </div>
@@ -912,7 +1048,9 @@ async function markDefenseAsOpened(defenseId) {
                         onClick={() => openReproModal(defense.id)}
                         className="rounded-2xl border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-medium text-blue-200 transition hover:bg-blue-500/25"
                         >
-                        {reproLoading && reproDefenseId === defense.id ? "Chargement..." : "C’est repro"}
+                        {reproLoading && reproDefenseId === defense.id
+                          ? t("common.loading", "Chargement...")
+                          : t("gvgCurrent.markAsRepro", "C'est repro")}
                         </button>
 
                             {defense.status === "repro" &&
@@ -922,7 +1060,7 @@ async function markDefenseAsOpened(defenseId) {
                                 onClick={() => cancelDefenseRepro(defense.id)}
                                 className="rounded-2xl border border-zinc-600 bg-zinc-800/60 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700/70"
                               >
-                                Annuler repro
+                                {t("gvgCurrent.cancelRepro", "Annuler repro")}
                               </button>
                             ) : null}
                             {defense.status === "repro" ? (
@@ -954,8 +1092,8 @@ async function markDefenseAsOpened(defenseId) {
     }`}
     title={
       canOpenVisibleRuns
-        ? "Voir les runs disponibles"
-        : "Aucun run visible pour ce compte"
+        ? t("gvgCurrent.viewRuns", "Voir les runs disponibles")
+        : t("gvgCurrent.noVisibleRun", "Aucun run visible pour ce compte")
     }
   >
     👀
@@ -965,7 +1103,7 @@ async function markDefenseAsOpened(defenseId) {
   type="button"
   onClick={() => openReproCandidates(defense)}
   className="rounded-2xl border border-zinc-500/40 bg-zinc-500/15 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-500/25"
-  title="Qui peut repro"
+  title={t("gvgCurrent.whoCanRepro", "Qui peut repro")}
 >
   ❓
 </button>
@@ -975,7 +1113,7 @@ async function markDefenseAsOpened(defenseId) {
   onClick={() => markDefenseAsOpened(defense.id)}
   className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25"
 >
-  C’est ouvert
+  {t("gvgCurrent.markAsOpen", "C'est ouvert")}
 </button>
                           </div>
 
@@ -984,11 +1122,11 @@ async function markDefenseAsOpened(defenseId) {
                                 type="button"
                                 onClick={() => openDefenseImage(defense)}
                                 className="group block w-full overflow-hidden rounded-xl border border-zinc-700/80 bg-black/40 shadow-sm transition hover:border-zinc-400/80"
-                                title="Voir l'image de la defense en grand"
+                                title={t("gvgCurrent.viewDefenseImage", "Voir l'image de la defense en grand")}
                               >
                                 <img
                                   src={getDefenseImageUrl(defense)}
-                                  alt={buildDefenseTitle(defense)}
+                                  alt={buildDefenseTitle(defense, t)}
                                   loading="lazy"
                                   decoding="async"
                                   className="h-36 w-full object-contain object-center transition duration-200 group-hover:scale-[1.02] sm:h-44 md:h-36 2xl:h-44"
@@ -1014,10 +1152,10 @@ async function markDefenseAsOpened(defenseId) {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-zinc-100">
-                  Repro
+                  {t("gvgCurrent.reproModalTitle", "Repro")}
                 </div>
                 <div className="text-sm text-zinc-400">
-                  Complète les champs manquants
+                  {t("gvgCurrent.reproModalHelp", "Complete les champs manquants")}
                 </div>
               </div>
 
@@ -1030,13 +1168,15 @@ async function markDefenseAsOpened(defenseId) {
                   setReproMessage("");
                 }}
               >
-                Fermer
+                {t("common.close", "Fermer")}
               </Button>
             </div>
 
             <div className="mt-6 space-y-4">
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-                <div className="text-sm text-zinc-400">Repro sur</div>
+                <div className="text-sm text-zinc-400">
+                  {t("gvgCurrent.reproOn", "Repro sur")}
+                </div>
                 <div className="mt-1 text-base font-semibold text-zinc-100">
                   {reproWatcherName}
                 </div>
@@ -1044,7 +1184,9 @@ async function markDefenseAsOpened(defenseId) {
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-                  <label className="text-sm text-zinc-300">Repro k PB</label>
+                  <label className="text-sm text-zinc-300">
+                    {t("gvgCurrent.reproPlayerBp", "Repro k PB")}
+                  </label>
                   <input
                     value={reproPlayerPb}
                     onChange={(e) => setReproPlayerPb(e.target.value)}
@@ -1054,7 +1196,9 @@ async function markDefenseAsOpened(defenseId) {
                 </div>
 
                 <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-                  <label className="text-sm text-zinc-300">Adversaire k PB</label>
+                  <label className="text-sm text-zinc-300">
+                    {t("gvgCurrent.reproEnemyBp", "Adversaire k PB")}
+                  </label>
                   <input
                     value={reproEnemyPb}
                     onChange={(e) => setReproEnemyPb(e.target.value)}
@@ -1071,7 +1215,9 @@ async function markDefenseAsOpened(defenseId) {
                     className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
                   >
                     <div className="text-sm text-zinc-300">
-                      Héros {line.slot} :{" "}
+                      {formatTranslation(t, "gvgCurrent.heroSlot", "Heros {slot} :", {
+                        slot: line.slot,
+                      })}{" "}
                       <span className="font-semibold text-zinc-100">
                         {line.hero}{" "}
                         {Number(line.awakening) >= 0 ? `A${line.awakening}` : "A?"}
@@ -1090,7 +1236,7 @@ async function markDefenseAsOpened(defenseId) {
                           )
                         );
                       }}
-                      placeholder="stuff en : ..."
+                      placeholder={t("gvgCurrent.stuffPlaceholder", "stuff en : ...")}
                       className="mt-2 w-full rounded-2xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none"
                     />
                   </div>
@@ -1098,7 +1244,9 @@ async function markDefenseAsOpened(defenseId) {
               </div>
 
               <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-                <label className="text-sm text-zinc-300">Artéfact</label>
+                <label className="text-sm text-zinc-300">
+                  {t("gvgCurrent.artifact", "Artefact")}
+                </label>
                 <input
                   value={reproArtifact}
                   onChange={(e) => setReproArtifact(e.target.value)}
@@ -1145,27 +1293,40 @@ async function markDefenseAsOpened(defenseId) {
         try {
           data = rawText ? JSON.parse(rawText) : null;
         } catch {
-          setReproMessage(`Réponse non JSON gvg-repro-save (${response.status})`);
+          setReproMessage(
+            formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+              context: "gvg-repro-save",
+              status: response.status,
+            })
+          );
           return;
         }
 
         if (!response.ok) {
-          setReproMessage(`Erreur sauvegarde repro : ${data?.error || "erreur inconnue"}`);
+          setReproMessage(
+            formatTranslation(t, "gvgCurrent.errorSaveRepro", "Erreur sauvegarde repro : {error}", {
+              error: data?.error || t("common.unknownError", "erreur inconnue"),
+            })
+          );
           return;
         }
 
         await markDefenseAsRepro(reproDefenseId);
-        setReproMessage("Repro enregistrée avec succès.");
+        setReproMessage(t("gvgCurrent.reproSaved", "Repro enregistree avec succes."));
         setReproModalOpen(false);
       } catch (error) {
         console.error("save repro modal error:", error);
-        setReproMessage(`Erreur sauvegarde repro : ${error?.message || "erreur inconnue"}`);
+        setReproMessage(
+          formatTranslation(t, "gvgCurrent.errorSaveRepro", "Erreur sauvegarde repro : {error}", {
+            error: error?.message || t("common.unknownError", "erreur inconnue"),
+          })
+        );
       } finally {
         setReproSaving(false);
       }
     }}
   >
-    {reproSaving ? "Enregistrement..." : "Enregistrer la repro"}
+    {reproSaving ? t("common.saving", "Enregistrement...") : t("gvgCurrent.saveRepro", "Enregistrer la repro")}
   </Button>
 </div>
 
@@ -1178,7 +1339,7 @@ async function markDefenseAsOpened(defenseId) {
     <div className="w-full max-w-2xl rounded-3xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
       <div className="flex items-center justify-between">
         <div className="text-lg font-semibold text-zinc-100">
-          Repro enregistrée
+          {t("gvgCurrent.savedReproTitle", "Repro enregistree")}
         </div>
 
         <Button
@@ -1187,13 +1348,13 @@ async function markDefenseAsOpened(defenseId) {
           className="rounded-2xl border-zinc-700 text-zinc-200"
           onClick={() => setReproViewOpen(false)}
         >
-          Fermer
+          {t("common.close", "Fermer")}
         </Button>
       </div>
 
       <div className="mt-4 whitespace-pre-wrap rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-200">
         {reproViewLoading
-          ? "Chargement..."
+          ? t("common.loading", "Chargement...")
           : reproViewMessage || reproViewText}
       </div>
     </div>
@@ -1214,14 +1375,14 @@ async function markDefenseAsOpened(defenseId) {
           className="rounded-2xl border-zinc-700 text-zinc-200"
           onClick={() => setImageModalOpen(false)}
         >
-          Fermer
+          {t("common.close", "Fermer")}
         </Button>
       </div>
 
       <div className="mt-4 flex items-center justify-center">
         <img
           src={imageModalUrl}
-          alt="defense"
+          alt={t("common.image", "Image")}
           className="max-h-[75vh] w-auto rounded-2xl border border-zinc-800"
         />
       </div>
@@ -1234,7 +1395,7 @@ async function markDefenseAsOpened(defenseId) {
 
       <div className="flex items-center justify-between">
         <div className="text-lg font-semibold text-zinc-100">
-          Strats disponibles
+          {t("gvgCurrent.availableStrats", "Strats disponibles")}
         </div>
 
         <Button
@@ -1243,14 +1404,14 @@ async function markDefenseAsOpened(defenseId) {
           className="rounded-2xl border-zinc-700 text-zinc-200"
           onClick={() => setStratModalOpen(false)}
         >
-          Fermer
+          {t("common.close", "Fermer")}
         </Button>
       </div>
 
       <div className="mt-4 space-y-4 max-h-[70vh] overflow-y-auto">
 
         {stratModalLoading ? (
-          <div className="text-sm text-zinc-400">Chargement...</div>
+          <div className="text-sm text-zinc-400">{t("common.loading", "Chargement...")}</div>
         ) : stratModalMessage ? (
           <div className="text-sm text-zinc-300">{stratModalMessage}</div>
         ) : (
@@ -1261,18 +1422,22 @@ async function markDefenseAsOpened(defenseId) {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <div className="text-sm text-zinc-400">
-                  Strat #{strat.strat_id}
+                  {formatTranslation(t, "gvgCurrent.stratNumber", "Strat #{number}", {
+                    number: strat.strat_id,
+                  })}
                 </div>
                 {showExternalRunAlerts && isExternalRunGuildCode(strat.guild_code) ? (
                   <span className="rounded-full border border-amber-400/50 bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-amber-100">
-                    Run externe - {getGvgGuildLabel(strat.guild_code)}
+                    {formatTranslation(t, "gvgCurrent.externalRun", "Run externe - {guild}", {
+                      guild: getGvgGuildLabel(strat.guild_code),
+                    })}
                   </span>
                 ) : null}
               </div>
 
 {strat.youtube_url ? (
   <div className="mt-3 space-y-3">
-    <div className="text-xs text-zinc-500">Vidéo :</div>
+    <div className="text-xs text-zinc-500">{t("gvgCurrent.video", "Video")} :</div>
 
     {getYoutubeEmbedUrl(strat.youtube_url) ? (
       <div className="overflow-hidden rounded-2xl border border-zinc-800">
@@ -1291,7 +1456,7 @@ async function markDefenseAsOpened(defenseId) {
         rel="noreferrer"
         className="inline-block text-sm text-blue-400 underline"
       >
-        Ouvrir la vidéo
+        {t("gvgCurrent.openVideo", "Ouvrir la video")}
       </a>
     )}
   </div>
@@ -1300,7 +1465,7 @@ async function markDefenseAsOpened(defenseId) {
 {strat.attack_code ? (
   <div className="mt-3 flex flex-wrap items-center gap-2">
     <div className="text-xs text-zinc-500">
-      Code : {strat.attack_code}
+      {t("gvgCurrent.code", "Code")} : {strat.attack_code}
     </div>
 
     <button
@@ -1314,7 +1479,7 @@ async function markDefenseAsOpened(defenseId) {
       }}
       className="rounded-2xl border border-zinc-700 bg-zinc-800/60 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700/70"
     >
-      Copier
+      {t("common.copy", "Copier")}
     </button>
   </div>
 ) : null}
@@ -1326,7 +1491,7 @@ async function markDefenseAsOpened(defenseId) {
 ) : null}
 
               <div className="mt-3 text-xs text-zinc-500">
-                Slots :
+                {t("gvgCurrent.slots", "Slots")} :
               </div>
 
               <div className="mt-1 text-xs text-zinc-300">
@@ -1349,7 +1514,7 @@ async function markDefenseAsOpened(defenseId) {
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
     <div className="w-[700px] max-h-[80vh] overflow-y-auto rounded-2xl bg-zinc-900 p-6">
       <div className="mb-4 text-lg font-bold text-zinc-50">
-        Qui peut repro cette défense
+        {t("gvgCurrent.whoCanReproDefense", "Qui peut repro cette defense")}
       </div>
 
       <div className="mb-4 flex gap-4 text-sm text-zinc-400">
@@ -1391,7 +1556,9 @@ async function markDefenseAsOpened(defenseId) {
               : "bg-red-500/20 text-red-300"
           }`}
         >
-          {c.canRepro ? "✅ Peut repro" : "❌ Incomplet"}
+          {c.canRepro
+            ? `✅ ${t("gvgCurrent.canRepro", "Peut repro")}`
+            : `❌ ${t("gvgCurrent.incomplete", "Incomplet")}`}
         </div>
       </div>
 
@@ -1415,7 +1582,7 @@ async function markDefenseAsOpened(defenseId) {
         onClick={() => setReproCandidatesModalOpen(false)}
         className="mt-4 rounded-xl bg-zinc-700 px-4 py-2 hover:bg-zinc-600"
       >
-        Fermer
+        {t("common.close", "Fermer")}
       </button>
     </div>
   </div>
