@@ -654,6 +654,7 @@ const LOGIN_HOTSPOTS = {
 };
 
 function LoginPanel({ onLogin }) {
+  const { language, t } = usePortalLanguage();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
@@ -661,6 +662,11 @@ function LoginPanel({ onLogin }) {
   const [focusedField, setFocusedField] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotDiscordId, setForgotDiscordId] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState("");
+  const [forgotResult, setForgotResult] = useState(null);
   const [viewport, setViewport] = useState(LOGIN_IMAGE_SIZE);
   const scrollRef = useRef(null);
 
@@ -692,6 +698,7 @@ function LoginPanel({ onLogin }) {
   const loginFontSize = Math.min(Math.max(14, 21 * imageScale), 38);
   const pageWidth = Math.max(viewport.width, stageWidth + stageOffsetX * 2);
   const pageHeight = Math.max(viewport.height, stageHeight + stageOffsetY * 2);
+  const loginBackground = language === "en" ? "/backgrounds/login-realms-en.png" : "/backgrounds/login-realms.png";
 
   useEffect(() => {
     const container = scrollRef.current;
@@ -729,7 +736,7 @@ function LoginPanel({ onLogin }) {
     const cleanPassword = password.trim();
 
     if (!cleanDiscordId || !cleanPassword) {
-      setErrorMessage("Renseigne ton ID Discord et ton mot de passe.");
+      setErrorMessage(t("login.missingCredentials", "Renseigne ton ID Discord et ton mot de passe."));
       return;
     }
 
@@ -747,22 +754,95 @@ function LoginPanel({ onLogin }) {
       if (error) throw error;
 
       if (!data) {
-        setErrorMessage("Identifiant Discord ou mot de passe incorrect.");
+        setErrorMessage(t("login.invalidCredentials", "Identifiant Discord ou mot de passe incorrect."));
         return;
       }
 
       onLogin(buildPortalSession({ ...data, password_change_required: isForcedPortalPassword(cleanPassword) }), { remember });
     } catch (error) {
       console.error("[portal-login]", error);
-      setErrorMessage("Connexion impossible. Reessaie ou contacte un admin.");
+      setErrorMessage(t("login.failed", "Connexion impossible. Reessaie ou contacte un admin."));
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  function openForgotDialog() {
+    setForgotDiscordId(identifier.trim());
+    setForgotError("");
+    setForgotResult(null);
+    setForgotOpen(true);
+  }
+
+  async function submitForgotPassword(event) {
+    event.preventDefault();
+    if (forgotLoading) return;
+
+    const cleanDiscordId = forgotDiscordId.trim();
+    if (!cleanDiscordId) {
+      setForgotError(t("login.forgotMissingId", "Renseigne ton ID Discord."));
+      setForgotResult(null);
+      return;
+    }
+
+    setForgotLoading(true);
+    setForgotError("");
+    setForgotResult(null);
+
+    try {
+      const { data: member, error: memberError } = await supabase
+        .from("guild_members")
+        .select("id, watcher_name, discord_id, guild_code")
+        .eq("discord_id", cleanDiscordId)
+        .maybeSingle();
+
+      if (memberError) throw memberError;
+
+      if (!member) {
+        setForgotError(t("login.forgotNotFound", "Aucun compte Portal trouve pour cet ID Discord."));
+        return;
+      }
+
+      const guildCode = String(member.guild_code || "").trim();
+      if (!guildCode) {
+        setForgotError(t("login.forgotNoGuild", "Ce compte n'a pas de guilde assignee. Contacte un admin Paladin."));
+        return;
+      }
+
+      const { data: admins, error: adminsError } = await supabase
+        .from("guild_members")
+        .select("watcher_name, discord_id, role, guild_code")
+        .eq("guild_code", guildCode);
+
+      if (adminsError) throw adminsError;
+
+      const adminRows = (admins || [])
+        .filter((row) => isAdminRole(row.role))
+        .sort((left, right) => String(left.watcher_name || "").localeCompare(String(right.watcher_name || ""), "fr", { sensitivity: "base" }))
+        .map((row) => ({
+          name: row.watcher_name || row.discord_id || "Admin",
+          discordId: row.discord_id || "",
+          role: row.role || "admin",
+        }));
+
+      setForgotResult({
+        guildCode,
+        admins: adminRows,
+      });
+    } catch (error) {
+      console.error("[portal-forgot-password]", error);
+      setForgotError(t("login.failed", "Connexion impossible. Reessaie ou contacte un admin."));
+    } finally {
+      setForgotLoading(false);
+    }
+  }
+
   return (
     <main ref={scrollRef} className="relative h-[100svh] min-h-[100svh] overflow-auto bg-[#02060d] text-zinc-100">
-      <h1 className="sr-only">Dashboard of Realms - Connexion</h1>
+      <h1 className="sr-only">{t("login.title", "Dashboard of Realms - Connexion")}</h1>
+      <div className="fixed right-4 top-4 z-50">
+        <PortalLanguageSelector />
+      </div>
 
       <div
         className="relative"
@@ -784,7 +864,7 @@ function LoginPanel({ onLogin }) {
         >
           <img
             aria-hidden="true"
-            src="/backgrounds/login-realms.png"
+            src={loginBackground}
             alt=""
             className="absolute inset-0 h-full w-full select-none object-fill"
             draggable="false"
@@ -800,7 +880,7 @@ function LoginPanel({ onLogin }) {
           }}
         >
           <span className={identifier ? "truncate text-[#e6dccb]" : "truncate text-[#cabeab]/65"}>
-            {identifier || "Identifiant"}
+            {identifier || t("login.identifier", "Identifiant")}
           </span>
         </div>
         <input
@@ -808,7 +888,7 @@ function LoginPanel({ onLogin }) {
           onChange={(event) => setIdentifier(event.target.value)}
           onFocus={() => setFocusedField("identifier")}
           onBlur={() => setFocusedField(null)}
-          aria-label="Identifiant"
+          aria-label={t("login.identifier", "Identifiant")}
           autoComplete="username"
           className="absolute cursor-text opacity-0"
           style={hotspotStyle(LOGIN_HOTSPOTS.email)}
@@ -822,7 +902,7 @@ function LoginPanel({ onLogin }) {
           }}
         >
           <span className={password ? "truncate text-[#e6dccb]" : "truncate text-[#cabeab]/65"}>
-            {password ? (showPassword ? password : "\u2022".repeat(password.length)) : "Mot de passe"}
+            {password ? (showPassword ? password : "\u2022".repeat(password.length)) : t("login.password", "Mot de passe")}
           </span>
         </div>
         <input
@@ -831,7 +911,7 @@ function LoginPanel({ onLogin }) {
           onChange={(event) => setPassword(event.target.value)}
           onFocus={() => setFocusedField("password")}
           onBlur={() => setFocusedField(null)}
-          aria-label="Mot de passe"
+          aria-label={t("login.password", "Mot de passe")}
           autoComplete="current-password"
           className="absolute cursor-text opacity-0"
           style={hotspotStyle(LOGIN_HOTSPOTS.password)}
@@ -839,7 +919,7 @@ function LoginPanel({ onLogin }) {
         <button
           type="button"
           onClick={() => setShowPassword((value) => !value)}
-          aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+          aria-label={showPassword ? t("login.hidePassword", "Masquer le mot de passe") : t("login.showPassword", "Afficher le mot de passe")}
           className="absolute rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
           style={hotspotStyle(LOGIN_HOTSPOTS.eye)}
         />
@@ -850,7 +930,7 @@ function LoginPanel({ onLogin }) {
           className="absolute bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
           style={hotspotStyle(LOGIN_HOTSPOTS.remember)}
         >
-          <span className="sr-only">Se souvenir de moi</span>
+          <span className="sr-only">{t("login.remember", "Se souvenir de moi")}</span>
         </button>
         {remember && (
           <span
@@ -863,10 +943,11 @@ function LoginPanel({ onLogin }) {
         )}
         <button
           type="button"
+          onClick={openForgotDialog}
           className="absolute bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
           style={hotspotStyle(LOGIN_HOTSPOTS.forgot)}
         >
-          <span className="sr-only">Mot de passe oublie ?</span>
+          <span className="sr-only">{t("login.forgot", "Mot de passe oublie ?")}</span>
         </button>
         <button
           type="submit"
@@ -874,7 +955,7 @@ function LoginPanel({ onLogin }) {
           className="absolute cursor-pointer bg-transparent outline-none transition focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/80 disabled:cursor-wait"
           style={hotspotStyle(LOGIN_HOTSPOTS.submit)}
         >
-          <span className="sr-only">Se connecter</span>
+          <span className="sr-only">{t("login.submit", "Se connecter")}</span>
         </button>
         {(errorMessage || isSubmitting) && (
           <div
@@ -891,12 +972,95 @@ function LoginPanel({ onLogin }) {
               fontSize: `${Math.max(11, 14 * imageScale)}px`,
             }}
           >
-            {isSubmitting ? "Connexion..." : errorMessage}
+            {isSubmitting ? t("login.submitting", "Connexion...") : errorMessage}
           </div>
         )}
       </form>
         </div>
       </div>
+      {forgotOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-950 p-5 text-zinc-100 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold">{t("login.forgotTitle", "Mot de passe oublie")}</h2>
+                <p className="mt-1 text-sm text-zinc-400">
+                  {t(
+                    "login.forgotHelp",
+                    "Renseigne ton ID Discord. On te dira quels admins contacter pour ta guilde.",
+                  )}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                onClick={() => setForgotOpen(false)}
+              >
+                {t("common.close", "Fermer")}
+              </Button>
+            </div>
+
+            <form onSubmit={submitForgotPassword} className="mt-5 space-y-4">
+              <label className="block space-y-2">
+                <span className="text-sm font-medium text-zinc-300">
+                  {t("login.forgotIdLabel", "ID Discord")}
+                </span>
+                <input
+                  value={forgotDiscordId}
+                  onChange={(event) => setForgotDiscordId(event.target.value)}
+                  className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 outline-none focus:border-cyan-400"
+                  placeholder={t("login.forgotIdPlaceholder", "Ton ID Discord")}
+                  autoComplete="username"
+                />
+              </label>
+
+              {forgotError ? (
+                <div className="rounded-xl border border-red-400/40 bg-red-950/60 px-3 py-2 text-sm text-red-100">
+                  {forgotError}
+                </div>
+              ) : null}
+
+              {forgotResult ? (
+                <div className="rounded-xl border border-emerald-400/30 bg-emerald-950/35 p-3 text-sm text-emerald-50">
+                  <div className="font-semibold">{t("login.forgotResultTitle", "Contacte les admins de ta guilde")}</div>
+                  <p className="mt-1 text-emerald-100/85">
+                    {t(
+                      "login.forgotResultIntro",
+                      "Ton compte est lie a {guild}. Contacte un de ces admins pour recuperer ton acces.",
+                    ).replace("{guild}", forgotResult.guildCode)}
+                  </p>
+
+                  {forgotResult.admins.length ? (
+                    <div className="mt-3 space-y-2">
+                      {forgotResult.admins.map((admin) => (
+                        <div key={`${admin.discordId}-${admin.name}`} className="rounded-lg border border-emerald-300/20 bg-black/25 p-2">
+                          <div className="font-medium">{admin.name}</div>
+                          <div className="text-xs text-emerald-100/70">
+                            {t("login.forgotDiscordId", "ID Discord")} : {admin.discordId || "-"} · {t("login.forgotRole", "Role")} : {admin.role}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-lg border border-amber-300/25 bg-amber-950/40 p-2 text-amber-100">
+                      {t("login.forgotNoAdmin", "Aucun admin trouve pour cette guilde. Contacte Darius ou un leader Paladin.")}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              <Button
+                type="submit"
+                disabled={forgotLoading}
+                className="w-full bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
+              >
+                {forgotLoading ? t("login.forgotSearching", "Recherche...") : t("login.forgotSearch", "Trouver mes admins")}
+              </Button>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -992,7 +1156,7 @@ function LanguageFlagMark({ languageCode }) {
 }
 
 function PortalLanguageSelector() {
-  const { language, setLanguage, currentLanguage } = usePortalLanguage();
+  const { language, setLanguage, currentLanguage, t } = usePortalLanguage();
   const [open, setOpen] = useState(false);
 
   return (
@@ -1001,7 +1165,7 @@ function PortalLanguageSelector() {
         type="button"
         variant="outline"
         className="h-9 rounded-lg border-zinc-700 bg-zinc-900 px-3 text-zinc-100 hover:bg-zinc-800"
-        aria-label={`Langue actuelle : ${currentLanguage.label}`}
+        aria-label={`${t("language.current", "Langue actuelle")} : ${currentLanguage.label}`}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
