@@ -615,13 +615,14 @@ function getDefenseRecordState(defense) {
   };
 }
   function buildSlotLabel(bastion, type, tower, team) {
-    const keepPrefix = language === "en" ? "K" : "B";
+    const strongholdPrefix = language === "en" ? "S" : "B";
 
     if (type === "fortress") {
-      return `${keepPrefix}${bastion}_F_T${team}`;
+      const keepCode = language === "en" ? "K" : "F";
+      return `${strongholdPrefix}${bastion}_${keepCode}_T${team}`;
     }
 
-    return `${keepPrefix}${bastion}_T${tower}_T${team}`;
+    return `${strongholdPrefix}${bastion}_T${tower}_T${team}`;
   }
 
 function getGroupEmoji(groupNum) {
