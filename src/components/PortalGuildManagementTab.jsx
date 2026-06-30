@@ -20,6 +20,13 @@ import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
 
+function formatText(template, values) {
+  return Object.entries(values).reduce(
+    (text, [key, value]) => text.replace(new RegExp(`\\{${key}\\}`, "g"), value ?? ""),
+    template,
+  );
+}
+
 function getSessionGuildCode(session) {
   return session?.guildCode || session?.guild_code || "G1";
 }
@@ -105,6 +112,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [memberToTransfer, setMemberToTransfer] = useState(null);
   const [targetGuildCode, setTargetGuildCode] = useState("");
+  const [removingMemberId, setRemovingMemberId] = useState("");
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [newMember, setNewMember] = useState({
     name: "",
@@ -122,6 +130,9 @@ export default function PortalGuildManagementTab({ session }) {
     return sessionGuildCode ? [sessionGuildCode] : [];
   }, [session]);
   const activeGuildIsPaladin = isPaladinGuildCode(activeGuildCode);
+  const removeMemberLabel = isPaladinSession(session)
+    ? t("guildManagement.leaveCluster", "Quitte le cluster")
+    : t("guildManagement.leaveGuild", "Quitte la guilde");
 
   const activeMembers = useMemo(
     () => members.filter((member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode)),
@@ -603,6 +614,109 @@ export default function PortalGuildManagementTab({ session }) {
     setSelectedMemberId((current) => (String(current) === String(memberToTransfer.id) ? null : current));
   }
 
+  async function deleteRows(table, column, value, errorLabel) {
+    const { error } = await supabase.from(table).delete().eq(column, value);
+
+    if (error) {
+      console.error(errorLabel, error);
+      throw error;
+    }
+  }
+
+  async function removeMemberFromGuild() {
+    if (!isAdmin || !memberToTransfer?.id || removingMemberId) return;
+
+    const currentGuildCode = memberToTransfer.guildCode || activeGuildCode;
+    const confirmMessage = formatText(
+      isPaladinSession(session)
+        ? t(
+            "guildManagement.leaveClusterConfirm",
+            "Retirer definitivement {player} du cluster ? Cette action supprimera toutes ses donnees.",
+          )
+        : t(
+            "guildManagement.leaveGuildConfirm",
+            "Retirer definitivement {player} de la guilde ? Cette action supprimera toutes ses donnees.",
+          ),
+      { player: memberToTransfer.name },
+    );
+
+    if (!window.confirm(confirmMessage)) return;
+
+    setRemovingMemberId(memberToTransfer.id);
+    setSavingMessage(t("guildManagement.removingMember", "Suppression du membre en cours..."));
+    setErrorMessage("");
+
+    try {
+      const { data: intersaisonAssignments, error: intersaisonAssignmentsFetchError } = await supabase
+        .from("intersaison_assignments")
+        .select("id")
+        .eq("member_id", memberToTransfer.id);
+
+      if (intersaisonAssignmentsFetchError) {
+        console.error("Erreur chargement assignations intersaison membre Portal:", intersaisonAssignmentsFetchError);
+        throw intersaisonAssignmentsFetchError;
+      }
+
+      const intersaisonAssignmentIds = (intersaisonAssignments || []).map((row) => row.id).filter(Boolean);
+
+      if (intersaisonAssignmentIds.length > 0) {
+        const { error: intersaisonNotesError } = await supabase
+          .from("intersaison_notes")
+          .delete()
+          .in("assignment_id", intersaisonAssignmentIds);
+
+        if (intersaisonNotesError) {
+          console.error("Erreur suppression notes intersaison membre Portal:", intersaisonNotesError);
+          throw intersaisonNotesError;
+        }
+      }
+
+      await deleteRows("intersaison_assignments", "member_id", memberToTransfer.id, "Erreur suppression assignations intersaison membre Portal:");
+      await deleteRows("cluster_defense_likes", "member_id", memberToTransfer.id, "Erreur suppression votes defenses membre Portal:");
+      await deleteRows("member_awakenings", "member_id", memberToTransfer.id, "Erreur suppression eveils membre Portal:");
+      await deleteRows("member_pb_entries", "member_id", memberToTransfer.id, "Erreur suppression PB membre Portal:");
+      await deleteRows("member_demonic_monsters", "member_id", memberToTransfer.id, "Erreur suppression monstres membre Portal:");
+      await deleteRows("soul_stones", "member_id", memberToTransfer.id, "Erreur suppression pierres membre Portal:");
+      await deleteRows("gvg_repro", "member_id", memberToTransfer.id, "Erreur suppression repros GVG membre Portal:");
+
+      await supabase
+        .from("gvg_discord_repro_requests")
+        .update({
+          reproducer_member_id: null,
+          reproducer_discord_id: null,
+          reproducer_name: null,
+        })
+        .eq("reproducer_member_id", memberToTransfer.id);
+
+      await deleteRows("guild_members", "id", memberToTransfer.id, "Erreur suppression membre Portal:");
+
+      void logPortalActivity(session, {
+        targetMemberId: null,
+        targetName: memberToTransfer.name,
+        actionType: "guild_management_member_delete",
+        entityType: "member",
+        entityId: String(memberToTransfer.id),
+        summary: `${memberToTransfer.name} retire de ${currentGuildCode}`,
+        metadata: {
+          guildCode: currentGuildCode,
+          removedFrom: isPaladinSession(session) ? "cluster" : "guild",
+        },
+      });
+
+      setMembers((previous) => previous.filter((member) => String(member.id) !== String(memberToTransfer.id)));
+      setDefenseVotes((previous) => previous.filter((vote) => String(vote.memberId) !== String(memberToTransfer.id)));
+      setSelectedMemberId((current) => (String(current) === String(memberToTransfer.id) ? null : current));
+      setTransferDialogOpen(false);
+      setMemberToTransfer(null);
+      setTargetGuildCode("");
+    } catch (error) {
+      setErrorMessage(error?.message || t("guildManagement.removeMemberError", "Suppression du membre impossible."));
+    } finally {
+      setRemovingMemberId("");
+      setSavingMessage("");
+    }
+  }
+
   async function addMember() {
     const cleanName = newMember.name.trim();
     const cleanDiscordId = newMember.discordId.trim();
@@ -1065,8 +1179,20 @@ export default function PortalGuildManagementTab({ session }) {
             <div className="mt-6 flex flex-wrap justify-end gap-2">
               <Button
                 type="button"
+                variant="destructive"
+                className="rounded-lg bg-red-700 text-white hover:bg-red-600"
+                disabled={Boolean(removingMemberId)}
+                onClick={removeMemberFromGuild}
+              >
+                {removingMemberId === memberToTransfer.id
+                  ? t("guildManagement.removing", "Suppression...")
+                  : removeMemberLabel}
+              </Button>
+              <Button
+                type="button"
                 variant="outline"
                 className="rounded-lg border-zinc-700 text-zinc-200"
+                disabled={Boolean(removingMemberId)}
                 onClick={() => {
                   setTransferDialogOpen(false);
                   setMemberToTransfer(null);
@@ -1079,6 +1205,7 @@ export default function PortalGuildManagementTab({ session }) {
                 type="button"
                 className="rounded-lg bg-amber-500 text-zinc-950 hover:bg-amber-400"
                 disabled={
+                  Boolean(removingMemberId) ||
                   !targetGuildCode ||
                   !visibleGuildCodes.some(
                     (guildCode) => normalizeGuildCodeKey(guildCode) === normalizeGuildCodeKey(targetGuildCode),

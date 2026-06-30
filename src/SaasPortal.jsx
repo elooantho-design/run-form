@@ -5132,6 +5132,7 @@ const logActionLabelKeys = {
   guild_management_member_transfer: ["logs.action.guildMemberTransfer", "Transfert membre"],
   guild_management_member_attach: ["logs.action.guildMemberAttach", "Membre rattache"],
   guild_management_member_create: ["logs.action.guildMemberCreate", "Membre ajoute"],
+  guild_management_member_delete: ["logs.action.guildMemberDelete", "Membre supprime"],
   gvg_launcher_start: ["logs.action.gvgLauncherStart", "Capture GVG"],
   gvg_validation_import: ["logs.action.gvgValidationImport", "Import GVG"],
   gvg_job_delete: ["logs.action.gvgJobDelete", "Job GVG supprime"],
@@ -5293,6 +5294,12 @@ function getLogDisplaySummary(log, t) {
       });
     case "player_password_change":
       return translateLogTemplate(t, "logs.event.playerPasswordChange", "{actor} a change son mot de passe", { actor });
+    case "guild_management_member_delete":
+      return translateLogTemplate(t, "logs.event.guildMemberDelete", "{actor} a supprime {target} de {guild}", {
+        actor,
+        target,
+        guild: metadata.guildCode || "-",
+      });
     default:
       return log?.summary || t("logs.event.unknown", "Evenement");
   }
