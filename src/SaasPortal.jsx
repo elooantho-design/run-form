@@ -57,6 +57,7 @@ import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
 import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
+import moontonHeroImages from "@/data/moontonHeroImages.json";
 import {
   filterByGuildScope,
   getControlBrand,
@@ -74,6 +75,11 @@ import {
   isInheritedDefense,
   resolveDefenseVariantsForGuild,
 } from "@/lib/defenseVariants";
+import {
+  buildPublicCalqueUrl,
+  buildPublicCalquesBaseUrl,
+  buildPublicDownloadUrl,
+} from "@/lib/vpsAssets";
 
 const navigation = [
   { id: "home", label: "Accueil", labelKey: "nav.home", icon: LayoutDashboard },
@@ -197,14 +203,16 @@ const bastions = Array.from({ length: 4 }, (_, index) => ({
   status: index === 0 ? "pret" : index === 1 ? "controle" : "vide",
 }));
 
-const calquesBaseUrl = String(import.meta.env?.VITE_CALQUES_BASE_URL || "").replace(/\/$/, "");
+const calquesBaseUrl = String(
+  import.meta.env?.VITE_CALQUES_BASE_URL || buildPublicCalquesBaseUrl()
+).replace(/\/$/, "");
 
 function isLocalHost() {
   if (typeof window === "undefined") return false;
   return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 }
 
-function calqueUrl(kind, fileName) {
+function calqueUrl(kind, fileName, options = {}) {
   const folders = {
     hero: "hero-calques",
     faction: "faction-calques",
@@ -214,9 +222,15 @@ function calqueUrl(kind, fileName) {
   const encodedFile = encodeURIComponent(fileName);
 
   if (calquesBaseUrl) return `${calquesBaseUrl}/${folder}/${encodedFile}`;
-  if (isLocalHost()) return `/${folder}/${encodedFile}`;
+  const publicUrl = buildPublicCalqueUrl(kind, fileName);
+  if (publicUrl) return publicUrl;
+  if (isLocalHost() && !options.forceProxy) return `/${folder}/${encodedFile}`;
 
-  return `/api/gvg-server?action=calque&kind=${kind}&file=${encodedFile}`;
+  return `${options.forceProxy ? getApiBase() : ""}/api/gvg-server?action=calque&kind=${kind}&file=${encodedFile}`;
+}
+
+function launcherDownloadUrl(apiBase) {
+  return buildPublicDownloadUrl("PaladinGVGLauncher.zip") || `${apiBase}/api/gvg-server?action=launcher-download`;
 }
 
 function getApiBase() {
@@ -516,6 +530,22 @@ function buildHeroImageCandidates(champion, portalName) {
   return [...new Set(candidates)];
 }
 
+function getMoontonHeroImage(champion, portalName) {
+  const keys = [
+    champion?.name,
+    getChampionEnglishName(champion),
+    portalName,
+  ]
+    .map(normalizeHeroKey)
+    .filter(Boolean);
+
+  for (const key of keys) {
+    if (moontonHeroImages[key]) return moontonHeroImages[key];
+  }
+
+  return null;
+}
+
 function getChampionReleaseTime(champion) {
   const releaseValue = getChampionField(champion, [
     "released_at",
@@ -546,6 +576,8 @@ function buildPortalHeroCards(champions) {
 
       const imageFiles = buildHeroImageCandidates(champion, portalName);
       const imageFile = imageFiles[0] || "";
+      const officialImageInfo = getMoontonHeroImage(champion, portalName);
+      const officialImageFile = normalizeHeroImageFile(officialImageInfo?.file || "");
       const releaseTime = getChampionReleaseTime(champion);
       const isRecentRelease = releaseTime !== null && Date.now() - releaseTime < latestReleaseWindowMs;
       const isLatestRelease = isChampionMarkedLatest(champion) || isRecentRelease;
@@ -563,6 +595,9 @@ function buildPortalHeroCards(champions) {
         imageFile,
         image: imageFile ? calqueUrl("hero", imageFile) : "",
         fallbackImages: imageFiles.slice(1).map((fileName) => calqueUrl("hero", fileName)),
+        officialImageFile,
+        officialImage: officialImageFile ? calqueUrl("hero", officialImageFile, { forceProxy: true }) : "",
+        officialImageSource: officialImageInfo?.source || "",
         isLatestRelease,
         latestReleaseRank: releaseTime === null ? null : -releaseTime,
       };
@@ -1773,6 +1808,7 @@ function HeroBoxView({ session }) {
   const [savingHeroId, setSavingHeroId] = useState("");
   const [bulkSavingRarity, setBulkSavingRarity] = useState("");
   const [heroStates, setHeroStates] = useState({});
+  const [selectedHeroDetails, setSelectedHeroDetails] = useState(null);
 
   const connectedPlayerId = session?.memberId || session?.id || "";
   const isAdminUser = isAdminSession(session);
@@ -2442,9 +2478,18 @@ function HeroBoxView({ session }) {
               canEdit={canEdit}
               saving={savingHeroId === hero.id || bulkSavingRarity === hero.rarity}
               language={language}
+              onOpenDetails={setSelectedHeroDetails}
             />
           ))}
         </div>
+
+        {selectedHeroDetails ? (
+          <HeroDetailsModal
+            hero={selectedHeroDetails}
+            language={language}
+            onClose={() => setSelectedHeroDetails(null)}
+          />
+        ) : null}
       </div>
     </section>
   );
@@ -2462,11 +2507,13 @@ function HeroLayerCard({
   canEdit = false,
   saving = false,
   language = "fr",
+  onOpenDetails,
 }) {
   const { t } = usePortalLanguage();
   const [fallbackImageIndex, setFallbackImageIndex] = useState(-1);
   const [lockPressing, setLockPressing] = useState(false);
   const lockTimerRef = useRef(null);
+  const lockTriggeredRef = useRef(false);
   const imageSrc = fallbackImageIndex === -1 ? hero.image : hero.fallbackImages?.[fallbackImageIndex] || hero.image;
   const displayName = getPortalHeroDisplayName(hero, language);
   const canLongPressLock = canEdit && state.owned && !saving;
@@ -2497,9 +2544,20 @@ function HeroLayerCard({
     setLockPressing(true);
     lockTimerRef.current = window.setTimeout(() => {
       lockTimerRef.current = null;
+      lockTriggeredRef.current = true;
       setLockPressing(false);
       onLock?.(hero.id);
     }, 650);
+  }
+
+  function handleCardClick(event) {
+    if (lockTriggeredRef.current) {
+      lockTriggeredRef.current = false;
+      return;
+    }
+
+    if (!state.owned || event.defaultPrevented || event.target.closest?.("button")) return;
+    onOpenDetails?.(hero);
   }
 
   function handleImageReady() {
@@ -2531,6 +2589,7 @@ function HeroLayerCard({
       onContextMenu={(event) => {
         if (canLongPressLock) event.preventDefault();
       }}
+      onClick={handleCardClick}
     >
       <div className="hero-layer-skeleton" aria-hidden="true" />
       <img
@@ -2584,6 +2643,73 @@ function HeroLayerCard({
         <strong>{displayName}</strong>
       </div>
     </article>
+  );
+}
+
+function HeroDetailsModal({ hero, language = "fr", onClose }) {
+  const { t } = usePortalLanguage();
+  const displayName = getPortalHeroDisplayName(hero, language);
+  const detailImage = hero.officialImage || hero.image;
+  const hasOfficialImage = Boolean(hero.officialImage);
+  const rarityLabel = hero.rarity ? t(`rarity.${hero.rarity}`, formatHeroFilterLabel(hero.rarity)) : "";
+  const roleLabels = (hero.roles || []).map((role) => t(`heroRole.${role}`, formatHeroFilterLabel(role)));
+  const factionLabels = (hero.factions || []).map((faction) => t(`heroFaction.${faction}`, formatHeroFilterLabel(faction)));
+
+  return (
+    <div className="hero-details-backdrop" role="presentation" onClick={onClose}>
+      <article
+        className="hero-details-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={displayName}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="hero-details-close"
+          aria-label={t("common.close", "Fermer")}
+          onClick={onClose}
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="hero-details-portrait">
+          {detailImage ? <img src={detailImage} alt={displayName} draggable="false" /> : null}
+        </div>
+
+        <div className="hero-details-content">
+          <div>
+            <p className="hero-details-eyebrow">{t("heroDetails.eyebrow", "Fiche heros")}</p>
+            <h3>{displayName}</h3>
+            <p className="hero-details-subtitle">
+              {hasOfficialImage
+                ? t("heroDetails.officialImageReady", "Portrait officiel Moonton connecte au VPS.")
+                : t("heroDetails.officialImageMissing", "Portrait officiel Moonton manquant pour ce heros.")}
+            </p>
+          </div>
+
+          <div className="hero-details-tags" aria-label={t("heroDetails.tags", "Informations heros")}>
+            {rarityLabel ? <span>{rarityLabel}</span> : null}
+            {roleLabels.map((label) => (
+              <span key={`role-${label}`}>{label}</span>
+            ))}
+            {factionLabels.map((label) => (
+              <span key={`faction-${label}`}>{label}</span>
+            ))}
+          </div>
+
+          <div className="hero-details-placeholder">
+            <strong>{t("heroDetails.inProgressTitle", "Page en construction")}</strong>
+            <p>
+              {t(
+                "heroDetails.inProgressText",
+                "Les eveils, stuffs et usages par contenu seront ajoutes ici au fur et a mesure.",
+              )}
+            </p>
+          </div>
+        </div>
+      </article>
+    </div>
   );
 }
 
@@ -2836,7 +2962,7 @@ function LauncherView({ session: portalSession }) {
               {launching ? t("launcher.openingShort", "Ouverture...") : t("launcher.startCapture", "Lancer la capture GVG")}
             </Button>
             <a
-              href={`${apiBase}/api/gvg-server?action=launcher-download`}
+              href={launcherDownloadUrl(apiBase)}
               className="inline-flex items-center rounded-2xl border border-zinc-700 bg-zinc-950/70 px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-cyan-300/60 hover:text-cyan-100"
             >
               <UploadCloud className="mr-2 h-4 w-4" />
@@ -2993,7 +3119,7 @@ function LauncherView({ session: portalSession }) {
 
             <div className="mt-6 flex flex-wrap gap-3">
               <a
-                href={`${apiBase}/api/gvg-server?action=launcher-download`}
+                href={launcherDownloadUrl(apiBase)}
                 className="inline-flex items-center rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
               >
                 <UploadCloud className="mr-2 h-4 w-4" />

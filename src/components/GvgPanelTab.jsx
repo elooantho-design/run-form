@@ -10,6 +10,7 @@ import {
   isPaladinSession,
 } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { buildPublicDownloadUrl } from "@/lib/vpsAssets";
 
 function normalizeGuildInput(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24);
@@ -1668,7 +1669,10 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                     {t("gvgPanel.openRecordLauncher", "Ouvrir le launcher record")}
                   </button>
                   <a
-                    href={`${apiBase}/api/gvg-server?action=record-launcher-download`}
+                    href={
+                      buildPublicDownloadUrl("PaladinGVGRecordLauncher.zip") ||
+                      `${apiBase}/api/gvg-server?action=record-launcher-download`
+                    }
                     className="rounded border border-emerald-500/40 px-3 py-1 text-sm text-emerald-100 hover:border-emerald-300"
                   >
                     {t("gvgPanel.downloadInstall", "Telecharger / installer")}

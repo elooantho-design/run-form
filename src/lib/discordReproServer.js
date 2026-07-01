@@ -4,6 +4,7 @@ const DEFAULT_REPRO_CHANNEL_IDS = {
   G2: "1517470861354078338",
 };
 const REPRO_REQUEST_TABLE = "gvg_discord_repro_requests";
+const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,8 +65,55 @@ function getPortalBaseUrl() {
     .replace(/\/$/, "");
 }
 
-function resolveDiscordImageUrl(imageUrl) {
+function getPublicAssetsBaseUrl() {
+  const raw = String(
+    process.env.GVG_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VPS_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VITE_GVG_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VITE_ASSETS_BASE_URL ||
+      DEFAULT_PUBLIC_ASSETS_BASE_URL
+  ).trim();
+
+  if (!raw || /^(0|false|off|disabled)$/i.test(raw)) return "";
+  return raw.replace(/\/+$/, "");
+}
+
+function encodeUrlSegment(value) {
+  return encodeURIComponent(String(value || "").trim());
+}
+
+function buildPublicPreviewUrl(guild, jobId, file) {
+  const baseUrl = getPublicAssetsBaseUrl();
+  if (!baseUrl || !guild || !jobId || !file) return "";
+
+  return `${baseUrl}/public/jobs/${encodeUrlSegment(
+    String(guild).trim().toLowerCase()
+  )}/${encodeUrlSegment(jobId)}/previews/${encodeUrlSegment(file)}`;
+}
+
+function resolvePublicAssetProxyUrl(imageUrl) {
   const value = String(imageUrl || "").trim();
+  if (!value) return value;
+
+  try {
+    const parsed = new URL(value, "https://portal.local");
+    if (parsed.pathname !== "/api/gvg-server") return value;
+    if (parsed.searchParams.get("action") !== "preview") return value;
+
+    return (
+      buildPublicPreviewUrl(
+        parsed.searchParams.get("guild") || parsed.searchParams.get("sourceGuild"),
+        parsed.searchParams.get("jobId") || parsed.searchParams.get("job_id"),
+        parsed.searchParams.get("file")
+      ) || value
+    );
+  } catch {
+    return value;
+  }
+}
+
+function resolveDiscordImageUrl(imageUrl) {
+  const value = resolvePublicAssetProxyUrl(imageUrl);
   if (!value) return "";
   if (/^https?:\/\//i.test(value)) return value;
 

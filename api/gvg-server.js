@@ -19,6 +19,7 @@ export const config = {
 };
 
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
+const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
 const VPS_REQUEST_TIMEOUT_MS = 12000;
 const CALQUE_FOLDERS = {
   hero: "hero-calques",
@@ -136,6 +137,59 @@ function getServerConfig() {
   const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
 
   return { serverUrl, token };
+}
+
+function getPublicAssetsBaseUrl() {
+  const raw = String(
+    process.env.GVG_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VPS_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VITE_GVG_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VITE_ASSETS_BASE_URL ||
+      DEFAULT_PUBLIC_ASSETS_BASE_URL
+  ).trim();
+
+  if (!raw || /^(0|false|off|disabled)$/i.test(raw)) return "";
+  return raw.replace(/\/+$/, "");
+}
+
+function encodeUrlSegment(value) {
+  return encodeURIComponent(String(value || "").trim());
+}
+
+function buildPublicAssetUrl(parts) {
+  const baseUrl = getPublicAssetsBaseUrl();
+  if (!baseUrl) return "";
+  return `${baseUrl}/${parts.map(encodeUrlSegment).join("/")}`;
+}
+
+function buildPublicPreviewUrl(guild, jobId, file) {
+  if (!guild || !jobId || !file) return "";
+
+  return buildPublicAssetUrl([
+    "public",
+    "jobs",
+    String(guild).trim().toLowerCase(),
+    jobId,
+    "previews",
+    file,
+  ]);
+}
+
+function buildPublicCalqueUrl(kind, file) {
+  const folder = CALQUE_FOLDERS[kind];
+  if (!folder || !file) return "";
+  return buildPublicAssetUrl(["assets", "calques", folder, file]);
+}
+
+function buildPublicDownloadUrl(file) {
+  if (!file) return "";
+  return buildPublicAssetUrl(["downloads", file]);
+}
+
+function redirectToPublicAsset(res, url, cacheControl = "public, max-age=300") {
+  res.setHeader("Cache-Control", cacheControl);
+  res.setHeader("Location", url);
+  return res.status(307).end();
 }
 
 function getSupabaseAdmin() {
@@ -753,6 +807,11 @@ async function handlePreview(req, res) {
     return res.status(400).json({ error: "parametres preview invalides" });
   }
 
+  const publicUrl = buildPublicPreviewUrl(guild, jobId, file);
+  if (publicUrl) {
+    return redirectToPublicAsset(res, publicUrl, "public, max-age=300");
+  }
+
   const fileResponse = await requestVpsFile(
     `/api/v1/jobs/${encodeURIComponent(guild)}/${encodeURIComponent(jobId)}/preview/${encodeURIComponent(file)}`
   );
@@ -779,6 +838,11 @@ async function handleCalque(req, res) {
 
   if (!folder || !isValidCalqueFile(file)) {
     return res.status(400).json({ error: "calque invalide" });
+  }
+
+  const publicUrl = buildPublicCalqueUrl(kind, file);
+  if (publicUrl) {
+    return redirectToPublicAsset(res, publicUrl, "public, max-age=86400, immutable");
   }
 
   const fileResponse = await requestVpsFile(
@@ -845,6 +909,11 @@ async function handleLauncherStatus(req, res) {
 }
 
 async function handleLauncherDownload(req, res) {
+  const publicUrl = buildPublicDownloadUrl(LAUNCHER_DOWNLOAD_FILE);
+  if (publicUrl) {
+    return redirectToPublicAsset(res, publicUrl, "public, max-age=3600");
+  }
+
   const fileResponse = await requestVpsFile(`/downloads/${LAUNCHER_DOWNLOAD_FILE}`, {
     auth: false,
     timeoutMs: 30000,
@@ -860,6 +929,11 @@ async function handleLauncherDownload(req, res) {
 }
 
 async function handleRecordLauncherDownload(req, res) {
+  const publicUrl = buildPublicDownloadUrl(RECORD_LAUNCHER_DOWNLOAD_FILE);
+  if (publicUrl) {
+    return redirectToPublicAsset(res, publicUrl, "public, max-age=3600");
+  }
+
   const fileResponse = await requestVpsFile(`/downloads/${RECORD_LAUNCHER_DOWNLOAD_FILE}`, {
     auth: false,
     timeoutMs: 30000,
@@ -910,7 +984,8 @@ async function handleImport(req, res) {
     return {
       ...item,
       image_url: previewFile
-        ? `/api/gvg-server?action=preview&guild=${encodeURIComponent(sourceGuild)}&jobId=${encodeURIComponent(jobId)}&file=${encodeURIComponent(previewFile)}`
+        ? buildPublicPreviewUrl(sourceGuild, jobId, previewFile) ||
+          `/api/gvg-server?action=preview&guild=${encodeURIComponent(sourceGuild)}&jobId=${encodeURIComponent(jobId)}&file=${encodeURIComponent(previewFile)}`
         : item?.image_url || null,
     };
   });

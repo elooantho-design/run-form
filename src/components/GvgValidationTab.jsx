@@ -7,6 +7,7 @@ import { logPortalActivity } from "@/lib/portalActivity";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { getGvgGuildLabel, getVisibleGvgGuildCodes, normalizeGvgGuildCode } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { buildPublicPreviewUrl, resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
 
 const DIRECTIONS = ["N", "S", "E", "O"];
 const DEFENSE_SLOT_COUNT = 5;
@@ -89,18 +90,22 @@ function getJobAgeLabel(job) {
 }
 
 function buildPreviewUrl(job, item) {
-  if (!item?.preview_file) return item?.image_url || "";
+  if (!item?.preview_file) return resolvePublicAssetProxyUrl(item?.image_url || "");
 
-  return `/api/gvg-server?action=preview&guild=${encodeURIComponent(getJobSourceGuild(job))}&jobId=${encodeURIComponent(
-    getJobId(job)
-  )}&file=${encodeURIComponent(item.preview_file)}`;
+  return (
+    buildPublicPreviewUrl(getJobSourceGuild(job), getJobId(job), item.preview_file) ||
+    `/api/gvg-server?action=preview&guild=${encodeURIComponent(getJobSourceGuild(job))}&jobId=${encodeURIComponent(
+      getJobId(job)
+    )}&file=${encodeURIComponent(item.preview_file)}`
+  );
 }
 
 function resolveApiUrl(apiBase, url) {
-  if (!url) return "";
-  if (/^https?:\/\//i.test(url)) return url;
-  if (url.startsWith("/api/") && apiBase) return `${apiBase}${url}`;
-  return url;
+  const resolvedUrl = resolvePublicAssetProxyUrl(url);
+  if (!resolvedUrl) return "";
+  if (/^https?:\/\//i.test(resolvedUrl)) return resolvedUrl;
+  if (resolvedUrl.startsWith("/api/") && apiBase) return `${apiBase}${resolvedUrl}`;
+  return resolvedUrl;
 }
 
 function normalizePayloadItems(job, payload) {

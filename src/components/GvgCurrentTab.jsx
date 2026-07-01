@@ -10,6 +10,7 @@ import {
   isPaladinAdminSession,
 } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -350,11 +351,12 @@ function getYoutubeEmbedUrl(url) {
 
 function getDefenseImageUrl(defense) {
   if (!defense?.image_url) return "";
+  const imageUrl = resolvePublicAssetProxyUrl(defense.image_url);
 
   return (
-    defense.image_url.startsWith("/api/") && apiBase
-      ? `${apiBase}${defense.image_url}`
-      : defense.image_url
+    imageUrl.startsWith("/api/") && apiBase
+      ? `${apiBase}${imageUrl}`
+      : imageUrl
   );
 }
 
