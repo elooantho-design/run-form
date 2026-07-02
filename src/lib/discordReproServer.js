@@ -53,6 +53,11 @@ function getDiscordSendDelayMs() {
   return Number.isFinite(value) && value >= 0 ? value : 1200;
 }
 
+function getDiscordPurgeMaxMessages() {
+  const value = Number(process.env.DISCORD_REPRO_PURGE_MAX_MESSAGES || 1000);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1000;
+}
+
 function getPortalBaseUrl() {
   return String(
     process.env.PORTAL_PUBLIC_URL ||
@@ -474,6 +479,215 @@ async function deleteDiscordMessage(channelId, messageId) {
     { ignoreNotFound: true }
   );
   return { deleted: true };
+}
+
+async function listDiscordChannelMessages(channelId, options = {}) {
+  const params = new URLSearchParams({
+    limit: String(Math.min(Math.max(Number(options.limit || 100), 1), 100)),
+  });
+
+  if (options.before) params.set("before", String(options.before));
+
+  return discordRequest(
+    `/channels/${encodeURIComponent(channelId)}/messages?${params.toString()}`,
+    { method: "GET" }
+  );
+}
+
+function getDiscordSnowflakeTimestamp(messageId) {
+  try {
+    return Number((BigInt(String(messageId)) >> 22n) + 1420070400000n);
+  } catch {
+    return null;
+  }
+}
+
+function canBulkDeleteDiscordMessage(messageId) {
+  const timestamp = getDiscordSnowflakeTimestamp(messageId);
+  if (!timestamp) return false;
+
+  const thirteenDaysMs = 13 * 24 * 60 * 60 * 1000;
+  return Date.now() - timestamp < thirteenDaysMs;
+}
+
+async function bulkDeleteDiscordMessages(channelId, messageIds) {
+  const ids = (messageIds || []).map(String).filter(Boolean);
+  if (!ids.length) return { deleted: 0 };
+
+  if (ids.length === 1) {
+    const result = await deleteDiscordMessage(channelId, ids[0]);
+    return { deleted: result?.deleted ? 1 : 0 };
+  }
+
+  await discordRequest(
+    `/channels/${encodeURIComponent(channelId)}/messages/bulk-delete`,
+    {
+      method: "POST",
+      body: { messages: ids.slice(0, 100) },
+    }
+  );
+
+  return { deleted: ids.length };
+}
+
+async function markGuildReproRequestsDeleted(supabase, guild, metadata = {}) {
+  const now = new Date().toISOString();
+  const { error, count } = await supabase
+    .from(REPRO_REQUEST_TABLE)
+    .update({
+      state: "deleted",
+      discord_message_id: null,
+      discord_response_message_id: null,
+      last_error: null,
+      updated_at: now,
+    }, { count: "exact" })
+    .eq("guild", normalizeGuildCode(guild))
+    .in("state", ["requested", "send_failed", "repro_active"]);
+
+  if (error) {
+    if (isMissingReproRequestTable(error)) {
+      return { enabled: false, reason: "missing_gvg_discord_repro_requests_table" };
+    }
+    throw error;
+  }
+
+  return {
+    enabled: true,
+    marked_rows: count || 0,
+    ...metadata,
+  };
+}
+
+async function logDiscordChannelPurge(supabase, metadata) {
+  try {
+    const { error } = await supabase.from("portal_activity_logs").insert({
+      actor_name: "Discord repro",
+      action_type: "gvg_discord_repro_channel_purge",
+      entity_type: "discord_channel",
+      entity_id: metadata?.discord_channel_id || null,
+      summary: `Purge channel repro Discord (${metadata?.guild || "GVG"})`,
+      metadata,
+    });
+
+    if (error) {
+      console.warn("[discord-repro:channel-purge] activity log unavailable:", error.message);
+    }
+  } catch (error) {
+    console.warn("[discord-repro:channel-purge] activity log failed:", error?.message || error);
+  }
+}
+
+export async function purgeDiscordReproChannelForGuild(supabase, guild, options = {}) {
+  const normalizedGuild = normalizeGuildCode(guild);
+  const channelId = getDiscordReproChannelId(normalizedGuild);
+  const source = options.source || "gvg-reset";
+  const reason = options.reason || "gvg_reset";
+
+  if (!channelId) {
+    return { enabled: true, skipped: true, reason: "missing_repro_channel", guild: normalizedGuild };
+  }
+
+  if (!getDiscordBotToken()) {
+    return { enabled: false, reason: "missing_discord_config", guild: normalizedGuild, channel_id: channelId };
+  }
+
+  const maxMessages = getDiscordPurgeMaxMessages();
+  const errors = [];
+  let before = null;
+  let scannedMessages = 0;
+  let deletedMessages = 0;
+  let bulkDeletedMessages = 0;
+  let singleDeletedMessages = 0;
+
+  while (scannedMessages < maxMessages) {
+    const limit = Math.min(100, maxMessages - scannedMessages);
+    const messages = await listDiscordChannelMessages(channelId, { before, limit });
+    const page = Array.isArray(messages) ? messages : [];
+    if (!page.length) break;
+
+    scannedMessages += page.length;
+    before = page[page.length - 1]?.id || before;
+
+    const messageIds = page.map((message) => String(message?.id || "")).filter(Boolean);
+    const bulkIds = messageIds.filter(canBulkDeleteDiscordMessage);
+    const singleIds = messageIds.filter((id) => !canBulkDeleteDiscordMessage(id));
+
+    for (let index = 0; index < bulkIds.length; index += 100) {
+      const chunk = bulkIds.slice(index, index + 100);
+      try {
+        const result = await bulkDeleteDiscordMessages(channelId, chunk);
+        const deleted = result?.deleted || 0;
+        bulkDeletedMessages += deleted;
+        deletedMessages += deleted;
+      } catch (bulkError) {
+        errors.push({ mode: "bulk", count: chunk.length, error: bulkError?.message || "bulk delete failed" });
+
+        for (const messageId of chunk) {
+          try {
+            const result = await deleteDiscordMessage(channelId, messageId);
+            if (result?.deleted) {
+              singleDeletedMessages += 1;
+              deletedMessages += 1;
+            }
+          } catch (singleError) {
+            errors.push({ mode: "single_after_bulk", message_id: messageId, error: singleError?.message || "delete failed" });
+          }
+        }
+      }
+    }
+
+    for (const messageId of singleIds) {
+      try {
+        const result = await deleteDiscordMessage(channelId, messageId);
+        if (result?.deleted) {
+          singleDeletedMessages += 1;
+          deletedMessages += 1;
+        }
+      } catch (singleError) {
+        errors.push({ mode: "single", message_id: messageId, error: singleError?.message || "delete failed" });
+      }
+    }
+
+    if (page.length < 100) break;
+    await sleep(350);
+  }
+
+  let requestRowsUpdate = null;
+  try {
+    requestRowsUpdate = await markGuildReproRequestsDeleted(supabase, normalizedGuild, {
+      reason,
+      source,
+    });
+  } catch (error) {
+    errors.push({ mode: "db_mark_deleted", error: error?.message || "db update failed" });
+  }
+
+  const result = {
+    enabled: true,
+    guild: normalizedGuild,
+    channel_id: channelId,
+    scanned_messages: scannedMessages,
+    deleted_messages: deletedMessages,
+    bulk_deleted_messages: bulkDeletedMessages,
+    single_deleted_messages: singleDeletedMessages,
+    max_messages: maxMessages,
+    request_rows_update: requestRowsUpdate,
+    errors,
+  };
+
+  await logDiscordChannelPurge(supabase, {
+    guild: normalizedGuild,
+    discord_channel_id: channelId,
+    reason,
+    source,
+    ...result,
+  });
+
+  console.log(
+    `[discord-repro:channel-purge] guild=${normalizedGuild} channel=${channelId} scanned=${scannedMessages} deleted=${deletedMessages} errors=${errors.length}`
+  );
+
+  return result;
 }
 
 function getRequestMessageIds(requestRow) {

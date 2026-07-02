@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { cleanupDiscordReproRequestsForDefenseIds } from "../src/lib/discordReproServer.js";
+import { purgeDiscordReproChannelForGuild } from "../src/lib/discordReproServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -161,17 +161,15 @@ export default async function handler(req, res) {
     let discordReproCleanup = null;
     let discordReproWarning = null;
 
-    if (defenseIds.length > 0) {
-      try {
-        discordReproCleanup = await cleanupDiscordReproRequestsForDefenseIds(
-          supabase,
-          defenseIds
-        );
-      } catch (cleanupError) {
-        console.error("[gvg-reset] discord repro cleanup error:", cleanupError);
-        discordReproWarning =
-          cleanupError?.message || "nettoyage Discord repro impossible";
-      }
+    try {
+      discordReproCleanup = await purgeDiscordReproChannelForGuild(supabase, guild, {
+        reason: "gvg_reset",
+        source: "gvg-reset",
+      });
+    } catch (cleanupError) {
+      console.error("[gvg-reset] discord repro cleanup error:", cleanupError);
+      discordReproWarning =
+        cleanupError?.message || "nettoyage Discord repro impossible";
     }
 
     // 2) Supprimer les fichiers liés
