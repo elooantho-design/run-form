@@ -854,6 +854,21 @@ body {
   cursor: pointer;
 }
 
+.hero-layer-details-hitbox {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.hero-layer-details-hitbox:focus-visible {
+  outline: 2px solid rgba(250, 204, 21, 0.88);
+  outline-offset: -8px;
+}
+
 .hero-layer-card.is-saving {
   opacity: 0.72;
   pointer-events: none;

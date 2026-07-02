@@ -127,6 +127,7 @@ const PORTAL_TRANSLATIONS = {
   "heroBox.allFactions": "All factions",
   "heroBox.allFactionsShort": "All",
   "heroDetails.eyebrow": "Hero profile",
+  "heroDetails.open": "Open hero profile",
   "heroDetails.tags": "Hero information",
   "heroDetails.officialImageReady": "Official Moonton portrait connected to the VPS.",
   "heroDetails.officialImageMissing": "Official Moonton portrait missing for this hero.",

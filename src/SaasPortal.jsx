@@ -2556,7 +2556,9 @@ function HeroLayerCard({
       return;
     }
 
-    if (!state.owned || event.defaultPrevented || event.target.closest?.("button")) return;
+    const detailsHitbox = event.target.closest?.(".hero-layer-details-hitbox");
+    const blockedByControl = event.target.closest?.("button") && !detailsHitbox;
+    if (!state.owned || event.defaultPrevented || blockedByControl) return;
     onOpenDetails?.(hero);
   }
 
@@ -2602,6 +2604,15 @@ function HeroLayerCard({
         onLoad={handleImageReady}
         onError={handleImageError}
       />
+
+      {state.owned ? (
+        <button
+          type="button"
+          className="hero-layer-details-hitbox"
+          aria-label={`${t("heroDetails.open", "Ouvrir la fiche heros")} ${displayName}`}
+          title={`${t("heroDetails.open", "Ouvrir la fiche heros")} ${displayName}`}
+        />
+      ) : null}
 
       {!state.owned ? (
         <button
