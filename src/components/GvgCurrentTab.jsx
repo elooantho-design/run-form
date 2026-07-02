@@ -128,6 +128,7 @@ const [refreshTick, setRefreshTick] = useState(0);
   const [selectedFilter, setSelectedFilter] = useState(null);
   const [selectedBastionId, setSelectedBastionId] = useState(null);
   const [defenses, setDefenses] = useState([]);
+  const [openingDefenseIds, setOpeningDefenseIds] = useState(() => new Set());
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [reproModalOpen, setReproModalOpen] = useState(false);
@@ -731,7 +732,27 @@ setRefreshTick((prev) => prev + 1);
 }
 
 async function markDefenseAsOpened(defenseId) {
+  const previousDefense = defenses.find((defense) => defense.id === defenseId) || null;
+
   try {
+    setOpeningDefenseIds((current) => {
+      const next = new Set(current);
+      next.add(defenseId);
+      return next;
+    });
+
+    setDefenses((current) =>
+      current.map((defense) =>
+        defense.id === defenseId
+          ? {
+          ...defense,
+          record_status: defense.record_status || "pas_record",
+            }
+          : defense
+      )
+    );
+    setMessage(t("gvgCurrent.sentToPanel", "Defense envoyee dans le panel."));
+
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
       headers: {
@@ -749,6 +770,11 @@ async function markDefenseAsOpened(defenseId) {
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
+      if (previousDefense) {
+        setDefenses((current) =>
+          current.map((defense) => (defense.id === defenseId ? previousDefense : defense))
+        );
+      }
       setMessage(
         formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
           context: "gvg-panel-open",
@@ -759,6 +785,11 @@ async function markDefenseAsOpened(defenseId) {
     }
 
     if (!response.ok) {
+      if (previousDefense) {
+        setDefenses((current) =>
+          current.map((defense) => (defense.id === defenseId ? previousDefense : defense))
+        );
+      }
       setMessage(
         formatTranslation(t, "gvgCurrent.errorPanelOpen", "Erreur ouverture panel : {error}", {
           error: data?.error || t("common.unknownError", "erreur inconnue"),
@@ -776,11 +807,22 @@ async function markDefenseAsOpened(defenseId) {
     setRefreshTick((prev) => prev + 1);
   } catch (error) {
     console.error("markDefenseAsOpened error:", error);
+    if (previousDefense) {
+      setDefenses((current) =>
+        current.map((defense) => (defense.id === defenseId ? previousDefense : defense))
+      );
+    }
     setMessage(
       formatTranslation(t, "gvgCurrent.errorPanelOpen", "Erreur ouverture panel : {error}", {
         error: error?.message || t("common.unknownError", "erreur inconnue"),
       })
     );
+  } finally {
+    setOpeningDefenseIds((current) => {
+      const next = new Set(current);
+      next.delete(defenseId);
+      return next;
+    });
   }
 }
 
@@ -994,6 +1036,7 @@ async function markDefenseAsOpened(defenseId) {
                           defense.has_visible_run === true ||
                           Number(defense.visible_run_count || 0) > 0 ||
                           defense.record_status === "push";
+                        const isOpeningDefense = openingDefenseIds.has(defense.id);
 
                         return (
                         <div
@@ -1113,9 +1156,10 @@ async function markDefenseAsOpened(defenseId) {
 <button
   type="button"
   onClick={() => markDefenseAsOpened(defense.id)}
-  className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25"
+  disabled={isOpeningDefense}
+  className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-wait disabled:opacity-70"
 >
-  {t("gvgCurrent.markAsOpen", "C'est ouvert")}
+  {isOpeningDefense ? t("common.saving", "Enregistrement...") : t("gvgCurrent.markAsOpen", "C'est ouvert")}
 </button>
                           </div>
 
