@@ -798,8 +798,17 @@ async function saveComment() {
       return;
     }
 
+    if (data?.item?.id) {
+      setItems((current) =>
+        current.map((item) =>
+          item.id === data.item.id
+            ? { ...item, record_comment: data.item.record_comment || null }
+            : item
+        )
+      );
+    }
+
     setCommentModal(null);
-    load();
   } catch (e) {
     console.error(e);
     setMessage("Erreur commentaire");
@@ -837,8 +846,17 @@ async function saveAttackCode() {
       return;
     }
 
+    if (data?.item?.id) {
+      setItems((current) =>
+        current.map((item) =>
+          item.id === data.item.id
+            ? { ...item, attack_code: data.item.attack_code || null }
+            : item
+        )
+      );
+    }
+
     setAttackModal(null);
-    load();
   } catch (e) {
     console.error(e);
     setMessage("Erreur code d'attaque");

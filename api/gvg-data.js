@@ -68,6 +68,56 @@ const GVG_DEFENSE_LIST_SELECT_WITH_MIRROR = `
   created_at,
   updated_at
 `;
+const GVG_DATA_TIMING_LOGS = process.env.GVG_DATA_TIMING_LOGS !== "0";
+const SUPABASE_IN_CHUNK_SIZE = 80;
+const SUPABASE_ID_CHUNK_SIZE = 400;
+
+function createTimingLogger(label, meta = {}) {
+  const enabled = GVG_DATA_TIMING_LOGS;
+  const startedAt = performance.now();
+  let lastAt = startedAt;
+  const marks = [];
+
+  function mark(step, extra = {}) {
+    if (!enabled) return;
+
+    const now = performance.now();
+    const entry = {
+      step,
+      delta_ms: Math.round((now - lastAt) * 10) / 10,
+      total_ms: Math.round((now - startedAt) * 10) / 10,
+      ...extra,
+    };
+    marks.push(entry);
+    lastAt = now;
+    console.log(`[${label}:timing]`, JSON.stringify(entry));
+  }
+
+  function end(extra = {}) {
+    if (!enabled) return;
+
+    const now = performance.now();
+    const entry = {
+      step: "total",
+      total_ms: Math.round((now - startedAt) * 10) / 10,
+      marks: marks.length,
+      ...meta,
+      ...extra,
+    };
+    console.log(`[${label}:timing]`, JSON.stringify(entry));
+  }
+
+  mark("start", meta);
+  return { mark, end };
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
 
 function isMissingMirrorGroupColumn(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`;
@@ -202,131 +252,155 @@ function runStratMatchesAllQueries(stratSlots, queryItems) {
   );
 }
 
-async function fetchRunCandidateStratIdsByChampions(supabaseClient, champions) {
+async function fetchRunSlotsByChampions(supabaseClient, champions, timing) {
   const uniq = [...new Set((champions || []).filter(Boolean))];
   if (!uniq.length) return [];
 
-  const orFilter = uniq.map((champion) => `champion.eq.${champion}`).join(",");
-  const { data, error } = await supabaseClient
-    .from("defence_slot")
-    .select("strat_id, champion")
-    .or(orFilter);
+  const all = [];
+  const chunks = chunkArray(uniq, SUPABASE_IN_CHUNK_SIZE);
 
-  if (error) throw error;
+  for (const [chunkIndex, chunk] of chunks.entries()) {
+    for (let from = 0; ; from += 1000) {
+      const to = from + 999;
+      const { data, error } = await supabaseClient
+        .from("defence_slot")
+        .select("strat_id, champion, position, direction")
+        .in("champion", chunk)
+        .range(from, to);
 
-  const hitMap = new Map();
-  for (const row of data || []) {
-    const stratId = row.strat_id;
-    const champion = normalizeRunChampionName(row.champion);
-    if (!hitMap.has(stratId)) hitMap.set(stratId, new Set());
-    hitMap.get(stratId).add(champion);
-  }
+      if (error) throw error;
 
-  return [...hitMap.entries()]
-    .map(([stratId, hits]) => ({ stratId, hits: hits.size }))
-    .sort((a, b) => b.hits - a.hits)
-    .slice(0, 800)
-    .map((item) => item.stratId);
-}
+      all.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
-async function fetchRunScopedStratsByIds(supabaseClient, stratIds, scope, matcher) {
-  if (!stratIds?.length) return [];
-
-  let { data, error } = await supabaseClient
-    .from("defence_strat")
-    .select("id, guild_code")
-    .in("id", stratIds);
-
-  if (error) {
-    if (!isMissingGuildCodeColumn(error)) throw error;
-    if (!scope?.isPaladin) return [];
-
-    const fallback = await supabaseClient
-      .from("defence_strat")
-      .select("id")
-      .in("id", stratIds);
-
-    if (fallback.error) throw fallback.error;
-    data = (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
-  }
-
-  return (data || []).filter((strat) => matcher(strat, scope));
-}
-
-async function fetchRunBoycottedIds(supabaseClient, stratIds, targetGuildCode) {
-  if (!stratIds?.length || !targetGuildCode) return new Set();
-
-  const { data, error } = await supabaseClient
-    .from("defence_strat_boycotts")
-    .select("strat_id")
-    .eq("guild_code", targetGuildCode)
-    .in("strat_id", stratIds);
-
-  if (error) {
-    if (isMissingRunBoycottTable(error)) return new Set();
-    throw error;
-  }
-
-  return new Set((data || []).map((row) => String(row.strat_id)));
-}
-
-async function fetchRunSlotsByStratIds(supabaseClient, stratIds, pageSize = 1000) {
-  let all = [];
-
-  for (let from = 0; ; from += pageSize) {
-    const to = from + pageSize - 1;
-    const { data, error } = await supabaseClient
-      .from("defence_slot")
-      .select("strat_id, champion, position, direction")
-      .in("strat_id", stratIds)
-      .range(from, to);
-
-    if (error) throw error;
-
-    all = all.concat(data || []);
-    if (!data || data.length < pageSize) break;
+    timing?.mark("supabase:defence_slot_by_champions:chunk", {
+      chunk: chunkIndex + 1,
+      chunks: chunks.length,
+      champions: chunk.length,
+      rows_so_far: all.length,
+    });
   }
 
   return all;
 }
 
-async function countMatchingRunsForDefense(
-  supabaseClient,
-  defense,
-  scope,
-  targetGuildCode,
-  matcher,
-  { limit = 1 } = {}
-) {
-  const queryItems = buildRunQueryItemsFromHeroes(defense?.heroes);
-  if (!queryItems.length) return 0;
+async function fetchRunScopedStratsByIdsBulk(supabaseClient, stratIds, scope, matcher, timing) {
+  const uniq = [...new Set((stratIds || []).filter(Boolean))];
+  if (!uniq.length) return [];
 
-  const stratIds = await fetchRunCandidateStratIdsByChampions(
-    supabaseClient,
-    queryItems.map((item) => item.champion)
-  );
-  if (!stratIds.length) return 0;
+  let all = [];
+  let missingGuildCode = false;
+  const chunks = chunkArray(uniq, SUPABASE_ID_CHUNK_SIZE);
 
-  const scopedStrats = await fetchRunScopedStratsByIds(supabaseClient, stratIds, scope, matcher);
-  const scopedIds = scopedStrats.map((strat) => strat.id).filter(Boolean);
-  if (!scopedIds.length) return 0;
+  for (const [chunkIndex, chunk] of chunks.entries()) {
+    let { data, error } = await supabaseClient
+      .from("defence_strat")
+      .select("id, guild_code")
+      .in("id", chunk);
 
-  const boycottedIds = await fetchRunBoycottedIds(supabaseClient, scopedIds, targetGuildCode);
-  const activeIds = scopedIds.filter((stratId) => !boycottedIds.has(String(stratId)));
-  if (!activeIds.length) return 0;
+    if (error) {
+      if (!isMissingGuildCodeColumn(error)) throw error;
+      missingGuildCode = true;
+      break;
+    }
 
-  const slots = await fetchRunSlotsByStratIds(supabaseClient, activeIds, 1000);
+    all.push(...(data || []));
+    timing?.mark("supabase:defence_strat_scope:chunk", {
+      chunk: chunkIndex + 1,
+      chunks: chunks.length,
+      ids: chunk.length,
+      rows_so_far: all.length,
+    });
+  }
+
+  if (missingGuildCode) {
+    if (!scope?.isPaladin) return [];
+
+    all = [];
+    for (const [chunkIndex, chunk] of chunks.entries()) {
+      const fallback = await supabaseClient
+        .from("defence_strat")
+        .select("id")
+        .in("id", chunk);
+
+      if (fallback.error) throw fallback.error;
+
+      all.push(...((fallback.data || []).map((strat) => ({ ...strat, guild_code: null }))));
+      timing?.mark("supabase:defence_strat_scope_fallback:chunk", {
+        chunk: chunkIndex + 1,
+        chunks: chunks.length,
+        ids: chunk.length,
+        rows_so_far: all.length,
+      });
+    }
+  }
+
+  return all.filter((strat) => matcher(strat, scope));
+}
+
+async function fetchRunBoycottedIdsBulk(supabaseClient, stratIds, targetGuildCode, timing) {
+  const uniq = [...new Set((stratIds || []).filter(Boolean))];
+  if (!uniq.length || !targetGuildCode) return new Set();
+
+  const all = [];
+  const chunks = chunkArray(uniq, SUPABASE_ID_CHUNK_SIZE);
+
+  for (const [chunkIndex, chunk] of chunks.entries()) {
+    const { data, error } = await supabaseClient
+      .from("defence_strat_boycotts")
+      .select("strat_id")
+      .eq("guild_code", targetGuildCode)
+      .in("strat_id", chunk);
+
+    if (error) {
+      if (isMissingRunBoycottTable(error)) return new Set();
+      throw error;
+    }
+
+    all.push(...(data || []));
+    timing?.mark("supabase:defence_strat_boycotts:chunk", {
+      chunk: chunkIndex + 1,
+      chunks: chunks.length,
+      ids: chunk.length,
+      rows_so_far: all.length,
+    });
+  }
+
+  return new Set(all.map((row) => String(row.strat_id)));
+}
+
+function buildRunSlotIndexes(slots) {
+  const hitMap = new Map();
   const slotsByStrat = new Map();
 
   for (const slot of slots || []) {
-    if (!slotsByStrat.has(slot.strat_id)) slotsByStrat.set(slot.strat_id, []);
-    slotsByStrat.get(slot.strat_id).push(slot);
+    const stratId = slot.strat_id;
+    const champion = normalizeRunChampionName(slot.champion);
+    if (!stratId || !champion) continue;
+
+    if (!hitMap.has(stratId)) hitMap.set(stratId, new Set());
+    hitMap.get(stratId).add(champion);
+
+    if (!slotsByStrat.has(stratId)) slotsByStrat.set(stratId, []);
+    slotsByStrat.get(stratId).push(slot);
   }
+
+  return { hitMap, slotsByStrat };
+}
+
+function countMatchingRunsFromIndexes(queryItems, activeIds, hitMap, slotsByStrat, { limit = 1 } = {}) {
+  if (!queryItems.length || !activeIds?.length) return 0;
 
   let count = 0;
   for (const stratId of activeIds) {
-    const stratSlots = slotsByStrat.get(stratId) || [];
-    if (runStratMatchesAllQueries(stratSlots, queryItems)) {
+    const hits = hitMap.get(stratId);
+    if (!hits) continue;
+
+    const hasRelevantChampion = queryItems.some((query) => hits.has(query.champion));
+    if (!hasRelevantChampion) continue;
+
+    if (runStratMatchesAllQueries(slotsByStrat.get(stratId) || [], queryItems)) {
       count += 1;
       if (count >= limit) return count;
     }
@@ -335,36 +409,94 @@ async function countMatchingRunsForDefense(
   return count;
 }
 
-async function enrichDefensesWithRunAvailability(req, defenses, guild) {
+async function buildRunAvailabilityForDefenses(req, defenses, guild, timing) {
   const items = Array.isArray(defenses) ? defenses : [];
-  if (!items.length) return [];
+  if (!items.length) return { items: [], visibleScope: null };
+
+  const queryByDefenseId = new Map();
+  const allChampions = [];
+
+  for (const defense of items) {
+    const queryItems = buildRunQueryItemsFromHeroes(defense?.heroes);
+    queryByDefenseId.set(defense.id, queryItems);
+    allChampions.push(...queryItems.map((item) => item.champion));
+  }
+
+  const uniqueChampions = [...new Set(allChampions.filter(Boolean))];
+  timing?.mark("availability:queries_built", {
+    defenses: items.length,
+    unique_champions: uniqueChampions.length,
+  });
 
   const ownerScope = getRunScopeForGvgGuild(guild);
   const visibleScope = await resolveRunScope(supabase, req);
+  timing?.mark("supabase:resolve_run_scope", {
+    owner_space: ownerScope?.spaceKey,
+    visible_space: visibleScope?.spaceKey,
+    visible_is_paladin: Boolean(visibleScope?.isPaladin),
+    visible_is_admin: Boolean(visibleScope?.isAdmin),
+    visible_is_leader: Boolean(visibleScope?.isLeader),
+  });
 
-  return Promise.all(
-    items.map(async (defense) => {
-      const ownedRunCount = await countMatchingRunsForDefense(
-        supabase,
-        defense,
-        ownerScope,
-        defense.guild || guild,
-        stratMatchesRunScope,
+  const canReadExternalRuns =
+    visibleScope?.isPaladin && (visibleScope?.isAdmin || visibleScope?.isLeader);
+
+  const slotRows = await fetchRunSlotsByChampions(supabase, uniqueChampions, timing);
+  const { hitMap, slotsByStrat } = buildRunSlotIndexes(slotRows);
+  const candidateIds = [...hitMap.keys()];
+  timing?.mark("availability:slot_indexes", {
+    slot_rows: slotRows.length,
+    candidate_strats: candidateIds.length,
+  });
+
+  const [ownedScopedStrats, visibleScopedStrats] = await Promise.all([
+    fetchRunScopedStratsByIdsBulk(supabase, candidateIds, ownerScope, stratMatchesRunScope, timing),
+    canReadExternalRuns
+      ? fetchRunScopedStratsByIdsBulk(
+          supabase,
+          candidateIds,
+          visibleScope,
+          stratMatchesRunReadScope,
+          timing
+        )
+      : Promise.resolve(null),
+  ]);
+  timing?.mark("availability:scopes_filtered", {
+    owned_strats: ownedScopedStrats.length,
+    visible_strats: visibleScopedStrats ? visibleScopedStrats.length : ownedScopedStrats.length,
+  });
+
+  const targetGuildCode = items[0]?.guild || guild;
+  const allScopedIds = [
+    ...ownedScopedStrats.map((strat) => strat.id),
+    ...((visibleScopedStrats || []).map((strat) => strat.id)),
+  ];
+  const boycottedIds = await fetchRunBoycottedIdsBulk(supabase, allScopedIds, targetGuildCode, timing);
+  timing?.mark("availability:boycotts_loaded", {
+    boycotted: boycottedIds.size,
+    target_guild: targetGuildCode,
+  });
+
+  const ownedActiveIds = ownedScopedStrats
+    .map((strat) => strat.id)
+    .filter((stratId) => !boycottedIds.has(String(stratId)));
+  const visibleActiveIds = (visibleScopedStrats || ownedScopedStrats)
+    .map((strat) => strat.id)
+    .filter((stratId) => !boycottedIds.has(String(stratId)));
+
+  return {
+    visibleScope,
+    items: items.map((defense) => {
+      const queryItems = queryByDefenseId.get(defense.id) || [];
+      const ownedRunCount = countMatchingRunsFromIndexes(
+        queryItems,
+        ownedActiveIds,
+        hitMap,
+        slotsByStrat,
         { limit: 1 }
       );
-
-      const canReadExternalRuns =
-        visibleScope?.isPaladin && (visibleScope?.isAdmin || visibleScope?.isLeader);
-
       const visibleRunCount = canReadExternalRuns
-        ? await countMatchingRunsForDefense(
-          supabase,
-          defense,
-          visibleScope,
-          defense.guild || guild,
-          stratMatchesRunReadScope,
-          { limit: 1 }
-        )
+        ? countMatchingRunsFromIndexes(queryItems, visibleActiveIds, hitMap, slotsByStrat, { limit: 1 })
         : ownedRunCount;
 
       const currentStatus = String(defense.status || "").toLowerCase();
@@ -383,8 +515,8 @@ async function enrichDefensesWithRunAvailability(req, defenses, guild) {
         has_owned_run: ownedRunCount > 0,
         has_visible_run: visibleRunCount > 0,
       };
-    })
-  );
+    }),
+  };
 }
 
 async function syncDerivedGvgStatuses(items) {
@@ -443,45 +575,75 @@ function buildGvgDefenseListQuery(selectColumns, guild) {
 
 async function handleList(req, res) {
   const guild = normalizeGuildCode(req.query?.guild);
+  const timing = createTimingLogger("gvg-data:list", {
+    guild: guild || null,
+    has_member_id: Boolean(req.query?.memberId || req.query?.member_id),
+    has_discord_id: Boolean(req.query?.discordId || req.query?.discord_id),
+  });
 
   if (!guild) {
+    timing.end({ error: "invalid_guild" });
     return res.status(400).json({ error: "guild manquante ou invalide" });
   }
+
+  timing.mark("params_read", { guild });
 
   let mirrorGroupSchemaReady = true;
   let { data, error } = await buildGvgDefenseListQuery(
     GVG_DEFENSE_LIST_SELECT_WITH_MIRROR,
     guild
   );
+  timing.mark("supabase:gvg_defense:list", {
+    rows: data?.length || 0,
+    error: error?.code || null,
+    with_mirror: true,
+  });
 
   if (error && isMissingMirrorGroupColumn(error)) {
     mirrorGroupSchemaReady = false;
     const fallback = await buildGvgDefenseListQuery(GVG_DEFENSE_LIST_SELECT_BASE, guild);
     data = fallback.data?.map((item) => ({ ...item, mirror_group_num: null })) || null;
     error = fallback.error;
+    timing.mark("supabase:gvg_defense:list_fallback", {
+      rows: data?.length || 0,
+      error: error?.code || null,
+    });
   }
 
   if (error) {
     console.error("[gvg-data:list] select error:", error);
+    timing.end({ error: "gvg_defense_select" });
     return res.status(500).json({ error: "erreur lecture gvg" });
   }
 
   let items = data || [];
 
   try {
-    items = await enrichDefensesWithRunAvailability(req, items, guild);
+    const availability = await buildRunAvailabilityForDefenses(req, items, guild, timing);
+    items = availability.items;
+    timing.mark("availability:done", { rows: items.length });
   } catch (availabilityError) {
     console.error("[gvg-data:list] run availability error:", availabilityError);
+    timing.mark("availability:error", {
+      message: availabilityError?.message || "unknown",
+    });
   }
 
   let statusSync = null;
   try {
     statusSync = await syncDerivedGvgStatuses(items);
+    timing.mark("status_sync:done", {
+      updated: statusSync?.updated || 0,
+      discord_repro: statusSync?.discord_repro ? true : false,
+    });
   } catch (syncError) {
     console.error("[gvg-data:list] status sync error:", syncError);
+    timing.mark("status_sync:error", {
+      message: syncError?.message || "unknown",
+    });
   }
 
-  return res.status(200).json({
+  const payload = {
     success: true,
     guild,
     items,
@@ -490,7 +652,14 @@ async function handleList(req, res) {
     schema_warning: mirrorGroupSchemaReady
       ? null
       : "Colonne mirror_group_num absente sur gvg_defense.",
+  };
+  timing.mark("response:built", {
+    items: items.length,
+    bytes_estimate: Buffer.byteLength(JSON.stringify(payload), "utf8"),
   });
+  timing.end({ status: 200, items: items.length });
+
+  return res.status(200).json(payload);
 }
 
 async function handleUpdate(req, res) {
