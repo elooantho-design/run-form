@@ -2629,7 +2629,9 @@ function HeroLayerCard({
   );
 
   function startLockPress(event) {
-    if (!canLongPressLock || event.button > 0 || event.target.closest?.("button")) return;
+    const detailsHitbox = event.target.closest?.(".hero-layer-details-hitbox");
+    const blockedByControl = event.target.closest?.("button") && !detailsHitbox;
+    if (!canLongPressLock || event.button > 0 || blockedByControl) return;
 
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
