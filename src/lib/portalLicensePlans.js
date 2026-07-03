@@ -9,7 +9,7 @@ export const PORTAL_LICENSE_PLAN_KEYS = [
 
 export const PORTAL_LICENSE_STATUS_KEYS = ["active", "trial", "suspended", "cancelled"];
 
-export const DEFAULT_EXTERNAL_LICENSE_PLAN = "gvg";
+export const DEFAULT_EXTERNAL_LICENSE_PLAN = "trial_private";
 
 export const PORTAL_LICENSE_PLANS = {
   trial_private: {

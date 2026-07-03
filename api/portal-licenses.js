@@ -34,6 +34,15 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function normalizeDateInput(value) {
+  const raw = cleanText(value);
+  if (!raw) return null;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
 function normalizeRole(role) {
   return cleanText(role)
     .normalize("NFD")
@@ -249,8 +258,10 @@ function buildUpsertPayload(body, existing, leader) {
   if (!payload.guild_label) payload.guild_label = payload.guild_space_key;
 
   if (isTrial) {
-    payload.trial_started_at = existing?.trial_started_at || now.toISOString();
-    payload.trial_ends_at = existing?.trial_ends_at || addMonths(now, 1).toISOString();
+    const trialStartedAt = normalizeDateInput(body.trialStartedAt || body.trial_started_at);
+    const trialEndsAt = normalizeDateInput(body.trialEndsAt || body.trial_ends_at);
+    payload.trial_started_at = trialStartedAt || existing?.trial_started_at || now.toISOString();
+    payload.trial_ends_at = trialEndsAt || existing?.trial_ends_at || addMonths(payload.trial_started_at, 1).toISOString();
     payload.current_period_started_at = existing?.current_period_started_at || null;
     payload.current_period_ends_at = existing?.current_period_ends_at || null;
   } else if (plan === "suspended" || status === "suspended") {
@@ -259,10 +270,15 @@ function buildUpsertPayload(body, existing, leader) {
     payload.current_period_started_at = existing?.current_period_started_at || null;
     payload.current_period_ends_at = existing?.current_period_ends_at || null;
   } else {
+    const currentPeriodStartedAt = normalizeDateInput(body.currentPeriodStartedAt || body.current_period_started_at);
+    const currentPeriodEndsAt = normalizeDateInput(body.currentPeriodEndsAt || body.current_period_ends_at);
     payload.trial_started_at = existing?.trial_started_at || null;
     payload.trial_ends_at = existing?.trial_ends_at || null;
-    payload.current_period_started_at = existing?.current_period_started_at || now.toISOString();
-    payload.current_period_ends_at = existing?.current_period_ends_at || addMonths(hasActivePeriod ? currentPeriodEnds : now, 1).toISOString();
+    payload.current_period_started_at = currentPeriodStartedAt || existing?.current_period_started_at || now.toISOString();
+    payload.current_period_ends_at =
+      currentPeriodEndsAt ||
+      existing?.current_period_ends_at ||
+      addMonths(hasActivePeriod ? currentPeriodEnds : payload.current_period_started_at, 1).toISOString();
   }
 
   return payload;

@@ -74,6 +74,7 @@ import {
 import {
   DEFAULT_EXTERNAL_LICENSE_PLAN,
   PORTAL_LICENSE_PLANS,
+  addMonths,
   getPaladinLicenseAccess,
   getPortalLicenseAccess,
   isTrialLicensePlan,
@@ -4852,6 +4853,13 @@ function formatLicenseDate(value) {
   });
 }
 
+function formatLicenseDateInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
 function getLicenseDeadlineTone(daysLeft, status) {
   if (status === "suspended" || status === "cancelled") {
     return "border-red-500/40 bg-red-500/10 text-red-200";
@@ -4913,6 +4921,10 @@ function BillingView({ session }) {
               status: license.status,
               notes: license.notes || "",
               guildLabel: license.guildLabel || license.guildSpaceKey,
+              trialStartedAt: formatLicenseDateInput(license.trialStartedAt),
+              trialEndsAt: formatLicenseDateInput(license.trialEndsAt),
+              currentPeriodStartedAt: formatLicenseDateInput(license.currentPeriodStartedAt),
+              currentPeriodEndsAt: formatLicenseDateInput(license.currentPeriodEndsAt),
             },
           ])
         )
@@ -4968,6 +4980,10 @@ function BillingView({ session }) {
           plan: draft.plan || extra.plan || DEFAULT_EXTERNAL_LICENSE_PLAN,
           status: draft.status || extra.status || "active",
           notes: draft.notes || "",
+          trialStartedAt: draft.trialStartedAt || extra.trialStartedAt || "",
+          trialEndsAt: draft.trialEndsAt || extra.trialEndsAt || "",
+          currentPeriodStartedAt: draft.currentPeriodStartedAt || extra.currentPeriodStartedAt || "",
+          currentPeriodEndsAt: draft.currentPeriodEndsAt || extra.currentPeriodEndsAt || "",
           ...extra,
         }),
       });
@@ -4993,6 +5009,8 @@ function BillingView({ session }) {
       plan: "trial_private",
       status: "trial",
       notes: "Espace de test des abonnements.",
+      trialStartedAt: formatLicenseDateInput(new Date()),
+      trialEndsAt: formatLicenseDateInput(addMonths(new Date(), 1)),
     });
 
     await mutateLicense("save", guildSpaceKey, {
@@ -5000,6 +5018,8 @@ function BillingView({ session }) {
       plan: "trial_private",
       status: "trial",
       notes: "Espace de test des abonnements.",
+      trialStartedAt: formatLicenseDateInput(new Date()),
+      trialEndsAt: formatLicenseDateInput(addMonths(new Date(), 1)),
     });
   }
 
@@ -5157,6 +5177,56 @@ function BillingView({ session }) {
                         <span className="text-zinc-500">Periode payee : </span>
                       {formatLicenseDate(license.currentPeriodStartedAt)} {"->"} {formatLicenseDate(license.currentPeriodEndsAt)}
                       </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                        Debut essai
+                      </span>
+                      <input
+                        type="date"
+                        value={draft.trialStartedAt ?? formatLicenseDateInput(license.trialStartedAt)}
+                        onChange={(event) => updateDraft(license.guildSpaceKey, { trialStartedAt: event.target.value })}
+                        className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                        Fin essai
+                      </span>
+                      <input
+                        type="date"
+                        value={draft.trialEndsAt ?? formatLicenseDateInput(license.trialEndsAt)}
+                        onChange={(event) => updateDraft(license.guildSpaceKey, { trialEndsAt: event.target.value })}
+                        className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                        Debut periode payee
+                      </span>
+                      <input
+                        type="date"
+                        value={draft.currentPeriodStartedAt ?? formatLicenseDateInput(license.currentPeriodStartedAt)}
+                        onChange={(event) =>
+                          updateDraft(license.guildSpaceKey, { currentPeriodStartedAt: event.target.value })
+                        }
+                        className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                        Fin periode payee
+                      </span>
+                      <input
+                        type="date"
+                        value={draft.currentPeriodEndsAt ?? formatLicenseDateInput(license.currentPeriodEndsAt)}
+                        onChange={(event) =>
+                          updateDraft(license.guildSpaceKey, { currentPeriodEndsAt: event.target.value })
+                        }
+                        className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                      />
+                    </label>
                   </div>
                   <div className="mt-3 text-xs text-zinc-500">
                     {PORTAL_LICENSE_PLANS[plan]?.description || ""}
