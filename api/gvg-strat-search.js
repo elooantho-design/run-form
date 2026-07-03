@@ -285,6 +285,10 @@ export default async function handler(req, res) {
 
     const scope = await resolveRunScope(supabase, req);
 
+    if (!scope.canUseGvg || !scope.canSearchRuns) {
+      return res.status(403).json({ error: "abonnement insuffisant pour consulter les strats GVG" });
+    }
+
     if (!canUseRunTargetGuild(scope, defense.guild)) {
       return res.status(403).json({ error: "guilde hors perimetre" });
     }

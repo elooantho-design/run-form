@@ -439,7 +439,8 @@ async function buildRunAvailabilityForDefenses(req, defenses, guild, timing) {
   });
 
   const canReadExternalRuns =
-    visibleScope?.isPaladin && (visibleScope?.isAdmin || visibleScope?.isLeader);
+    (visibleScope?.isPaladin && (visibleScope?.isAdmin || visibleScope?.isLeader)) ||
+    (!visibleScope?.isPaladin && visibleScope?.canAccessPaladinRuns);
 
   const slotRows = await fetchRunSlotsByChampions(supabase, uniqueChampions, timing);
   const { hitMap, slotsByStrat } = buildRunSlotIndexes(slotRows);
@@ -587,6 +588,12 @@ async function handleList(req, res) {
   }
 
   timing.mark("params_read", { guild });
+
+  const visibleScope = await resolveRunScope(supabase, req);
+  if (!visibleScope.canUseGvg) {
+    timing.end({ error: "license_gvg_denied" });
+    return res.status(403).json({ error: "abonnement insuffisant pour acceder a la GVG" });
+  }
 
   let mirrorGroupSchemaReady = true;
   let { data, error } = await buildGvgDefenseListQuery(

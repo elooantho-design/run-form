@@ -63,6 +63,7 @@ import {
   getControlBrand,
   getGvgGuildLabel,
   getGuildScopeDescription,
+  getSessionGuildSpaceKey,
   getVisibleGvgGuildCodes,
   isPaladinGuildCode,
   isPaladinSession,
@@ -70,6 +71,15 @@ import {
   normalizeGuildCodeKey,
   PALADIN_CLUSTER_GUILD_CODES,
 } from "@/lib/guildScope";
+import {
+  DEFAULT_EXTERNAL_LICENSE_PLAN,
+  PORTAL_LICENSE_PLANS,
+  getPaladinLicenseAccess,
+  getPortalLicenseAccess,
+  isTrialLicensePlan,
+  normalizeLicensePlan,
+  normalizeLicenseStatus,
+} from "@/lib/portalLicensePlans";
 import {
   getDefenseRootId,
   isInheritedDefense,
@@ -269,6 +279,15 @@ function isLeaderSession(session) {
 
 function isAdminSession(session) {
   return Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
+}
+
+function isMissingPortalLicenseTable(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    message.includes("portal_guild_licenses")
+  );
 }
 
 function buildPortalSession(member) {
@@ -1240,6 +1259,7 @@ function PortalShell({ session, onLogout }) {
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const [viewMode, setViewMode] = useState(getInitialPortalViewMode);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [portalLicense, setPortalLicense] = useState(null);
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
   const isLeaderUser = isLeaderSession(session);
@@ -1247,15 +1267,36 @@ function PortalShell({ session, onLogout }) {
   const isMobileMode = viewMode === "mobile";
   const controlBrand = getControlBrand(session);
   const guildScopeDescription = getGuildScopeDescription(session);
+  const portalAccess = useMemo(
+    () =>
+      isPaladinUser
+        ? getPaladinLicenseAccess()
+        : getPortalLicenseAccess(portalLicense || { plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" }),
+    [isPaladinUser, portalLicense],
+  );
+  const visibleNavigation = useMemo(
+    () =>
+      navigation.filter((item) => {
+        if (item.id === "home" || item.id === "settings") return true;
+        if (item.id === "gvg") return portalAccess.canUseGvg;
+        if (item.id === "run-search") return portalAccess.canSearchRuns;
+        return portalAccess.canUsePortalCore;
+      }),
+    [portalAccess],
+  );
   const visibleAdminNavigation = useMemo(
     () =>
       adminNavigation.filter((item) => {
         if (item.paladinOnly && !isPaladinUser) return false;
         if (item.leaderOnly) return isLeaderUser;
+        if (!portalAccess.canUsePortalCore) return false;
+        if (item.id === "run-add" || item.id === "run-edit") return portalAccess.canManageOwnRuns;
+        if (item.id === "launcher") return portalAccess.canUseLauncher;
+        if (item.id === "validation") return portalAccess.canUseValidation;
         if (item.adminOnly) return isAdminUser;
         return true;
       }),
-    [isAdminUser, isLeaderUser, isPaladinUser],
+    [isAdminUser, isLeaderUser, isPaladinUser, portalAccess],
   );
 
   const activeTitle = useMemo(() => {
@@ -1267,11 +1308,51 @@ function PortalShell({ session, onLogout }) {
   useEffect(() => {
     const isAdminTab = adminNavigation.some((item) => item.id === active);
     const isVisibleAdminTab = visibleAdminNavigation.some((item) => item.id === active);
+    const isBaseTab = navigation.some((item) => item.id === active);
+    const isVisibleBaseTab = visibleNavigation.some((item) => item.id === active);
 
-    if (isAdminTab && !isVisibleAdminTab) {
+    if ((isAdminTab && !isVisibleAdminTab) || (isBaseTab && !isVisibleBaseTab)) {
       setActive("home");
     }
-  }, [active, visibleAdminNavigation]);
+  }, [active, visibleAdminNavigation, visibleNavigation]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPortalLicense() {
+      if (isPaladinUser) {
+        setPortalLicense(null);
+        return;
+      }
+
+      const guildSpaceKey = getSessionGuildSpaceKey(session);
+      if (!guildSpaceKey) return;
+
+      const { data, error } = await supabase
+        .from("portal_guild_licenses")
+        .select("plan, status, trial_started_at, trial_ends_at, current_period_started_at, current_period_ends_at")
+        .eq("guild_space_key", guildSpaceKey)
+        .maybeSingle();
+
+      if (cancelled) return;
+
+      if (error) {
+        if (!isMissingPortalLicenseTable(error)) {
+          console.error("[portal-license]", error);
+        }
+        setPortalLicense(null);
+        return;
+      }
+
+      setPortalLicense(data || null);
+    }
+
+    void loadPortalLicense();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPaladinUser, session]);
 
   useEffect(() => {
     if (active === "home" || active === "logs" || loggedTabViewsRef.current.has(active)) return;
@@ -1357,7 +1438,7 @@ function PortalShell({ session, onLogout }) {
 
     return (
       <>
-        {navigation.map((item) => {
+        {visibleNavigation.map((item) => {
           const Icon = item.icon;
           const selected = active === item.id;
 
@@ -1374,6 +1455,7 @@ function PortalShell({ session, onLogout }) {
           );
         })}
 
+        {visibleAdminNavigation.length ? (
         <div className="pt-2">
           <button
             type="button"
@@ -1413,6 +1495,7 @@ function PortalShell({ session, onLogout }) {
             </div>
           ) : null}
         </div>
+        ) : null}
       </>
     );
   };
@@ -1556,7 +1639,7 @@ function PortalShell({ session, onLogout }) {
         {isMobileMode ? (
           <div className="border-b border-zinc-800 bg-[#0d0c0a]/95 px-3 py-2">
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {[...navigation, ...visibleAdminNavigation].map((item) => {
+              {[...visibleNavigation, ...visibleAdminNavigation].map((item) => {
                 const Icon = item.icon;
                 const selected = active === item.id;
 
@@ -4747,8 +4830,93 @@ function GuildsView({ session }) {
   return <PortalGuildsTab session={session} />;
 }
 
+function formatLicenseDate(value) {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function getLicenseDeadlineTone(daysLeft, status) {
+  if (status === "suspended" || status === "cancelled") {
+    return "border-red-500/40 bg-red-500/10 text-red-200";
+  }
+
+  if (daysLeft === null || daysLeft === undefined) {
+    return "border-zinc-700 bg-zinc-900 text-zinc-300";
+  }
+
+  if (daysLeft < 0) return "border-red-500/40 bg-red-500/10 text-red-200";
+  if (daysLeft <= 3) return "border-amber-500/40 bg-amber-500/10 text-amber-100";
+  return "border-emerald-500/30 bg-emerald-500/10 text-emerald-100";
+}
+
+function getLicenseDeadlineLabel(license) {
+  if (license.status === "suspended") return "Suspendu";
+  if (license.status === "cancelled") return "Annule";
+  if (license.daysLeft === null || license.daysLeft === undefined) return "Aucune echeance";
+  if (license.daysLeft < 0) return `Expire depuis ${Math.abs(license.daysLeft)} j`;
+  if (license.daysLeft === 0) return "Expire aujourd'hui";
+  return `${license.daysLeft} j restants`;
+}
+
 function BillingView({ session }) {
+  const apiBase = useMemo(() => getApiBase(), []);
+  const actorMemberId = session?.memberId || session?.id || "";
   const isLeaderUser = isLeaderSession(session);
+  const [licenses, setLicenses] = useState([]);
+  const [schemaReady, setSchemaReady] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [savingKey, setSavingKey] = useState("");
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [drafts, setDrafts] = useState({});
+
+  async function loadLicenses() {
+    if (!isLeaderUser) return;
+
+    setLoading(true);
+    setErrorMessage("");
+
+    try {
+      const params = new URLSearchParams({ actorMemberId });
+      const response = await fetch(`${apiBase}/api/portal-licenses?${params.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Chargement licences impossible.");
+      }
+
+      setSchemaReady(payload.schemaReady !== false);
+      setLicenses(payload.licenses || []);
+      setDrafts(
+        Object.fromEntries(
+          (payload.licenses || []).map((license) => [
+            license.guildSpaceKey,
+            {
+              plan: license.plan,
+              status: license.status,
+              notes: license.notes || "",
+              guildLabel: license.guildLabel || license.guildSpaceKey,
+            },
+          ])
+        )
+      );
+    } catch (error) {
+      setErrorMessage(error.message || "Chargement licences impossible.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isLeaderUser) return;
+    void loadLicenses();
+  }, [actorMemberId, isLeaderUser]);
 
   if (!isLeaderUser) {
     return (
@@ -4759,16 +4927,293 @@ function BillingView({ session }) {
     );
   }
 
+  function updateDraft(guildSpaceKey, patch) {
+    setDrafts((current) => ({
+      ...current,
+      [guildSpaceKey]: {
+        ...(current[guildSpaceKey] || {}),
+        ...patch,
+      },
+    }));
+  }
+
+  async function mutateLicense(action, guildSpaceKey, extra = {}) {
+    if (!guildSpaceKey || savingKey) return;
+
+    const draft = drafts[guildSpaceKey] || {};
+    setSavingKey(`${action}:${guildSpaceKey}`);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const response = await fetch(`${apiBase}/api/portal-licenses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          actorMemberId,
+          guildSpaceKey,
+          guildLabel: draft.guildLabel || extra.guildLabel || guildSpaceKey,
+          plan: draft.plan || extra.plan || DEFAULT_EXTERNAL_LICENSE_PLAN,
+          status: draft.status || extra.status || "active",
+          notes: draft.notes || "",
+          ...extra,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Mise a jour impossible.");
+      }
+
+      setMessage("Licence mise a jour.");
+      await loadLicenses();
+    } catch (error) {
+      setErrorMessage(error.message || "Mise a jour impossible.");
+    } finally {
+      setSavingKey("");
+    }
+  }
+
+  async function createGuildTestLicense() {
+    const guildSpaceKey = "GUILDTEST";
+    updateDraft(guildSpaceKey, {
+      guildLabel: "Guild Test",
+      plan: "trial_private",
+      status: "trial",
+      notes: "Espace de test des abonnements.",
+    });
+
+    await mutateLicense("save", guildSpaceKey, {
+      guildLabel: "Guild Test",
+      plan: "trial_private",
+      status: "trial",
+      notes: "Espace de test des abonnements.",
+    });
+  }
+
   return (
-    <section className="grid gap-4 md:grid-cols-3">
-      {["Interne", "Guilde externe", "Entreprise"].map((plan, index) => (
-        <div key={plan} className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
-          <div className="text-sm text-zinc-500">Plan</div>
-          <div className="mt-1 text-xl font-semibold text-zinc-50">{plan}</div>
-          <div className="mt-4 text-3xl font-semibold text-zinc-50">{index === 0 ? "0" : index === 1 ? "19" : "49"} EUR</div>
-          <div className="mt-2 text-sm text-zinc-500">par mois</div>
+    <section className="space-y-5">
+      <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-300">Leader</p>
+            <h2 className="mt-1 text-2xl font-semibold text-zinc-50">Licences guildes externes</h2>
+            <p className="mt-2 max-w-3xl text-sm text-zinc-400">
+              Gere les essais, abonnements, suspensions et l'acces en lecture a la data Paladin. Une guilde externe
+              ne peut jamais modifier ni supprimer un run qui ne vient pas de son propre espace.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={loadLicenses}
+              className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+              disabled={loading}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Rafraichir
+            </Button>
+            <Button
+              type="button"
+              onClick={createGuildTestLicense}
+              className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+              disabled={!schemaReady || Boolean(savingKey)}
+            >
+              <PlusCircle className="mr-2 h-4 w-4" />
+              Creer Guild Test
+            </Button>
+          </div>
         </div>
-      ))}
+
+        {!schemaReady ? (
+          <div className="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            Table <span className="font-mono">portal_guild_licenses</span> manquante. Colle d'abord le SQL que je vais
+            te donner, puis reviens ici.
+          </div>
+        ) : null}
+
+        {message ? (
+          <div className="mt-5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+            {message}
+          </div>
+        ) : null}
+
+        {errorMessage ? (
+          <div className="mt-5 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {errorMessage}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {loading ? (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-400">
+            Chargement des licences...
+          </div>
+        ) : licenses.length ? (
+          licenses.map((license) => {
+            const draft = drafts[license.guildSpaceKey] || {};
+            const plan = normalizeLicensePlan(draft.plan || license.plan);
+            const status = normalizeLicenseStatus(draft.status || license.status, plan);
+            const deadlineTone = getLicenseDeadlineTone(license.daysLeft, license.status);
+            const isSavingThis = savingKey.endsWith(`:${license.guildSpaceKey}`);
+            const isTrial = isTrialLicensePlan(plan);
+
+            return (
+              <article key={license.guildSpaceKey} className="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                      Espace externe
+                    </div>
+                    <h3 className="mt-1 text-xl font-semibold text-zinc-50">{license.guildLabel}</h3>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(license.guildCodes || []).length ? (
+                        license.guildCodes.map((guildCode) => (
+                          <Badge key={guildCode} className="rounded-md border-zinc-700 bg-zinc-900 text-zinc-200">
+                            {guildCode}
+                          </Badge>
+                        ))
+                      ) : (
+                        <Badge className="rounded-md border-amber-500/30 bg-amber-500/10 text-amber-200">
+                          Aucun membre
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+
+                  <Badge className={`rounded-md border px-3 py-1 ${deadlineTone}`}>
+                    {getLicenseDeadlineLabel(license)}
+                  </Badge>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+                    <div className="text-xs text-zinc-500">Membres</div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-50">{license.memberCount}</div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+                    <div className="text-xs text-zinc-500">Admins</div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-50">{license.adminCount}</div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+                    <div className="text-xs text-zinc-500">Officiers</div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-50">{license.officerCount}</div>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                  <label className="block">
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Plan</span>
+                    <select
+                      value={plan}
+                      onChange={(event) => updateDraft(license.guildSpaceKey, { plan: event.target.value })}
+                      className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                    >
+                      {Object.entries(PORTAL_LICENSE_PLANS).map(([planKey, planConfig]) => (
+                        <option key={planKey} value={planKey}>
+                          {planConfig.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Statut</span>
+                    <select
+                      value={status}
+                      onChange={(event) => updateDraft(license.guildSpaceKey, { status: event.target.value })}
+                      className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                    >
+                      <option value="active">Actif</option>
+                      <option value="trial">Essai</option>
+                      <option value="suspended">Suspendu</option>
+                      <option value="cancelled">Annule</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-3 text-sm text-zinc-300">
+                  <div className="grid gap-2 md:grid-cols-2">
+                      <div>
+                        <span className="text-zinc-500">Essai : </span>
+                      {formatLicenseDate(license.trialStartedAt)} {"->"} {formatLicenseDate(license.trialEndsAt)}
+                      </div>
+                      <div>
+                        <span className="text-zinc-500">Periode payee : </span>
+                      {formatLicenseDate(license.currentPeriodStartedAt)} {"->"} {formatLicenseDate(license.currentPeriodEndsAt)}
+                      </div>
+                  </div>
+                  <div className="mt-3 text-xs text-zinc-500">
+                    {PORTAL_LICENSE_PLANS[plan]?.description || ""}
+                  </div>
+                </div>
+
+                <label className="mt-4 block">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Notes internes</span>
+                  <textarea
+                    value={draft.notes ?? license.notes ?? ""}
+                    onChange={(event) => updateDraft(license.guildSpaceKey, { notes: event.target.value })}
+                    className="mt-2 min-h-20 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
+                    placeholder="Infos paiement, contact, conditions particulieres..."
+                  />
+                </label>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    onClick={() => mutateLicense("save", license.guildSpaceKey)}
+                    className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
+                    disabled={isSavingThis}
+                  >
+                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                    Enregistrer
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => mutateLicense("mark_paid", license.guildSpaceKey)}
+                    className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                    disabled={isSavingThis || isTrial || plan === "suspended"}
+                    title={isTrial ? "Passe d'abord sur un abonnement payant." : "Prolonge d'un mois."}
+                  >
+                    <Clock3 className="mr-2 h-4 w-4" />
+                    Paiement recu +1 mois
+                  </Button>
+                  {status === "suspended" || plan === "suspended" ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => mutateLicense("resume", license.guildSpaceKey, { status: "active" })}
+                      className="rounded-lg border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20"
+                      disabled={isSavingThis}
+                    >
+                      Reprendre
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => mutateLicense("suspend", license.guildSpaceKey)}
+                      className="rounded-lg border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20"
+                      disabled={isSavingThis}
+                    >
+                      Suspendre
+                    </Button>
+                  )}
+                </div>
+              </article>
+            );
+          })
+        ) : (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-400">
+            Aucun espace externe trouve pour le moment. Cree Guild Test ou ajoute une guilde externe depuis l'onglet Guildes.
+          </div>
+        )}
+      </div>
     </section>
   );
 }

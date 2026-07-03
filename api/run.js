@@ -348,6 +348,10 @@ async function handleAdd(req, res) {
   const scope = await resolveRunScope(supabase, req);
   const normalizedSlots = normalizeSlots(slots);
 
+  if (!scope.canManageOwnRuns) {
+    return res.status(403).json({ error: "abonnement insuffisant pour ajouter un run" });
+  }
+
   if (!youtubeUrl || !String(youtubeUrl).trim()) {
     return res.status(400).json({ error: "youtubeUrl manquant" });
   }
@@ -433,6 +437,10 @@ async function handleSearch(req, res) {
   const scope = await resolveRunScope(supabase, req);
   const boycottGuildCode = getRunTargetGuildCode(scope, targetGuildCode);
 
+  if (!scope.canSearchRuns) {
+    return res.status(403).json({ error: "abonnement insuffisant pour rechercher des runs" });
+  }
+
   if (!Array.isArray(queryItems) || !queryItems.length) {
     return res.status(400).json({ error: "queryItems manquant" });
   }
@@ -451,6 +459,10 @@ async function handleGet(req, res) {
   const { id, targetGuildCode } = req.query || {};
   const scope = await resolveRunScope(supabase, req);
   const boycottGuildCode = getRunTargetGuildCode(scope, targetGuildCode);
+
+  if (!scope.canSearchRuns) {
+    return res.status(403).json({ error: "abonnement insuffisant pour consulter ce run" });
+  }
 
   if (!id) {
     return res.status(400).json({ error: "id manquant" });
@@ -542,6 +554,10 @@ async function handleBoycott(req, res) {
   const { strat_id, boycott = true, targetGuildCode, gvgDefenseId } = req.body || {};
   const scope = await resolveRunScope(supabase, req);
 
+  if (!scope.canBoycottRuns) {
+    return res.status(403).json({ error: "abonnement insuffisant pour boycotter un run" });
+  }
+
   if (!strat_id) {
     return res.status(400).json({ error: "strat_id manquant" });
   }
@@ -608,6 +624,10 @@ async function handleBoycott(req, res) {
 async function handleUpdate(req, res) {
   const { strat_id, youtubeUrl, attackCode, commentaire, slots } = req.body || {};
   const scope = await resolveRunScope(supabase, req);
+
+  if (!scope.canManageOwnRuns) {
+    return res.status(403).json({ error: "abonnement insuffisant pour modifier un run" });
+  }
 
   if (!strat_id) {
     return res.status(400).json({ error: "strat_id manquant" });
@@ -686,6 +706,10 @@ async function handleUpdate(req, res) {
 async function handleDelete(req, res) {
   const { strat_id } = req.body || {};
   const scope = await resolveRunScope(supabase, req);
+
+  if (!scope.canManageOwnRuns) {
+    return res.status(403).json({ error: "abonnement insuffisant pour supprimer un run" });
+  }
 
   if (!strat_id) {
     return res.status(400).json({ error: "strat_id manquant" });

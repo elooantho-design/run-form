@@ -7,6 +7,11 @@ import {
   PALADIN_CLUSTER_GUILD_CODES,
   PALADIN_SPACE_KEY,
 } from "./guildScope.js";
+import {
+  DEFAULT_EXTERNAL_LICENSE_PLAN,
+  getPaladinLicenseAccess,
+  getPortalLicenseAccess,
+} from "./portalLicensePlans.js";
 
 function normalizeRoleValue(role) {
   return String(role || "")
@@ -18,6 +23,15 @@ function normalizeRoleValue(role) {
 
 function isAdminRoleValue(roleValue) {
   return ["admin", "administrateur", "leader"].includes(roleValue);
+}
+
+function isMissingLicenseTable(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    message.includes("portal_guild_licenses")
+  );
 }
 
 function readSessionField(req, keys) {
@@ -81,6 +95,26 @@ export async function resolveRunScope(supabase, req) {
   const isPaladin = spaceKey === PALADIN_SPACE_KEY;
   const isLeader = hasTrustedMemberRole && isPaladin && roleValue === "leader";
   const isAdmin = hasTrustedMemberRole && isPaladin && isAdminRoleValue(roleValue);
+  let license = null;
+  let licenseAccess = getPaladinLicenseAccess();
+
+  if (!isPaladin) {
+    const { data, error } = await supabase
+      .from("portal_guild_licenses")
+      .select("plan, status, trial_started_at, trial_ends_at, current_period_started_at, current_period_ends_at")
+      .eq("guild_space_key", spaceKey)
+      .maybeSingle();
+
+    if (!error && data) {
+      license = data;
+      licenseAccess = getPortalLicenseAccess(data);
+    } else if (error && !isMissingLicenseTable(error)) {
+      console.error("[run-scope] license lookup error:", error);
+      licenseAccess = getPortalLicenseAccess({ plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" });
+    } else {
+      licenseAccess = getPortalLicenseAccess({ plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" });
+    }
+  }
 
   return {
     memberId: member?.id || memberId || "",
@@ -92,6 +126,14 @@ export async function resolveRunScope(supabase, req) {
     isAdmin,
     isPaladin,
     stratGuildCode: isPaladin ? null : guildCode,
+    license,
+    licenseAccess,
+    canUsePortalCore: isPaladin || licenseAccess.canUsePortalCore,
+    canUseGvg: isPaladin || licenseAccess.canUseGvg,
+    canSearchRuns: isPaladin || licenseAccess.canSearchRuns,
+    canManageOwnRuns: isPaladin || licenseAccess.canManageOwnRuns,
+    canBoycottRuns: isPaladin || licenseAccess.canBoycottRuns,
+    canAccessPaladinRuns: isPaladin || licenseAccess.canAccessPaladinRuns,
   };
 }
 
@@ -130,7 +172,13 @@ export function stratMatchesRunReadScope(strat, scope) {
     return !stratGuildCode || PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(stratGuildCode));
   }
 
-  return Boolean(stratGuildCode && getGuildSpaceKey(stratGuildCode) === scope?.spaceKey);
+  if (stratGuildCode && getGuildSpaceKey(stratGuildCode) === scope?.spaceKey) return true;
+
+  if (scope?.canAccessPaladinRuns) {
+    return !stratGuildCode || PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(stratGuildCode));
+  }
+
+  return false;
 }
 
 export function canUseRunTargetGuild(scope, guildCode) {
