@@ -1260,6 +1260,7 @@ function PortalShell({ session, onLogout }) {
   const [viewMode, setViewMode] = useState(getInitialPortalViewMode);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [portalLicense, setPortalLicense] = useState(null);
+  const [portalLicenseLoaded, setPortalLicenseLoaded] = useState(false);
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
   const isLeaderUser = isLeaderSession(session);
@@ -1268,11 +1269,12 @@ function PortalShell({ session, onLogout }) {
   const controlBrand = getControlBrand(session);
   const guildScopeDescription = getGuildScopeDescription(session);
   const portalAccess = useMemo(
-    () =>
-      isPaladinUser
-        ? getPaladinLicenseAccess()
-        : getPortalLicenseAccess(portalLicense || { plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" }),
-    [isPaladinUser, portalLicense],
+    () => {
+      if (isPaladinUser) return getPaladinLicenseAccess();
+      if (!portalLicenseLoaded) return getPortalLicenseAccess({ plan: "suspended", status: "suspended" });
+      return getPortalLicenseAccess(portalLicense || { plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" });
+    },
+    [isPaladinUser, portalLicense, portalLicenseLoaded],
   );
   const visibleNavigation = useMemo(
     () =>
@@ -1287,6 +1289,7 @@ function PortalShell({ session, onLogout }) {
   const visibleAdminNavigation = useMemo(
     () =>
       adminNavigation.filter((item) => {
+        if (!isAdminUser) return false;
         if (item.paladinOnly && !isPaladinUser) return false;
         if (item.leaderOnly) return isLeaderUser;
         if (!portalAccess.canUsePortalCore) return false;
@@ -1322,12 +1325,18 @@ function PortalShell({ session, onLogout }) {
     async function loadPortalLicense() {
       if (isPaladinUser) {
         setPortalLicense(null);
+        setPortalLicenseLoaded(true);
         return;
       }
 
       const guildSpaceKey = getSessionGuildSpaceKey(session);
-      if (!guildSpaceKey) return;
+      if (!guildSpaceKey) {
+        setPortalLicense(null);
+        setPortalLicenseLoaded(true);
+        return;
+      }
 
+      setPortalLicenseLoaded(false);
       const { data, error } = await supabase
         .from("portal_guild_licenses")
         .select("plan, status, trial_started_at, trial_ends_at, current_period_started_at, current_period_ends_at")
@@ -1341,10 +1350,12 @@ function PortalShell({ session, onLogout }) {
           console.error("[portal-license]", error);
         }
         setPortalLicense(null);
+        setPortalLicenseLoaded(true);
         return;
       }
 
       setPortalLicense(data || null);
+      setPortalLicenseLoaded(true);
     }
 
     void loadPortalLicense();
