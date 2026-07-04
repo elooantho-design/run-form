@@ -37,6 +37,8 @@ export default function GestionDefenseTab({
   getDefenseLikeTargetId,
 }) {
   const { t } = usePortalLanguage();
+  const bastionNumbers = [1, 2, 3, 4];
+  const towerNumbers = [1, 2, 3, 4, 5];
   const assignmentZones = [
     { type: "Bastion", number: 1, code: "B1" },
     { type: "Bastion", number: 2, code: "B2" },
@@ -52,13 +54,13 @@ export default function GestionDefenseTab({
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase();
     const compact = normalized.replace(/[_-]+/g, " ");
-    const numberMatch = compact.match(/\b([1-4])\b/);
-    const towerNumberMatch = compact.match(/\b(?:tour|tower|t)\s*([1-4])\b/);
+    const numberMatch = compact.match(/\b([1-5])\b/);
+    const towerNumberMatch = compact.match(/\b(?:tour|tower|t)\s*([1-5])\b/);
     const zoneBastionMatch =
       compact.match(/\bb\s*([1-4])\b/) ||
       compact.match(/\bbastion\s*([1-4])\b/);
     const hasBubbleZone = /\bbb\b|\bbulle\b|\bbubble\b/.test(compact);
-    const hasTower = compact.includes("tour") || compact.includes("tower") || /\bt\s*[1-4]\b/.test(compact);
+    const hasTower = compact.includes("tour") || compact.includes("tower") || /\bt\s*[1-5]\b/.test(compact);
     const zoneType = hasBubbleZone ? "Bulle" : zoneBastionMatch ? "Bastion" : null;
     const zoneNumber = zoneType === "Bastion" ? Number(zoneBastionMatch[1]) : null;
     const zoneCode = zoneType === "Bulle" ? "BB" : zoneNumber ? `B${zoneNumber}` : null;
@@ -119,7 +121,7 @@ export default function GestionDefenseTab({
         ? `B${Number(draft.zoneNumber)}`
         : "";
 
-    const towerLabel = parsedNumber >= 1 && parsedNumber <= 4 ? `Tour ${parsedNumber}` : "Tour";
+    const towerLabel = parsedNumber >= 1 && parsedNumber <= 5 ? `Tour ${parsedNumber}` : "Tour";
     return zoneCode ? `${zoneCode} ${towerLabel}` : towerLabel;
   };
 
@@ -360,6 +362,52 @@ const openAssignmentModal = (member) => {
     number: parsedAssignment.number || 1,
     zoneType: parsedAssignment.zoneType || "Bastion",
     zoneNumber: parsedAssignment.zoneType === "Bulle" ? null : parsedAssignment.zoneNumber || 1,
+  });
+};
+
+const updateAssignmentType = (nextType) => {
+  setAssignmentDraft((previous) => {
+    if (nextType === "Tour") {
+      const nextNumber =
+        Number(previous.number) >= 1 && Number(previous.number) <= 5
+          ? Number(previous.number)
+          : 1;
+      const nextZoneType = previous.zoneType || "Bastion";
+
+      return {
+        ...previous,
+        type: "Tour",
+        number: nextNumber,
+        zoneType: nextZoneType,
+        zoneNumber:
+          nextZoneType === "Bulle"
+            ? null
+            : Number(previous.zoneNumber) >= 1 && Number(previous.zoneNumber) <= 4
+            ? Number(previous.zoneNumber)
+            : 1,
+      };
+    }
+
+    if (nextType === "Bastion") {
+      return {
+        ...previous,
+        type: "Bastion",
+        number:
+          Number(previous.number) >= 1 && Number(previous.number) <= 4
+            ? Number(previous.number)
+            : 1,
+        zoneType: "Bastion",
+        zoneNumber: 1,
+      };
+    }
+
+    return {
+      ...previous,
+      type: "Bulle",
+      number: 1,
+      zoneType: "Bulle",
+      zoneNumber: null,
+    };
   });
 };
 
@@ -1245,15 +1293,7 @@ onClick={() => {
                 </span>
                 <select
                   value={assignmentDraft.type}
-                  onChange={(event) =>
-                    setAssignmentDraft((previous) => ({
-                      ...previous,
-                      type: event.target.value,
-                      number: event.target.value === "Bulle" ? 1 : previous.number || 1,
-                      zoneType: previous.zoneType || "Bastion",
-                      zoneNumber: previous.zoneType === "Bulle" ? null : previous.zoneNumber || 1,
-                    }))
-                  }
+                  onChange={(event) => updateAssignmentType(event.target.value)}
                   className="mt-2 h-11 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400/60"
                 >
                   <option value="Tour">{t("defenses.tower", "Tour")}</option>
@@ -1300,8 +1340,12 @@ onClick={() => {
                       ? t("guildManagement.assignmentTowerNumber", "Numero de tour")
                       : t("guildManagement.assignmentNumber", "Numero")}
                   </div>
-                  <div className="mt-2 grid grid-cols-4 gap-2">
-                    {[1, 2, 3, 4].map((number) => (
+                  <div
+                    className={`mt-2 grid gap-2 ${
+                      assignmentDraft.type === "Tour" ? "grid-cols-5" : "grid-cols-4"
+                    }`}
+                  >
+                    {(assignmentDraft.type === "Tour" ? towerNumbers : bastionNumbers).map((number) => (
                       <button
                         key={number}
                         type="button"
