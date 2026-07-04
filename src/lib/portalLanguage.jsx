@@ -396,6 +396,7 @@ const PORTAL_TRANSLATIONS = {
   "guildManagement.assignmentNumber": "Number",
   "guildManagement.assignmentTowerNumber": "Tower number",
   "guildManagement.assignmentZone": "Zone",
+  "guildManagement.assignmentBubblePosition": "Bubble position",
   "guildManagement.likeDefense": "Like this defense",
   "guildManagement.dislikeDefense": "Dislike this defense",
   "gvg.ally": "Ally",

@@ -65,6 +65,28 @@ export default function GestionDefenseTab({
     const zoneNumber = zoneType === "Bastion" ? Number(zoneBastionMatch[1]) : null;
     const zoneCode = zoneType === "Bulle" ? "BB" : zoneNumber ? `B${zoneNumber}` : null;
 
+    if (hasBubbleZone && hasTower) {
+      return {
+        type: "Bulle",
+        number: towerNumberMatch ? Number(towerNumberMatch[1]) : numberMatch ? Number(numberMatch[1]) : null,
+        zoneType: "Bulle",
+        zoneNumber: null,
+        zoneCode: "BB",
+        bubblePosition: "Tour",
+      };
+    }
+
+    if (hasBubbleZone && normalized.includes("bastion")) {
+      return {
+        type: "Bulle",
+        number: null,
+        zoneType: "Bulle",
+        zoneNumber: null,
+        zoneCode: "BB",
+        bubblePosition: "Bastion",
+      };
+    }
+
     if (hasTower) {
       return {
         type: "Tour",
@@ -91,6 +113,7 @@ export default function GestionDefenseTab({
         zoneType: "Bulle",
         zoneNumber: null,
         zoneCode: "BB",
+        bubblePosition: null,
       };
     }
 
@@ -107,9 +130,14 @@ export default function GestionDefenseTab({
     const type = draft?.type || "Tour";
     const number = draft?.number;
 
-    if (type === "Bulle") return "Bulle";
-
     const parsedNumber = Number(number);
+
+    if (type === "Bulle") {
+      if (draft?.bubblePosition === "Bastion") return "BB Bastion";
+      if (parsedNumber >= 1 && parsedNumber <= 5) return `BB Tour ${parsedNumber}`;
+      return "Bulle";
+    }
+
     if (type === "Bastion") {
       return parsedNumber >= 1 && parsedNumber <= 4 ? `Bastion ${parsedNumber}` : "Bastion";
     }
@@ -138,7 +166,16 @@ export default function GestionDefenseTab({
       const label = t("defenses.bastion", "Bastion");
       return parsedAssignment.number ? `${label} ${parsedAssignment.number}` : label;
     }
-    if (normalizedType === "bulle") return t("defenses.bubble", "Bulle");
+    if (normalizedType === "bulle") {
+      if (parsedAssignment.bubblePosition === "Bastion") {
+        return `BB ${t("defenses.bastion", "Bastion")}`;
+      }
+      if (parsedAssignment.bubblePosition === "Tour") {
+        const label = t("defenses.tower", "Tour");
+        return parsedAssignment.number ? `BB ${label} ${parsedAssignment.number}` : `BB ${label}`;
+      }
+      return t("defenses.bubble", "Bulle");
+    }
     return value || "";
   };
   const formatDefenseStatusLabel = (value) => {
@@ -163,6 +200,7 @@ export default function GestionDefenseTab({
     number: 1,
     zoneType: "Bastion",
     zoneNumber: 1,
+    bubblePosition: "Tour",
   });
 
   const [infoModalOpen, setInfoModalOpen] = useState(false);
@@ -320,7 +358,11 @@ const displayedMembers = [...members].sort((a, b) => {
       return assignment.number;
     }
 
-    if (assignment.type === "Bulle") return 5;
+    if (assignment.type === "Bulle") {
+      if (assignment.bubblePosition === "Bastion") return 0;
+      if (assignment.bubblePosition === "Tour") return 1;
+      return 5;
+    }
     return 99;
   };
 
@@ -362,6 +404,7 @@ const openAssignmentModal = (member) => {
     number: parsedAssignment.number || 1,
     zoneType: parsedAssignment.zoneType || "Bastion",
     zoneNumber: parsedAssignment.zoneType === "Bulle" ? null : parsedAssignment.zoneNumber || 1,
+    bubblePosition: parsedAssignment.bubblePosition || "Tour",
   });
 };
 
@@ -385,6 +428,7 @@ const updateAssignmentType = (nextType) => {
             : Number(previous.zoneNumber) >= 1 && Number(previous.zoneNumber) <= 4
             ? Number(previous.zoneNumber)
             : 1,
+        bubblePosition: "Tour",
       };
     }
 
@@ -398,15 +442,20 @@ const updateAssignmentType = (nextType) => {
             : 1,
         zoneType: "Bastion",
         zoneNumber: 1,
+        bubblePosition: "Tour",
       };
     }
 
     return {
       ...previous,
       type: "Bulle",
-      number: 1,
+      number:
+        Number(previous.number) >= 1 && Number(previous.number) <= 5
+          ? Number(previous.number)
+          : 1,
       zoneType: "Bulle",
       zoneNumber: null,
+      bubblePosition: previous.bubblePosition || "Tour",
     };
   });
 };
@@ -1163,12 +1212,14 @@ return (
         key={member.id}
         type="button"
 onClick={() => {
+  const parsedMemberAssignment = parseAssignment(member.assignment);
   setSelectedMemberId(member.id);
   if (setSelectedId) setSelectedId(member.id);
   setMemberView("defenses");
 
   setDefenseListFilter(
-    parseAssignment(member.assignment).type === "Bastion"
+    parsedMemberAssignment.type === "Bastion" ||
+      (parsedMemberAssignment.type === "Bulle" && parsedMemberAssignment.bubblePosition === "Bastion")
       ? "bastion"
       : "tour"
   );
@@ -1333,19 +1384,72 @@ onClick={() => {
                 </div>
               ) : null}
 
-              {assignmentDraft.type !== "Bulle" ? (
+              {assignmentDraft.type === "Bulle" ? (
                 <div>
                   <div className="text-sm text-zinc-400">
-                    {assignmentDraft.type === "Tour"
+                    {t("guildManagement.assignmentBubblePosition", "Position bulle")}
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {[
+                      {
+                        id: "Bastion",
+                        label: `BB ${t("defenses.bastion", "Bastion")}`,
+                      },
+                      {
+                        id: "Tour",
+                        label: `BB ${t("defenses.tower", "Tour")}`,
+                      },
+                    ].map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() =>
+                          setAssignmentDraft((previous) => ({
+                            ...previous,
+                            bubblePosition: option.id,
+                            number:
+                              option.id === "Tour"
+                                ? Number(previous.number) >= 1 && Number(previous.number) <= 5
+                                  ? Number(previous.number)
+                                  : 1
+                                : 1,
+                          }))
+                        }
+                        className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                          assignmentDraft.bubblePosition === option.id
+                            ? "border-emerald-300/70 bg-emerald-500/15 text-emerald-100"
+                            : "border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-600 hover:text-white"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {assignmentDraft.type !== "Bulle" ||
+              (assignmentDraft.type === "Bulle" && assignmentDraft.bubblePosition === "Tour") ? (
+                <div>
+                  <div className="text-sm text-zinc-400">
+                    {assignmentDraft.type === "Tour" ||
+                    (assignmentDraft.type === "Bulle" && assignmentDraft.bubblePosition === "Tour")
                       ? t("guildManagement.assignmentTowerNumber", "Numero de tour")
                       : t("guildManagement.assignmentNumber", "Numero")}
                   </div>
                   <div
                     className={`mt-2 grid gap-2 ${
-                      assignmentDraft.type === "Tour" ? "grid-cols-5" : "grid-cols-4"
+                      assignmentDraft.type === "Tour" ||
+                      (assignmentDraft.type === "Bulle" && assignmentDraft.bubblePosition === "Tour")
+                        ? "grid-cols-5"
+                        : "grid-cols-4"
                     }`}
                   >
-                    {(assignmentDraft.type === "Tour" ? towerNumbers : bastionNumbers).map((number) => (
+                    {(assignmentDraft.type === "Tour" ||
+                    (assignmentDraft.type === "Bulle" && assignmentDraft.bubblePosition === "Tour")
+                      ? towerNumbers
+                      : bastionNumbers
+                    ).map((number) => (
                       <button
                         key={number}
                         type="button"
