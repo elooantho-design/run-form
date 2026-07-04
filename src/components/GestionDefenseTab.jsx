@@ -37,35 +37,100 @@ export default function GestionDefenseTab({
   getDefenseLikeTargetId,
 }) {
   const { t } = usePortalLanguage();
+  const assignmentZones = [
+    { type: "Bastion", number: 1, code: "B1" },
+    { type: "Bastion", number: 2, code: "B2" },
+    { type: "Bastion", number: 3, code: "B3" },
+    { type: "Bastion", number: 4, code: "B4" },
+    { type: "Bulle", number: null, code: "BB" },
+  ];
+
   const parseAssignment = (value) => {
     const text = String(value || "").trim();
     const normalized = text
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase();
-    const numberMatch = normalized.match(/\b([1-4])\b/);
+    const compact = normalized.replace(/[_-]+/g, " ");
+    const numberMatch = compact.match(/\b([1-4])\b/);
+    const towerNumberMatch = compact.match(/\b(?:tour|tower|t)\s*([1-4])\b/);
+    const zoneBastionMatch =
+      compact.match(/\bb\s*([1-4])\b/) ||
+      compact.match(/\bbastion\s*([1-4])\b/);
+    const hasBubbleZone = /\bbb\b|\bbulle\b|\bbubble\b/.test(compact);
+    const hasTower = compact.includes("tour") || compact.includes("tower") || /\bt\s*[1-4]\b/.test(compact);
+    const zoneType = hasBubbleZone ? "Bulle" : zoneBastionMatch ? "Bastion" : null;
+    const zoneNumber = zoneType === "Bastion" ? Number(zoneBastionMatch[1]) : null;
+    const zoneCode = zoneType === "Bulle" ? "BB" : zoneNumber ? `B${zoneNumber}` : null;
+
+    if (hasTower) {
+      return {
+        type: "Tour",
+        number: towerNumberMatch ? Number(towerNumberMatch[1]) : numberMatch ? Number(numberMatch[1]) : null,
+        zoneType,
+        zoneNumber,
+        zoneCode,
+      };
+    }
 
     if (normalized.includes("bastion")) {
-      return { type: "Bastion", number: numberMatch ? Number(numberMatch[1]) : null };
+      return {
+        type: "Bastion",
+        number: numberMatch ? Number(numberMatch[1]) : null,
+        zoneType: null,
+        zoneNumber: null,
+        zoneCode: null,
+      };
     }
     if (normalized.includes("bulle") || normalized.includes("bubble")) {
-      return { type: "Bulle", number: null };
+      return {
+        type: "Bulle",
+        number: null,
+        zoneType: "Bulle",
+        zoneNumber: null,
+        zoneCode: "BB",
+      };
     }
 
-    return { type: "Tour", number: numberMatch ? Number(numberMatch[1]) : null };
+    return {
+      type: "Tour",
+      number: numberMatch ? Number(numberMatch[1]) : null,
+      zoneType: null,
+      zoneNumber: null,
+      zoneCode: null,
+    };
   };
-  const buildAssignmentValue = (type, number) => {
+
+  const buildAssignmentValue = (draft) => {
+    const type = draft?.type || "Tour";
+    const number = draft?.number;
+
     if (type === "Bulle") return "Bulle";
+
     const parsedNumber = Number(number);
-    return parsedNumber >= 1 && parsedNumber <= 4 ? `${type} ${parsedNumber}` : type;
+    if (type === "Bastion") {
+      return parsedNumber >= 1 && parsedNumber <= 4 ? `Bastion ${parsedNumber}` : "Bastion";
+    }
+
+    const zoneCode =
+      draft?.zoneType === "Bulle"
+        ? "BB"
+        : Number(draft?.zoneNumber) >= 1 && Number(draft?.zoneNumber) <= 4
+        ? `B${Number(draft.zoneNumber)}`
+        : "";
+
+    const towerLabel = parsedNumber >= 1 && parsedNumber <= 4 ? `Tour ${parsedNumber}` : "Tour";
+    return zoneCode ? `${zoneCode} ${towerLabel}` : towerLabel;
   };
+
   const formatDefenseTypeLabel = (value) => {
     const parsedAssignment = parseAssignment(value);
     const normalizedType = parsedAssignment.type.toLowerCase();
 
     if (normalizedType === "tour") {
       const label = t("defenses.tower", "Tour");
-      return parsedAssignment.number ? `${label} ${parsedAssignment.number}` : label;
+      const towerLabel = parsedAssignment.number ? `${label} ${parsedAssignment.number}` : label;
+      return parsedAssignment.zoneCode ? `${parsedAssignment.zoneCode} ${towerLabel}` : towerLabel;
     }
     if (normalizedType === "bastion") {
       const label = t("defenses.bastion", "Bastion");
@@ -94,6 +159,8 @@ export default function GestionDefenseTab({
   const [assignmentDraft, setAssignmentDraft] = useState({
     type: "Tour",
     number: 1,
+    zoneType: "Bastion",
+    zoneNumber: 1,
   });
 
   const [infoModalOpen, setInfoModalOpen] = useState(false);
@@ -237,6 +304,24 @@ const displayedMembers = [...members].sort((a, b) => {
 
   const assignmentA = parseAssignment(a.assignment);
   const assignmentB = parseAssignment(b.assignment);
+
+  const getZoneRank = (assignment) => {
+    if (assignment.type === "Tour") {
+      if (assignment.zoneType === "Bastion" && assignment.zoneNumber) {
+        return assignment.zoneNumber;
+      }
+      if (assignment.zoneType === "Bulle") return 5;
+      return 99;
+    }
+
+    if (assignment.type === "Bastion" && assignment.number) {
+      return assignment.number;
+    }
+
+    if (assignment.type === "Bulle") return 5;
+    return 99;
+  };
+
   const orderByMode = {
     tour_first: { Tour: 0, Bulle: 1, Bastion: 2 },
     bastion_first: { Bastion: 0, Tour: 1, Bulle: 2 },
@@ -248,6 +333,13 @@ const displayedMembers = [...members].sort((a, b) => {
 
   if (typeRankA !== typeRankB) {
     return typeRankA - typeRankB;
+  }
+
+  const zoneRankA = getZoneRank(assignmentA);
+  const zoneRankB = getZoneRank(assignmentB);
+
+  if (zoneRankA !== zoneRankB) {
+    return zoneRankA - zoneRankB;
   }
 
   const numberA = assignmentA.number ?? 99;
@@ -266,13 +358,15 @@ const openAssignmentModal = (member) => {
   setAssignmentDraft({
     type: parsedAssignment.type,
     number: parsedAssignment.number || 1,
+    zoneType: parsedAssignment.zoneType || "Bastion",
+    zoneNumber: parsedAssignment.zoneType === "Bulle" ? null : parsedAssignment.zoneNumber || 1,
   });
 };
 
 const saveAssignmentDraft = async () => {
   if (!assignmentModalMember || !setMemberAssignment) return;
 
-  const nextAssignment = buildAssignmentValue(assignmentDraft.type, assignmentDraft.number);
+  const nextAssignment = buildAssignmentValue(assignmentDraft);
   const saved = await setMemberAssignment(assignmentModalMember.id, nextAssignment);
   if (saved !== false) {
     setAssignmentModalMember(null);
@@ -1156,6 +1250,8 @@ onClick={() => {
                       ...previous,
                       type: event.target.value,
                       number: event.target.value === "Bulle" ? 1 : previous.number || 1,
+                      zoneType: previous.zoneType || "Bastion",
+                      zoneNumber: previous.zoneType === "Bulle" ? null : previous.zoneNumber || 1,
                     }))
                   }
                   className="mt-2 h-11 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400/60"
@@ -1166,10 +1262,43 @@ onClick={() => {
                 </select>
               </label>
 
+              {assignmentDraft.type === "Tour" ? (
+                <div>
+                  <div className="text-sm text-zinc-400">
+                    {t("guildManagement.assignmentZone", "Zone")}
+                  </div>
+                  <div className="mt-2 grid grid-cols-5 gap-2">
+                    {assignmentZones.map((zone) => (
+                      <button
+                        key={zone.code}
+                        type="button"
+                        onClick={() =>
+                          setAssignmentDraft((previous) => ({
+                            ...previous,
+                            zoneType: zone.type,
+                            zoneNumber: zone.number,
+                          }))
+                        }
+                        className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                          assignmentDraft.zoneType === zone.type &&
+                          Number(assignmentDraft.zoneNumber || 0) === Number(zone.number || 0)
+                            ? "border-emerald-300/70 bg-emerald-500/15 text-emerald-100"
+                            : "border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-600 hover:text-white"
+                        }`}
+                      >
+                        {zone.code}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               {assignmentDraft.type !== "Bulle" ? (
                 <div>
                   <div className="text-sm text-zinc-400">
-                    {t("guildManagement.assignmentNumber", "Numero")}
+                    {assignmentDraft.type === "Tour"
+                      ? t("guildManagement.assignmentTowerNumber", "Numero de tour")
+                      : t("guildManagement.assignmentNumber", "Numero")}
                   </div>
                   <div className="mt-2 grid grid-cols-4 gap-2">
                     {[1, 2, 3, 4].map((number) => (

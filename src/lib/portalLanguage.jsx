@@ -394,6 +394,8 @@ const PORTAL_TRANSLATIONS = {
   "guildManagement.assignmentModalTitle": "Defense position",
   "guildManagement.assignmentType": "Category",
   "guildManagement.assignmentNumber": "Number",
+  "guildManagement.assignmentTowerNumber": "Tower number",
+  "guildManagement.assignmentZone": "Zone",
   "guildManagement.likeDefense": "Like this defense",
   "guildManagement.dislikeDefense": "Dislike this defense",
   "gvg.ally": "Ally",
