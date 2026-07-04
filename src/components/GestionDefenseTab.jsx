@@ -37,11 +37,40 @@ export default function GestionDefenseTab({
   getDefenseLikeTargetId,
 }) {
   const { t } = usePortalLanguage();
-  const formatDefenseTypeLabel = (value) => {
-    const normalizedType = String(value || "").trim().toLowerCase();
+  const parseAssignment = (value) => {
+    const text = String(value || "").trim();
+    const normalized = text
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    const numberMatch = normalized.match(/\b([1-4])\b/);
 
-    if (normalizedType === "tour") return t("defenses.tower", "Tour");
-    if (normalizedType === "bastion") return t("defenses.bastion", "Bastion");
+    if (normalized.includes("bastion")) {
+      return { type: "Bastion", number: numberMatch ? Number(numberMatch[1]) : null };
+    }
+    if (normalized.includes("bulle") || normalized.includes("bubble")) {
+      return { type: "Bulle", number: null };
+    }
+
+    return { type: "Tour", number: numberMatch ? Number(numberMatch[1]) : null };
+  };
+  const buildAssignmentValue = (type, number) => {
+    if (type === "Bulle") return "Bulle";
+    const parsedNumber = Number(number);
+    return parsedNumber >= 1 && parsedNumber <= 4 ? `${type} ${parsedNumber}` : type;
+  };
+  const formatDefenseTypeLabel = (value) => {
+    const parsedAssignment = parseAssignment(value);
+    const normalizedType = parsedAssignment.type.toLowerCase();
+
+    if (normalizedType === "tour") {
+      const label = t("defenses.tower", "Tour");
+      return parsedAssignment.number ? `${label} ${parsedAssignment.number}` : label;
+    }
+    if (normalizedType === "bastion") {
+      const label = t("defenses.bastion", "Bastion");
+      return parsedAssignment.number ? `${label} ${parsedAssignment.number}` : label;
+    }
     if (normalizedType === "bulle") return t("defenses.bubble", "Bulle");
     return value || "";
   };
@@ -61,6 +90,11 @@ export default function GestionDefenseTab({
   const [memberView, setMemberView] = useState("defenses");
   const [roleSortMode, setRoleSortMode] = useState("alpha");
   const [defenseListFilter, setDefenseListFilter] = useState("tour");
+  const [assignmentModalMember, setAssignmentModalMember] = useState(null);
+  const [assignmentDraft, setAssignmentDraft] = useState({
+    type: "Tour",
+    number: 1,
+  });
 
   const [infoModalOpen, setInfoModalOpen] = useState(false);
 const [infoDefense, setInfoDefense] = useState(null);
@@ -125,6 +159,7 @@ const cycleRoleSortMode = () => {
   setRoleSortMode((prev) => {
     if (prev === "alpha") return "tour_first";
     if (prev === "tour_first") return "bastion_first";
+    if (prev === "bastion_first") return "bubble_first";
     return "alpha";
   });
 };
@@ -200,18 +235,49 @@ const displayedMembers = [...members].sort((a, b) => {
     return a.name.localeCompare(b.name);
   }
 
-  if (roleSortMode === "tour_first") {
-    const order = { Tour: 0, Bulle: 1, Bastion: 2 };
-    return (order[a.assignment] ?? 99) - (order[b.assignment] ?? 99);
+  const assignmentA = parseAssignment(a.assignment);
+  const assignmentB = parseAssignment(b.assignment);
+  const orderByMode = {
+    tour_first: { Tour: 0, Bulle: 1, Bastion: 2 },
+    bastion_first: { Bastion: 0, Tour: 1, Bulle: 2 },
+    bubble_first: { Bulle: 0, Tour: 1, Bastion: 2 },
+  };
+  const order = orderByMode[roleSortMode] || orderByMode.tour_first;
+  const typeRankA = order[assignmentA.type] ?? 99;
+  const typeRankB = order[assignmentB.type] ?? 99;
+
+  if (typeRankA !== typeRankB) {
+    return typeRankA - typeRankB;
   }
 
-  if (roleSortMode === "bastion_first") {
-    const order = { Bastion: 0, Tour: 1, Bulle: 2 };
-    return (order[a.assignment] ?? 99) - (order[b.assignment] ?? 99);
+  const numberA = assignmentA.number ?? 99;
+  const numberB = assignmentB.number ?? 99;
+
+  if (numberA !== numberB) {
+    return numberA - numberB;
   }
 
-  return 0;
+  return a.name.localeCompare(b.name);
 });
+
+const openAssignmentModal = (member) => {
+  const parsedAssignment = parseAssignment(member.assignment);
+  setAssignmentModalMember(member);
+  setAssignmentDraft({
+    type: parsedAssignment.type,
+    number: parsedAssignment.number || 1,
+  });
+};
+
+const saveAssignmentDraft = async () => {
+  if (!assignmentModalMember || !setMemberAssignment) return;
+
+  const nextAssignment = buildAssignmentValue(assignmentDraft.type, assignmentDraft.number);
+  const saved = await setMemberAssignment(assignmentModalMember.id, nextAssignment);
+  if (saved !== false) {
+    setAssignmentModalMember(null);
+  }
+};
 
 return (
   <div className="space-y-6">
@@ -928,7 +994,9 @@ return (
       ? "A→Z"
       : roleSortMode === "tour_first"
       ? t("defenses.towers", "Tours")
-      : t("defenses.bastions", "Bastions")}
+      : roleSortMode === "bastion_first"
+      ? t("defenses.bastions", "Bastions")
+      : t("defenses.bubbles", "Bulles")}
   </span>
 </button>
                 <div>{t("guildManagement.completion", "Completion")}</div>
@@ -958,7 +1026,7 @@ onClick={() => {
   setMemberView("defenses");
 
   setDefenseListFilter(
-    (member.assignment || "Tour") === "Bastion"
+    parseAssignment(member.assignment).type === "Bastion"
       ? "bastion"
       : "tour"
   );
@@ -983,17 +1051,7 @@ onClick={() => {
     <div
       onClick={(e) => {
         e.stopPropagation();
-        if (!setMemberAssignment) return;
-
-        const current = member.assignment || "Tour";
-        const next =
-          current === "Tour"
-            ? "Bastion"
-            : current === "Bastion"
-            ? "Bulle"
-            : "Tour";
-
-        setMemberAssignment(member.id, next);
+        openAssignmentModal(member);
       }}
       className="inline-flex cursor-pointer rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-1 text-sm text-zinc-200 hover:bg-zinc-800"
     >
@@ -1073,6 +1131,89 @@ onClick={() => {
             </div>
           </div>
         </>
+      )}
+      {assignmentModalMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white shadow-2xl">
+            <div className="mb-5">
+              <div className="text-lg font-semibold">
+                {t("guildManagement.assignmentModalTitle", "Position defense")}
+              </div>
+              <div className="mt-1 text-sm text-zinc-400">
+                {assignmentModalMember.name}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <label className="block">
+                <span className="text-sm text-zinc-400">
+                  {t("guildManagement.assignmentType", "Categorie")}
+                </span>
+                <select
+                  value={assignmentDraft.type}
+                  onChange={(event) =>
+                    setAssignmentDraft((previous) => ({
+                      ...previous,
+                      type: event.target.value,
+                      number: event.target.value === "Bulle" ? 1 : previous.number || 1,
+                    }))
+                  }
+                  className="mt-2 h-11 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none focus:border-emerald-400/60"
+                >
+                  <option value="Tour">{t("defenses.tower", "Tour")}</option>
+                  <option value="Bastion">{t("defenses.bastion", "Bastion")}</option>
+                  <option value="Bulle">{t("defenses.bubble", "Bulle")}</option>
+                </select>
+              </label>
+
+              {assignmentDraft.type !== "Bulle" ? (
+                <div>
+                  <div className="text-sm text-zinc-400">
+                    {t("guildManagement.assignmentNumber", "Numero")}
+                  </div>
+                  <div className="mt-2 grid grid-cols-4 gap-2">
+                    {[1, 2, 3, 4].map((number) => (
+                      <button
+                        key={number}
+                        type="button"
+                        onClick={() =>
+                          setAssignmentDraft((previous) => ({
+                            ...previous,
+                            number,
+                          }))
+                        }
+                        className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                          Number(assignmentDraft.number) === number
+                            ? "border-emerald-300/70 bg-emerald-500/15 text-emerald-100"
+                            : "border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-600 hover:text-white"
+                        }`}
+                      >
+                        {number}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAssignmentModalMember(null)}
+                className="rounded-xl border border-zinc-700 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-800"
+              >
+                {t("common.cancel", "Annuler")}
+              </button>
+              <button
+                type="button"
+                onClick={saveAssignmentDraft}
+                className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400"
+              >
+                {t("common.save", "Enregistrer")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {infoModalOpen && infoDefense && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">

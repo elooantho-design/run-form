@@ -488,6 +488,8 @@ export default function PortalGuildManagementTab({ session }) {
     if (saved) {
       updateMemberLocal(memberId, { assignment: value });
     }
+
+    return saved;
   }
 
   async function setMemberStatus(memberId, status) {
