@@ -704,7 +704,7 @@ async function handleUpdate(req, res) {
 }
 
 async function handleDelete(req, res) {
-  const { strat_id } = req.body || {};
+  const { strat_id, targetGuildCode, gvgDefenseId } = req.body || {};
   const scope = await resolveRunScope(supabase, req);
 
   if (!scope.canManageOwnRuns) {
@@ -713,6 +713,10 @@ async function handleDelete(req, res) {
 
   if (!strat_id) {
     return res.status(400).json({ error: "strat_id manquant" });
+  }
+
+  if (targetGuildCode && !canUseRunTargetGuild(scope, targetGuildCode)) {
+    return res.status(403).json({ error: "guilde cible hors perimetre" });
   }
 
   const existingStrat = await fetchScopedStratById(supabase, strat_id, scope);
@@ -738,9 +742,15 @@ async function handleDelete(req, res) {
     return res.status(500).json({ error: "erreur suppression strat" });
   }
 
+  const targetGuild = targetGuildCode ? getRunTargetGuildCode(scope, targetGuildCode) : null;
+  const gvgStatus = targetGuild
+    ? await refreshGvgDefenseStatus(supabase, gvgDefenseId, targetGuild)
+    : null;
+
   return res.status(200).json({
     success: true,
     strat_id,
+    gvg_status: gvgStatus?.status || null,
   });
 }
 

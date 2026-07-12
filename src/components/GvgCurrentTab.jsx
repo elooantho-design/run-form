@@ -1,13 +1,18 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Ban, Pencil, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import {
+  getGuildSpaceKey,
   getGvgGuildLabel,
+  getSessionGuildCode,
   getVisibleGvgGuildCodes,
   isExternalRunGuildCode,
+  isPaladinGuildCode,
   isPaladinAdminSession,
+  isPaladinSession,
 } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
@@ -33,6 +38,34 @@ function getRunSessionParams(session) {
     discordId: session?.discordId || session?.discord_id || "",
     guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
   };
+}
+
+function getRunSessionPayload(session) {
+  return {
+    ...getRunSessionParams(session),
+    role: session?.role || "",
+  };
+}
+
+function normalizeRoleValue(role) {
+  return String(role || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function isAdminOrLeaderSession(session) {
+  const role = normalizeRoleValue(session?.role);
+  return Boolean(
+    session?.isAdmin === true ||
+      session?.admin === true ||
+      session?.isLeader === true ||
+      session?.leader === true ||
+      role.includes("admin") ||
+      role.includes("administrateur") ||
+      role === "leader"
+  );
 }
 
 function getStatusClasses(status) {
@@ -159,7 +192,7 @@ function shouldShowDefenseForCurrentFilter(defense, selectedFilter) {
   return true;
 }
 
-export default function GvgCurrentTab({ session: portalSession } = {}) {
+export default function GvgCurrentTab({ session: portalSession, onEditRun } = {}) {
   const apiBase = useMemo(() => getApiBase(), []);
   const { language, t } = usePortalLanguage();
 const [refreshTick, setRefreshTick] = useState(0);
@@ -190,6 +223,8 @@ const [refreshTick, setRefreshTick] = useState(0);
     const [stratModalLoading, setStratModalLoading] = useState(false);
     const [stratModalMessage, setStratModalMessage] = useState("");
     const [stratModalItems, setStratModalItems] = useState([]);
+    const [stratModalDefenseId, setStratModalDefenseId] = useState(null);
+    const [stratActionLoading, setStratActionLoading] = useState(null);
     const [reproCandidates, setReproCandidates] = useState([]);
     const [reproHeroes, setReproHeroes] = useState([]);
     const [reproCandidatesModalOpen, setReproCandidatesModalOpen] = useState(false);
@@ -208,6 +243,7 @@ const [refreshTick, setRefreshTick] = useState(0);
   }, []);
   const session = portalSession || dashboardSession;
   const showExternalRunAlerts = useMemo(() => isPaladinAdminSession(session), [session]);
+  const canUseStratAdminActions = useMemo(() => isAdminOrLeaderSession(session), [session]);
   const visibleGuilds = useMemo(() => getVisibleGvgGuildCodes(session), [session]);
   const [selectedGuild, setSelectedGuild] = useState(() => {
     return localStorage.getItem("gvg_selected_guild") || "";
@@ -541,6 +577,7 @@ async function openReproCandidates(defense) {
 
 async function openStratView(defenseId) {
   try {
+    setStratModalDefenseId(defenseId);
     setStratModalLoading(true);
     setStratModalMessage("");
     setStratModalItems([]);
@@ -867,6 +904,182 @@ async function markDefenseAsOpened(defenseId) {
       return next;
     });
   }
+}
+
+function canManageRunFromCurrent(strat) {
+  if (!canUseStratAdminActions) return false;
+
+  const runGuildCode = strat?.guild_code || "";
+
+  if (isPaladinSession(session)) {
+    return !runGuildCode || isPaladinGuildCode(runGuildCode);
+  }
+
+  return Boolean(
+    runGuildCode &&
+      getGuildSpaceKey(runGuildCode) === getGuildSpaceKey(getSessionGuildCode(session))
+  );
+}
+
+function updateGvgDefenseStatus(defenseId, status) {
+  if (!defenseId || !status) return;
+
+  setDefenses((prev) =>
+    prev.map((defense) =>
+      defense.id === defenseId ? { ...defense, status } : defense
+    )
+  );
+}
+
+async function handleBoycottStrat(strat) {
+  const stratId = strat?.strat_id;
+
+  if (!stratId) {
+    setStratModalMessage(t("gvgCurrent.errorMissingStrat", "Run introuvable."));
+    return;
+  }
+
+  try {
+    setStratActionLoading({ type: "boycott", id: stratId });
+
+    const response = await fetch(`${apiBase}/api/run?action=boycott`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session: getRunSessionPayload(session),
+        strat_id: stratId,
+        targetGuildCode: selectedGuild,
+        gvgDefenseId: stratModalDefenseId,
+        boycott: true,
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setStratModalMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "run-boycott",
+          status: response.status,
+        })
+      );
+      return;
+    }
+
+    if (!response.ok) {
+      setStratModalMessage(
+        formatTranslation(t, "gvgCurrent.errorBoycottRun", "Boycott impossible : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
+      return;
+    }
+
+    updateGvgDefenseStatus(stratModalDefenseId, data?.gvg_status);
+
+    const nextItems = stratModalItems.filter((item) => item.strat_id !== stratId);
+    setStratModalItems(nextItems);
+    if (!nextItems.length) {
+      setStratModalMessage(t("gvgCurrent.noStratFound", "Aucune strat trouvee."));
+    }
+  } catch (error) {
+    console.error("handleBoycottStrat error:", error);
+    setStratModalMessage(
+      formatTranslation(t, "gvgCurrent.errorBoycottRun", "Boycott impossible : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
+  } finally {
+    setStratActionLoading(null);
+  }
+}
+
+async function handleDeleteStrat(strat) {
+  const stratId = strat?.strat_id;
+
+  if (!stratId) {
+    setStratModalMessage(t("gvgCurrent.errorMissingStrat", "Run introuvable."));
+    return;
+  }
+
+  const confirmed = window.confirm(
+    formatTranslation(t, "gvgCurrent.deleteRunConfirm", "Supprimer la strat #{number} ?", {
+      number: stratId,
+    })
+  );
+
+  if (!confirmed) return;
+
+  try {
+    setStratActionLoading({ type: "delete", id: stratId });
+
+    const response = await fetch(`${apiBase}/api/run?action=delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session: getRunSessionPayload(session),
+        strat_id: stratId,
+        targetGuildCode: selectedGuild,
+        gvgDefenseId: stratModalDefenseId,
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setStratModalMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "run-delete",
+          status: response.status,
+        })
+      );
+      return;
+    }
+
+    if (!response.ok) {
+      setStratModalMessage(
+        formatTranslation(t, "gvgCurrent.errorDeleteRun", "Suppression impossible : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
+      return;
+    }
+
+    updateGvgDefenseStatus(stratModalDefenseId, data?.gvg_status);
+
+    const nextItems = stratModalItems.filter((item) => item.strat_id !== stratId);
+    setStratModalItems(nextItems);
+    if (!nextItems.length) {
+      setStratModalMessage(t("gvgCurrent.noStratFound", "Aucune strat trouvee."));
+    }
+  } catch (error) {
+    console.error("handleDeleteStrat error:", error);
+    setStratModalMessage(
+      formatTranslation(t, "gvgCurrent.errorDeleteRun", "Suppression impossible : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
+  } finally {
+    setStratActionLoading(null);
+  }
+}
+
+function handleEditStrat(strat) {
+  const stratId = strat?.strat_id;
+  if (!stratId || typeof onEditRun !== "function") return;
+
+  setStratModalOpen(false);
+  onEditRun(stratId);
 }
 
 function renderDefenseCard(defense, key = defense.id) {
@@ -1728,6 +1941,66 @@ function renderDesktopSlot(slot, team) {
                   </span>
                 ) : null}
               </div>
+
+              {canUseStratAdminActions ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      !canManageRunFromCurrent(strat) ||
+                      stratActionLoading?.id === strat.strat_id
+                    }
+                    title={
+                      canManageRunFromCurrent(strat)
+                        ? t("gvgCurrent.editRun", "Modifier")
+                        : t("gvgCurrent.editLimited", "Modification limitee a la banque modifiable")
+                    }
+                    onClick={() => handleEditStrat(strat)}
+                    className="rounded-2xl border-zinc-700 bg-zinc-950/60 text-zinc-100 hover:bg-zinc-800"
+                  >
+                    <Pencil className="mr-2 h-4 w-4" />
+                    {t("common.edit", "Modifier")}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={stratActionLoading?.id === strat.strat_id}
+                    onClick={() => handleBoycottStrat(strat)}
+                    className="rounded-2xl border-amber-500/50 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+                  >
+                    <Ban className="mr-2 h-4 w-4" />
+                    {stratActionLoading?.type === "boycott" && stratActionLoading?.id === strat.strat_id
+                      ? t("common.saving", "Enregistrement...")
+                      : t("gvgCurrent.boycottRun", "Boycotter")}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={
+                      !canManageRunFromCurrent(strat) ||
+                      stratActionLoading?.id === strat.strat_id
+                    }
+                    title={
+                      canManageRunFromCurrent(strat)
+                        ? t("gvgCurrent.deleteRun", "Supprimer")
+                        : t("gvgCurrent.deleteLimited", "Suppression limitee a la banque modifiable")
+                    }
+                    onClick={() => handleDeleteStrat(strat)}
+                    className="rounded-2xl"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {stratActionLoading?.type === "delete" && stratActionLoading?.id === strat.strat_id
+                      ? t("run.deleting", "Suppression...")
+                      : t("common.delete", "Supprimer")}
+                  </Button>
+                </div>
+              ) : null}
 
 {strat.youtube_url ? (
   <div className="mt-3 space-y-3">

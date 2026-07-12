@@ -1262,6 +1262,7 @@ function PortalShell({ session, onLogout }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [portalLicense, setPortalLicense] = useState(null);
   const [portalLicenseLoaded, setPortalLicenseLoaded] = useState(false);
+  const [editRunInitialId, setEditRunInitialId] = useState("");
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
   const isLeaderUser = isLeaderSession(session);
@@ -1414,6 +1415,13 @@ function PortalShell({ session, onLogout }) {
 
   const selectTab = (tabId) => {
     setActive(tabId);
+    setMobileNavOpen(false);
+  };
+
+  const openRunEditor = (runId) => {
+    setEditRunInitialId(String(runId || ""));
+    setActive("run-edit");
+    setAdminNavOpen(true);
     setMobileNavOpen(false);
   };
 
@@ -1682,7 +1690,7 @@ function PortalShell({ session, onLogout }) {
           {active === "demon-monsters" ? <DemonMonstersTab session={session} /> : null}
           {active === "personal-best" ? <PersonalBestTab session={session} /> : null}
           {active === "defenses" ? <MyDefensesTab session={session} /> : null}
-          {active === "gvg" ? <GvgView session={session} /> : null}
+          {active === "gvg" ? <GvgView session={session} onEditRun={openRunEditor} /> : null}
           {active === "run-search" ? <RunSearchGrid session={session} /> : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
@@ -1690,7 +1698,7 @@ function PortalShell({ session, onLogout }) {
           {active === "admin-defenses" ? <PortalAdminDefensesView session={session} /> : null}
           {active === "intersaison" ? <PortalIntersaisonTab session={session} /> : null}
           {active === "run-add" ? <RunAddTab session={session} /> : null}
-          {active === "run-edit" ? <RunEditTab session={session} /> : null}
+          {active === "run-edit" ? <RunEditTab session={session} initialRunId={editRunInitialId} /> : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
           {active === "templates" ? <AddHeroView session={session} /> : null}
           {active === "guilds" ? <GuildsView session={session} /> : null}
@@ -2821,7 +2829,7 @@ function HeroDetailsModal({ hero, language = "fr", onClose }) {
   );
 }
 
-function GvgView({ session }) {
+function GvgView({ session, onEditRun }) {
   const { t } = usePortalLanguage();
   const [activeGvgView, setActiveGvgView] = useState("current");
   const canUseGvgAdminViews = isAdminSession(session);
@@ -2869,7 +2877,7 @@ function GvgView({ session }) {
         })}
       </div>
 
-      {activeGvgView === "current" ? <GvgCurrentTab session={session} /> : null}
+      {activeGvgView === "current" ? <GvgCurrentTab session={session} onEditRun={onEditRun} /> : null}
       {activeGvgView === "panel" && canUseGvgAdminViews ? <GvgPanelTab session={session} /> : null}
       {activeGvgView === "admin" && canUseGvgAdminViews ? <GvgAdminTab session={session} /> : null}
     </section>

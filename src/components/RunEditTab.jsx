@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -161,7 +161,7 @@ function getDirectionOverlayConfig(dir) {
   }
 }
 
-export default function RunEditTab({ session: portalSession } = {}) {
+export default function RunEditTab({ session: portalSession, initialRunId = "" } = {}) {
   const { language, t } = usePortalLanguage();
   const [mode, setMode] = useState("tour");
   const [bgError, setBgError] = useState(false);
@@ -181,7 +181,8 @@ const [deleteLoading, setDeleteLoading] = useState(false);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [attackCode, setAttackCode] = useState("");
   const [commentaire, setCommentaire] = useState("");
-  const [runId, setRunId] = useState("");
+  const [runId, setRunId] = useState(() => String(initialRunId || ""));
+  const lastAutoLoadedRunIdRef = useRef("");
   const apiBase = useMemo(() => getApiBase(), []);
   const dashboardSession = useMemo(() => getDashboardSession(), []);
   const session = portalSession || dashboardSession;
@@ -409,8 +410,10 @@ async function deleteRun() {
   }
 }
 
-async function loadRun() {
-  if (!runId.trim()) {
+async function loadRun(nextRunId = runId) {
+  const targetRunId = String(nextRunId || "").trim();
+
+  if (!targetRunId) {
     setSaveMessage("Indique un ID de run.");
     return;
   }
@@ -421,7 +424,7 @@ async function loadRun() {
 
     const scopeQuery = buildRunScopeQuery(session);
     const response = await fetch(
-      `${apiBase}/api/run?action=get&id=${encodeURIComponent(runId.trim())}${scopeQuery ? `&${scopeQuery}` : ""}`
+      `${apiBase}/api/run?action=get&id=${encodeURIComponent(targetRunId)}${scopeQuery ? `&${scopeQuery}` : ""}`
     );
 
     const rawText = await response.text();
@@ -447,6 +450,7 @@ async function loadRun() {
     }));
 
     setSlots(incomingSlots);
+    setRunId(targetRunId);
     setActivePos(incomingSlots[0]?.id || null);
     setHeroQuery(translateChampionName(incomingSlots[0]?.hero || "", championDisplayMap, language));
     setYoutubeUrl(data?.youtube_url || "");
@@ -462,6 +466,15 @@ async function loadRun() {
     setSaveLoading(false);
   }
 }
+
+useEffect(() => {
+  const nextRunId = String(initialRunId || "").trim();
+  if (!nextRunId || nextRunId === lastAutoLoadedRunIdRef.current) return;
+
+  lastAutoLoadedRunIdRef.current = nextRunId;
+  setRunId(nextRunId);
+  loadRun(nextRunId);
+}, [initialRunId]);
 
 useEffect(() => {
   setBgError(false);
