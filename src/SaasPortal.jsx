@@ -2878,7 +2878,7 @@ function GvgView({ session, onEditRun }) {
       </div>
 
       {activeGvgView === "current" ? <GvgCurrentTab session={session} onEditRun={onEditRun} /> : null}
-      {activeGvgView === "panel" && canUseGvgAdminViews ? <GvgPanelTab session={session} /> : null}
+      {activeGvgView === "panel" && canUseGvgAdminViews ? <GvgPanelTab session={session} onEditRun={onEditRun} /> : null}
       {activeGvgView === "admin" && canUseGvgAdminViews ? <GvgAdminTab session={session} /> : null}
     </section>
   );

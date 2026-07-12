@@ -2029,44 +2029,43 @@ function renderDesktopSlot(slot, team) {
   </div>
 ) : null}
 
-{strat.attack_code ? (
-  <div className="mt-3 flex flex-wrap items-center gap-2">
-    <div className="text-xs text-zinc-500">
-      {t("gvgCurrent.code", "Code")} : {strat.attack_code}
-    </div>
+              <div className="mt-3 grid gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/50 p-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    {t("gvgCurrent.attackCode", "Code d'attaque")}
+                  </span>
+                  {strat.attack_code ? (
+                    <>
+                      <span className="font-semibold text-zinc-100">{strat.attack_code}</span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(strat.attack_code);
+                          } catch (error) {
+                            console.error("clipboard error:", error);
+                          }
+                        }}
+                        className="rounded-2xl border border-zinc-700 bg-zinc-800/60 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700/70"
+                      >
+                        {t("common.copy", "Copier")}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-zinc-400">{t("gvgCurrent.noAttackCode", "Pas de code")}</span>
+                  )}
+                </div>
 
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(strat.attack_code);
-        } catch (error) {
-          console.error("clipboard error:", error);
-        }
-      }}
-      className="rounded-2xl border border-zinc-700 bg-zinc-800/60 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700/70"
-    >
-      {t("common.copy", "Copier")}
-    </button>
-  </div>
-) : null}
-
-{strat.commentaire ? (
-  <div className="mt-2 text-sm text-zinc-200 whitespace-pre-wrap">
-    {strat.commentaire}
-  </div>
-) : null}
-
-              <div className="mt-3 text-xs text-zinc-500">
-                {t("gvgCurrent.slots", "Slots")} :
-              </div>
-
-              <div className="mt-1 text-xs text-zinc-300">
-                {strat.slots.map((s, i) => (
-                  <div key={i}>
-                    {translateChampionName(s.champion, championDisplayMap, language)} {s.position || ""} {s.direction || ""}
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    {t("gvgCurrent.instructions", "Consignes")}
                   </div>
-                ))}
+                  <div className="mt-1 whitespace-pre-wrap text-zinc-200">
+                    {strat.commentaire
+                      ? strat.commentaire
+                      : t("gvgCurrent.noInstructions", "Pas de consigne particuliere")}
+                  </div>
+                </div>
               </div>
             </div>
           ))

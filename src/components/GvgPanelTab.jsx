@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Ban, Pencil, Trash2 } from "lucide-react";
 import {
   getGuildSpaceKey,
   getGvgGuildLabel,
@@ -142,7 +143,7 @@ function normalizeDir(dir) {
   return d;
 }
 
-export default function GvgPanelTab({ session: portalSession } = {}) {
+export default function GvgPanelTab({ session: portalSession, onEditRun } = {}) {
   const { language, t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const dashboardSession = useMemo(() => {
@@ -1174,6 +1175,8 @@ const handleDeleteStrat = async (run) => {
       body: JSON.stringify({
         session: getRunSessionPayload(session),
         strat_id: stratId,
+        targetGuildCode: runsModal?.guild || guild,
+        gvgDefenseId: runsModal?.id || null,
       }),
     });
 
@@ -1199,6 +1202,14 @@ const handleDeleteStrat = async (run) => {
     setMessage(`Suppression impossible : ${err?.message || "erreur inconnue"}`);
   }
 };
+
+function handleEditStrat(run) {
+  const stratId = run?.strat_id;
+  if (!stratId || typeof onEditRun !== "function") return;
+
+  setRunsModal(null);
+  onEditRun(stratId);
+}
 
 const handleBoycottStrat = async (run) => {
   const stratId = run?.strat_id;
@@ -1866,43 +1877,103 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                           ) : null}
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleBoycottStrat(run)}
-                            className="rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-white hover:bg-amber-700"
-                          >
-                            {t("gvgPanel.boycottFor", "Boycotter pour")} {getGvgGuildLabel(runsModal.guild || guild)}
-                          </button>
+                        {canUsePanelActions ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleEditStrat(run)}
+                              disabled={!canDeleteRunFromPanel(run)}
+                              title={
+                                canDeleteRunFromPanel(run)
+                                  ? t("gvgPanel.editStrat", "Modifier la strat")
+                                  : t("gvgPanel.editLimited", "Modification limitee a la banque modifiable")
+                              }
+                              className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${
+                                canDeleteRunFromPanel(run)
+                                  ? "bg-zinc-700 text-white hover:bg-zinc-600"
+                                  : "cursor-not-allowed bg-zinc-700 text-zinc-300 opacity-50"
+                              }`}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              {t("common.edit", "Modifier")}
+                            </button>
 
-                          <button
-                            onClick={() => handleDeleteStrat(run)}
-                            disabled={!canDeleteRunFromPanel(run)}
-                            title={
-                              canDeleteRunFromPanel(run)
-                                ? t("gvgPanel.deleteStrat", "Supprimer la strat")
-                                : t("gvgPanel.deleteLimited", "Suppression limitee a la banque modifiable")
-                            }
-                            className={`rounded px-2 py-1 text-xs ${
-                              canDeleteRunFromPanel(run)
-                                ? "bg-red-600 hover:bg-red-700"
-                                : "cursor-not-allowed bg-zinc-700 opacity-50"
-                            }`}
-                          >
-                            {t("common.delete", "Supprimer")}
-                          </button>
-                        </div>
+                            <button
+                              type="button"
+                              onClick={() => handleBoycottStrat(run)}
+                              className="inline-flex items-center gap-1 rounded bg-amber-600 px-2 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+                            >
+                              <Ban className="h-3.5 w-3.5" />
+                              {t("gvgPanel.boycottFor", "Boycotter pour")} {getGvgGuildLabel(runsModal.guild || guild)}
+                            </button>
+
+                            <button
+                              onClick={() => handleDeleteStrat(run)}
+                              disabled={!canDeleteRunFromPanel(run)}
+                              title={
+                                canDeleteRunFromPanel(run)
+                                  ? t("gvgPanel.deleteStrat", "Supprimer la strat")
+                                  : t("gvgPanel.deleteLimited", "Suppression limitee a la banque modifiable")
+                              }
+                              className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${
+                                canDeleteRunFromPanel(run)
+                                  ? "bg-red-600 text-white hover:bg-red-700"
+                                  : "cursor-not-allowed bg-zinc-700 text-zinc-300 opacity-50"
+                              }`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              {t("common.delete", "Supprimer")}
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
 
-                      <div className="w-full aspect-video overflow-hidden rounded-xl border border-zinc-800">
-                        <iframe
-                          src={getYoutubeEmbedUrl(run.youtube_url)}
-                          className="h-full w-full"
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                          allowFullScreen
-                          loading="lazy"
-                          referrerPolicy="strict-origin-when-cross-origin"
-                        />
+                      {run.youtube_url ? (
+                        getYoutubeEmbedUrl(run.youtube_url) ? (
+                          <div className="w-full aspect-video overflow-hidden rounded-xl border border-zinc-800">
+                            <iframe
+                              src={getYoutubeEmbedUrl(run.youtube_url)}
+                              className="h-full w-full"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                              allowFullScreen
+                              loading="lazy"
+                              referrerPolicy="strict-origin-when-cross-origin"
+                            />
+                          </div>
+                        ) : (
+                          <a
+                            href={run.youtube_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm text-blue-400 underline"
+                          >
+                            {t("gvgCurrent.openVideo", "Ouvrir la video")}
+                          </a>
+                        )
+                      ) : null}
+
+                      <div className="mt-3 grid gap-2 rounded-xl border border-zinc-700/70 bg-zinc-950/50 p-3 text-sm">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            {t("gvgPanel.attackCode", "Code d'attaque")}
+                          </span>
+                          {run.attack_code ? (
+                            <span className="font-semibold text-zinc-100">{run.attack_code}</span>
+                          ) : (
+                            <span className="text-zinc-400">{t("gvgPanel.noAttackCode", "Pas de code")}</span>
+                          )}
+                        </div>
+
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            {t("gvgPanel.instructions", "Consignes")}
+                          </div>
+                          <div className="mt-1 whitespace-pre-wrap text-zinc-200">
+                            {run.commentaire
+                              ? run.commentaire
+                              : t("gvgPanel.noInstructions", "Pas de consigne particuliere")}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ))}
