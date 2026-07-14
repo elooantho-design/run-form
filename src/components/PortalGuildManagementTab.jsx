@@ -730,27 +730,34 @@ export default function PortalGuildManagementTab({ session }) {
   }
 
   async function setMemberStatus(memberId, status) {
-    const targetMember = members.find((member) => String(member.id) === String(memberId));
-    const saved = await updateMemberField(
-      memberId,
-      { status },
-      "Erreur statut Portal:",
-      {
-        targetMemberId: memberId,
-        targetName: targetMember?.name || "",
-        actionType: "guild_management_status_update",
-        entityType: "member",
-        entityId: String(memberId),
-        summary: `${targetMember?.name || "Joueur"} : statut defense passe a ${status}`,
-        metadata: {
-          status,
-          guildCode: activeGuildCode,
-        },
-      }
-    );
+    setSavingMessage(t("common.saving", "Sauvegarde..."));
+    setErrorMessage("");
 
-    if (saved) {
+    try {
+      const response = await fetch("/api/portal-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update-defense-status",
+          actorMemberId: session?.memberId || session?.id || "",
+          memberId,
+          status,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || `HTTP ${response.status}`);
+      }
+
       updateMemberLocal(memberId, { status });
+      setMemberPanelMember((previous) =>
+        previous && String(previous.id) === String(memberId) ? { ...previous, status } : previous
+      );
+    } catch (error) {
+      console.error("Erreur statut Portal:", error);
+      setErrorMessage(error?.message || "Sauvegarde impossible.");
+    } finally {
+      setSavingMessage("");
     }
   }
 
@@ -771,39 +778,38 @@ export default function PortalGuildManagementTab({ session }) {
     setSavingMessage(t("guildManagement.resettingStatuses", "Remise a faire des statuts..."));
     setErrorMessage("");
 
-    const { error } = await supabase
-      .from("guild_members")
-      .update({ status: GUILD_STATUS_TODO })
-      .in("id", memberIds);
+    try {
+      const response = await fetch("/api/portal-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reset-defense-statuses",
+          actorMemberId: session?.memberId || session?.id || "",
+          guildCode: activeGuildCode,
+          memberIds,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || `HTTP ${response.status}`);
+      }
 
-    setResettingStatuses(false);
-    setSavingMessage("");
-
-    if (error) {
+      const updatedIds = payload?.memberIds?.length ? payload.memberIds : memberIds;
+      setMembers((previous) =>
+        previous.map((member) =>
+          updatedIds.includes(member.id) ? { ...member, status: GUILD_STATUS_TODO } : member
+        )
+      );
+      setMemberPanelMember((previous) =>
+        previous && updatedIds.includes(previous.id) ? { ...previous, status: GUILD_STATUS_TODO } : previous
+      );
+    } catch (error) {
       console.error("Erreur reset statuts gestion guilde:", error);
-      setErrorMessage(error.message || t("guildManagement.resetStatusesError", "Reset des statuts impossible."));
-      return;
+      setErrorMessage(error?.message || t("guildManagement.resetStatusesError", "Reset des statuts impossible."));
+    } finally {
+      setResettingStatuses(false);
+      setSavingMessage("");
     }
-
-    setMembers((previous) =>
-      previous.map((member) =>
-        memberIds.includes(member.id) ? { ...member, status: GUILD_STATUS_TODO } : member
-      )
-    );
-    setMemberPanelMember((previous) =>
-      previous && memberIds.includes(previous.id) ? { ...previous, status: GUILD_STATUS_TODO } : previous
-    );
-
-    void logPortalActivity(session, {
-      actionType: "guild_management_status_reset",
-      entityType: "guild_members",
-      entityId: activeGuildCode,
-      summary: `${session?.watcherName || session?.name || "Admin"} a remis les statuts defense en A faire (${activeGuildCode})`,
-      metadata: {
-        guildCode: activeGuildCode,
-        count: memberIds.length,
-      },
-    });
   }
 
   async function setDefenseVote(defense, value) {

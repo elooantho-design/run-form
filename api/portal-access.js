@@ -15,8 +15,13 @@ const MAX_MEMBER_ROWS = 600;
 const MAX_SUGGESTIONS = 20;
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFENSE_FOLLOWUP_TABLE = "guild_defense_discord_followups";
+const TODO_STATUS = "\u00c0 faire";
 const VERIFY_STATUS = "\u00c0 v\u00e9rifier";
+const VALID_STATUS = "Valid\u00e9";
 const DISCORD_STATUS_TODO = "\u274c";
+const DISCORD_STATUS_VERIFY = "\u26a0\uFE0F";
+const DISCORD_STATUS_DONE = "\u2705";
+const DEFENSE_STATUSES = new Set([TODO_STATUS, VERIFY_STATUS, VALID_STATUS]);
 
 function sendJson(res, status, payload) {
   res.statusCode = status;
@@ -198,11 +203,17 @@ function buildDiscordStatusChannelName(currentName, targetName, statusEmoji) {
   const cleanCurrent = cleanText(currentName);
   const cleanTarget = cleanText(targetName);
   const strippedCurrent = cleanCurrent
-    .replace(/^\s*(?:\u2705|\u274c)\s*(?:[-–—]\s*)?/u, "")
+    .replace(/^\s*(?:\u2705|\u274c|\u26a0\uFE0F?|\u26a0)\s*(?:[-\u2013\u2014]\s*)?/u, "")
     .trim();
   const baseName = strippedCurrent || cleanTarget || cleanCurrent || "Joueur";
 
   return `${statusEmoji} - ${baseName}`.slice(0, 100);
+}
+
+function getDiscordStatusEmoji(status) {
+  if (status === VERIFY_STATUS) return DISCORD_STATUS_VERIFY;
+  if (status === VALID_STATUS) return DISCORD_STATUS_DONE;
+  return DISCORD_STATUS_TODO;
 }
 
 async function renameDiscordChannelStatus(channelId, targetName, statusEmoji) {
@@ -494,6 +505,208 @@ async function handleReset(body, res) {
   });
 }
 
+async function handleUpdateDefenseStatus(body, res) {
+  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
+  const memberId = cleanText(body.memberId || body.member_id);
+  const status = cleanText(body.status);
+  const adminCheck = await requireAdminById(actorMemberId);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Joueur manquant." });
+    return;
+  }
+
+  if (!DEFENSE_STATUSES.has(status)) {
+    sendJson(res, 400, { error: "Statut defense invalide." });
+    return;
+  }
+
+  const { data: target, error: targetError } = await supabase
+    .from("guild_members")
+    .select("id, role, discord_id, watcher_name, guild_code, personal_forum_post_url")
+    .eq("id", memberId)
+    .maybeSingle();
+
+  if (targetError) {
+    sendJson(res, 500, { error: targetError.message || "Joueur introuvable." });
+    return;
+  }
+
+  if (!target) {
+    sendJson(res, 404, { error: "Joueur introuvable." });
+    return;
+  }
+
+  if (!canAdminManageTarget(adminCheck.admin, target)) {
+    sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+    return;
+  }
+
+  const { error: statusError } = await supabase
+    .from("guild_members")
+    .update({ status })
+    .eq("id", target.id);
+
+  if (statusError) {
+    sendJson(res, 500, { error: statusError.message || "Mise a jour statut impossible." });
+    return;
+  }
+
+  const warnings = [];
+  let forumRename = null;
+  const forumChannelId = parseDiscordChannelId(target.personal_forum_post_url);
+  if (forumChannelId) {
+    try {
+      forumRename = await renameDiscordChannelStatus(
+        forumChannelId,
+        getMemberName(target),
+        getDiscordStatusEmoji(status)
+      );
+    } catch (renameError) {
+      warnings.push({
+        type: "discord_channel_rename_failed",
+        message: renameError?.message || "rename failed",
+      });
+    }
+  }
+
+  const adminName = getMemberName(adminCheck.admin);
+  const targetName = getMemberName(target);
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: adminCheck.admin.id,
+    actor_name: adminName,
+    target_member_id: target.id,
+    target_name: targetName,
+    action_type: "guild_management_status_update",
+    entity_type: "guild_members",
+    entity_id: target.id,
+    summary: `${targetName} : statut defense passe a ${status}`,
+    metadata: {
+      guildCode: target.guild_code || "",
+      status,
+      forumRename,
+      warnings,
+    },
+  });
+
+  sendJson(res, 200, {
+    ok: true,
+    memberId: target.id,
+    status,
+    forumSkipped: !forumChannelId,
+    forumRename,
+    warnings,
+  });
+}
+
+async function handleResetDefenseStatuses(body, res) {
+  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
+  const memberIds = Array.isArray(body.memberIds || body.member_ids)
+    ? [...new Set((body.memberIds || body.member_ids).map(cleanText).filter(Boolean))]
+    : [];
+  const adminCheck = await requireAdminById(actorMemberId);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (memberIds.length === 0) {
+    sendJson(res, 400, { error: "Aucun joueur a remettre a faire." });
+    return;
+  }
+
+  if (memberIds.length > MAX_MEMBER_ROWS) {
+    sendJson(res, 400, { error: "Trop de joueurs dans la demande." });
+    return;
+  }
+
+  const { data: targets, error: targetError } = await supabase
+    .from("guild_members")
+    .select("id, role, discord_id, watcher_name, guild_code, personal_forum_post_url")
+    .in("id", memberIds);
+
+  if (targetError) {
+    sendJson(res, 500, { error: targetError.message || "Chargement joueurs impossible." });
+    return;
+  }
+
+  const manageableTargets = (targets || []).filter((target) =>
+    canAdminManageTarget(adminCheck.admin, target)
+  );
+
+  if (manageableTargets.length !== memberIds.length) {
+    sendJson(res, 403, { error: "Certains joueurs ne sont pas dans ton perimetre." });
+    return;
+  }
+
+  const manageableIds = manageableTargets.map((target) => target.id);
+  const { error: statusError } = await supabase
+    .from("guild_members")
+    .update({ status: TODO_STATUS })
+    .in("id", manageableIds);
+
+  if (statusError) {
+    sendJson(res, 500, { error: statusError.message || "Reset des statuts impossible." });
+    return;
+  }
+
+  const warnings = [];
+  const forumRenames = [];
+  for (const target of manageableTargets) {
+    const forumChannelId = parseDiscordChannelId(target.personal_forum_post_url);
+    if (!forumChannelId) continue;
+
+    try {
+      const rename = await renameDiscordChannelStatus(
+        forumChannelId,
+        getMemberName(target),
+        getDiscordStatusEmoji(TODO_STATUS)
+      );
+      forumRenames.push({ memberId: target.id, ...rename });
+    } catch (renameError) {
+      warnings.push({
+        type: "discord_channel_rename_failed",
+        memberId: target.id,
+        memberName: getMemberName(target),
+        message: renameError?.message || "rename failed",
+      });
+    }
+  }
+
+  const adminName = getMemberName(adminCheck.admin);
+  const guildCode = cleanText(body.guildCode || body.guild_code);
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: adminCheck.admin.id,
+    actor_name: adminName,
+    action_type: "guild_management_status_reset",
+    entity_type: "guild_members",
+    entity_id: guildCode || null,
+    summary: `${adminName} a remis les statuts defense en A faire${guildCode ? ` (${guildCode})` : ""}`,
+    metadata: {
+      guildCode,
+      count: manageableTargets.length,
+      renamedCount: forumRenames.filter((rename) => rename?.renamed).length,
+      warnings,
+    },
+  });
+
+  sendJson(res, 200, {
+    ok: true,
+    memberIds: manageableIds,
+    status: TODO_STATUS,
+    forumRenames,
+    warnings,
+  });
+}
+
 async function handleSendDefenses(body, res) {
   const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const memberId = cleanText(body.memberId || body.member_id);
@@ -609,7 +822,11 @@ async function handleSendDefenses(body, res) {
     forumMessageIds = await sendDiscordMessages(forumChannelId, content);
 
     try {
-      forumRename = await renameDiscordChannelStatus(forumChannelId, getMemberName(target), DISCORD_STATUS_TODO);
+      forumRename = await renameDiscordChannelStatus(
+        forumChannelId,
+        getMemberName(target),
+        getDiscordStatusEmoji(VERIFY_STATUS)
+      );
     } catch (renameError) {
       warnings.push({
         type: "discord_channel_rename_failed",
@@ -728,6 +945,16 @@ export default async function handler(req, res) {
 
     if (action === "send-defenses") {
       await handleSendDefenses(body, res);
+      return;
+    }
+
+    if (action === "update-defense-status") {
+      await handleUpdateDefenseStatus(body, res);
+      return;
+    }
+
+    if (action === "reset-defense-statuses") {
+      await handleResetDefenseStatuses(body, res);
       return;
     }
 

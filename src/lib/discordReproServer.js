@@ -1348,7 +1348,7 @@ function buildDiscordStatusChannelName(currentName, targetName, statusEmoji) {
   const cleanCurrent = String(currentName || "").trim();
   const cleanTarget = String(targetName || "").trim();
   const strippedCurrent = cleanCurrent
-    .replace(/^\s*(?:\u2705|\u274c)\s*(?:[-–—]\s*)?/u, "")
+    .replace(/^\s*(?:\u2705|\u274c|\u26a0\uFE0F?|\u26a0)\s*(?:[-\u2013\u2014]\s*)?/u, "")
     .trim();
   const baseName = strippedCurrent || cleanTarget || cleanCurrent || "Joueur";
 
