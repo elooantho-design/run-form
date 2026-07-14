@@ -411,7 +411,9 @@ async function deleteRun() {
 }
 
 async function loadRun(nextRunId = runId) {
-  const targetRunId = String(nextRunId || "").trim();
+  const requestedRunId =
+    typeof nextRunId === "string" || typeof nextRunId === "number" ? nextRunId : runId;
+  const targetRunId = String(requestedRunId || "").trim();
 
   if (!targetRunId) {
     setSaveMessage("Indique un ID de run.");
@@ -574,7 +576,7 @@ useEffect(() => {
   type="button"
   className="rounded-2xl"
   disabled={saveLoading}
-  onClick={loadRun}
+  onClick={() => loadRun()}
 >
   {t("run.load", "Charger")}
 </Button>
