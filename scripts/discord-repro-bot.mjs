@@ -176,9 +176,15 @@ function connect() {
       try {
         const result = await forwardReaction(event);
         if (!result?.ignored) {
-          console.log(
-            `[discord-repro-bot] repro ouverte message=${event.message_id} defense=${result?.gvg_defense_id || "?"}`
-          );
+          if (result?.handler === "guild_defense_followup") {
+            console.log(
+              `[discord-repro-bot] defenses validees message=${event.message_id} member=${result?.member_id || "?"}`
+            );
+          } else {
+            console.log(
+              `[discord-repro-bot] repro ouverte message=${event.message_id} defense=${result?.gvg_defense_id || "?"}`
+            );
+          }
         } else {
           console.log(
             `[discord-repro-bot] reaction ignoree message=${event.message_id} reason=${result?.reason || "unknown"}`

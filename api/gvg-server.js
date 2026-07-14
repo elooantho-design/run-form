@@ -8,6 +8,7 @@ import {
   buildReproTemplateData,
   getDiscordReproRequestById,
   handleDiscordReproReaction,
+  handleGuildDefenseFollowupReaction,
   resolveMemberByDiscordUser,
   saveDiscordModalSubmission,
 } from "../src/lib/discordReproServer.js";
@@ -1130,7 +1131,20 @@ async function handleDiscordReproInternal(req, res, supabase, rawBody) {
   }
 
   if (payload?.action === "reaction_add") {
-    const result = await handleDiscordReproReaction(supabase, payload);
+    const reproResult = await handleDiscordReproReaction(supabase, payload);
+    if (!reproResult?.ignored) {
+      return res.status(200).json({ ...reproResult, handler: "gvg_repro" });
+    }
+
+    const followupResult = await handleGuildDefenseFollowupReaction(supabase, payload);
+    const result = followupResult?.ignored
+      ? {
+          ignored: true,
+          reason: followupResult.reason || reproResult.reason || "reaction_ignored",
+          repro_reason: reproResult.reason || null,
+          followup_reason: followupResult.reason || null,
+        }
+      : { ...followupResult, handler: "guild_defense_followup" };
     return res.status(200).json(result);
   }
 

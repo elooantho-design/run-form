@@ -14,6 +14,9 @@ const TEMPORARY_PASSWORD_PREFIX = "TMP-";
 const MAX_MEMBER_ROWS = 600;
 const MAX_SUGGESTIONS = 20;
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DEFENSE_FOLLOWUP_TABLE = "guild_defense_discord_followups";
+const VERIFY_STATUS = "\u00c0 v\u00e9rifier";
+const DISCORD_STATUS_TODO = "\u274c";
 
 function sendJson(res, status, payload) {
   res.statusCode = status;
@@ -48,6 +51,15 @@ function normalizeGuildCode(value) {
 
 function isPaladinGuildCode(value) {
   return /^G[1-7]$/.test(normalizeGuildCode(value));
+}
+
+function isMissingFollowupTable(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    message.includes(DEFENSE_FOLLOWUP_TABLE)
+  );
 }
 
 function getMemberName(member) {
@@ -180,6 +192,38 @@ async function discordRequest(pathname, options = {}) {
   }
 
   return payload;
+}
+
+function buildDiscordStatusChannelName(currentName, targetName, statusEmoji) {
+  const cleanCurrent = cleanText(currentName);
+  const cleanTarget = cleanText(targetName);
+  const strippedCurrent = cleanCurrent
+    .replace(/^\s*(?:\u2705|\u274c)\s*(?:[-–—]\s*)?/u, "")
+    .trim();
+  const baseName = strippedCurrent || cleanTarget || cleanCurrent || "Joueur";
+
+  return `${statusEmoji} - ${baseName}`.slice(0, 100);
+}
+
+async function renameDiscordChannelStatus(channelId, targetName, statusEmoji) {
+  if (!channelId) return { skipped: true, reason: "missing_channel" };
+
+  const channel = await discordRequest(`/channels/${encodeURIComponent(channelId)}`, {
+    method: "GET",
+  });
+  const before = cleanText(channel?.name);
+  const after = buildDiscordStatusChannelName(before, targetName, statusEmoji);
+
+  if (!after || before === after) {
+    return { skipped: true, reason: "already_named", channelId, before, after };
+  }
+
+  await discordRequest(`/channels/${encodeURIComponent(channelId)}`, {
+    method: "PATCH",
+    body: { name: after },
+  });
+
+  return { renamed: true, channelId, before, after };
 }
 
 function parseDiscordChannelId(value) {
@@ -556,9 +600,73 @@ async function handleSendDefenses(body, res) {
   const forumPostUrl = cleanText(body.forumPostUrl || body.forum_post_url || target.personal_forum_post_url);
   const forumChannelId = parseDiscordChannelId(forumPostUrl);
   let forumMessageIds = [];
+  const warnings = [];
+  let forumRename = null;
+  let followupTracking = null;
+  let statusUpdated = false;
 
   if (forumChannelId) {
     forumMessageIds = await sendDiscordMessages(forumChannelId, content);
+
+    try {
+      forumRename = await renameDiscordChannelStatus(forumChannelId, getMemberName(target), DISCORD_STATUS_TODO);
+    } catch (renameError) {
+      warnings.push({
+        type: "discord_channel_rename_failed",
+        message: renameError?.message || "rename failed",
+      });
+    }
+  }
+
+  const { error: statusError } = await supabase
+    .from("guild_members")
+    .update({ status: VERIFY_STATUS })
+    .eq("id", target.id);
+
+  if (statusError) {
+    warnings.push({
+      type: "member_status_update_failed",
+      message: statusError.message || "status update failed",
+    });
+  } else {
+    statusUpdated = true;
+  }
+
+  if (forumChannelId && forumMessageIds.length > 0) {
+    const { data: followupRow, error: followupError } = await supabase
+      .from(DEFENSE_FOLLOWUP_TABLE)
+      .insert({
+        guild_code: normalizeGuildCode(target.guild_code),
+        member_id: target.id,
+        member_name: getMemberName(target),
+        member_discord_id: target.discord_id || null,
+        admin_member_id: adminCheck.admin.id,
+        admin_name: getMemberName(adminCheck.admin),
+        discord_channel_id: forumChannelId,
+        discord_message_id: forumMessageIds[0] || null,
+        discord_message_ids: forumMessageIds.filter(Boolean),
+        dm_message_ids: dmMessageIds.filter(Boolean),
+        forum_post_url: forumPostUrl || null,
+        defense_names: defenseNames,
+        message_content: content,
+        thread_name_before: forumRename?.before || null,
+        thread_name_after: forumRename?.after || null,
+        state: "pending",
+        updated_at: new Date().toISOString(),
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (followupError) {
+      warnings.push({
+        type: isMissingFollowupTable(followupError)
+          ? "missing_guild_defense_discord_followups_table"
+          : "followup_tracking_failed",
+        message: followupError.message || "followup tracking failed",
+      });
+    } else {
+      followupTracking = { id: followupRow?.id || null };
+    }
   }
 
   const adminName = getMemberName(adminCheck.admin);
@@ -579,6 +687,10 @@ async function handleSendDefenses(body, res) {
       dmMessageIds,
       forumMessageIds,
       forumPostUrl: forumPostUrl || "",
+      forumRename,
+      followupTracking,
+      statusUpdated,
+      warnings,
     },
   });
 
@@ -587,6 +699,10 @@ async function handleSendDefenses(body, res) {
     dmMessageIds,
     forumMessageIds,
     forumSkipped: !forumChannelId,
+    forumRename,
+    followupTracking,
+    statusUpdated,
+    warnings,
   });
 }
 

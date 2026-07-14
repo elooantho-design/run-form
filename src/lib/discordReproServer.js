@@ -4,7 +4,10 @@ const DEFAULT_REPRO_CHANNEL_IDS = {
   G2: "1517470861354078338",
 };
 const REPRO_REQUEST_TABLE = "gvg_discord_repro_requests";
+const DEFENSE_FOLLOWUP_TABLE = "guild_defense_discord_followups";
 const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
+const DEFENSE_STATUS_VALID = "Valid\u00e9";
+const DISCORD_STATUS_DONE = "\u2705";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -12,6 +15,26 @@ function sleep(ms) {
 
 function normalizeGuildCode(value) {
   return String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function isAdminRole(role) {
+  return ["admin", "administrateur", "leader"].includes(normalizeText(role));
+}
+
+function isLeaderRole(role) {
+  return normalizeText(role) === "leader";
+}
+
+function isPaladinGuildCode(value) {
+  return /^G[1-7]$/.test(normalizeGuildCode(value));
 }
 
 function isDiscordReproEligibleDefense(defense) {
@@ -1068,7 +1091,7 @@ export async function resolveMemberByDiscordUser(supabase, user) {
 
   const { data, error } = await supabase
     .from("guild_members")
-    .select("id, watcher_name, discord_id, guild_code")
+    .select("id, watcher_name, discord_id, guild_code, role")
     .eq("discord_id", discordId)
     .maybeSingle();
 
@@ -1298,6 +1321,159 @@ async function sendDiscordDm(userId, content) {
 
 function isWhiteCheckEmoji(emojiName) {
   return ["✅", "white_check_mark", ":white_check_mark:"].includes(String(emojiName || "").trim());
+}
+
+function isMissingDefenseFollowupTable(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    message.includes(DEFENSE_FOLLOWUP_TABLE)
+  );
+}
+
+function canValidateDefenseFollowup(admin, followup) {
+  if (!admin || !isAdminRole(admin.role)) return false;
+  if (isLeaderRole(admin.role)) return true;
+
+  const adminGuild = normalizeGuildCode(admin.guild_code);
+  const targetGuild = normalizeGuildCode(followup.guild_code);
+  if (!adminGuild || !targetGuild) return false;
+
+  if (isPaladinGuildCode(adminGuild) && isPaladinGuildCode(targetGuild)) return true;
+  return adminGuild === targetGuild;
+}
+
+function buildDiscordStatusChannelName(currentName, targetName, statusEmoji) {
+  const cleanCurrent = String(currentName || "").trim();
+  const cleanTarget = String(targetName || "").trim();
+  const strippedCurrent = cleanCurrent
+    .replace(/^\s*(?:\u2705|\u274c)\s*(?:[-–—]\s*)?/u, "")
+    .trim();
+  const baseName = strippedCurrent || cleanTarget || cleanCurrent || "Joueur";
+
+  return `${statusEmoji} - ${baseName}`.slice(0, 100);
+}
+
+async function renameDiscordChannelStatus(channelId, targetName, statusEmoji) {
+  if (!channelId || !getDiscordBotToken()) return { skipped: true, reason: "missing_channel_or_token" };
+
+  const channel = await discordRequest(`/channels/${encodeURIComponent(channelId)}`, {
+    method: "GET",
+  });
+  const before = String(channel?.name || "").trim();
+  const after = buildDiscordStatusChannelName(before, targetName, statusEmoji);
+
+  if (!after || before === after) {
+    return { skipped: true, reason: "already_named", channel_id: channelId, before, after };
+  }
+
+  await discordRequest(`/channels/${encodeURIComponent(channelId)}`, {
+    method: "PATCH",
+    body: { name: after },
+  });
+
+  return { renamed: true, channel_id: channelId, before, after };
+}
+
+async function findDefenseFollowupByDiscordMessage(supabase, messageId) {
+  const { data, error } = await supabase
+    .from(DEFENSE_FOLLOWUP_TABLE)
+    .select("*")
+    .contains("discord_message_ids", [messageId])
+    .neq("state", "deleted")
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error) {
+    if (isMissingDefenseFollowupTable(error)) {
+      return { missingTable: true, followup: null };
+    }
+    throw error;
+  }
+
+  return { missingTable: false, followup: data?.[0] || null };
+}
+
+export async function handleGuildDefenseFollowupReaction(supabase, event) {
+  if (!isWhiteCheckEmoji(event?.emojiName)) {
+    return { ignored: true, reason: "emoji_not_supported" };
+  }
+
+  const messageId = String(event?.messageId || "").trim();
+  const discordUserId = String(event?.userId || "").trim();
+  if (!messageId) {
+    const error = new Error("messageId manquant");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { missingTable, followup } = await findDefenseFollowupByDiscordMessage(supabase, messageId);
+  if (missingTable) return { ignored: true, reason: "missing_guild_defense_discord_followups_table" };
+  if (!followup) return { ignored: true, reason: "followup_not_found" };
+  if (followup.state === "validated") return { ignored: true, reason: "already_validated" };
+
+  const admin = await resolveMemberByDiscordUser(supabase, { id: discordUserId });
+  if (!canValidateDefenseFollowup(admin, followup)) {
+    return { ignored: true, reason: "not_admin_or_wrong_scope" };
+  }
+
+  const now = new Date().toISOString();
+  const rename = await renameDiscordChannelStatus(
+    followup.discord_channel_id || event?.channelId,
+    followup.member_name,
+    DISCORD_STATUS_DONE
+  );
+
+  const { error: memberError } = await supabase
+    .from("guild_members")
+    .update({ status: DEFENSE_STATUS_VALID })
+    .eq("id", followup.member_id);
+  if (memberError) throw memberError;
+
+  const { error: followupError } = await supabase
+    .from(DEFENSE_FOLLOWUP_TABLE)
+    .update({
+      state: "validated",
+      validated_by_member_id: admin.id,
+      validated_by_discord_id: discordUserId || null,
+      validated_by_name: admin.watcher_name || admin.discord_id || "Admin",
+      validated_at: now,
+      thread_name_after: rename?.after || followup.thread_name_after || null,
+      updated_at: now,
+      last_error: null,
+    })
+    .eq("id", followup.id);
+  if (followupError) throw followupError;
+
+  try {
+    await supabase.from("portal_activity_logs").insert({
+      actor_member_id: admin.id,
+      actor_name: admin.watcher_name || admin.discord_id || "Admin",
+      target_member_id: followup.member_id,
+      target_name: followup.member_name || "Joueur",
+      action_type: "guild_management_defenses_validated_discord",
+      entity_type: "guild_defense_discord_followups",
+      entity_id: followup.id,
+      summary: `${admin.watcher_name || admin.discord_id || "Admin"} a valide les defenses de ${followup.member_name || "Joueur"} via Discord`,
+      metadata: {
+        guildCode: followup.guild_code,
+        discordMessageId: messageId,
+        discordChannelId: followup.discord_channel_id || event?.channelId || null,
+        rename,
+      },
+    });
+  } catch (logError) {
+    console.warn("[guild-defense-followup] activity log failed:", logError?.message || logError);
+  }
+
+  return {
+    success: true,
+    followup_id: followup.id,
+    member_id: followup.member_id,
+    guild_code: followup.guild_code,
+    rename,
+  };
 }
 
 export async function handleDiscordReproReaction(supabase, event) {

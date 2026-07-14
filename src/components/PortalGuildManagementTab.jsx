@@ -19,6 +19,9 @@ import { resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
+const GUILD_STATUS_TODO = "\u00c0 faire";
+const GUILD_STATUS_VERIFY = "\u00c0 v\u00e9rifier";
+const GUILD_STATUS_VALID = "Valid\u00e9";
 
 function formatText(template, values) {
   return Object.entries(values).reduce(
@@ -152,6 +155,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [memberPanelMessage, setMemberPanelMessage] = useState("");
   const [memberPanelError, setMemberPanelError] = useState("");
   const [memberPanelCustomMessage, setMemberPanelCustomMessage] = useState("");
+  const [resettingStatuses, setResettingStatuses] = useState(false);
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -616,6 +620,12 @@ export default function PortalGuildManagementTab({ session }) {
           ? t("guildManagement.defensesSentDmOnly", "Defenses envoyees en MP. Aucun tchat personnel exploitable.")
           : t("guildManagement.defensesSent", "Defenses envoyees en MP et dans le tchat personnel.")
       );
+      if (payload?.statusUpdated) {
+        updateMemberLocal(memberPanelMember.id, { status: GUILD_STATUS_VERIFY });
+        setMemberPanelMember((previous) =>
+          previous ? { ...previous, status: GUILD_STATUS_VERIFY } : previous
+        );
+      }
 
     } catch (error) {
       console.error("Erreur envoi defenses Discord Portal:", error);
@@ -742,6 +752,58 @@ export default function PortalGuildManagementTab({ session }) {
     if (saved) {
       updateMemberLocal(memberId, { status });
     }
+  }
+
+  async function resetActiveMemberStatuses() {
+    if (!isAdmin || resettingStatuses) return;
+    const memberIds = activeMembers.map((member) => member.id).filter(Boolean);
+    if (!memberIds.length) return;
+
+    const confirmed = window.confirm(
+      t(
+        "guildManagement.resetStatusesConfirm",
+        "Remettre tous les joueurs visibles en statut A faire ?",
+      )
+    );
+    if (!confirmed) return;
+
+    setResettingStatuses(true);
+    setSavingMessage(t("guildManagement.resettingStatuses", "Remise a faire des statuts..."));
+    setErrorMessage("");
+
+    const { error } = await supabase
+      .from("guild_members")
+      .update({ status: GUILD_STATUS_TODO })
+      .in("id", memberIds);
+
+    setResettingStatuses(false);
+    setSavingMessage("");
+
+    if (error) {
+      console.error("Erreur reset statuts gestion guilde:", error);
+      setErrorMessage(error.message || t("guildManagement.resetStatusesError", "Reset des statuts impossible."));
+      return;
+    }
+
+    setMembers((previous) =>
+      previous.map((member) =>
+        memberIds.includes(member.id) ? { ...member, status: GUILD_STATUS_TODO } : member
+      )
+    );
+    setMemberPanelMember((previous) =>
+      previous && memberIds.includes(previous.id) ? { ...previous, status: GUILD_STATUS_TODO } : previous
+    );
+
+    void logPortalActivity(session, {
+      actionType: "guild_management_status_reset",
+      entityType: "guild_members",
+      entityId: activeGuildCode,
+      summary: `${session?.watcherName || session?.name || "Admin"} a remis les statuts defense en A faire (${activeGuildCode})`,
+      metadata: {
+        guildCode: activeGuildCode,
+        count: memberIds.length,
+      },
+    });
   }
 
   async function setDefenseVote(defense, value) {
@@ -1193,6 +1255,18 @@ export default function PortalGuildManagementTab({ session }) {
             <Button
               type="button"
               variant="outline"
+              className="rounded-lg border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+              disabled={!isAdmin || resettingStatuses || activeMembers.length === 0}
+              onClick={resetActiveMemberStatuses}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {resettingStatuses
+                ? t("guildManagement.resettingStatusesShort", "Reset...")
+                : t("guildManagement.resetStatuses", "Tout a faire")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
               className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
               onClick={() => setRefreshTick((value) => value + 1)}
             >
@@ -1250,9 +1324,9 @@ export default function PortalGuildManagementTab({ session }) {
               trackedMetaDefense={trackedMetaDefense}
               setTrackedMetaDefense={setTrackedMetaDefenseId}
               metaDefenseCounters={metaDefenseCounters}
-              setTodoMember={(memberId) => setMemberStatus(memberId, "À faire")}
-              setVerifyMember={(memberId) => setMemberStatus(memberId, "À vérifier")}
-              validateMember={(memberId) => setMemberStatus(memberId, "Validé")}
+              setTodoMember={(memberId) => setMemberStatus(memberId, GUILD_STATUS_TODO)}
+              setVerifyMember={(memberId) => setMemberStatus(memberId, GUILD_STATUS_VERIFY)}
+              validateMember={(memberId) => setMemberStatus(memberId, GUILD_STATUS_VALID)}
               setTransferDialogOpen={setTransferDialogOpen}
               setMemberToTransfer={setMemberToTransfer}
               setTargetGuildCode={setTargetGuildCode}
