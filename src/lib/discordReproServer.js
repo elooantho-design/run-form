@@ -222,6 +222,22 @@ async function discordRequest(pathname, options = {}, requestOptions = {}) {
   throw new Error("Discord rate limit retry exhausted");
 }
 
+function serializeDiscordError(error, extra = {}) {
+  const retryAfter = Number(error?.data?.retry_after ?? error?.payload?.retry_after ?? 0);
+  const statusCode = error?.status ?? error?.statusCode ?? null;
+  const retryText =
+    statusCode === 429 && Number.isFinite(retryAfter) && retryAfter > 0
+      ? ` Reessaie dans ${Math.ceil(retryAfter)}s.`
+      : "";
+
+  return {
+    ...extra,
+    statusCode,
+    retryAfter: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+    message: `${error?.message || "Discord request failed"}${retryText}`,
+  };
+}
+
 function formatDefenseTitle(defense) {
   const bastion = defense?.bastion ? `Bastion ${defense.bastion}` : "Bastion ?";
   const type =
@@ -1438,11 +1454,22 @@ export async function handleGuildDefenseFollowupReaction(supabase, event) {
   }
 
   const now = new Date().toISOString();
-  const rename = await renameDiscordChannelStatus(
-    followup.discord_channel_id || event?.channelId,
-    followup.member_name,
-    DISCORD_STATUS_DONE
-  );
+  const warnings = [];
+  let rename = null;
+  try {
+    rename = await renameDiscordChannelStatus(
+      followup.discord_channel_id || event?.channelId,
+      followup.member_name,
+      DISCORD_STATUS_DONE
+    );
+  } catch (renameError) {
+    const warning = serializeDiscordError(renameError, {
+      type: "discord_channel_rename_failed",
+      discordChannelId: followup.discord_channel_id || event?.channelId || null,
+    });
+    warnings.push(warning);
+    console.warn("[guild-defense-followup] channel rename failed:", warning.message);
+  }
 
   const { error: memberError } = await supabase
     .from("guild_members")
@@ -1460,7 +1487,7 @@ export async function handleGuildDefenseFollowupReaction(supabase, event) {
       validated_at: now,
       thread_name_after: rename?.after || followup.thread_name_after || null,
       updated_at: now,
-      last_error: null,
+      last_error: warnings.length ? JSON.stringify(warnings).slice(0, 1000) : null,
     })
     .eq("id", followup.id);
   if (followupError) throw followupError;
@@ -1480,6 +1507,7 @@ export async function handleGuildDefenseFollowupReaction(supabase, event) {
         discordMessageId: messageId,
         discordChannelId: followup.discord_channel_id || event?.channelId || null,
         rename,
+        warnings,
       },
     });
   } catch (logError) {
@@ -1492,6 +1520,7 @@ export async function handleGuildDefenseFollowupReaction(supabase, event) {
     member_id: followup.member_id,
     guild_code: followup.guild_code,
     rename,
+    warnings,
   };
 }
 

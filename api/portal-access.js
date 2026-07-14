@@ -199,6 +199,22 @@ async function discordRequest(pathname, options = {}) {
   return payload;
 }
 
+function serializeDiscordWarning(error, extra = {}) {
+  const retryAfter = Number(error?.payload?.retry_after ?? error?.data?.retry_after ?? 0);
+  const statusCode = error?.statusCode ?? error?.status ?? null;
+  const retryText =
+    statusCode === 429 && Number.isFinite(retryAfter) && retryAfter > 0
+      ? ` Reessaie dans ${Math.ceil(retryAfter)}s.`
+      : "";
+
+  return {
+    ...extra,
+    statusCode,
+    retryAfter: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+    message: `${error?.message || "Discord request failed"}${retryText}`,
+  };
+}
+
 function buildDiscordStatusChannelName(currentName, targetName, statusEmoji) {
   const cleanCurrent = cleanText(currentName);
   const cleanTarget = cleanText(targetName);
@@ -568,10 +584,11 @@ async function handleUpdateDefenseStatus(body, res) {
         getDiscordStatusEmoji(status)
       );
     } catch (renameError) {
-      warnings.push({
+      warnings.push(serializeDiscordWarning(renameError, {
         type: "discord_channel_rename_failed",
-        message: renameError?.message || "rename failed",
-      });
+        memberId: target.id,
+        memberName: getMemberName(target),
+      }));
     }
   }
 
@@ -671,12 +688,11 @@ async function handleResetDefenseStatuses(body, res) {
       );
       forumRenames.push({ memberId: target.id, ...rename });
     } catch (renameError) {
-      warnings.push({
+      warnings.push(serializeDiscordWarning(renameError, {
         type: "discord_channel_rename_failed",
         memberId: target.id,
         memberName: getMemberName(target),
-        message: renameError?.message || "rename failed",
-      });
+      }));
     }
   }
 
@@ -828,10 +844,11 @@ async function handleSendDefenses(body, res) {
         getDiscordStatusEmoji(VERIFY_STATUS)
       );
     } catch (renameError) {
-      warnings.push({
+      warnings.push(serializeDiscordWarning(renameError, {
         type: "discord_channel_rename_failed",
-        message: renameError?.message || "rename failed",
-      });
+        memberId: target.id,
+        memberName: getMemberName(target),
+      }));
     }
   }
 
@@ -850,6 +867,25 @@ async function handleSendDefenses(body, res) {
   }
 
   if (forumChannelId && forumMessageIds.length > 0) {
+    const followupUpdatedAt = new Date().toISOString();
+    const { error: supersedeError } = await supabase
+      .from(DEFENSE_FOLLOWUP_TABLE)
+      .update({
+        state: "deleted",
+        updated_at: followupUpdatedAt,
+        last_error: "superseded_by_new_defense_message",
+      })
+      .eq("member_id", target.id)
+      .eq("discord_channel_id", forumChannelId)
+      .eq("state", "pending");
+
+    if (supersedeError && !isMissingFollowupTable(supersedeError)) {
+      warnings.push({
+        type: "followup_supersede_failed",
+        message: supersedeError.message || "followup supersede failed",
+      });
+    }
+
     const { data: followupRow, error: followupError } = await supabase
       .from(DEFENSE_FOLLOWUP_TABLE)
       .insert({
@@ -869,7 +905,7 @@ async function handleSendDefenses(body, res) {
         thread_name_before: forumRename?.before || null,
         thread_name_after: forumRename?.after || null,
         state: "pending",
-        updated_at: new Date().toISOString(),
+        updated_at: followupUpdatedAt,
       })
       .select("id")
       .maybeSingle();

@@ -30,6 +30,14 @@ function formatText(template, values) {
   );
 }
 
+function formatPortalAccessWarnings(warnings) {
+  const rows = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  if (!rows.length) return "";
+
+  const first = rows[0]?.message || "Discord n'a pas pu appliquer toute l'action.";
+  return rows.length > 1 ? `${first} (+${rows.length - 1})` : first;
+}
+
 function getDiscordAppUrl(value) {
   const rawUrl = String(value || "").trim();
   if (!rawUrl) return "";
@@ -620,6 +628,18 @@ export default function PortalGuildManagementTab({ session }) {
           ? t("guildManagement.defensesSentDmOnly", "Defenses envoyees en MP. Aucun tchat personnel exploitable.")
           : t("guildManagement.defensesSent", "Defenses envoyees en MP et dans le tchat personnel.")
       );
+      const warningText = formatPortalAccessWarnings(payload?.warnings);
+      if (warningText) {
+        setMemberPanelError(
+          formatText(
+            t(
+              "guildManagement.discordRenameWarning",
+              "Action Portal effectuee, mais Discord n'a pas renomme le salon : {warning}",
+            ),
+            { warning: warningText },
+          )
+        );
+      }
       if (payload?.statusUpdated) {
         updateMemberLocal(memberPanelMember.id, { status: GUILD_STATUS_VERIFY });
         setMemberPanelMember((previous) =>
@@ -753,6 +773,18 @@ export default function PortalGuildManagementTab({ session }) {
       setMemberPanelMember((previous) =>
         previous && String(previous.id) === String(memberId) ? { ...previous, status } : previous
       );
+      const warningText = formatPortalAccessWarnings(payload?.warnings);
+      if (warningText) {
+        setErrorMessage(
+          formatText(
+            t(
+              "guildManagement.discordRenameWarning",
+              "Action Portal effectuee, mais Discord n'a pas renomme le salon : {warning}",
+            ),
+            { warning: warningText },
+          )
+        );
+      }
     } catch (error) {
       console.error("Erreur statut Portal:", error);
       setErrorMessage(error?.message || "Sauvegarde impossible.");
@@ -803,6 +835,18 @@ export default function PortalGuildManagementTab({ session }) {
       setMemberPanelMember((previous) =>
         previous && updatedIds.includes(previous.id) ? { ...previous, status: GUILD_STATUS_TODO } : previous
       );
+      const warningText = formatPortalAccessWarnings(payload?.warnings);
+      if (warningText) {
+        setErrorMessage(
+          formatText(
+            t(
+              "guildManagement.discordResetRenameWarning",
+              "Statuts remis a faire, mais certains salons Discord n'ont pas ete renommes : {warning}",
+            ),
+            { warning: warningText },
+          )
+        );
+      }
     } catch (error) {
       console.error("Erreur reset statuts gestion guilde:", error);
       setErrorMessage(error?.message || t("guildManagement.resetStatusesError", "Reset des statuts impossible."));
