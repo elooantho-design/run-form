@@ -27,6 +27,30 @@ function formatText(template, values) {
   );
 }
 
+function getDiscordAppUrl(value) {
+  const rawUrl = String(value || "").trim();
+  if (!rawUrl) return "";
+  if (rawUrl.startsWith("discord://")) return rawUrl;
+
+  const match = rawUrl.match(/discord(?:app)?\.com\/channels\/([^/?#]+)\/([^/?#]+)(?:\/([^/?#]+))?/i);
+  if (!match) return rawUrl;
+
+  const [, guildId, channelId, messageId] = match;
+  return `discord://-/channels/${guildId}/${channelId}${messageId ? `/${messageId}` : ""}`;
+}
+
+function openDiscordTarget(value) {
+  const targetUrl = getDiscordAppUrl(value);
+  if (!targetUrl) return;
+
+  if (targetUrl.startsWith("discord://")) {
+    window.location.href = targetUrl;
+    return;
+  }
+
+  window.open(targetUrl, "_blank", "noopener,noreferrer");
+}
+
 function getSessionGuildCode(session) {
   return session?.guildCode || session?.guild_code || "G1";
 }
@@ -127,6 +151,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [memberPanelSending, setMemberPanelSending] = useState(false);
   const [memberPanelMessage, setMemberPanelMessage] = useState("");
   const [memberPanelError, setMemberPanelError] = useState("");
+  const [memberPanelCustomMessage, setMemberPanelCustomMessage] = useState("");
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -412,6 +437,7 @@ export default function PortalGuildManagementTab({ session }) {
   function openMemberPanel(member) {
     setMemberPanelMember(member);
     setMemberPanelForumUrl(member?.personalForumPostUrl || "");
+    setMemberPanelCustomMessage(buildMemberDefenseMessageDraft(member));
     setMemberPanelMessage("");
     setMemberPanelError("");
     setMemberPanelOpen(true);
@@ -421,6 +447,77 @@ export default function PortalGuildManagementTab({ session }) {
     return [member?.defense1, member?.defense2].filter(
       (name) => name && name !== EMPTY_DEFENSE && name !== "—"
     );
+  }
+
+  function getAssignedDefenseDetails(member) {
+    return getAssignedDefenseNames(member).map((defenseName) => {
+      const defense =
+        activeDefenses.find((entry) => String(entry.name || "") === String(defenseName || "")) || null;
+
+      return {
+        name: defenseName,
+        defense,
+      };
+    });
+  }
+
+  function formatDefenseDraftDetails(defense) {
+    if (!defense) {
+      return [
+        t("guildManagement.defenseMissingInfo", "Defense assignee mais informations introuvables dans Portal."),
+      ];
+    }
+
+    const heroes = defense.slots?.length ? defense.slots.join(", ") : t("common.empty", "Vide");
+    const conditions = defense.conditions?.length
+      ? defense.conditions.map((condition) => `- ${condition.label}`).join("\n")
+      : `- ${t("adminDefenses.noCondition", "Aucune condition")}`;
+    const infos = defense.infoBlocks?.length
+      ? defense.infoBlocks
+          .map((block) => String(block.content || "").trim())
+          .filter(Boolean)
+          .map((content) => `- ${content}`)
+          .join("\n")
+      : `- ${t("gvgCurrent.noInstructions", "Pas de consigne particuliere")}`;
+
+    return [
+      `Type : ${defense.type || "-"}`,
+      `Tier : ${defense.tier || "-"}`,
+      `Heros : ${heroes}`,
+      "Conditions :",
+      conditions,
+      "Infos :",
+      infos,
+      defense.image ? `Image : ${defense.image}` : "",
+    ].filter(Boolean);
+  }
+
+  function buildMemberDefenseMessageDraft(member) {
+    const targetName = member?.name || "Joueur";
+    const guildCode = member?.guildCode || activeGuildCode || "-";
+    const actorName = session?.watcherName || session?.name || "Admin";
+    const assignedDefenses = getAssignedDefenseDetails(member);
+
+    const lines = [
+      `**Defenses assignees - ${targetName} (${guildCode})**`,
+      `Envoye par ${actorName}.`,
+      "",
+      "Voici les defenses a preparer :",
+    ];
+
+    if (assignedDefenses.length === 0) {
+      lines.push("");
+      lines.push(t("guildManagement.noDefenseToSend", "Aucune defense assignee a ce joueur."));
+      return lines.join("\n");
+    }
+
+    assignedDefenses.forEach(({ name, defense }, index) => {
+      lines.push("");
+      lines.push(`**Defense ${index + 1} - ${name}**`);
+      lines.push(...formatDefenseDraftDetails(defense));
+    });
+
+    return lines.join("\n");
   }
 
   async function saveMemberForumPostUrl({ silent = false } = {}) {
@@ -480,6 +577,12 @@ export default function PortalGuildManagementTab({ session }) {
       return;
     }
 
+    const cleanCustomMessage = memberPanelCustomMessage.trim();
+    if (!cleanCustomMessage) {
+      setMemberPanelError(t("guildManagement.emptyDiscordMessage", "Le message Discord ne peut pas etre vide."));
+      return;
+    }
+
     setMemberPanelSending(true);
     setMemberPanelError("");
     setMemberPanelMessage(t("guildManagement.sendingDefenses", "Envoi Discord en cours..."));
@@ -499,6 +602,7 @@ export default function PortalGuildManagementTab({ session }) {
           actorMemberId: session?.memberId || session?.id || "",
           memberId: memberPanelMember.id,
           forumPostUrl: cleanUrl,
+          customMessage: cleanCustomMessage,
         }),
       });
 
@@ -1266,7 +1370,7 @@ export default function PortalGuildManagementTab({ session }) {
 
       {memberPanelOpen && memberPanelMember ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-2xl rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-start gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-sky-500/30 bg-sky-500/10">
@@ -1337,6 +1441,36 @@ export default function PortalGuildManagementTab({ session }) {
                 )}
               </div>
 
+              <label className="block">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-sm text-zinc-400">
+                    {t("guildManagement.discordMessageLabel", "Message Discord a envoyer")}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 rounded-lg border-zinc-700 px-2 text-xs text-zinc-200"
+                    disabled={memberPanelSending}
+                    onClick={() => setMemberPanelCustomMessage(buildMemberDefenseMessageDraft(memberPanelMember))}
+                  >
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                    {t("guildManagement.resetDiscordMessage", "Reinitialiser")}
+                  </Button>
+                </div>
+                <textarea
+                  value={memberPanelCustomMessage}
+                  onChange={(event) => setMemberPanelCustomMessage(event.target.value)}
+                  rows={14}
+                  className="mt-2 min-h-56 w-full resize-y rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-3 font-mono text-sm leading-6 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-sky-400/60 focus:ring-2 focus:ring-sky-400/20"
+                />
+                <span className="mt-2 block text-xs leading-5 text-zinc-500">
+                  {t(
+                    "guildManagement.discordMessageDraftHelp",
+                    "Tu peux modifier les infos et conditions ici : cela personnalise uniquement le message Discord, sans modifier les defenses sources.",
+                  )}
+                </span>
+              </label>
+
               {memberPanelMessage ? (
                 <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
                   {memberPanelMessage}
@@ -1356,7 +1490,7 @@ export default function PortalGuildManagementTab({ session }) {
                 variant="outline"
                 className="rounded-lg border-zinc-700 text-zinc-200"
                 disabled={!memberPanelForumUrl.trim()}
-                onClick={() => window.open(memberPanelForumUrl.trim(), "_blank", "noopener,noreferrer")}
+                onClick={() => openDiscordTarget(memberPanelForumUrl)}
               >
                 <ExternalLink className="mr-2 h-4 w-4" />
                 {t("guildManagement.openPersonalChat", "Ouvrir le tchat")}
@@ -1374,7 +1508,12 @@ export default function PortalGuildManagementTab({ session }) {
               <Button
                 type="button"
                 className="rounded-lg bg-sky-500 text-zinc-950 hover:bg-sky-400"
-                disabled={memberPanelSending || !isAdmin || getAssignedDefenseNames(memberPanelMember).length === 0}
+                disabled={
+                  memberPanelSending ||
+                  !isAdmin ||
+                  getAssignedDefenseNames(memberPanelMember).length === 0 ||
+                  !memberPanelCustomMessage.trim()
+                }
                 onClick={sendMemberDefensesToDiscord}
               >
                 <Send className="mr-2 h-4 w-4" />

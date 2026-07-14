@@ -535,6 +535,7 @@ async function handleSendDefenses(body, res) {
 
   const defenses = [];
   const missingNames = [];
+  const customContent = cleanText(body.customMessage || body.custom_message || body.message);
 
   defenseNames.forEach((name) => {
     const defense = pickDefenseForGuild(defenseRows || [], name, target.guild_code);
@@ -542,12 +543,14 @@ async function handleSendDefenses(body, res) {
     else missingNames.push(name);
   });
 
-  const content = buildDefenseMessage({
-    target,
-    defenses,
-    missingNames,
-    actor: adminCheck.admin,
-  });
+  const content =
+    customContent ||
+    buildDefenseMessage({
+      target,
+      defenses,
+      missingNames,
+      actor: adminCheck.admin,
+    });
 
   const dmMessageIds = await sendDiscordDm(target.discord_id, content);
   const forumPostUrl = cleanText(body.forumPostUrl || body.forum_post_url || target.personal_forum_post_url);
