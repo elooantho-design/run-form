@@ -476,9 +476,15 @@ return (
     {isDetailView ? (
       <div className="space-y-6 p-6">
         <div className="flex items-center justify-between">
-          <div className="text-xl font-semibold text-white">
+          <button
+            type="button"
+            onClick={() => {
+              if (onOpenMemberPanel) onOpenMemberPanel(selectedMember);
+            }}
+            className="rounded-lg px-1 py-0.5 text-left text-xl font-semibold text-white underline-offset-4 hover:text-emerald-200 hover:underline"
+          >
             {selectedMember.name}
-          </div>
+          </button>
 
           <button
             onClick={() => {

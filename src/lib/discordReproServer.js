@@ -1093,10 +1093,17 @@ export async function resolveMemberByDiscordUser(supabase, user) {
     .from("guild_members")
     .select("id, watcher_name, discord_id, guild_code, role")
     .eq("discord_id", discordId)
-    .maybeSingle();
+    .order("created_at", { ascending: true })
+    .limit(20);
 
   if (error) throw error;
-  return data;
+  const rows = data || [];
+  return (
+    rows.find((member) => isLeaderRole(member.role)) ||
+    rows.find((member) => isAdminRole(member.role)) ||
+    rows[0] ||
+    null
+  );
 }
 
 function textInput(customId, label, value, options = {}) {
@@ -1377,22 +1384,34 @@ async function renameDiscordChannelStatus(channelId, targetName, statusEmoji) {
 }
 
 async function findDefenseFollowupByDiscordMessage(supabase, messageId) {
-  const { data, error } = await supabase
-    .from(DEFENSE_FOLLOWUP_TABLE)
-    .select("*")
-    .contains("discord_message_ids", [messageId])
-    .neq("state", "deleted")
-    .order("created_at", { ascending: false })
-    .limit(1);
+  const readLatest = async (queryBuilder) => {
+    const { data, error } = await queryBuilder
+      .neq("state", "deleted")
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-  if (error) {
-    if (isMissingDefenseFollowupTable(error)) {
-      return { missingTable: true, followup: null };
+    if (error) {
+      if (isMissingDefenseFollowupTable(error)) {
+        return { missingTable: true, followup: null };
+      }
+      throw error;
     }
-    throw error;
+
+    return { missingTable: false, followup: data?.[0] || null };
+  };
+
+  const checks = [
+    () => readLatest(supabase.from(DEFENSE_FOLLOWUP_TABLE).select("*").contains("discord_message_ids", [messageId])),
+    () => readLatest(supabase.from(DEFENSE_FOLLOWUP_TABLE).select("*").contains("dm_message_ids", [messageId])),
+    () => readLatest(supabase.from(DEFENSE_FOLLOWUP_TABLE).select("*").eq("discord_message_id", messageId)),
+  ];
+
+  for (const check of checks) {
+    const result = await check();
+    if (result.missingTable || result.followup) return result;
   }
 
-  return { missingTable: false, followup: data?.[0] || null };
+  return { missingTable: false, followup: null };
 }
 
 export async function handleGuildDefenseFollowupReaction(supabase, event) {
