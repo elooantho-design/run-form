@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, Plus, RefreshCw, ShieldCheck, UserPlus, Users, X } from "lucide-react";
+import { ArrowRightLeft, ExternalLink, MessageSquare, Plus, RefreshCw, Save, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
 import GestionDefenseTab from "@/components/GestionDefenseTab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -120,6 +120,13 @@ export default function PortalGuildManagementTab({ session }) {
     forumPostUrl: "",
   });
   const [addingMember, setAddingMember] = useState(false);
+  const [memberPanelOpen, setMemberPanelOpen] = useState(false);
+  const [memberPanelMember, setMemberPanelMember] = useState(null);
+  const [memberPanelForumUrl, setMemberPanelForumUrl] = useState("");
+  const [memberPanelSaving, setMemberPanelSaving] = useState(false);
+  const [memberPanelSending, setMemberPanelSending] = useState(false);
+  const [memberPanelMessage, setMemberPanelMessage] = useState("");
+  const [memberPanelError, setMemberPanelError] = useState("");
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -400,6 +407,122 @@ export default function PortalGuildManagementTab({ session }) {
     }
 
     return true;
+  }
+
+  function openMemberPanel(member) {
+    setMemberPanelMember(member);
+    setMemberPanelForumUrl(member?.personalForumPostUrl || "");
+    setMemberPanelMessage("");
+    setMemberPanelError("");
+    setMemberPanelOpen(true);
+  }
+
+  function getAssignedDefenseNames(member) {
+    return [member?.defense1, member?.defense2].filter(
+      (name) => name && name !== EMPTY_DEFENSE && name !== "—"
+    );
+  }
+
+  async function saveMemberForumPostUrl({ silent = false } = {}) {
+    if (!memberPanelMember?.id) return false;
+
+    const cleanUrl = memberPanelForumUrl.trim();
+    setMemberPanelSaving(true);
+    setMemberPanelError("");
+    if (!silent) setMemberPanelMessage("");
+
+    const saved = await updateMemberField(
+      memberPanelMember.id,
+      { personal_forum_post_url: cleanUrl || null },
+      "Erreur sauvegarde lien Discord personnel Portal:",
+      {
+        targetMemberId: memberPanelMember.id,
+        targetName: memberPanelMember.name || "",
+        actionType: "guild_management_personal_chat_update",
+        entityType: "member",
+        entityId: String(memberPanelMember.id),
+        summary: `${memberPanelMember.name || "Joueur"} : lien tchat Discord personnel mis a jour`,
+        metadata: {
+          guildCode: memberPanelMember.guildCode || activeGuildCode,
+          hasPersonalForumPostUrl: Boolean(cleanUrl),
+        },
+      }
+    );
+
+    setMemberPanelSaving(false);
+
+    if (!saved) {
+      setMemberPanelError(t("guildManagement.personalChatSaveError", "Sauvegarde du lien impossible."));
+      return false;
+    }
+
+    updateMemberLocal(memberPanelMember.id, { personalForumPostUrl: cleanUrl });
+    setMemberPanelMember((previous) =>
+      previous ? { ...previous, personalForumPostUrl: cleanUrl } : previous
+    );
+    if (!silent) {
+      setMemberPanelMessage(t("guildManagement.personalChatSaved", "Lien tchat sauvegarde."));
+    }
+    return true;
+  }
+
+  async function sendMemberDefensesToDiscord() {
+    if (!memberPanelMember?.id || memberPanelSending) return;
+
+    const defenseNames = getAssignedDefenseNames(memberPanelMember);
+    if (defenseNames.length === 0) {
+      setMemberPanelError(t("guildManagement.noDefenseToSend", "Aucune defense assignee a ce joueur."));
+      return;
+    }
+
+    if (!memberPanelMember.discordId) {
+      setMemberPanelError(t("guildManagement.noDiscordId", "ID Discord joueur manquant."));
+      return;
+    }
+
+    setMemberPanelSending(true);
+    setMemberPanelError("");
+    setMemberPanelMessage(t("guildManagement.sendingDefenses", "Envoi Discord en cours..."));
+
+    try {
+      const cleanUrl = memberPanelForumUrl.trim();
+      if (cleanUrl !== (memberPanelMember.personalForumPostUrl || "")) {
+        const saved = await saveMemberForumPostUrl({ silent: true });
+        if (!saved) return;
+      }
+
+      const response = await fetch("/api/portal-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send-defenses",
+          actorMemberId: session?.memberId || session?.id || "",
+          memberId: memberPanelMember.id,
+          forumPostUrl: cleanUrl,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || `HTTP ${response.status}`);
+      }
+
+      setMemberPanelMessage(
+        payload?.forumSkipped
+          ? t("guildManagement.defensesSentDmOnly", "Defenses envoyees en MP. Aucun tchat personnel exploitable.")
+          : t("guildManagement.defensesSent", "Defenses envoyees en MP et dans le tchat personnel.")
+      );
+
+    } catch (error) {
+      console.error("Erreur envoi defenses Discord Portal:", error);
+      setMemberPanelError(
+        formatText(t("guildManagement.defensesSendError", "Envoi impossible : {error}"), {
+          error: error?.message || t("common.unknownError", "erreur inconnue"),
+        })
+      );
+    } finally {
+      setMemberPanelSending(false);
+    }
   }
 
   async function assignDefense(slot, defense, memberId) {
@@ -1041,6 +1164,7 @@ export default function PortalGuildManagementTab({ session }) {
               defenseDislikesCountByRootId={defenseDislikesCountByRootId}
               defenseVoteByRootId={defenseVoteByRootId}
               getDefenseLikeTargetId={getDefenseLikeTargetId}
+              onOpenMemberPanel={openMemberPanel}
             />
           </div>
         </div>
@@ -1134,6 +1258,129 @@ export default function PortalGuildManagementTab({ session }) {
               >
                 <Plus className="mr-2 h-4 w-4" />
                 {addingMember ? t("guildManagement.adding", "Ajout...") : t("common.confirm", "Confirmer")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {memberPanelOpen && memberPanelMember ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-2xl rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-sky-500/30 bg-sky-500/10">
+                  <MessageSquare className="h-5 w-5 text-sky-200" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-zinc-50">
+                    {t("guildManagement.playerPanelTitle", "Suivi Discord joueur")}
+                  </h3>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    {memberPanelMember.name} · {memberPanelMember.guildCode || activeGuildCode} · ID Discord :{" "}
+                    {memberPanelMember.discordId || "-"}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+                disabled={memberPanelSaving || memberPanelSending}
+                onClick={() => {
+                  if (memberPanelSaving || memberPanelSending) return;
+                  setMemberPanelOpen(false);
+                  setMemberPanelMember(null);
+                }}
+                title={t("common.close", "Fermer")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                  {t("guildManagement.assignedDefenses", "Defenses assignees")}
+                </div>
+                <div className="mt-2 grid gap-2 text-sm text-zinc-200 sm:grid-cols-2">
+                  {[memberPanelMember.defense1, memberPanelMember.defense2].map((defenseName, index) => (
+                    <div key={`${defenseName || "empty"}-${index}`} className="rounded-lg border border-zinc-800 bg-black/25 px-3 py-2">
+                      <span className="text-zinc-500">Def {index + 1}</span>
+                      <div className="mt-1 font-semibold text-zinc-100">
+                        {defenseName && defenseName !== EMPTY_DEFENSE && defenseName !== "—"
+                          ? defenseName
+                          : t("common.empty", "Vide")}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <label className="block">
+                <span className="text-sm text-zinc-400">
+                  {t("guildManagement.personalChatLink", "Lien du tchat personnalise Discord")}
+                </span>
+                <input
+                  type="url"
+                  value={memberPanelForumUrl}
+                  onChange={(event) => setMemberPanelForumUrl(event.target.value)}
+                  placeholder="https://discord.com/channels/..."
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-sky-400/60 focus:ring-2 focus:ring-sky-400/20"
+                />
+              </label>
+
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 text-sm leading-6 text-zinc-400">
+                {t(
+                  "guildManagement.discordSendHelp",
+                  "Le bouton d'envoi transmet les defenses en MP au joueur et copie le meme message dans son tchat personnalise si le lien est renseigne.",
+                )}
+              </div>
+
+              {memberPanelMessage ? (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                  {memberPanelMessage}
+                </div>
+              ) : null}
+
+              {memberPanelError ? (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  {memberPanelError}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                disabled={!memberPanelForumUrl.trim()}
+                onClick={() => window.open(memberPanelForumUrl.trim(), "_blank", "noopener,noreferrer")}
+              >
+                <ExternalLink className="mr-2 h-4 w-4" />
+                {t("guildManagement.openPersonalChat", "Ouvrir le tchat")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                disabled={memberPanelSaving}
+                onClick={() => saveMemberForumPostUrl()}
+              >
+                <Save className="mr-2 h-4 w-4" />
+                {memberPanelSaving ? t("common.saving", "Sauvegarde...") : t("common.save", "Sauvegarder")}
+              </Button>
+              <Button
+                type="button"
+                className="rounded-lg bg-sky-500 text-zinc-950 hover:bg-sky-400"
+                disabled={memberPanelSending || !isAdmin || getAssignedDefenseNames(memberPanelMember).length === 0}
+                onClick={sendMemberDefensesToDiscord}
+              >
+                <Send className="mr-2 h-4 w-4" />
+                {memberPanelSending
+                  ? t("guildManagement.sending", "Envoi...")
+                  : t("guildManagement.sendDefenses", "Envoyer les defenses")}
               </Button>
             </div>
           </div>

@@ -35,6 +35,7 @@ export default function GestionDefenseTab({
   defenseDislikesCountByRootId,
   defenseVoteByRootId,
   getDefenseLikeTargetId,
+  onOpenMemberPanel,
 }) {
   const { t } = usePortalLanguage();
   const bastionNumbers = [1, 2, 3, 4];
@@ -1232,7 +1233,25 @@ onClick={() => {
             : ""
         }`}
       >
-        <div className="font-medium text-zinc-50">{member.name}</div>
+        <div className="font-medium text-zinc-50">
+          <span
+            className="cursor-pointer rounded-md px-1 py-0.5 underline-offset-4 hover:text-emerald-200 hover:underline"
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (onOpenMemberPanel) onOpenMemberPanel(member);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              if (onOpenMemberPanel) onOpenMemberPanel(member);
+            }}
+          >
+            {member.name}
+          </span>
+        </div>
 
         <div className="text-xs text-zinc-300 leading-tight">
           <div>{member.defense1 || "--"}</div>
