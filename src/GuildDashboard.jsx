@@ -3,6 +3,7 @@ import GestionDefenseTab from "./components/GestionDefenseTab";
 import AdminDefensesTab from "@/components/AdminDefensesTab";
 import MonSuiviTab from "./components/MonSuiviTab";
 import { supabase } from "@/lib/supabase";
+import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import { DndContext, closestCenter } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -501,7 +502,8 @@ function normalizeHeroImageName(heroName) {
 }
 
 function getHeroImageUrl(heroName) {
-  return `/heroes/${normalizeHeroImageName(heroName)}.png`;
+  const fileName = `${normalizeHeroImageName(heroName)}.png`;
+  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
 }
 
 function getDemonicMonsterImageUrl(slug) {

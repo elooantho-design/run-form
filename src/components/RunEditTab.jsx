@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 
 const MAX_SLOTS = 5;
 
@@ -67,7 +68,9 @@ function normalizeChampionName(name) {
 
 function getHeroImageSrc(heroName) {
   const name = normalizeChampionName(heroName);
-  return name ? `/heroes/${name}.png` : "";
+  if (!name) return "";
+  const fileName = `${name}.png`;
+  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
 }
 
 const LOCAL_API_PORT = 3000;

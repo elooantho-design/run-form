@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { getGvgGuildLabel, isExternalRunGuildCode, isPaladinAdminSession } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 
 import {
   Select,
@@ -77,7 +78,9 @@ function normalizeChampionName(name) {
 
 function getHeroImageSrc(heroName) {
   const name = normalizeChampionName(heroName);
-  return name ? `/heroes/${name}.png` : "";
+  if (!name) return "";
+  const fileName = `${name}.png`;
+  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
 }
 
 const LOCAL_API_PORT = 3000;

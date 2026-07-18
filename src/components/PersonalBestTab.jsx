@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionDisplayName, getChampionEnglishName } from "@/lib/championDisplay";
+import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
   filterByGuildScope,
@@ -61,7 +62,8 @@ function normalizeHeroImageName(heroName) {
 }
 
 function getHeroImageUrl(heroName) {
-  return `/heroes/${normalizeHeroImageName(heroName)}.png`;
+  const fileName = `${normalizeHeroImageName(heroName)}.png`;
+  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
 }
 
 function getSessionGuildCode(session) {

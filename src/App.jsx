@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RotateCcw, Trash2, Info } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 // --- Composants UI simples (remplacent ceux du canvas ChatGPT) ---
 const Card = ({children,className=""}) => <div className={`border rounded-xl bg-white/5 ${className}`}>{children}</div>;
 const CardHeader = ({children,className=""}) => <div className={`p-3 border-b ${className}`}>{children}</div>;
@@ -91,7 +92,9 @@ function normalizeChampionName(name) {
 
 function getHeroImageSrc(heroName) {
   const name = normalizeChampionName(heroName);
-  return name ? `/heroes/${name}.png` : "";
+  if (!name) return "";
+  const fileName = `${name}.png`;
+  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
 }
 
 function normalizeApiDirToForm(dir) {

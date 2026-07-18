@@ -1,6 +1,7 @@
 /**
  * Fonctions de calcul et utilitaires pour le Dashboard de Guilde
  */
+import { buildPublicHeroUrl } from "./lib/vpsAssets";
 
 export function buildDefaultAwakenings(metaHeroes) {
   return Object.fromEntries(metaHeroes.map((hero) => [hero, -1]));
@@ -236,7 +237,8 @@ export function normalizeHeroImageName(heroName) {
 }
 
 export function getHeroImageUrl(heroName) {
-  return `/heroes/${normalizeHeroImageName(heroName)}.png`;
+  const fileName = `${normalizeHeroImageName(heroName)}.png`;
+  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
 }
 
 export function getDemonicMonsterImageUrl(slug) {

@@ -35,6 +35,11 @@ export function buildPublicCalqueUrl(kind, fileName) {
   return buildAssetUrl(["assets", "calques", folder, fileName]);
 }
 
+export function buildPublicHeroUrl(fileName) {
+  if (!fileName) return "";
+  return buildAssetUrl(["assets", "heroes", fileName]);
+}
+
 export function buildPublicPreviewUrl(guild, jobId, fileName) {
   if (!guild || !jobId || !fileName) return "";
 
