@@ -11,6 +11,7 @@ const CALQUE_FOLDERS = {
   faction: "faction-calques",
   role: "role-calques",
 };
+const HERO_ASSETS_VERSION = "20260718-heroes-1";
 
 function encodeSegment(value) {
   return encodeURIComponent(String(value || "").trim());
@@ -37,7 +38,8 @@ export function buildPublicCalqueUrl(kind, fileName) {
 
 export function buildPublicHeroUrl(fileName) {
   if (!fileName) return "";
-  return buildAssetUrl(["assets", "heroes", fileName]);
+  const url = buildAssetUrl(["assets", "heroes", fileName]);
+  return url ? `${url}?v=${HERO_ASSETS_VERSION}` : "";
 }
 
 export function buildPublicPreviewUrl(guild, jobId, fileName) {
