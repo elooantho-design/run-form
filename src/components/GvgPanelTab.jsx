@@ -465,6 +465,15 @@ function makeDefenseRecordKey(defense) {
   return defense.is_ally === true ? `${base}_ally` : base;
 }
 
+function isRecordSessionItemReceived(item) {
+  const status = item?.status;
+
+  return Boolean(
+    item?.video_file ||
+      ["uploaded", "youtube_uploading", "youtube_uploaded", "youtube_error"].includes(status)
+  );
+}
+
 const recordUploadsByKey = useMemo(() => {
   const map = new Map();
 
@@ -481,14 +490,15 @@ const recordUploadsByKey = useMemo(() => {
         sessionTime;
       const mapKeys = [
         defenseId ? `id:${defenseId}` : "",
-        key ? `key:${key}` : "",
+        !defenseId && key ? `key:${key}` : "",
       ].filter(Boolean);
+      const rank = isRecordSessionItemReceived(item) ? 2 : 1;
 
       for (const mapKey of mapKeys) {
         const current = map.get(mapKey);
 
-        if (!current || itemTime >= current.time) {
-          map.set(mapKey, { item, session, time: itemTime });
+        if (!current || rank > current.rank || (rank === current.rank && itemTime >= current.time)) {
+          map.set(mapKey, { item, session, time: itemTime, rank });
         }
       }
     }
@@ -505,13 +515,7 @@ function getDefenseRecordUpload(defense) {
 }
 
 function isRecordVideoReceived(upload) {
-  const item = upload?.item;
-  const status = item?.status;
-
-  return Boolean(
-    item?.video_file ||
-      ["uploaded", "youtube_uploading", "youtube_uploaded", "youtube_error"].includes(status)
-  );
+  return isRecordSessionItemReceived(upload?.item);
 }
 
 const recordFlowStats = useMemo(() => {

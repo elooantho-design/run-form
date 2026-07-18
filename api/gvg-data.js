@@ -1359,6 +1359,46 @@ function makeRecordPlanItem(defense) {
   };
 }
 
+function recordSessionItemHasVideo(item) {
+  const status = String(item?.status || "").toLowerCase();
+  return Boolean(
+    item?.video_file ||
+      item?.youtube_url ||
+      ["uploaded", "youtube_uploading", "youtube_uploaded", "youtube_error"].includes(status)
+  );
+}
+
+function buildUploadedRecordItemKeys(sessions) {
+  const uploaded = new Set();
+
+  for (const session of sessions || []) {
+    for (const item of session?.items || []) {
+      if (!recordSessionItemHasVideo(item)) {
+        continue;
+      }
+
+      const id = String(item?.id || item?.defense_id || "").trim().toLowerCase();
+      if (id) uploaded.add(`id:${id}`);
+    }
+  }
+
+  return uploaded;
+}
+
+async function loadExistingRecordSessionsForPlan(guild) {
+  try {
+    const params = new URLSearchParams({
+      guild,
+      limit: "100",
+    });
+    const vps = await requestGvgVps(`/api/v1/record/sessions?${params.toString()}`);
+    return vps?.sessions || [];
+  } catch (error) {
+    console.warn("[gvg-data:record_session_create] existing sessions unavailable:", error?.message || error);
+    return [];
+  }
+}
+
 async function handleCreateRecordSession(req, res) {
   const body = req.body || {};
   const guild = normalizeGuildCode(body.guild);
@@ -1413,7 +1453,13 @@ async function handleCreateRecordSession(req, res) {
     return res.status(500).json({ error: "lecture gvg_defense impossible" });
   }
 
-  const items = (data || []).map(makeRecordPlanItem);
+  const existingSessions = await loadExistingRecordSessionsForPlan(guild);
+  const uploadedKeys = buildUploadedRecordItemKeys(existingSessions);
+  const allItems = (data || []).map(makeRecordPlanItem);
+  const items = allItems.filter((item) => {
+    const id = String(item.id || "").toLowerCase();
+    return !uploadedKeys.has(`id:${id}`);
+  });
 
   if (!items.length) {
     return res.status(200).json({
@@ -1423,7 +1469,10 @@ async function handleCreateRecordSession(req, res) {
       scope,
       count: 0,
       items: [],
-      message: "Aucune defense a record pour cette selection.",
+      skipped_existing: allItems.length,
+      message: allItems.length
+        ? "Toutes les videos attendues sont deja recues par le VPS."
+        : "Aucune defense a record pour cette selection.",
     });
   }
 
@@ -1446,6 +1495,7 @@ async function handleCreateRecordSession(req, res) {
       scope,
       count: items.length,
       items,
+      skipped_existing: allItems.length - items.length,
       protocol_url: `paladin-gvg-record://start?guild=${encodeURIComponent(guild)}&side=${encodeURIComponent(scope)}&session=${encodeURIComponent(sessionId)}`,
       vps,
     });
