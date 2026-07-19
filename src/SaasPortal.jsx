@@ -3,6 +3,7 @@ import {
   Activity,
   Bell,
   Bot,
+  BookOpen,
   CheckCircle2,
   ChevronRight,
   Clock3,
@@ -54,6 +55,7 @@ import RunAddTab from "@/components/RunAddTab";
 import RunEditTab from "@/components/RunEditTab";
 import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
+import PveLibraryTab from "@/components/PveLibraryTab";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
@@ -119,6 +121,18 @@ const adminNavigation = [
   { id: "logs", label: "Logs", labelKey: "nav.logs", icon: Activity },
   { id: "player-access", label: "Acces joueurs", labelKey: "nav.playerAccess", icon: Lock, adminOnly: true },
 ];
+
+function normalizePveContentNavItem(row) {
+  return {
+    id: row.id,
+    label: row.name || row.slug || "PVE",
+    slug: row.slug || "",
+    description: row.description || "",
+    stageCount: row.stage_count ?? 0,
+    sortOrder: row.sort_order ?? 9999,
+    isActive: row.is_active ?? true,
+  };
+}
 
 const PORTAL_VIEW_MODE_STORAGE_KEY = "portalViewMode";
 
@@ -1259,10 +1273,13 @@ function PortalShell({ session, onLogout }) {
   const { t } = usePortalLanguage();
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
+  const [pveNavOpen, setPveNavOpen] = useState(false);
   const [viewMode, setViewMode] = useState(getInitialPortalViewMode);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [portalLicense, setPortalLicense] = useState(null);
   const [portalLicenseLoaded, setPortalLicenseLoaded] = useState(false);
+  const [pveContents, setPveContents] = useState([]);
+  const [pveContentsLoaded, setPveContentsLoaded] = useState(false);
   const [editRunInitialId, setEditRunInitialId] = useState("");
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
@@ -1304,11 +1321,49 @@ function PortalShell({ session, onLogout }) {
       }),
     [isAdminUser, isLeaderUser, isPaladinUser, portalAccess],
   );
+  const visiblePveNavigation = useMemo(
+    () =>
+      pveContents
+        .filter((content) => content.isActive)
+        .sort((a, b) => {
+          if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
+            return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
+          }
+
+          return String(a.label || "").localeCompare(String(b.label || ""), "fr", {
+            sensitivity: "base",
+          });
+        }),
+    [pveContents],
+  );
+  const activePveContentId = active.startsWith("pve:") ? active.slice(4) : "";
+  const activePveItem = visiblePveNavigation.find((item) => String(item.id) === String(activePveContentId));
+  const activePveTab = active === "pve" || active.startsWith("pve:");
+  const mobileQuickNavigation = useMemo(
+    () => [
+      ...visibleNavigation,
+      ...(portalAccess.canUsePortalCore
+        ? [
+            { id: "pve", label: "PVE", labelKey: "nav.pve", icon: BookOpen },
+            ...visiblePveNavigation.map((item) => ({
+              id: `pve:${item.id}`,
+              label: item.label,
+              labelKey: null,
+              icon: Play,
+            })),
+          ]
+        : []),
+      ...visibleAdminNavigation,
+    ],
+    [portalAccess.canUsePortalCore, visibleAdminNavigation, visibleNavigation, visiblePveNavigation],
+  );
 
   const activeTitle = useMemo(() => {
+    if (activePveTab) return activePveItem?.label || t("nav.pve", "PVE");
+
     const activeItem = [...navigation, ...adminNavigation].find((item) => item.id === active);
     return activeItem ? t(activeItem.labelKey, activeItem.label) : t("nav.home", "Accueil");
-  }, [active, t]);
+  }, [active, activePveItem, activePveTab, t]);
   const activeAdminItem = visibleAdminNavigation.some((item) => item.id === active);
 
   useEffect(() => {
@@ -1316,11 +1371,16 @@ function PortalShell({ session, onLogout }) {
     const isVisibleAdminTab = visibleAdminNavigation.some((item) => item.id === active);
     const isBaseTab = navigation.some((item) => item.id === active);
     const isVisibleBaseTab = visibleNavigation.some((item) => item.id === active);
+    const isPveTab = active === "pve" || active.startsWith("pve:");
 
-    if ((isAdminTab && !isVisibleAdminTab) || (isBaseTab && !isVisibleBaseTab)) {
+    if (
+      (isAdminTab && !isVisibleAdminTab) ||
+      (isBaseTab && !isVisibleBaseTab) ||
+      (isPveTab && !portalAccess.canUsePortalCore)
+    ) {
       setActive("home");
     }
-  }, [active, visibleAdminNavigation, visibleNavigation]);
+  }, [active, portalAccess.canUsePortalCore, visibleAdminNavigation, visibleNavigation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1369,6 +1429,47 @@ function PortalShell({ session, onLogout }) {
   }, [isPaladinUser, session]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadPveContents() {
+      if (!portalAccess.canUsePortalCore) {
+        setPveContents([]);
+        setPveContentsLoaded(true);
+        return;
+      }
+
+      setPveContentsLoaded(false);
+
+      const { data, error } = await supabase
+        .from("pve_contents")
+        .select("id, slug, name, description, stage_count, sort_order, is_active")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("name", { ascending: true });
+
+      if (cancelled) return;
+
+      if (error) {
+        if (error.code !== "42P01") {
+          console.error("[pve-contents]", error);
+        }
+        setPveContents([]);
+        setPveContentsLoaded(true);
+        return;
+      }
+
+      setPveContents((data || []).map(normalizePveContentNavItem));
+      setPveContentsLoaded(true);
+    }
+
+    void loadPveContents();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [portalAccess.canUsePortalCore]);
+
+  useEffect(() => {
     if (active === "home" || active === "logs" || loggedTabViewsRef.current.has(active)) return;
 
     loggedTabViewsRef.current.add(active);
@@ -1386,6 +1487,10 @@ function PortalShell({ session, onLogout }) {
   useEffect(() => {
     if (activeAdminItem) setAdminNavOpen(true);
   }, [activeAdminItem]);
+
+  useEffect(() => {
+    if (activePveTab) setPveNavOpen(true);
+  }, [activePveTab]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1475,6 +1580,66 @@ function PortalShell({ session, onLogout }) {
             </button>
           );
         })}
+
+        {portalAccess.canUsePortalCore ? (
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => {
+              setPveNavOpen((value) => !value);
+              if (!activePveTab) {
+                const firstContent = visiblePveNavigation[0];
+                setActive(firstContent ? `pve:${firstContent.id}` : "pve");
+              }
+            }}
+            className={`flex w-full items-center gap-3 rounded-xl px-3 ${
+              variant === "mobile" ? "py-3 text-base" : "py-2.5 text-sm"
+            } text-left transition ${
+              activePveTab
+                ? "bg-zinc-900 text-zinc-50"
+                : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+            }`}
+            aria-expanded={pveNavOpen}
+          >
+            <BookOpen className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{t("nav.pve", "PVE")}</span>
+            <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${pveNavOpen ? "rotate-90" : ""}`} />
+          </button>
+
+          {pveNavOpen ? (
+            <div className="mt-1 space-y-1 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
+              {visiblePveNavigation.length ? (
+                visiblePveNavigation.map((item) => {
+                  const selected = active === `pve:${item.id}`;
+
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => selectTab(`pve:${item.id}`)}
+                      className={adminItemClass(selected)}
+                    >
+                      <Play className="h-4 w-4 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                    </button>
+                  );
+                })
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => selectTab("pve")}
+                  className={adminItemClass(active === "pve")}
+                >
+                  <BookOpen className="h-4 w-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {pveContentsLoaded ? t("pve.noContentShort", "Aucun contenu") : t("common.loading", "Chargement...")}
+                  </span>
+                </button>
+              )}
+            </div>
+          ) : null}
+        </div>
+        ) : null}
 
         {visibleAdminNavigation.length ? (
         <div className="pt-2">
@@ -1660,7 +1825,7 @@ function PortalShell({ session, onLogout }) {
         {isMobileMode ? (
           <div className="border-b border-zinc-800 bg-[#0d0c0a]/95 px-3 py-2">
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {[...visibleNavigation, ...visibleAdminNavigation].map((item) => {
+              {mobileQuickNavigation.map((item) => {
                 const Icon = item.icon;
                 const selected = active === item.id;
 
@@ -1676,7 +1841,7 @@ function PortalShell({ session, onLogout }) {
                     }`}
                   >
                     <Icon className="h-3.5 w-3.5" />
-                    <span>{t(item.labelKey, item.label)}</span>
+                    <span>{item.labelKey ? t(item.labelKey, item.label) : item.label}</span>
                   </button>
                 );
               })}
@@ -1693,6 +1858,29 @@ function PortalShell({ session, onLogout }) {
           {active === "defenses" ? <MyDefensesTab session={session} /> : null}
           {active === "gvg" ? <GvgView session={session} onEditRun={openRunEditor} /> : null}
           {active === "run-search" ? <RunSearchGrid session={session} /> : null}
+          {activePveTab ? (
+            <PveLibraryTab
+              session={session}
+              contents={visiblePveNavigation}
+              selectedContentId={activePveContentId}
+              onContentCreated={(content) => {
+                setPveContents((previous) => [
+                  ...previous.filter((item) => String(item.id) !== String(content.id)),
+                  {
+                    id: content.id,
+                    label: content.name,
+                    slug: content.slug,
+                    description: content.description,
+                    stageCount: content.stageCount,
+                    sortOrder: content.sortOrder,
+                    isActive: content.isActive,
+                  },
+                ]);
+                setActive(`pve:${content.id}`);
+                setPveNavOpen(true);
+              }}
+            />
+          ) : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}
           {active === "validation" ? <GvgValidationTab session={session} /> : null}
           {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
