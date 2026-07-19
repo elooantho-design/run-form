@@ -11,6 +11,22 @@ function isAdminSession(session) {
   return role === "admin" || role === "leader";
 }
 
+function isMissingPveVideoHeroesError(error) {
+  if (!error) return false;
+
+  const code = String(error.code || "");
+  const message = String(error.message || error.details || error.hint || "");
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("pve_video_heroes") &&
+      (message.includes("schema cache") ||
+        message.includes("does not exist") ||
+        message.includes("Could not find the table")))
+  );
+}
+
 function extractYoutubeVideoId(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -315,7 +331,7 @@ export default function PveLibraryTab({
         .eq("content_id", selectedContent.id),
     ]);
 
-    const heroLinksMissing = heroLinksResult.error?.code === "42P01";
+    const heroLinksMissing = isMissingPveVideoHeroesError(heroLinksResult.error);
     if (stagesResult.error || videosResult.error || linksResult.error || (heroLinksResult.error && !heroLinksMissing)) {
       const error = stagesResult.error || videosResult.error || linksResult.error || heroLinksResult.error;
       setErrorMessage(
@@ -465,7 +481,9 @@ export default function PveLibraryTab({
       .delete()
       .eq("video_id", videoId);
 
-    if (deleteHeroesError && deleteHeroesError.code !== "42P01") throw deleteHeroesError;
+    const heroTableMissing = isMissingPveVideoHeroesError(deleteHeroesError);
+    if (deleteHeroesError && !heroTableMissing) throw deleteHeroesError;
+    if (heroTableMissing) return;
 
     if (!selectedHeroIds.length) return;
 
@@ -586,7 +604,7 @@ export default function PveLibraryTab({
       .delete()
       .eq("video_id", video.id);
 
-    if (deleteHeroLinksError && deleteHeroLinksError.code !== "42P01") {
+    if (deleteHeroLinksError && !isMissingPveVideoHeroesError(deleteHeroLinksError)) {
       setErrorMessage(deleteHeroLinksError.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
       setDeletingVideoId("");
       return;
