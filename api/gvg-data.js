@@ -693,12 +693,34 @@ async function handleUpdate(req, res) {
           updated_at: new Date().toISOString(),
         };
 
+  const { data: targetDefense, error: readError } = await supabase
+    .from("gvg_defense")
+    .select("id, guild, is_ally, heroes, status")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (readError) {
+    console.error("[gvg-data:update] read error:", readError);
+    return res.status(500).json({
+      error: readError.message || "read failed",
+      details: readError,
+    });
+  }
+
+  if (!targetDefense) {
+    return res.status(404).json({ error: "defense introuvable" });
+  }
+
+  const targetIds =
+    action === "repro"
+      ? await findMatchingReproDefenseIds(targetDefense)
+      : [targetDefense.id];
+
   const { data, error } = await supabase
     .from("gvg_defense")
     .update(updatePayload)
-    .eq("id", id)
-    .select("id, status, repro_by")
-    .maybeSingle();
+    .in("id", targetIds)
+    .select("id, status, repro_by");
 
   if (error) {
     console.error("[gvg-data:update] supabase error:", error);
@@ -708,13 +730,19 @@ async function handleUpdate(req, res) {
     });
   }
 
-  if (!data) {
-    return res.status(404).json({ error: "défense introuvable" });
+  const updatedRows = Array.isArray(data) ? data : [];
+  const item = updatedRows.find((row) => String(row.id) === String(id)) || updatedRows[0] || null;
+
+  if (!item) {
+    return res.status(404).json({ error: "defense introuvable" });
   }
 
   return res.status(200).json({
     success: true,
-    item: data,
+    item,
+    items: updatedRows,
+    updated_ids: updatedRows.map((row) => row.id),
+    updated_count: updatedRows.length,
   });
 }
 
@@ -868,6 +896,43 @@ function makeDefenseSignature(defense) {
   if (slots.length !== 5) return null;
 
   return slots.join("|");
+}
+
+function canReceivePropagatedRepro(defense) {
+  const status = String(defense?.status || "").toLowerCase();
+  return !status || status === "def" || status === "repro";
+}
+
+async function findMatchingReproDefenseIds(targetDefense) {
+  const targetId = targetDefense?.id;
+  if (!targetId) return [];
+
+  const signature = makeDefenseSignature(targetDefense);
+  const guild = normalizeGuildCode(targetDefense?.guild);
+
+  if (!signature || !guild) return [targetId];
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .select("id, heroes, status, is_ally")
+    .eq("guild", guild);
+
+  if (error) {
+    console.error("[gvg-data:update] matching read error:", error);
+    throw error;
+  }
+
+  const ids = new Set([targetId]);
+
+  for (const defense of data || []) {
+    if (!defense?.id) continue;
+    if ((defense?.is_ally === true) !== (targetDefense?.is_ally === true)) continue;
+    if (!canReceivePropagatedRepro(defense)) continue;
+    if (makeDefenseSignature(defense) !== signature) continue;
+    ids.add(defense.id);
+  }
+
+  return [...ids];
 }
 
 function buildGroupEntry(num, signature, defenses) {

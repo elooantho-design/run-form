@@ -25,6 +25,59 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
+function normalizeGvgDefenseChampionName(name) {
+  if (!name) return null;
+
+  return String(name)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\d+$/, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim() || null;
+}
+
+function normalizeGvgDefensePosition(position) {
+  return String(position || "").trim().toUpperCase() || null;
+}
+
+function normalizeGvgDefenseDirection(direction) {
+  const value = String(direction || "").trim().toUpperCase();
+
+  if (["N", "NORD", "NORTH", "UP"].includes(value)) return "N";
+  if (["S", "SUD", "SOUTH", "DOWN"].includes(value)) return "S";
+  if (["E", "EST", "EAST", "RIGHT"].includes(value)) return "E";
+  if (["O", "OUEST", "W", "WEST", "LEFT"].includes(value)) return "O";
+
+  return value || null;
+}
+
+function makeGvgDefenseSignature(defense) {
+  const heroes = Array.isArray(defense?.heroes) ? defense.heroes : [];
+
+  const slots = heroes
+    .map((hero) => {
+      const champion = normalizeGvgDefenseChampionName(hero?.champion || hero?.name);
+      const position = normalizeGvgDefensePosition(hero?.position);
+      const direction = normalizeGvgDefenseDirection(hero?.direction);
+
+      if (!champion || !position || !direction) return null;
+
+      return `${position}:${direction}:${champion}`;
+    })
+    .filter(Boolean)
+    .sort();
+
+  if (slots.length !== 5) return null;
+
+  return slots.join("|");
+}
+
+function canReceivePropagatedRepro(defense) {
+  const status = String(defense?.status || "").toLowerCase();
+  return !status || status === "def" || status === "repro";
+}
+
 function isAdminRole(role) {
   return ["admin", "administrateur", "leader"].includes(normalizeText(role));
 }
@@ -1064,8 +1117,7 @@ export async function saveReproSubmission(
     artifact,
   });
 
-  const payload = {
-    gvg_defense_id: gvgDefenseId,
+  const payloadBase = {
     member_id: memberId || null,
     watcher_name: watcherName,
     player_pb: playerPb || null,
@@ -1080,14 +1132,37 @@ export async function saveReproSubmission(
     updated_at: new Date().toISOString(),
   };
 
+  const { data: targetDefense, error: targetError } = await supabase
+    .from("gvg_defense")
+    .select("id, guild, is_ally, heroes, status")
+    .eq("id", gvgDefenseId)
+    .maybeSingle();
+
+  if (targetError) throw targetError;
+  if (!targetDefense) {
+    const error = new Error("defense introuvable");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const targetIds = await findMatchingReproDefenseIds(supabase, targetDefense);
+  const payload = targetIds.map((targetId) => ({
+    ...payloadBase,
+    gvg_defense_id: targetId,
+  }));
+
   const { data, error } = await supabase
     .from("gvg_repro")
     .upsert(payload, { onConflict: "gvg_defense_id" })
-    .select("id, gvg_defense_id, watcher_name, message_text")
-    .maybeSingle();
+    .select("id, gvg_defense_id, watcher_name, message_text");
 
   if (error) throw error;
-  return data;
+
+  return (
+    (data || []).find((row) => String(row.gvg_defense_id) === String(gvgDefenseId)) ||
+    (data || [])[0] ||
+    null
+  );
 }
 
 export async function getDiscordReproRequestById(supabase, requestId) {
@@ -1227,6 +1302,69 @@ function flattenModalValues(components) {
   return values;
 }
 
+async function findMatchingReproDefenseIds(supabase, targetDefense) {
+  const targetId = targetDefense?.id;
+  if (!targetId) return [];
+
+  const signature = makeGvgDefenseSignature(targetDefense);
+  const guild = normalizeGuildCode(targetDefense?.guild);
+
+  if (!signature || !guild) return [targetId];
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .select("id, heroes, status, is_ally")
+    .eq("guild", guild);
+
+  if (error) throw error;
+
+  const ids = new Set([targetId]);
+
+  for (const defense of data || []) {
+    if (!defense?.id) continue;
+    if ((defense?.is_ally === true) !== (targetDefense?.is_ally === true)) continue;
+    if (!canReceivePropagatedRepro(defense)) continue;
+    if (makeGvgDefenseSignature(defense) !== signature) continue;
+    ids.add(defense.id);
+  }
+
+  return [...ids];
+}
+
+async function markMatchingGvgDefensesAsRepro(supabase, { defenseId, reproBy, updatedAt }) {
+  const { data: targetDefense, error: readError } = await supabase
+    .from("gvg_defense")
+    .select("id, guild, is_ally, heroes, status")
+    .eq("id", defenseId)
+    .maybeSingle();
+
+  if (readError) throw readError;
+  if (!targetDefense) {
+    const error = new Error("defense introuvable");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const targetIds = await findMatchingReproDefenseIds(supabase, targetDefense);
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .update({
+      status: "repro",
+      repro_by: reproBy,
+      updated_at: updatedAt,
+    })
+    .in("id", targetIds)
+    .select("id, status, repro_by");
+
+  if (error) throw error;
+
+  return {
+    item: (data || []).find((row) => String(row.id) === String(defenseId)) || (data || [])[0] || null,
+    items: data || [],
+    updated_count: (data || []).length,
+  };
+}
+
 export async function saveDiscordModalSubmission(supabase, { requestId, user, modalComponents }) {
   const requestRow = await getDiscordReproRequestById(supabase, requestId);
   if (!requestRow) {
@@ -1265,14 +1403,11 @@ export async function saveDiscordModalSubmission(supabase, { requestId, user, mo
   });
 
   const now = new Date().toISOString();
-  await supabase
-    .from("gvg_defense")
-    .update({
-      status: "repro",
-      repro_by: member.watcher_name || user?.username || "Joueur",
-      updated_at: now,
-    })
-    .eq("id", requestRow.gvg_defense_id);
+  await markMatchingGvgDefensesAsRepro(supabase, {
+    defenseId: requestRow.gvg_defense_id,
+    reproBy: member.watcher_name || user?.username || "Joueur",
+    updatedAt: now,
+  });
 
   await supabase
     .from(REPRO_REQUEST_TABLE)
