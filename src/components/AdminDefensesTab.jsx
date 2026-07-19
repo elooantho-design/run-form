@@ -9,6 +9,7 @@ export default function AdminDefensesTab({
   onDelete,
   onAdd,
   onAddCondition,
+  onRemoveCondition,
   onEnsureEditable,
 }) {
   const { t } = usePortalLanguage();
@@ -494,6 +495,15 @@ const addImageBlock = async (event) => {
                     className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
                   >
                     + {t("defenses.conditions", "Condition")}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onRemoveCondition?.(defense)}
+                    disabled={(defense.conditions || []).length === 0}
+                    className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    - {t("defenses.conditions", "Condition")}
                   </button>
                   <button
   type="button"

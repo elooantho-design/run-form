@@ -3253,6 +3253,7 @@ function LauncherView({ session: portalSession }) {
           </div>
         </div>
       ) : null}
+
     </section>
   );
 }
@@ -3282,12 +3283,7 @@ function mapPortalAdminDefenseRow(row, blocksByDefenseId = new Map()) {
     .map((slot) => slot.champions?.name || "")
     .filter(Boolean);
 
-  const conditions = (row.guild_defense_conditions || []).map((condition) => ({
-    id: condition.id,
-    championId: condition.champion_id,
-    minAwakening: condition.min_awakening,
-    label: `${condition.champions?.name || "Hero"} A${condition.min_awakening} minimum`,
-  }));
+  const conditions = (row.guild_defense_conditions || []).map(mapPortalDefenseConditionRow);
 
   return {
     id: row.id,
@@ -3306,6 +3302,20 @@ function mapPortalAdminDefenseRow(row, blocksByDefenseId = new Map()) {
     image: row.image_url || "",
     image_url: row.image_url || "",
   };
+}
+
+function mapPortalDefenseConditionRow(condition) {
+  return {
+    id: condition.id,
+    championId: condition.champion_id,
+    minAwakening: condition.min_awakening,
+    label: `${condition.champions?.name || "Hero"} A${condition.min_awakening} minimum`,
+  };
+}
+
+function normalizePortalDefenseFaction(value) {
+  const normalized = normalizeHeroDataValue(value);
+  return heroFactionMeta[normalized] ? normalized : String(value || "").trim();
 }
 
 function normalizeDefenseChampionName(value) {
@@ -3389,6 +3399,8 @@ function PortalAdminDefensesView({ session }) {
   const [draft, setDraft] = useState(emptyPortalDefenseDraft);
   const [conditionOpen, setConditionOpen] = useState(false);
   const [conditionDefenseId, setConditionDefenseId] = useState("");
+  const [conditionRemoveOpen, setConditionRemoveOpen] = useState(false);
+  const [conditionRemoveDefense, setConditionRemoveDefense] = useState(null);
   const [newCondition, setNewCondition] = useState({ hero: "", minAwakening: 5 });
   const isAdminUser = isAdminSession(session);
   const visibleDefenseGuildCodes = useMemo(() => {
@@ -3414,6 +3426,23 @@ function PortalAdminDefensesView({ session }) {
   const selectedConditionDefense = useMemo(
     () => defenses.find((defense) => String(defense.id) === String(conditionDefenseId)) || null,
     [conditionDefenseId, defenses],
+  );
+
+  const defenseFactionOptions = useMemo(
+    () => {
+      const championFactions = champions.flatMap((champion) =>
+        splitChampionValues(getChampionField(champion, ["faction", "Faction", "factions", "Factions"])),
+      );
+      const factionValues = [...new Set([...heroFactionOrder, ...championFactions])].sort((left, right) =>
+        sortHeroValues(left, right, heroFactionOrder),
+      );
+
+      return factionValues.map((faction) => ({
+        value: faction,
+        label: t(`heroFaction.${faction}`, heroFactionMeta[faction]?.label || formatHeroFilterLabel(faction)),
+      }));
+    },
+    [champions, t],
   );
 
   useEffect(() => {
@@ -3460,7 +3489,7 @@ function PortalAdminDefensesView({ session }) {
 
       const [defensesResult, championsResult] = await Promise.all([
         defensesQuery.order("created_at", { ascending: true }),
-        supabase.from("champions").select("id, name, portal_name").order("name", { ascending: true }),
+        supabase.from("champions").select("*").order("name", { ascending: true }),
       ]);
 
       if (cancelled) return;
@@ -3695,7 +3724,7 @@ function PortalAdminDefensesView({ session }) {
       name: editableDefense.name || "",
       tier: editableDefense.tier || "meta_s",
       type: editableDefense.type || "Tour",
-      faction: editableDefense.faction || "",
+      faction: normalizePortalDefenseFaction(editableDefense.faction),
       image: editableDefense.image || editableDefense.image_url || "",
       guildCode: editableDefense.guildCode || activeGuildCode,
       isGlobal: Boolean(editableDefense.isGlobal),
@@ -3775,7 +3804,7 @@ function PortalAdminDefensesView({ session }) {
       name: cleanName,
       tier: draft.tier,
       type: draft.type,
-      faction: draft.faction.trim() || null,
+      faction: normalizePortalDefenseFaction(draft.faction) || null,
       image_url: draft.image || null,
       guild_code: nextGuildCode,
       is_global: nextIsGlobal,
@@ -3915,6 +3944,108 @@ function PortalAdminDefensesView({ session }) {
       setRefreshTick((value) => value + 1);
     } catch (error) {
       setErrorMessage(error?.message || "Ajout de condition impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openRemoveConditionDialog(defense) {
+    const editableDefense = await ensureEditableDefense(defense);
+    if (!editableDefense) return;
+
+    setSaving(true);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const { data, error } = await supabase
+        .from("guild_defense_conditions")
+        .select(`
+          id,
+          champion_id,
+          min_awakening,
+          champions (
+            name
+          )
+        `)
+        .eq("defense_id", editableDefense.id)
+        .order("min_awakening", { ascending: false });
+
+      if (error) throw error;
+
+      const conditions = (data || []).map(mapPortalDefenseConditionRow);
+      if (conditions.length === 0) {
+        setErrorMessage("Cette defense n'a aucune condition a retirer.");
+        return;
+      }
+
+      setConditionRemoveDefense({
+        ...editableDefense,
+        conditions,
+      });
+      setConditionRemoveOpen(true);
+    } catch (error) {
+      setErrorMessage(error?.message || "Chargement des conditions impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeDefenseCondition(condition) {
+    if (!isAdminUser || saving || !conditionRemoveDefense?.id || !condition?.id) return;
+
+    setSaving(true);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const { error } = await supabase
+        .from("guild_defense_conditions")
+        .delete()
+        .eq("id", condition.id)
+        .eq("defense_id", conditionRemoveDefense.id);
+
+      if (error) throw error;
+
+      void logPortalActivity(session, {
+        actionType: "admin_defense_condition_remove",
+        entityType: "defense",
+        entityId: String(conditionRemoveDefense.id),
+        summary: `${session?.watcherName || session?.name || "Admin"} a retire une condition de ${conditionRemoveDefense.name}`,
+        metadata: {
+          defenseName: conditionRemoveDefense.name,
+          condition: condition.label,
+        },
+      });
+
+      const nextConditions = (conditionRemoveDefense.conditions || []).filter(
+        (item) => String(item.id) !== String(condition.id),
+      );
+
+      setConditionRemoveDefense((previous) =>
+        previous
+          ? {
+              ...previous,
+              conditions: nextConditions,
+            }
+          : previous,
+      );
+
+      setDefenses((previous) =>
+        previous.map((defense) =>
+          String(defense.id) === String(conditionRemoveDefense.id)
+            ? {
+                ...defense,
+                conditions: (defense.conditions || []).filter((item) => String(item.id) !== String(condition.id)),
+              }
+            : defense,
+        ),
+      );
+
+      setMessage(`Condition retiree de ${conditionRemoveDefense.name}.`);
+      if (nextConditions.length === 0) setConditionRemoveOpen(false);
+    } catch (error) {
+      setErrorMessage(error?.message || "Suppression de condition impossible.");
     } finally {
       setSaving(false);
     }
@@ -4125,6 +4256,7 @@ function PortalAdminDefensesView({ session }) {
           onEdit={openEditDefense}
           onDelete={deleteDefense}
           onAddCondition={openConditionDialog}
+          onRemoveCondition={openRemoveConditionDialog}
           onEnsureEditable={ensureEditableDefense}
         />
       )}
@@ -4204,12 +4336,18 @@ function PortalAdminDefensesView({ session }) {
 
                   <label className="block text-sm font-medium text-zinc-300">
                     Faction
-                    <input
-                      type="text"
+                    <select
                       value={draft.faction}
                       onChange={(event) => setDraft((previous) => ({ ...previous, faction: event.target.value }))}
                       className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
-                    />
+                    >
+                      <option value="">{t("adminDefenses.noFaction", "Sans faction")}</option>
+                      {defenseFactionOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                 </div>
 
@@ -4345,6 +4483,65 @@ function PortalAdminDefensesView({ session }) {
               </Button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {conditionRemoveOpen && conditionRemoveDefense ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-zinc-100 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">{t("adminDefenses.removeCondition", "Retirer une condition")}</h3>
+                <p className="mt-1 text-sm text-zinc-500">{conditionRemoveDefense.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConditionRemoveOpen(false)}
+                className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
+                aria-label={t("common.close", "Fermer")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-2">
+              {(conditionRemoveDefense.conditions || []).length === 0 ? (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-3 text-sm text-zinc-400">
+                  {t("adminDefenses.noCondition", "Aucune condition")}
+                </div>
+              ) : (
+                (conditionRemoveDefense.conditions || []).map((condition) => (
+                  <div
+                    key={condition.id}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-3"
+                  >
+                    <span className="text-sm text-zinc-100">{condition.label}</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-lg border-red-800 bg-transparent text-red-200 hover:bg-red-950/40"
+                      onClick={() => removeDefenseCondition(condition)}
+                      disabled={saving}
+                    >
+                      {t("common.delete", "Supprimer")}
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 bg-transparent text-zinc-200"
+                onClick={() => setConditionRemoveOpen(false)}
+                disabled={saving}
+              >
+                {t("common.close", "Fermer")}
+              </Button>
+            </div>
+          </div>
         </div>
       ) : null}
     </section>
