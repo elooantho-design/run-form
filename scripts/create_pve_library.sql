@@ -56,7 +56,7 @@ create table if not exists public.pve_video_heroes (
   id uuid primary key default gen_random_uuid(),
   content_id uuid not null references public.pve_contents(id) on delete cascade,
   video_id uuid not null references public.pve_videos(id) on delete cascade,
-  champion_id uuid null references public.champions(id) on delete set null,
+  champion_id bigint null references public.champions(id) on delete set null,
   champion_name text not null,
   sort_order integer not null default 9999,
   created_at timestamptz not null default now(),
@@ -190,7 +190,10 @@ with seed_contents as (
     values
       ('gr1', 'GR1', 'Raid d''equipement 1', 24, 10),
       ('gr2', 'GR2', 'Raid d''equipement 2', 24, 20),
-      ('gr3', 'GR3', 'Raid d''equipement 3', 24, 30)
+      ('gr3', 'GR3', 'Raid d''equipement 3', 24, 30),
+      ('donjon1', 'Donjon 1', 'Donjon d''equipement 1', 13, 40),
+      ('donjon2', 'Donjon 2', 'Donjon d''equipement 2', 13, 50),
+      ('donjon3', 'Donjon 3', 'Donjon d''equipement 3', 13, 60)
   ) as value_rows(slug, name, description, stage_count, sort_order)
 ),
 upserted_contents as (

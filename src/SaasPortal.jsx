@@ -150,6 +150,33 @@ const pveContentBlueprints = [
     categorySlug: "gear-raid",
     categoryName: "Raid d'equipement",
   },
+  {
+    slug: "donjon1",
+    name: "Donjon 1",
+    description: "Donjon d'equipement 1",
+    stageCount: 13,
+    sortOrder: 40,
+    categorySlug: "gear-raid",
+    categoryName: "Raid d'equipement",
+  },
+  {
+    slug: "donjon2",
+    name: "Donjon 2",
+    description: "Donjon d'equipement 2",
+    stageCount: 13,
+    sortOrder: 50,
+    categorySlug: "gear-raid",
+    categoryName: "Raid d'equipement",
+  },
+  {
+    slug: "donjon3",
+    name: "Donjon 3",
+    description: "Donjon d'equipement 3",
+    stageCount: 13,
+    sortOrder: 60,
+    categorySlug: "gear-raid",
+    categoryName: "Raid d'equipement",
+  },
 ];
 
 function normalizePveContentNavItem(row) {
