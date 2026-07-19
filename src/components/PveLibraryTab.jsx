@@ -6,6 +6,9 @@ import { supabase } from "@/lib/supabase";
 import { getChampionDisplayName, normalizeChampionLookupKey } from "@/lib/championDisplay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
+const CREATOR_MODE_UNLISTED = "__unlisted__";
+const CREATOR_MODE_NEW = "__new_creator__";
+
 function isAdminSession(session) {
   const role = String(session?.role || "").trim().toLowerCase();
   return role === "admin" || role === "leader";
@@ -41,6 +44,58 @@ function isMissingPveVideoHeroAlternativesError(error) {
         message.includes("does not exist") ||
         message.includes("Could not find the table")))
   );
+}
+
+function isMissingPveCreatorsError(error) {
+  if (!error) return false;
+
+  const code = String(error.code || "");
+  const message = String(error.message || error.details || error.hint || "");
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("pve_creators") &&
+      (message.includes("schema cache") ||
+        message.includes("does not exist") ||
+        message.includes("Could not find the table")))
+  );
+}
+
+function isMissingPveVideoCreatorColumnError(error) {
+  if (!error) return false;
+
+  const code = String(error.code || "");
+  const message = String(error.message || error.details || error.hint || "");
+  const missingCreatorColumn = message.includes("creator_id") || message.includes("suggested_creator_name");
+
+  return (
+    code === "PGRST204" ||
+    (missingCreatorColumn &&
+      (message.includes("schema cache") ||
+        message.includes("does not exist") ||
+        message.includes("Could not find the") ||
+        message.includes("column")))
+  );
+}
+
+function normalizeExternalUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+function buildCreatorKey(name) {
+  const base = String(name || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return base || "creator";
 }
 
 function extractYoutubeVideoId(value) {
@@ -112,6 +167,25 @@ function normalizeStage(row) {
   };
 }
 
+function normalizeCreator(row) {
+  return {
+    id: String(row?.id || ""),
+    name: String(row?.name || "").trim(),
+    creatorKey: String(row?.creator_key || row?.creatorKey || "").trim(),
+    channelUrl: normalizeExternalUrl(row?.channel_url || row?.channelUrl || ""),
+    avatarUrl: normalizeExternalUrl(row?.avatar_url || row?.avatarUrl || ""),
+    youtubeChannelId: String(row?.youtube_channel_id || row?.youtubeChannelId || "").trim(),
+  };
+}
+
+function sortCreators(creators) {
+  return [...creators].sort((left, right) => left.name.localeCompare(right.name, "fr", { sensitivity: "base" }));
+}
+
+function buildSuggestedCreatorGroupKey(value) {
+  return normalizeChampionLookupKey(value) || "unknown";
+}
+
 function getStageShortLabel(stage) {
   if (!stage) return "";
 
@@ -159,6 +233,7 @@ function normalizeVideo(
   heroLinkRows = [],
   alternativeLinkRows = [],
   championById = new Map(),
+  creatorById = new Map(),
   language = "fr",
 ) {
   const heroLinks = heroLinkRows
@@ -208,9 +283,15 @@ function normalizeVideo(
       };
     });
 
+  const creatorId = String(row.creator_id || row.creatorId || "");
+  const creator = creatorId ? creatorById.get(creatorId) || null : null;
+
   return {
     id: row.id,
     contentId: row.content_id || row.contentId,
+    creatorId,
+    creator,
+    suggestedCreatorName: String(row.suggested_creator_name || row.suggestedCreatorName || "").trim(),
     youtubeUrl: row.youtube_url || row.youtubeUrl || "",
     youtubeVideoId: row.youtube_video_id || row.youtubeVideoId || "",
     title: row.title || "",
@@ -236,13 +317,17 @@ export default function PveLibraryTab({
   const [stages, setStages] = useState([]);
   const [videos, setVideos] = useState([]);
   const [champions, setChampions] = useState([]);
+  const [creators, setCreators] = useState([]);
+  const [creatorSchemaReady, setCreatorSchemaReady] = useState(true);
   const [loading, setLoading] = useState(false);
   const [savingVideo, setSavingVideo] = useState(false);
+  const [resolvingCreatorKey, setResolvingCreatorKey] = useState("");
   const [deletingVideoId, setDeletingVideoId] = useState("");
   const [videoFormOpen, setVideoFormOpen] = useState(false);
   const [editingVideoId, setEditingVideoId] = useState("");
   const [heroSearch, setHeroSearch] = useState("");
   const [alternativeHeroSearches, setAlternativeHeroSearches] = useState({});
+  const [creatorReviewDrafts, setCreatorReviewDrafts] = useState({});
   const [boxFilterEnabled, setBoxFilterEnabled] = useState(false);
   const [ownedChampionIds, setOwnedChampionIds] = useState([]);
   const [ownedHeroesLoading, setOwnedHeroesLoading] = useState(false);
@@ -252,6 +337,13 @@ export default function PveLibraryTab({
     url: "",
     title: "",
     notes: "",
+    creatorId: "",
+    creatorMode: "",
+    suggestedCreatorName: "",
+    creatorLookupUrl: "",
+    creatorName: "",
+    creatorChannelUrl: "",
+    creatorAvatarUrl: "",
     stageIds: [],
     heroIds: [],
     heroAlternatives: {},
@@ -455,6 +547,33 @@ export default function PveLibraryTab({
     return map;
   }, [videos]);
 
+  const pendingCreatorGroups = useMemo(() => {
+    const map = new Map();
+
+    videos
+      .filter((video) => !video.creatorId && String(video.suggestedCreatorName || "").trim())
+      .forEach((video) => {
+        const suggestedName = String(video.suggestedCreatorName || "").trim();
+        const key = buildSuggestedCreatorGroupKey(suggestedName);
+
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
+            suggestedName,
+            videos: [],
+          });
+        }
+
+        map.get(key).videos.push(video);
+      });
+
+    return [...map.values()].sort((left, right) =>
+      left.suggestedName.localeCompare(right.suggestedName, "fr", { sensitivity: "base" }),
+    );
+  }, [videos]);
+
+  const pendingCreatorVideoCount = pendingCreatorGroups.reduce((total, group) => total + group.videos.length, 0);
+
   const selectedStageLabel = selectedStage
     ? getStageFullLabel(selectedContent, selectedStage)
     : selectedContent?.name || "PVE";
@@ -483,6 +602,7 @@ export default function PveLibraryTab({
     if (!selectedContent?.id) {
       setStages([]);
       setVideos([]);
+      setCreators([]);
       setErrorMessage(
         selectedContent
           ? t(
@@ -497,7 +617,7 @@ export default function PveLibraryTab({
     setLoading(true);
     setErrorMessage("");
 
-    const [stagesResult, videosResult, linksResult, heroLinksResult, alternativeLinksResult] = await Promise.all([
+    const [stagesResult, initialVideosResult, linksResult, heroLinksResult, alternativeLinksResult, creatorsResult] = await Promise.all([
       supabase
         .from("pve_content_stages")
         .select("id, content_id, stage_number, name, sort_order")
@@ -506,7 +626,7 @@ export default function PveLibraryTab({
         .order("stage_number", { ascending: true }),
       supabase
         .from("pve_videos")
-        .select("id, content_id, youtube_url, youtube_video_id, title, notes, created_by_name, created_at")
+        .select("id, content_id, creator_id, suggested_creator_name, youtube_url, youtube_video_id, title, notes, created_by_name, created_at")
         .eq("content_id", selectedContent.id)
         .order("created_at", { ascending: false }),
       supabase
@@ -523,18 +643,42 @@ export default function PveLibraryTab({
           "id, content_id, video_id, required_champion_id, required_champion_name, alternative_champion_id, alternative_champion_name, sort_order",
         )
         .eq("content_id", selectedContent.id),
+      supabase
+        .from("pve_creators")
+        .select("id, name, creator_key, channel_url, avatar_url")
+        .order("name", { ascending: true }),
     ]);
+
+    let videosResult = initialVideosResult;
+    const videoCreatorColumnMissing = isMissingPveVideoCreatorColumnError(initialVideosResult.error);
+    if (videoCreatorColumnMissing) {
+      videosResult = await supabase
+        .from("pve_videos")
+        .select("id, content_id, youtube_url, youtube_video_id, title, notes, created_by_name, created_at")
+        .eq("content_id", selectedContent.id)
+        .order("created_at", { ascending: false });
+    }
 
     const heroLinksMissing = isMissingPveVideoHeroesError(heroLinksResult.error);
     const alternativeLinksMissing = isMissingPveVideoHeroAlternativesError(alternativeLinksResult.error);
+    const creatorsMissing = isMissingPveCreatorsError(creatorsResult.error);
+    setCreatorSchemaReady(!videoCreatorColumnMissing && !creatorsMissing);
+
     if (
       stagesResult.error ||
       videosResult.error ||
       linksResult.error ||
       (heroLinksResult.error && !heroLinksMissing) ||
-      (alternativeLinksResult.error && !alternativeLinksMissing)
+      (alternativeLinksResult.error && !alternativeLinksMissing) ||
+      (creatorsResult.error && !creatorsMissing)
     ) {
-      const error = stagesResult.error || videosResult.error || linksResult.error || heroLinksResult.error || alternativeLinksResult.error;
+      const error =
+        stagesResult.error ||
+        videosResult.error ||
+        linksResult.error ||
+        heroLinksResult.error ||
+        alternativeLinksResult.error ||
+        creatorsResult.error;
       setErrorMessage(
         error?.code === "42P01"
           ? t(
@@ -545,11 +689,14 @@ export default function PveLibraryTab({
       );
       setStages([]);
       setVideos([]);
+      setCreators([]);
       setLoading(false);
       return;
     }
 
     const nextStages = (stagesResult.data || []).map(normalizeStage);
+    const nextCreators = creatorsMissing ? [] : sortCreators((creatorsResult.data || []).map(normalizeCreator).filter((creator) => creator.id && creator.name));
+    const creatorById = new Map(nextCreators.map((creator) => [String(creator.id), creator]));
     const nextVideos = (videosResult.data || []).map((row) =>
       normalizeVideo(
         row,
@@ -557,12 +704,14 @@ export default function PveLibraryTab({
         heroLinksMissing ? [] : heroLinksResult.data || [],
         alternativeLinksMissing ? [] : alternativeLinksResult.data || [],
         championById,
+        creatorById,
         language,
       ),
     );
 
     setStages(nextStages);
     setVideos(nextVideos);
+    setCreators(nextCreators);
     setSelectedStageId((current) => {
       if (nextStages.some((stage) => String(stage.id) === String(current))) return current;
       return nextStages[0]?.id || "";
@@ -570,6 +719,13 @@ export default function PveLibraryTab({
     setVideoDraft((previous) => ({
       ...previous,
       stageIds: nextStages[0]?.id ? [String(nextStages[0].id)] : [],
+      creatorId: "",
+      creatorMode: "",
+      suggestedCreatorName: "",
+      creatorLookupUrl: "",
+      creatorName: "",
+      creatorChannelUrl: "",
+      creatorAvatarUrl: "",
       heroIds: [],
       heroAlternatives: {},
     }));
@@ -673,6 +829,114 @@ export default function PveLibraryTab({
     }));
   };
 
+  const getCreatorReviewDraft = (group) => ({
+    existingCreatorId: "",
+    name: group?.suggestedName || "",
+    channelUrl: "",
+    avatarUrl: "",
+    lookupUrl: "",
+    ...(creatorReviewDrafts[group?.key] || {}),
+  });
+
+  const updateCreatorReviewDraft = (groupKey, patch) => {
+    setCreatorReviewDrafts((previous) => ({
+      ...previous,
+      [groupKey]: {
+        ...(previous[groupKey] || {}),
+        ...patch,
+      },
+    }));
+  };
+
+  const resolveCreatorGroup = async (group, mode) => {
+    if (!isAdminUser || !group?.videos?.length || resolvingCreatorKey) return;
+
+    const draft = getCreatorReviewDraft(group);
+    const videoIds = group.videos.map((video) => video.id).filter(Boolean);
+    const body = {
+      action: "resolve-suggestion",
+      actorMemberId: getSessionMemberId(session),
+      videoIds,
+    };
+
+    if (mode === "existing") {
+      if (!draft.existingCreatorId) {
+        setErrorMessage(t("pve.creatorExistingRequired", "Selectionne un createur existant."));
+        return;
+      }
+
+      body.creatorId = draft.existingCreatorId;
+    } else {
+      const name = String(draft.name || group.suggestedName || "").trim();
+      const lookupUrl = String(draft.lookupUrl || "").trim();
+      const channelUrl = normalizeExternalUrl(draft.channelUrl);
+
+      if (!name && !lookupUrl && !channelUrl) {
+        setErrorMessage(t("pve.creatorNameOrUrlRequired", "Renseigne un nom ou une URL YouTube de createur."));
+        return;
+      }
+
+      body.creator = {
+        name,
+        youtubeLookupUrl: lookupUrl,
+        channelUrl,
+        avatarUrl: normalizeExternalUrl(draft.avatarUrl),
+      };
+    }
+
+    setResolvingCreatorKey(group.key);
+    setErrorMessage("");
+    setMessage("");
+
+    const response = await fetch("/api/pve-creators", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      setErrorMessage(payload?.error || t("pve.resolveCreatorError", "Attribution du createur impossible."));
+      setResolvingCreatorKey("");
+      return;
+    }
+
+    const normalizedCreator = normalizeCreator(payload.creator);
+    const videoIdSet = new Set(videoIds.map(String));
+
+    if (normalizedCreator.id) {
+      setCreators((previous) =>
+        sortCreators([...previous.filter((creator) => creator.id !== normalizedCreator.id), normalizedCreator]),
+      );
+      setVideos((previous) =>
+        previous.map((video) =>
+          videoIdSet.has(String(video.id))
+            ? {
+                ...video,
+                creatorId: normalizedCreator.id,
+                creator: normalizedCreator,
+                suggestedCreatorName: "",
+              }
+            : video,
+        ),
+      );
+    }
+
+    setCreatorReviewDrafts((previous) => {
+      const next = { ...previous };
+      delete next[group.key];
+      return next;
+    });
+    setMessage(
+      payload?.youtubeWarning
+        ? `${t("pve.creatorResolved", "Createur officiel associe.")} ${payload.youtubeWarning}`
+        : t("pve.creatorResolved", "Createur officiel associe."),
+    );
+    setResolvingCreatorKey("");
+  };
+
   const openAddVideoForm = () => {
     setEditingVideoId("");
     setHeroSearch("");
@@ -682,6 +946,13 @@ export default function PveLibraryTab({
       url: "",
       title: "",
       notes: "",
+      creatorId: "",
+      creatorMode: "",
+      suggestedCreatorName: "",
+      creatorLookupUrl: "",
+      creatorName: "",
+      creatorChannelUrl: "",
+      creatorAvatarUrl: "",
       stageIds: selectedStage?.id ? [String(selectedStage.id)] : [],
       heroIds: [],
       heroAlternatives: {},
@@ -709,6 +980,13 @@ export default function PveLibraryTab({
       url: video.youtubeUrl || "",
       title: video.title || "",
       notes: video.notes || "",
+      creatorId: video.creatorId || "",
+      creatorMode: video.creatorId ? "" : video.suggestedCreatorName ? CREATOR_MODE_UNLISTED : "",
+      suggestedCreatorName: video.suggestedCreatorName || "",
+      creatorLookupUrl: "",
+      creatorName: "",
+      creatorChannelUrl: "",
+      creatorAvatarUrl: "",
       stageIds: video.stageIds?.length ? video.stageIds.map(String) : selectedStage?.id ? [String(selectedStage.id)] : [],
       heroIds: (video.heroes || []).map((hero) => String(hero.championId || hero.id)).filter(Boolean),
       heroAlternatives: nextHeroAlternatives,
@@ -862,9 +1140,73 @@ export default function PveLibraryTab({
       return;
     }
 
+    const suggestedCreatorName =
+      videoDraft.creatorMode === CREATOR_MODE_UNLISTED
+        ? String(videoDraft.suggestedCreatorName || "").trim()
+        : "";
+
+    if (creatorSchemaReady && videoDraft.creatorMode === CREATOR_MODE_UNLISTED && !suggestedCreatorName) {
+      setErrorMessage(t("pve.suggestedCreatorNameRequired", "Renseigne le nom du createur a proposer."));
+      return;
+    }
+
+    if (creatorSchemaReady && videoDraft.creatorMode === CREATOR_MODE_NEW) {
+      const hasCreatorDraft =
+        String(videoDraft.creatorName || "").trim() ||
+        String(videoDraft.creatorLookupUrl || "").trim() ||
+        normalizeExternalUrl(videoDraft.creatorChannelUrl);
+
+      if (!hasCreatorDraft) {
+        setErrorMessage(t("pve.creatorNameOrUrlRequired", "Renseigne un nom ou une URL YouTube de createur."));
+        return;
+      }
+    }
+
     setSavingVideo(true);
     setErrorMessage("");
     setMessage("");
+
+    let videoCreatorId = videoDraft.creatorId || "";
+    let youtubeWarning = "";
+
+    if (creatorSchemaReady && videoDraft.creatorMode === CREATOR_MODE_NEW) {
+      const response = await fetch("/api/pve-creators", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "create-or-reuse",
+          actorMemberId: getSessionMemberId(session),
+          creator: {
+            name: String(videoDraft.creatorName || "").trim(),
+            youtubeLookupUrl: String(videoDraft.creatorLookupUrl || "").trim(),
+            channelUrl: normalizeExternalUrl(videoDraft.creatorChannelUrl),
+            avatarUrl: normalizeExternalUrl(videoDraft.creatorAvatarUrl),
+          },
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setErrorMessage(payload?.error || t("pve.createCreatorError", "Creation du createur impossible."));
+        setSavingVideo(false);
+        return;
+      }
+
+      const normalizedCreator = normalizeCreator(payload.creator);
+      if (!normalizedCreator.id) {
+        setErrorMessage(t("pve.createCreatorError", "Creation du createur impossible."));
+        setSavingVideo(false);
+        return;
+      }
+
+      videoCreatorId = normalizedCreator.id;
+      youtubeWarning = String(payload?.youtubeWarning || "").trim();
+      setCreators((previous) =>
+        sortCreators([...previous.filter((creator) => creator.id !== normalizedCreator.id), normalizedCreator]),
+      );
+    }
 
     const videoPayload = {
       content_id: selectedContent.id,
@@ -874,6 +1216,10 @@ export default function PveLibraryTab({
       notes: videoDraft.notes.trim() || null,
       updated_at: new Date().toISOString(),
     };
+    if (creatorSchemaReady) {
+      videoPayload.creator_id = videoCreatorId || null;
+      videoPayload.suggested_creator_name = suggestedCreatorName || null;
+    }
 
     const result = editingVideoId
       ? await supabase
@@ -910,12 +1256,20 @@ export default function PveLibraryTab({
       url: "",
       title: "",
       notes: "",
+      creatorId: "",
+      creatorMode: "",
+      suggestedCreatorName: "",
+      creatorLookupUrl: "",
+      creatorName: "",
+      creatorChannelUrl: "",
+      creatorAvatarUrl: "",
       stageIds: selectedStage?.id ? [String(selectedStage.id)] : [],
       heroIds: [],
       heroAlternatives: {},
     });
     closeVideoForm();
-    setMessage(editingVideoId ? t("pve.videoUpdated", "Video modifiee.") : t("pve.videoAdded", "Video ajoutee."));
+    const saveMessage = editingVideoId ? t("pve.videoUpdated", "Video modifiee.") : t("pve.videoAdded", "Video ajoutee.");
+    setMessage(youtubeWarning ? `${saveMessage} ${youtubeWarning}` : saveMessage);
     setSavingVideo(false);
     await loadContentData();
   };
@@ -1023,6 +1377,174 @@ export default function PveLibraryTab({
       {errorMessage ? (
         <div className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200">
           {errorMessage}
+        </div>
+      ) : null}
+
+      {isAdminUser && pendingCreatorVideoCount ? (
+        <div className="space-y-3 rounded-2xl border border-amber-800/70 bg-amber-950/20 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-300">
+                {t("pve.creatorReviewEyebrow", "Createurs a identifier")}
+              </div>
+              <h3 className="mt-1 text-lg font-semibold text-white">
+                {t("pve.creatorReviewTitle", "{count} videos sans createur officiel").replace(
+                  "{count}",
+                  String(pendingCreatorVideoCount),
+                )}
+              </h3>
+              <p className="mt-1 text-sm text-amber-100/75">
+                {t(
+                  "pve.creatorReviewDescription",
+                  "Associe ces propositions a un createur existant ou cree une fiche officielle.",
+                )}
+              </p>
+            </div>
+            <Badge className="border-amber-500/60 bg-amber-500/15 text-amber-100">
+              {pendingCreatorGroups.length} {t("pve.creatorGroups", "groupe(s)")}
+            </Badge>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            {pendingCreatorGroups.map((group) => {
+              const draft = getCreatorReviewDraft(group);
+              const resolving = resolvingCreatorKey === group.key;
+
+              return (
+                <div key={group.key} className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-white">{group.suggestedName}</div>
+                      <div className="text-xs text-zinc-500">
+                        {group.videos.length} {t("pve.creatorVideosPending", "video(s) a attribuer")}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {group.videos.map((video) => (
+                      <div key={`creator-review-video-${video.id}`} className="rounded-xl border border-zinc-800 bg-black/30 p-2">
+                        <a
+                          href={video.youtubeUrl}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="line-clamp-1 text-sm font-semibold text-zinc-100 hover:text-amber-100 hover:underline"
+                        >
+                          {video.title}
+                        </a>
+                        <div className="mt-1 text-xs text-zinc-500">
+                          {video.createdByName
+                            ? `${t("pve.addedBy", "Ajoute par")} ${video.createdByName}`
+                            : t("common.unknown", "Inconnu")}
+                          {video.createdAt ? ` - ${formatDate(video.createdAt)}` : ""}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <label className="text-sm font-medium text-zinc-300">
+                      {t("pve.assignExistingCreator", "Associer a un createur existant")}
+                      <select
+                        value={draft.existingCreatorId}
+                        onChange={(event) =>
+                          updateCreatorReviewDraft(group.key, { existingCreatorId: event.target.value })
+                        }
+                        className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                      >
+                        <option value="">{t("pve.creatorNone", "Aucun createur lie")}</option>
+                        {creators.map((creator) => (
+                          <option key={`review-creator-${creator.id}`} value={creator.id}>
+                            {creator.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="flex items-end">
+                      <Button
+                        type="button"
+                        onClick={() => resolveCreatorGroup(group, "existing")}
+                        disabled={resolving || !draft.existingCreatorId}
+                        className="w-full rounded-xl bg-amber-500 text-amber-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {resolving ? t("common.saving", "Sauvegarde...") : t("pve.resolveCreatorWithExisting", "Associer")}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-zinc-800 bg-black/30 p-3">
+                    <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                      {t("pve.createOfficialCreator", "Creer une fiche officielle")}
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <label className="text-sm font-medium text-zinc-300">
+                        {t("pve.creatorLookupUrl", "URL chaine ou video YouTube")}
+                        <input
+                          type="text"
+                          value={draft.lookupUrl}
+                          onChange={(event) => updateCreatorReviewDraft(group.key, { lookupUrl: event.target.value })}
+                          placeholder="https://www.youtube.com/@... ou https://youtu.be/..."
+                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                        />
+                      </label>
+                      <label className="text-sm font-medium text-zinc-300">
+                        {t("pve.officialCreatorName", "Nom officiel")}
+                        <input
+                          type="text"
+                          value={draft.name}
+                          onChange={(event) => updateCreatorReviewDraft(group.key, { name: event.target.value })}
+                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                        />
+                      </label>
+                      <label className="text-sm font-medium text-zinc-300">
+                        {t("pve.officialCreatorChannelUrl", "URL chaine YouTube")}
+                        <input
+                          type="url"
+                          value={draft.channelUrl}
+                          onChange={(event) => updateCreatorReviewDraft(group.key, { channelUrl: event.target.value })}
+                          placeholder="https://www.youtube.com/@..."
+                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                        />
+                      </label>
+                      <label className="text-sm font-medium text-zinc-300">
+                        {t("pve.officialCreatorAvatarUrl", "Avatar ou logo")}
+                        <input
+                          type="url"
+                          value={draft.avatarUrl}
+                          onChange={(event) => updateCreatorReviewDraft(group.key, { avatarUrl: event.target.value })}
+                          placeholder="https://..."
+                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                        />
+                      </label>
+                    </div>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      {t(
+                        "pve.creatorLookupHelp",
+                        "Si une URL YouTube est renseignee, le serveur complete les champs vides une seule fois puis stocke les infos dans Supabase.",
+                      )}
+                    </p>
+                    <Button
+                      type="button"
+                      onClick={() => resolveCreatorGroup(group, "new")}
+                      disabled={
+                        resolving ||
+                        !(
+                          String(draft.name || "").trim() ||
+                          String(draft.lookupUrl || "").trim() ||
+                          normalizeExternalUrl(draft.channelUrl)
+                        )
+                      }
+                      className="mt-3 rounded-xl bg-zinc-100 text-zinc-950 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {resolving
+                        ? t("common.saving", "Sauvegarde...")
+                        : t("pve.resolveCreatorWithNew", "Creer et associer")}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
 
@@ -1180,6 +1702,162 @@ export default function PveLibraryTab({
                     className="mt-1 w-full resize-none rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
                   />
                 </label>
+
+                {creatorSchemaReady ? (
+                  <div className="space-y-3 rounded-2xl border border-zinc-800 bg-zinc-950/70 p-3">
+                    <label className="text-sm font-medium text-zinc-300">
+                      {t("pve.creatorSelect", "Createur YouTube")}
+                      <select
+                        value={
+                          videoDraft.creatorMode === CREATOR_MODE_UNLISTED
+                            ? CREATOR_MODE_UNLISTED
+                            : videoDraft.creatorMode === CREATOR_MODE_NEW
+                              ? CREATOR_MODE_NEW
+                              : videoDraft.creatorId
+                        }
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setVideoDraft((previous) => {
+                            if (value === CREATOR_MODE_UNLISTED) {
+                              return {
+                                ...previous,
+                                creatorId: "",
+                                creatorMode: CREATOR_MODE_UNLISTED,
+                                creatorLookupUrl: "",
+                                creatorName: "",
+                                creatorChannelUrl: "",
+                                creatorAvatarUrl: "",
+                              };
+                            }
+
+                            if (value === CREATOR_MODE_NEW) {
+                              return {
+                                ...previous,
+                                creatorId: "",
+                                creatorMode: CREATOR_MODE_NEW,
+                                suggestedCreatorName: "",
+                              };
+                            }
+
+                            return {
+                              ...previous,
+                              creatorId: value,
+                              creatorMode: "",
+                              suggestedCreatorName: "",
+                              creatorLookupUrl: "",
+                              creatorName: "",
+                              creatorChannelUrl: "",
+                              creatorAvatarUrl: "",
+                            };
+                          });
+                        }}
+                        className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
+                      >
+                        <option value="">{t("pve.creatorNone", "Aucun createur lie")}</option>
+                        {creators.map((creator) => (
+                          <option key={creator.id} value={creator.id}>
+                            {creator.name}
+                          </option>
+                        ))}
+                        <option value={CREATOR_MODE_UNLISTED}>
+                          {t("pve.creatorUnlisted", "Createur non repertorie")}
+                        </option>
+                        <option value={CREATOR_MODE_NEW}>
+                          {t("pve.creatorCreateNew", "Creer un createur officiel")}
+                        </option>
+                      </select>
+                    </label>
+
+                    {videoDraft.creatorMode === CREATOR_MODE_NEW ? (
+                      <div className="space-y-3">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <label className="text-sm font-medium text-zinc-300">
+                            {t("pve.creatorLookupUrl", "URL chaine ou video YouTube")}
+                            <input
+                              type="text"
+                              value={videoDraft.creatorLookupUrl}
+                              onChange={(event) =>
+                                setVideoDraft((previous) => ({ ...previous, creatorLookupUrl: event.target.value }))
+                              }
+                              placeholder="https://www.youtube.com/@... ou https://youtu.be/..."
+                              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
+                            />
+                          </label>
+                          <label className="text-sm font-medium text-zinc-300">
+                            {t("pve.officialCreatorName", "Nom officiel")}
+                            <input
+                              type="text"
+                              value={videoDraft.creatorName}
+                              onChange={(event) =>
+                                setVideoDraft((previous) => ({ ...previous, creatorName: event.target.value }))
+                              }
+                              placeholder={t("pve.creatorAutoNamePlaceholder", "Auto si URL YouTube reconnue")}
+                              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
+                            />
+                          </label>
+                          <label className="text-sm font-medium text-zinc-300">
+                            {t("pve.officialCreatorChannelUrl", "URL chaine YouTube")}
+                            <input
+                              type="url"
+                              value={videoDraft.creatorChannelUrl}
+                              onChange={(event) =>
+                                setVideoDraft((previous) => ({ ...previous, creatorChannelUrl: event.target.value }))
+                              }
+                              placeholder="https://www.youtube.com/@..."
+                              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
+                            />
+                          </label>
+                          <label className="text-sm font-medium text-zinc-300">
+                            {t("pve.officialCreatorAvatarUrl", "Avatar ou logo")}
+                            <input
+                              type="url"
+                              value={videoDraft.creatorAvatarUrl}
+                              onChange={(event) =>
+                                setVideoDraft((previous) => ({ ...previous, creatorAvatarUrl: event.target.value }))
+                              }
+                              placeholder="https://..."
+                              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
+                            />
+                          </label>
+                        </div>
+                        <p className="text-xs text-zinc-500">
+                          {t(
+                            "pve.creatorLookupHelp",
+                            "Si une URL YouTube est renseignee, le serveur complete les champs vides une seule fois puis stocke les infos dans Supabase.",
+                          )}
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {videoDraft.creatorMode === CREATOR_MODE_UNLISTED ? (
+                      <label className="text-sm font-medium text-zinc-300">
+                        {t("pve.suggestedCreatorName", "Nom du createur a proposer")}
+                        <input
+                          type="text"
+                          value={videoDraft.suggestedCreatorName}
+                          onChange={(event) =>
+                            setVideoDraft((previous) => ({ ...previous, suggestedCreatorName: event.target.value }))
+                          }
+                          required
+                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
+                        />
+                        <span className="mt-1 block text-xs text-zinc-500">
+                          {t(
+                            "pve.suggestedCreatorHelp",
+                            "La video sera visible tout de suite. Un admin validera ensuite la fiche createur officielle.",
+                          )}
+                        </span>
+                      </label>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-amber-800 bg-amber-950/30 px-3 py-2 text-sm text-amber-100">
+                    {t(
+                      "pve.creatorMigrationMissing",
+                      "La migration createurs PVE n'est pas encore appliquee. Les videos restent utilisables sans attribution createur.",
+                    )}
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <div>
@@ -1383,10 +2061,14 @@ export default function PveLibraryTab({
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <h4 className="font-semibold text-white">{video.title}</h4>
-                          <div className="mt-1 text-xs text-zinc-500">
-                            {video.createdByName || t("common.unknown", "Inconnu")}
-                            {video.createdAt ? ` - ${formatDate(video.createdAt)}` : ""}
-                          </div>
+                          {video.createdByName || video.createdAt ? (
+                            <div className="mt-1 text-xs text-zinc-500">
+                              {video.createdByName
+                                ? `${t("pve.addedBy", "Ajoute par")} ${video.createdByName}`
+                                : t("common.unknown", "Inconnu")}
+                              {video.createdAt ? ` - ${formatDate(video.createdAt)}` : ""}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="flex shrink-0 items-center gap-1">
                           {isAdminUser ? (
@@ -1413,7 +2095,7 @@ export default function PveLibraryTab({
                           <a
                             href={video.youtubeUrl}
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noreferrer noopener"
                             className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-300 hover:bg-zinc-800 hover:text-white"
                             title={t("pve.openYoutube", "Ouvrir YouTube")}
                           >
@@ -1421,6 +2103,59 @@ export default function PveLibraryTab({
                           </a>
                         </div>
                       </div>
+
+                      {video.creator ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            {video.creator.avatarUrl ? (
+                              <img
+                                src={video.creator.avatarUrl}
+                                alt=""
+                                loading="lazy"
+                                className="h-9 w-9 shrink-0 rounded-full border border-zinc-700 object-cover"
+                                onError={(event) => {
+                                  event.currentTarget.style.display = "none";
+                                }}
+                              />
+                            ) : null}
+                            <div className="min-w-0">
+                              <div className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                                {t("pve.creator", "Createur")}
+                              </div>
+                              {video.creator.channelUrl ? (
+                                <a
+                                  href={video.creator.channelUrl}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                  className="block truncate text-sm font-semibold text-emerald-200 hover:text-emerald-100 hover:underline"
+                                >
+                                  {video.creator.name}
+                                </a>
+                              ) : (
+                                <div className="truncate text-sm font-semibold text-zinc-100">{video.creator.name}</div>
+                              )}
+                            </div>
+                          </div>
+                          {video.creator.channelUrl ? (
+                            <a
+                              href={video.creator.channelUrl}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="inline-flex items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-800 hover:text-white"
+                            >
+                              {t("pve.openCreatorChannel", "Voir la chaine")}
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                          ) : null}
+                        </div>
+                      ) : video.suggestedCreatorName ? (
+                        <div className="rounded-xl border border-amber-800/60 bg-amber-950/20 px-3 py-2 text-sm text-amber-100">
+                          <span className="text-amber-200/80">
+                            {t("pve.suggestedCreator", "Createur propose")} :
+                          </span>{" "}
+                          <span className="font-semibold">{video.suggestedCreatorName}</span>
+                        </div>
+                      ) : null}
 
                       {video.notes ? (
                         <p className="whitespace-pre-wrap text-sm text-zinc-300">{video.notes}</p>
