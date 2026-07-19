@@ -114,6 +114,10 @@ function getStageFullLabel(content, stage) {
   return shortLabel ? `${content?.name || "PVE"} ${shortLabel}` : content?.name || "PVE";
 }
 
+function getSessionMemberId(session) {
+  return session?.memberId || session?.member_id || session?.id || "";
+}
+
 function normalizeChampionOption(row, language = "fr") {
   const technicalName = String(row?.name || "").trim();
   const displayName = getChampionDisplayName(row, language) || technicalName;
@@ -183,6 +187,9 @@ export default function PveLibraryTab({
   const [videoFormOpen, setVideoFormOpen] = useState(false);
   const [editingVideoId, setEditingVideoId] = useState("");
   const [heroSearch, setHeroSearch] = useState("");
+  const [boxFilterEnabled, setBoxFilterEnabled] = useState(false);
+  const [ownedChampionIds, setOwnedChampionIds] = useState([]);
+  const [ownedHeroesLoading, setOwnedHeroesLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [videoDraft, setVideoDraft] = useState({
@@ -220,6 +227,44 @@ export default function PveLibraryTab({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const memberId = getSessionMemberId(session);
+    let cancelled = false;
+
+    async function loadOwnedHeroes() {
+      if (!memberId) {
+        setOwnedChampionIds([]);
+        setOwnedHeroesLoading(false);
+        return;
+      }
+
+      setOwnedHeroesLoading(true);
+      const { data, error } = await supabase
+        .from("member_awakenings")
+        .select("champion_id, awakening_level")
+        .eq("member_id", memberId)
+        .gte("awakening_level", 0);
+
+      if (cancelled) return;
+
+      if (error) {
+        console.warn("[pve-owned-heroes]", error);
+        setOwnedChampionIds([]);
+        setOwnedHeroesLoading(false);
+        return;
+      }
+
+      setOwnedChampionIds((data || []).map((row) => String(row.champion_id || "")).filter(Boolean));
+      setOwnedHeroesLoading(false);
+    }
+
+    void loadOwnedHeroes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.memberId, session?.member_id, session?.id]);
 
   const sortedContents = useMemo(
     () =>
@@ -298,6 +343,26 @@ export default function PveLibraryTab({
     return videos.filter((video) => video.stageIds.includes(String(selectedStage.id)));
   }, [selectedStage, videos]);
 
+  const ownedChampionIdSet = useMemo(
+    () => new Set(ownedChampionIds.map((championId) => String(championId))),
+    [ownedChampionIds],
+  );
+
+  const boxCompatibleStageVideos = useMemo(
+    () =>
+      selectedStageVideos.filter((video) => {
+        if (!video.heroes?.length) return false;
+
+        return video.heroes.every((hero) => {
+          const championId = String(hero.championId || hero.id || "");
+          return championId && ownedChampionIdSet.has(championId);
+        });
+      }),
+    [ownedChampionIdSet, selectedStageVideos],
+  );
+
+  const visibleStageVideos = boxFilterEnabled ? boxCompatibleStageVideos : selectedStageVideos;
+
   const videosByStageId = useMemo(() => {
     const map = new Map();
 
@@ -314,6 +379,26 @@ export default function PveLibraryTab({
   const selectedStageLabel = selectedStage
     ? getStageFullLabel(selectedContent, selectedStage)
     : selectedContent?.name || "PVE";
+
+  const getDuplicateYoutubeStageLabels = (youtubeVideoId, selectedStageIds, ignoredVideoId = "") => {
+    const normalizedYoutubeVideoId = String(youtubeVideoId || "");
+    if (!normalizedYoutubeVideoId) return [];
+
+    const duplicateStageIds = new Set();
+
+    videos.forEach((video) => {
+      if (ignoredVideoId && String(video.id) === String(ignoredVideoId)) return;
+      if (String(video.youtubeVideoId || "") !== normalizedYoutubeVideoId) return;
+
+      selectedStageIds.forEach((stageId) => {
+        if (video.stageIds.includes(String(stageId))) duplicateStageIds.add(String(stageId));
+      });
+    });
+
+    return stages
+      .filter((stage) => duplicateStageIds.has(String(stage.id)))
+      .map((stage) => getStageFullLabel(selectedContent, stage));
+  };
 
   const loadContentData = async () => {
     if (!selectedContent?.id) {
@@ -557,6 +642,16 @@ export default function PveLibraryTab({
       return;
     }
 
+    const duplicateStageLabels = getDuplicateYoutubeStageLabels(youtubeVideoId, selectedStageIds, editingVideoId);
+    if (duplicateStageLabels.length) {
+      const duplicateMessage = t(
+        "pve.duplicateYoutubeForStages",
+        "Cette video YouTube est deja liee a : {stages}.",
+      ).replace("{stages}", duplicateStageLabels.join(", "));
+      setErrorMessage(duplicateMessage);
+      return;
+    }
+
     setSavingVideo(true);
     setErrorMessage("");
     setMessage("");
@@ -786,15 +881,45 @@ export default function PveLibraryTab({
                 <h3 className="text-xl font-semibold text-white">{selectedStageLabel}</h3>
               </div>
 
-              <Button
-                type="button"
-                onClick={openAddVideoForm}
-                disabled={!selectedStage}
-                className="rounded-xl bg-red-600 text-white hover:bg-red-500"
-              >
-                <Youtube className="h-4 w-4" />
-                {t("pve.addVideo", "Ajouter une video")}
-              </Button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="flex rounded-xl border border-zinc-800 bg-zinc-900 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setBoxFilterEnabled(false)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      !boxFilterEnabled
+                        ? "bg-zinc-100 text-zinc-950"
+                        : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                    }`}
+                  >
+                    {t("pve.filterAllVideos", "Toutes")} ({selectedStageVideos.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBoxFilterEnabled(true)}
+                    disabled={ownedHeroesLoading}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      boxFilterEnabled
+                        ? "bg-emerald-400 text-emerald-950"
+                        : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                    }`}
+                  >
+                    {ownedHeroesLoading
+                      ? t("pve.loadingBox", "Box...")
+                      : `${t("pve.filterMyBox", "Ma box")} (${boxCompatibleStageVideos.length})`}
+                  </button>
+                </div>
+
+                <Button
+                  type="button"
+                  onClick={openAddVideoForm}
+                  disabled={!selectedStage}
+                  className="rounded-xl bg-red-600 text-white hover:bg-red-500"
+                >
+                  <Youtube className="h-4 w-4" />
+                  {t("pve.addVideo", "Ajouter une video")}
+                </Button>
+              </div>
             </div>
 
             {videoFormOpen ? (
@@ -939,9 +1064,9 @@ export default function PveLibraryTab({
               </form>
             ) : null}
 
-            {selectedStageVideos.length ? (
+            {visibleStageVideos.length ? (
               <div className="grid gap-3 lg:grid-cols-2">
-                {selectedStageVideos.map((video) => (
+                {visibleStageVideos.map((video) => (
                   <article key={video.id} className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
                     <div className="bg-black">
                       <iframe
@@ -1035,11 +1160,28 @@ export default function PveLibraryTab({
               <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-950 p-8 text-center">
                 <Search className="mx-auto h-8 w-8 text-zinc-600" />
                 <div className="mt-3 font-semibold text-zinc-200">
-                  {t("pve.noVideoForStage", "Aucune video pour ce niveau.")}
+                  {boxFilterEnabled && selectedStageVideos.length
+                    ? t("pve.noBoxVideoForStage", "Aucune video compatible avec ta box.")
+                    : t("pve.noVideoForStage", "Aucune video pour ce niveau.")}
                 </div>
                 <p className="mt-1 text-sm text-zinc-500">
-                  {t("pve.noVideoHelp", "Ajoute une video YouTube et associe-la a un ou plusieurs niveaux.")}
+                  {boxFilterEnabled && selectedStageVideos.length
+                    ? t(
+                        "pve.noBoxVideoHelp",
+                        "Les videos sans composition ou avec des heros manquants restent dans Toutes.",
+                      )
+                    : t("pve.noVideoHelp", "Ajoute une video YouTube et associe-la a un ou plusieurs niveaux.")}
                 </p>
+                {boxFilterEnabled && selectedStageVideos.length ? (
+                  <Button
+                    type="button"
+                    onClick={() => setBoxFilterEnabled(false)}
+                    variant="outline"
+                    className="mt-4 rounded-xl border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                  >
+                    {t("pve.showAllVideos", "Afficher toutes")}
+                  </Button>
+                ) : null}
               </div>
             )}
           </div>
