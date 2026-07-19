@@ -1431,11 +1431,11 @@ export default function PveLibraryTab({
                           <div className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                             {t("pve.composition", "Composition")}
                           </div>
-                          <div className="space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             {video.heroes.map((hero) => (
                               <div
                                 key={`hero-${video.id}-${hero.championId || hero.technicalName}`}
-                                className="flex flex-wrap items-center gap-1.5"
+                                className="inline-flex flex-wrap items-center gap-1.5"
                               >
                                 <Badge className="border-emerald-700/70 bg-emerald-950/40 text-emerald-100">
                                   {hero.displayName}
