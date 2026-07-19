@@ -76,7 +76,9 @@ function normalizeContent(row) {
     name: row.name || row.label || "",
     slug: row.slug || "",
     description: row.description || "",
+    categorySlug: row.categorySlug || row.category_slug || "",
     categoryName: row.categoryName || row.category_name || "",
+    categorySortOrder: row.categorySortOrder ?? row.category_sort_order ?? 9999,
     stageCount: row.stage_count ?? row.stageCount ?? 0,
     sortOrder: row.sort_order ?? row.sortOrder ?? 9999,
     isActive: row.is_active ?? row.isActive ?? true,
@@ -92,6 +94,24 @@ function normalizeStage(row) {
     name: row.name || "",
     sortOrder: row.sort_order ?? row.sortOrder ?? row.stage_number ?? 9999,
   };
+}
+
+function getStageShortLabel(stage) {
+  if (!stage) return "";
+
+  const number = stage.number ?? "";
+  const name = String(stage.name || "").trim();
+  const defaultName = `Niveau ${number}`;
+
+  if (name && name.toLowerCase() !== defaultName.toLowerCase()) return name;
+  return String(number);
+}
+
+function getStageFullLabel(content, stage) {
+  if (!stage) return content?.name || "PVE";
+
+  const shortLabel = getStageShortLabel(stage);
+  return shortLabel ? `${content?.name || "PVE"} ${shortLabel}` : content?.name || "PVE";
 }
 
 function normalizeChampionOption(row, language = "fr") {
@@ -206,6 +226,10 @@ export default function PveLibraryTab({
       [...localContents]
         .filter((content) => content.isActive)
         .sort((a, b) => {
+          if ((a.categorySortOrder ?? 9999) !== (b.categorySortOrder ?? 9999)) {
+            return (a.categorySortOrder ?? 9999) - (b.categorySortOrder ?? 9999);
+          }
+
           if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
             return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
           }
@@ -288,7 +312,7 @@ export default function PveLibraryTab({
   }, [videos]);
 
   const selectedStageLabel = selectedStage
-    ? `${selectedContent?.name || "PVE"} ${selectedStage.number}`
+    ? getStageFullLabel(selectedContent, selectedStage)
     : selectedContent?.name || "PVE";
 
   const loadContentData = async () => {
@@ -712,6 +736,8 @@ export default function PveLibraryTab({
                   {stages.map((stage) => {
                     const selected = String(stage.id) === String(selectedStage?.id);
                     const videoCount = videosByStageId.get(String(stage.id)) || 0;
+                    const stageLabel = getStageShortLabel(stage);
+                    const compactStageLabel = stageLabel.length <= 3;
 
                     return (
                       <button
@@ -733,7 +759,13 @@ export default function PveLibraryTab({
                         <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">
                           {selectedContent.name}
                         </div>
-                        <div className="mt-1 text-2xl font-black leading-none">{stage.number}</div>
+                        <div
+                          className={`mt-1 font-black ${
+                            compactStageLabel ? "text-2xl leading-none" : "text-sm leading-tight"
+                          }`}
+                        >
+                          {stageLabel}
+                        </div>
                         <div className="mt-2 text-[0.68rem] text-zinc-400">
                           {videoCount} {t("pve.videoShort", "video")}
                         </div>
@@ -879,7 +911,7 @@ export default function PveLibraryTab({
                               : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-600"
                           }`}
                         >
-                          {selectedContent.name} {stage.number}
+                          {getStageFullLabel(selectedContent, stage)}
                         </button>
                       );
                     })}
@@ -991,7 +1023,7 @@ export default function PveLibraryTab({
                           .filter((stage) => video.stageIds.includes(String(stage.id)))
                           .map((stage) => (
                             <Badge key={`badge-${video.id}-${stage.id}`} className="border-zinc-700 bg-zinc-900 text-zinc-300">
-                              {selectedContent.name} {stage.number}
+                              {getStageFullLabel(selectedContent, stage)}
                             </Badge>
                           ))}
                       </div>

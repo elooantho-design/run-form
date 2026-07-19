@@ -188,13 +188,15 @@ with seed_contents as (
   select *
   from (
     values
-      ('gr1', 'GR1', 'Raid d''equipement 1', 24, 10),
-      ('gr2', 'GR2', 'Raid d''equipement 2', 24, 20),
-      ('gr3', 'GR3', 'Raid d''equipement 3', 24, 30),
-      ('donjon1', 'Donjon 1', 'Donjon d''equipement 1', 13, 40),
-      ('donjon2', 'Donjon 2', 'Donjon d''equipement 2', 13, 50),
-      ('donjon3', 'Donjon 3', 'Donjon d''equipement 3', 13, 60)
-  ) as value_rows(slug, name, description, stage_count, sort_order)
+      ('gr1', 'GR1', 'Raid d''equipement 1', 24, 10, 'gear-raid', 'Raid d''equipement', 10),
+      ('gr2', 'GR2', 'Raid d''equipement 2', 24, 20, 'gear-raid', 'Raid d''equipement', 10),
+      ('gr3', 'GR3', 'Raid d''equipement 3', 24, 30, 'gear-raid', 'Raid d''equipement', 10),
+      ('donjon1', 'Donjon 1', 'Donjon d''equipement 1', 13, 40, 'gear-raid', 'Raid d''equipement', 10),
+      ('donjon2', 'Donjon 2', 'Donjon d''equipement 2', 13, 50, 'gear-raid', 'Raid d''equipement', 10),
+      ('donjon3', 'Donjon 3', 'Donjon d''equipement 3', 13, 60, 'gear-raid', 'Raid d''equipement', 10),
+      ('dragon-chasm', 'Gouffre du dragon', 'Boss de guilde - Gouffre du dragon', 8, 10, 'guild-boss', 'Boss de guilde', 20),
+      ('titan-ruins', 'Ruine de titan', 'Boss de guilde - Ruine de titan', 4, 20, 'guild-boss', 'Boss de guilde', 20)
+  ) as value_rows(slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order)
 ),
 upserted_contents as (
   insert into public.pve_contents (
@@ -214,9 +216,9 @@ upserted_contents as (
     seed_contents.description,
     seed_contents.stage_count,
     seed_contents.sort_order,
-    'gear-raid',
-    'Raid d''equipement',
-    10,
+    seed_contents.category_slug,
+    seed_contents.category_name,
+    seed_contents.category_sort_order,
     true
   from seed_contents
   on conflict (slug) do update
@@ -230,6 +232,24 @@ upserted_contents as (
       category_sort_order = excluded.category_sort_order,
       is_active = true
   returning id, slug, stage_count
+),
+stage_labels as (
+  select *
+  from (
+    values
+      ('dragon-chasm', 1, 'Facile'),
+      ('dragon-chasm', 2, 'Normal'),
+      ('dragon-chasm', 3, 'Difficile'),
+      ('dragon-chasm', 4, 'Cauchemar 1'),
+      ('dragon-chasm', 5, 'Cauchemar 2'),
+      ('dragon-chasm', 6, 'Cauchemar 3'),
+      ('dragon-chasm', 7, 'Cauchemar 4'),
+      ('dragon-chasm', 8, 'Abyss 1'),
+      ('titan-ruins', 1, 'Apocalypse 1'),
+      ('titan-ruins', 2, 'Apocalypse 2'),
+      ('titan-ruins', 3, 'Matrice 1 - Magique'),
+      ('titan-ruins', 4, 'Matrice 1 - Physique')
+  ) as value_rows(slug, stage_number, stage_name)
 )
 insert into public.pve_content_stages (
   content_id,
@@ -239,11 +259,14 @@ insert into public.pve_content_stages (
 )
 select
   upserted_contents.id,
-  stage_number,
-  'Niveau ' || stage_number,
-  stage_number
+  generated_stage.stage_number,
+  coalesce(stage_labels.stage_name, 'Niveau ' || generated_stage.stage_number),
+  generated_stage.stage_number
 from upserted_contents
-cross join lateral generate_series(1, upserted_contents.stage_count) as stage_number
+cross join lateral generate_series(1, upserted_contents.stage_count) as generated_stage(stage_number)
+left join stage_labels
+  on stage_labels.slug = upserted_contents.slug
+ and stage_labels.stage_number = generated_stage.stage_number
 on conflict (content_id, stage_number) do update
   set
     name = excluded.name,

@@ -131,6 +131,7 @@ const pveContentBlueprints = [
     sortOrder: 10,
     categorySlug: "gear-raid",
     categoryName: "Raid d'equipement",
+    categorySortOrder: 10,
   },
   {
     slug: "gr2",
@@ -140,6 +141,7 @@ const pveContentBlueprints = [
     sortOrder: 20,
     categorySlug: "gear-raid",
     categoryName: "Raid d'equipement",
+    categorySortOrder: 10,
   },
   {
     slug: "gr3",
@@ -149,6 +151,7 @@ const pveContentBlueprints = [
     sortOrder: 30,
     categorySlug: "gear-raid",
     categoryName: "Raid d'equipement",
+    categorySortOrder: 10,
   },
   {
     slug: "donjon1",
@@ -158,6 +161,7 @@ const pveContentBlueprints = [
     sortOrder: 40,
     categorySlug: "gear-raid",
     categoryName: "Raid d'equipement",
+    categorySortOrder: 10,
   },
   {
     slug: "donjon2",
@@ -167,6 +171,7 @@ const pveContentBlueprints = [
     sortOrder: 50,
     categorySlug: "gear-raid",
     categoryName: "Raid d'equipement",
+    categorySortOrder: 10,
   },
   {
     slug: "donjon3",
@@ -176,8 +181,38 @@ const pveContentBlueprints = [
     sortOrder: 60,
     categorySlug: "gear-raid",
     categoryName: "Raid d'equipement",
+    categorySortOrder: 10,
+  },
+  {
+    slug: "dragon-chasm",
+    name: "Gouffre du dragon",
+    description: "Boss de guilde - Gouffre du dragon",
+    stageCount: 8,
+    sortOrder: 10,
+    categorySlug: "guild-boss",
+    categoryName: "Boss de guilde",
+    categorySortOrder: 20,
+  },
+  {
+    slug: "titan-ruins",
+    name: "Ruine de titan",
+    description: "Boss de guilde - Ruine de titan",
+    stageCount: 4,
+    sortOrder: 20,
+    categorySlug: "guild-boss",
+    categoryName: "Boss de guilde",
+    categorySortOrder: 20,
   },
 ];
+
+const pveCategoryTranslationKeys = {
+  "gear-raid": "pve.category.gearRaid",
+  "guild-boss": "pve.category.guildBoss",
+};
+
+function getPveCategoryTranslationKey(categorySlug) {
+  return pveCategoryTranslationKeys[categorySlug] || "";
+}
 
 function normalizePveContentNavItem(row) {
   return {
@@ -188,6 +223,7 @@ function normalizePveContentNavItem(row) {
     description: row.description || "",
     categorySlug: row.categorySlug || row.category_slug || "gear-raid",
     categoryName: row.categoryName || row.category_name || "Raid d'equipement",
+    categorySortOrder: row.categorySortOrder ?? row.category_sort_order ?? 9999,
     stageCount: row.stage_count ?? row.stageCount ?? 0,
     sortOrder: row.sort_order ?? row.sortOrder ?? 9999,
     isActive: row.is_active ?? true,
@@ -212,9 +248,53 @@ function mergePveContentNavItems(rows = []) {
       is_active: row?.is_active ?? true,
       categorySlug: blueprint.categorySlug,
       categoryName: blueprint.categoryName,
+      categorySortOrder: row?.category_sort_order ?? blueprint.categorySortOrder,
       missingInDatabase: !row?.id,
     });
   });
+}
+
+function buildPveNavigationCategories(items = []) {
+  const categoriesBySlug = new Map();
+
+  items.forEach((item) => {
+    const slug = item.categorySlug || "gear-raid";
+    const existing = categoriesBySlug.get(slug);
+    const category = existing || {
+      slug,
+      name: item.categoryName || "PVE",
+      sortOrder: item.categorySortOrder ?? 9999,
+      items: [],
+    };
+
+    category.name = item.categoryName || category.name;
+    category.sortOrder = Math.min(category.sortOrder, item.categorySortOrder ?? 9999);
+    category.items.push(item);
+    categoriesBySlug.set(slug, category);
+  });
+
+  return [...categoriesBySlug.values()]
+    .map((category) => ({
+      ...category,
+      items: [...category.items].sort((a, b) => {
+        if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
+          return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
+        }
+
+        return String(a.label || "").localeCompare(String(b.label || ""), "fr", {
+          sensitivity: "base",
+        });
+      }),
+    }))
+    .sort((a, b) => {
+      if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
+        return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
+      }
+
+      return String(a.name || "").localeCompare(String(b.name || ""), "fr", {
+        sensitivity: "base",
+      });
+    });
 }
 
 const PORTAL_VIEW_MODE_STORAGE_KEY = "portalViewMode";
@@ -1357,7 +1437,7 @@ function PortalShell({ session, onLogout }) {
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const [pveNavOpen, setPveNavOpen] = useState(false);
-  const [pveGearRaidNavOpen, setPveGearRaidNavOpen] = useState(false);
+  const [pveCategoryNavOpen, setPveCategoryNavOpen] = useState(() => ({ "gear-raid": false }));
   const [viewMode, setViewMode] = useState(getInitialPortalViewMode);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [portalLicense, setPortalLicense] = useState(null);
@@ -1410,6 +1490,10 @@ function PortalShell({ session, onLogout }) {
       pveContents
         .filter((content) => content.isActive)
         .sort((a, b) => {
+          if ((a.categorySortOrder ?? 9999) !== (b.categorySortOrder ?? 9999)) {
+            return (a.categorySortOrder ?? 9999) - (b.categorySortOrder ?? 9999);
+          }
+
           if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
             return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
           }
@@ -1420,8 +1504,8 @@ function PortalShell({ session, onLogout }) {
         }),
     [pveContents],
   );
-  const gearRaidPveNavigation = useMemo(
-    () => visiblePveNavigation.filter((item) => item.categorySlug === "gear-raid"),
+  const pveNavigationCategories = useMemo(
+    () => buildPveNavigationCategories(visiblePveNavigation),
     [visiblePveNavigation],
   );
   const activePveContentId = active.startsWith("pve:") ? active.slice(4) : "";
@@ -1535,8 +1619,9 @@ function PortalShell({ session, onLogout }) {
 
       const { data, error } = await supabase
         .from("pve_contents")
-        .select("id, slug, name, description, stage_count, sort_order, is_active")
+        .select("id, slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order, is_active")
         .eq("is_active", true)
+        .order("category_sort_order", { ascending: true })
         .order("sort_order", { ascending: true })
         .order("name", { ascending: true });
 
@@ -1584,9 +1669,12 @@ function PortalShell({ session, onLogout }) {
   useEffect(() => {
     if (activePveTab) {
       setPveNavOpen(true);
-      setPveGearRaidNavOpen(true);
+      const categorySlug = activePveItem?.categorySlug || pveNavigationCategories[0]?.slug;
+      if (categorySlug) {
+        setPveCategoryNavOpen((previous) => ({ ...previous, [categorySlug]: true }));
+      }
     }
-  }, [activePveTab]);
+  }, [activePveItem?.categorySlug, activePveTab, pveNavigationCategories]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1684,9 +1772,11 @@ function PortalShell({ session, onLogout }) {
             onClick={() => {
               setPveNavOpen((value) => !value);
               if (!activePveTab) {
-                const firstContent = gearRaidPveNavigation[0] || visiblePveNavigation[0];
+                const firstContent = visiblePveNavigation[0];
                 setActive(firstContent ? `pve:${firstContent.navId}` : "pve");
-                setPveGearRaidNavOpen(true);
+                if (firstContent?.categorySlug) {
+                  setPveCategoryNavOpen((previous) => ({ ...previous, [firstContent.categorySlug]: true }));
+                }
               }
             }}
             className={`flex w-full items-center gap-3 rounded-xl px-3 ${
@@ -1705,49 +1795,60 @@ function PortalShell({ session, onLogout }) {
 
           {pveNavOpen ? (
             <div className="mt-1 space-y-1 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
-              {gearRaidPveNavigation.length ? (
-                <div className="space-y-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPveGearRaidNavOpen((value) => !value);
-                      if (!activePveTab) {
-                        const firstContent = gearRaidPveNavigation[0];
-                        if (firstContent) setActive(`pve:${firstContent.navId}`);
-                      }
-                    }}
-                    className={adminItemClass(activePveItem?.categorySlug === "gear-raid")}
-                    aria-expanded={pveGearRaidNavOpen}
-                  >
-                    <BookOpen className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">
-                      {t("pve.category.gearRaid", "Raid d'equipement")}
-                    </span>
-                    <ChevronRight
-                      className={`h-4 w-4 shrink-0 transition-transform ${pveGearRaidNavOpen ? "rotate-90" : ""}`}
-                    />
-                  </button>
+              {pveNavigationCategories.length ? (
+                pveNavigationCategories.map((category) => {
+                  const categoryOpen = Boolean(pveCategoryNavOpen[category.slug]);
+                  const categoryLabelKey = getPveCategoryTranslationKey(category.slug);
+                  const selectedCategory = activePveItem?.categorySlug === category.slug;
 
-                  {pveGearRaidNavOpen ? (
-                    <div className="space-y-1 pl-4">
-                      {gearRaidPveNavigation.map((item) => {
-                        const selected = active === `pve:${item.navId}`;
+                  return (
+                    <div key={category.slug} className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPveCategoryNavOpen((previous) => ({
+                            ...previous,
+                            [category.slug]: !previous[category.slug],
+                          }));
+                          if (!activePveTab) {
+                            const firstContent = category.items[0];
+                            if (firstContent) setActive(`pve:${firstContent.navId}`);
+                          }
+                        }}
+                        className={adminItemClass(selectedCategory)}
+                        aria-expanded={categoryOpen}
+                      >
+                        <BookOpen className="h-4 w-4 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">
+                          {categoryLabelKey ? t(categoryLabelKey, category.name) : category.name}
+                        </span>
+                        <ChevronRight
+                          className={`h-4 w-4 shrink-0 transition-transform ${categoryOpen ? "rotate-90" : ""}`}
+                        />
+                      </button>
 
-                        return (
-                          <button
-                            key={item.navId}
-                            type="button"
-                            onClick={() => selectTab(`pve:${item.navId}`)}
-                            className={adminItemClass(selected)}
-                          >
-                            <Play className="h-4 w-4 shrink-0" />
-                            <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                          </button>
-                        );
-                      })}
+                      {categoryOpen ? (
+                        <div className="space-y-1 pl-4">
+                          {category.items.map((item) => {
+                            const selected = active === `pve:${item.navId}`;
+
+                            return (
+                              <button
+                                key={item.navId}
+                                type="button"
+                                onClick={() => selectTab(`pve:${item.navId}`)}
+                                className={adminItemClass(selected)}
+                              >
+                                <Play className="h-4 w-4 shrink-0" />
+                                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
-                </div>
+                  );
+                })
               ) : (
                 <button
                   type="button"
