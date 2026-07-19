@@ -1669,12 +1669,15 @@ function PortalShell({ session, onLogout }) {
   useEffect(() => {
     if (activePveTab) {
       setPveNavOpen(true);
-      const categorySlug = activePveItem?.categorySlug || pveNavigationCategories[0]?.slug;
+    }
+
+    if (active.startsWith("pve:")) {
+      const categorySlug = activePveItem?.categorySlug;
       if (categorySlug) {
         setPveCategoryNavOpen((previous) => ({ ...previous, [categorySlug]: true }));
       }
     }
-  }, [activePveItem?.categorySlug, activePveTab, pveNavigationCategories]);
+  }, [active, activePveItem?.categorySlug, activePveTab]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1772,11 +1775,7 @@ function PortalShell({ session, onLogout }) {
             onClick={() => {
               setPveNavOpen((value) => !value);
               if (!activePveTab) {
-                const firstContent = visiblePveNavigation[0];
-                setActive(firstContent ? `pve:${firstContent.navId}` : "pve");
-                if (firstContent?.categorySlug) {
-                  setPveCategoryNavOpen((previous) => ({ ...previous, [firstContent.categorySlug]: true }));
-                }
+                setActive("pve");
               }
             }}
             className={`flex w-full items-center gap-3 rounded-xl px-3 ${
