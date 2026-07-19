@@ -237,6 +237,7 @@ with seed_contents as (
       ('donjon2', 'Donjon 2', 'Donjon d''equipement 2', 13, 50, 'gear-raid', 'Raid d''equipement', 10),
       ('donjon3', 'Donjon 3', 'Donjon d''equipement 3', 13, 60, 'gear-raid', 'Raid d''equipement', 10),
       ('artifact-raid', 'Raid d''artefacts', 'Raid de materiaux d''artefacts', 30, 10, 'artifact-raid', 'Raid d''artefacts', 15),
+      ('illusion-tower', 'Tour de l''Illusion', 'Tour de l''Illusion', 48, 10, 'illusion-tower', 'Tour de l''Illusion', 40),
       ('faction-trial-all', 'All', 'Épreuve de faction - All', 18, 10, 'faction-trial', 'Épreuve de faction', 18),
       ('faction-trial-nordiste', 'Nordiste', 'Épreuve de faction - Nordiste', 18, 20, 'faction-trial', 'Épreuve de faction', 18),
       ('faction-trial-arbiter-chaotic', 'Arbitre et chaotique', 'Épreuve de faction - Arbitre et chaotique', 18, 30, 'faction-trial', 'Épreuve de faction', 18),
@@ -312,7 +313,15 @@ stage_labels as (
       ('immortal-codex', 7, 'Cauchemar fantasmatique'),
       ('immortal-codex', 8, 'Mère des corbeaux'),
       ('immortal-codex-conquest', 1, 'Commandant de légion du cauchemar'),
-      ('immortal-codex-conquest', 2, 'Eris Del de l''aube')
+      ('immortal-codex-conquest', 2, 'Eris Del de l''aube'),
+      ('illusion-tower', 41, 'Chambre cachée 1'),
+      ('illusion-tower', 42, 'Chambre cachée 2'),
+      ('illusion-tower', 43, 'Chambre cachée 3'),
+      ('illusion-tower', 44, 'Chambre cachée 4'),
+      ('illusion-tower', 45, 'Chambre cachée 5'),
+      ('illusion-tower', 46, 'Chambre cachée 6'),
+      ('illusion-tower', 47, 'Chambre cachée 7'),
+      ('illusion-tower', 48, 'Chambre cachée 8')
   ) as value_rows(slug, stage_number, stage_name)
 )
 insert into public.pve_content_stages (

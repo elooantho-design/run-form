@@ -195,6 +195,17 @@ const pveContentBlueprints = [
     directNav: true,
   },
   {
+    slug: "illusion-tower",
+    name: "Tour de l'Illusion",
+    description: "Tour de l'Illusion",
+    stageCount: 48,
+    sortOrder: 10,
+    categorySlug: "illusion-tower",
+    categoryName: "Tour de l'Illusion",
+    categorySortOrder: 40,
+    directNav: true,
+  },
+  {
     slug: "dragon-chasm",
     name: "Gouffre du dragon",
     description: "Boss de guilde - Gouffre du dragon",
@@ -332,6 +343,7 @@ const pveCategoryTranslationKeys = {
   "faction-trial": "pve.category.factionTrial",
   "guild-boss": "pve.category.guildBoss",
   "immortal-codex": "pve.category.immortalCodex",
+  "illusion-tower": "pve.category.illusionTower",
 };
 
 function getPveCategoryTranslationKey(categorySlug) {
