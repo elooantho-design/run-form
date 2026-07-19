@@ -70,6 +70,58 @@ create index if not exists pve_video_stages_content_stage_idx
 create index if not exists pve_video_stages_video_idx
   on public.pve_video_stages (video_id);
 
+grant select on public.pve_contents to anon, authenticated;
+grant select on public.pve_content_stages to anon, authenticated;
+grant select, insert on public.pve_videos to anon, authenticated;
+grant select, insert on public.pve_video_stages to anon, authenticated;
+
+alter table public.pve_contents enable row level security;
+alter table public.pve_content_stages enable row level security;
+alter table public.pve_videos enable row level security;
+alter table public.pve_video_stages enable row level security;
+
+drop policy if exists pve_contents_read on public.pve_contents;
+create policy pve_contents_read
+  on public.pve_contents
+  for select
+  to anon, authenticated
+  using (is_active = true);
+
+drop policy if exists pve_content_stages_read on public.pve_content_stages;
+create policy pve_content_stages_read
+  on public.pve_content_stages
+  for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists pve_videos_read on public.pve_videos;
+create policy pve_videos_read
+  on public.pve_videos
+  for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists pve_videos_insert on public.pve_videos;
+create policy pve_videos_insert
+  on public.pve_videos
+  for insert
+  to anon, authenticated
+  with check (true);
+
+drop policy if exists pve_video_stages_read on public.pve_video_stages;
+create policy pve_video_stages_read
+  on public.pve_video_stages
+  for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists pve_video_stages_insert on public.pve_video_stages;
+create policy pve_video_stages_insert
+  on public.pve_video_stages
+  for insert
+  to anon, authenticated
+  with check (true);
+
 with seed_contents as (
   select *
   from (
