@@ -63,6 +63,19 @@ create table if not exists public.pve_video_heroes (
   unique (video_id, champion_name)
 );
 
+create table if not exists public.pve_video_hero_alternatives (
+  id uuid primary key default gen_random_uuid(),
+  content_id uuid not null references public.pve_contents(id) on delete cascade,
+  video_id uuid not null references public.pve_videos(id) on delete cascade,
+  required_champion_id bigint null references public.champions(id) on delete set null,
+  required_champion_name text not null,
+  alternative_champion_id bigint null references public.champions(id) on delete set null,
+  alternative_champion_name text not null,
+  sort_order integer not null default 9999,
+  created_at timestamptz not null default now(),
+  unique (video_id, required_champion_name, alternative_champion_name)
+);
+
 create index if not exists pve_contents_active_sort_idx
   on public.pve_contents (is_active, sort_order, name);
 
@@ -87,17 +100,25 @@ create index if not exists pve_video_heroes_content_video_idx
 create index if not exists pve_video_heroes_champion_idx
   on public.pve_video_heroes (champion_id);
 
+create index if not exists pve_video_hero_alternatives_video_required_idx
+  on public.pve_video_hero_alternatives (video_id, required_champion_name, sort_order);
+
+create index if not exists pve_video_hero_alternatives_alternative_idx
+  on public.pve_video_hero_alternatives (alternative_champion_id);
+
 grant select on public.pve_contents to anon, authenticated;
 grant select on public.pve_content_stages to anon, authenticated;
 grant select, insert, update, delete on public.pve_videos to anon, authenticated;
 grant select, insert, delete on public.pve_video_stages to anon, authenticated;
 grant select, insert, delete on public.pve_video_heroes to anon, authenticated;
+grant select, insert, delete on public.pve_video_hero_alternatives to anon, authenticated;
 
 alter table public.pve_contents enable row level security;
 alter table public.pve_content_stages enable row level security;
 alter table public.pve_videos enable row level security;
 alter table public.pve_video_stages enable row level security;
 alter table public.pve_video_heroes enable row level security;
+alter table public.pve_video_hero_alternatives enable row level security;
 
 drop policy if exists pve_contents_read on public.pve_contents;
 create policy pve_contents_read
@@ -184,6 +205,27 @@ create policy pve_video_heroes_delete
   to anon, authenticated
   using (true);
 
+drop policy if exists pve_video_hero_alternatives_read on public.pve_video_hero_alternatives;
+create policy pve_video_hero_alternatives_read
+  on public.pve_video_hero_alternatives
+  for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists pve_video_hero_alternatives_insert on public.pve_video_hero_alternatives;
+create policy pve_video_hero_alternatives_insert
+  on public.pve_video_hero_alternatives
+  for insert
+  to anon, authenticated
+  with check (true);
+
+drop policy if exists pve_video_hero_alternatives_delete on public.pve_video_hero_alternatives;
+create policy pve_video_hero_alternatives_delete
+  on public.pve_video_hero_alternatives
+  for delete
+  to anon, authenticated
+  using (true);
+
 with seed_contents as (
   select *
   from (
@@ -206,7 +248,8 @@ with seed_contents as (
       ('faction-trial-cauchemar', 'Cauchemar', 'Épreuve de faction - Cauchemar', 18, 90, 'faction-trial', 'Épreuve de faction', 18),
       ('dragon-chasm', 'Gouffre du dragon', 'Boss de guilde - Gouffre du dragon', 8, 10, 'guild-boss', 'Boss de guilde', 20),
       ('titan-ruins', 'Ruine de titan', 'Boss de guilde - Ruine de titan', 4, 20, 'guild-boss', 'Boss de guilde', 20),
-      ('immortal-codex', 'Codex immortel', 'Codex immortel', 8, 10, 'immortal-codex', 'Codex immortel', 30)
+      ('immortal-codex', 'Défi d''épreuve', 'Codex immortel - Défi d''épreuve', 8, 10, 'immortal-codex', 'Codex immortel', 30),
+      ('immortal-codex-conquest', 'Défi de conquête', 'Codex immortel - Défi de conquête', 2, 20, 'immortal-codex', 'Codex immortel', 30)
   ) as value_rows(slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order)
 ),
 upserted_contents as (
@@ -267,7 +310,9 @@ stage_labels as (
       ('immortal-codex', 5, 'Seigneur de Styx'),
       ('immortal-codex', 6, 'Maelström'),
       ('immortal-codex', 7, 'Cauchemar fantasmatique'),
-      ('immortal-codex', 8, 'Mère des corbeaux')
+      ('immortal-codex', 8, 'Mère des corbeaux'),
+      ('immortal-codex-conquest', 1, 'Commandant de légion du cauchemar'),
+      ('immortal-codex-conquest', 2, 'Eris Del de l''aube')
   ) as value_rows(slug, stage_number, stage_name)
 )
 insert into public.pve_content_stages (

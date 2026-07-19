@@ -27,6 +27,22 @@ function isMissingPveVideoHeroesError(error) {
   );
 }
 
+function isMissingPveVideoHeroAlternativesError(error) {
+  if (!error) return false;
+
+  const code = String(error.code || "");
+  const message = String(error.message || error.details || error.hint || "");
+
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    (message.includes("pve_video_hero_alternatives") &&
+      (message.includes("schema cache") ||
+        message.includes("does not exist") ||
+        message.includes("Could not find the table")))
+  );
+}
+
 function extractYoutubeVideoId(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -137,19 +153,58 @@ function normalizeChampionOption(row, language = "fr") {
   };
 }
 
-function normalizeVideo(row, linkRows = [], heroLinkRows = [], championById = new Map(), language = "fr") {
+function normalizeVideo(
+  row,
+  linkRows = [],
+  heroLinkRows = [],
+  alternativeLinkRows = [],
+  championById = new Map(),
+  language = "fr",
+) {
   const heroLinks = heroLinkRows
     .filter((link) => String(link.video_id || link.videoId) === String(row.id))
     .sort((left, right) => (left.sort_order ?? 9999) - (right.sort_order ?? 9999))
     .map((link) => {
       const champion = championById.get(String(link.champion_id || link.championId || ""));
       const option = champion ? normalizeChampionOption(champion, language) : null;
+      const championId = String(link.champion_id || link.championId || option?.id || "");
+      const technicalName = option?.technicalName || link.champion_name || "";
+      const alternativeLinks = alternativeLinkRows
+        .filter((alternativeLink) => {
+          if (String(alternativeLink.video_id || alternativeLink.videoId) !== String(row.id)) return false;
+
+          const requiredId = String(alternativeLink.required_champion_id || alternativeLink.requiredChampionId || "");
+          const requiredName = String(alternativeLink.required_champion_name || alternativeLink.requiredChampionName || "");
+
+          return (championId && requiredId === championId) || (technicalName && requiredName === technicalName);
+        })
+        .sort((left, right) => (left.sort_order ?? 9999) - (right.sort_order ?? 9999))
+        .map((alternativeLink) => {
+          const alternativeChampion = championById.get(
+            String(alternativeLink.alternative_champion_id || alternativeLink.alternativeChampionId || ""),
+          );
+          const alternativeOption = alternativeChampion ? normalizeChampionOption(alternativeChampion, language) : null;
+
+          return {
+            id: String(
+              alternativeLink.alternative_champion_id ||
+                alternativeLink.alternativeChampionId ||
+                alternativeOption?.id ||
+                alternativeLink.alternative_champion_name ||
+                "",
+            ),
+            championId: alternativeLink.alternative_champion_id || alternativeLink.alternativeChampionId || alternativeOption?.id || "",
+            technicalName: alternativeOption?.technicalName || alternativeLink.alternative_champion_name || "",
+            displayName: alternativeOption?.displayName || alternativeLink.alternative_champion_name || "",
+          };
+        });
 
       return {
-        id: String(link.champion_id || link.championId || option?.id || link.champion_name || ""),
-        championId: link.champion_id || link.championId || option?.id || "",
-        technicalName: option?.technicalName || link.champion_name || "",
+        id: String(championId || link.champion_name || ""),
+        championId: championId || "",
+        technicalName,
         displayName: option?.displayName || link.champion_name || "",
+        alternatives: alternativeLinks,
       };
     });
 
@@ -187,6 +242,7 @@ export default function PveLibraryTab({
   const [videoFormOpen, setVideoFormOpen] = useState(false);
   const [editingVideoId, setEditingVideoId] = useState("");
   const [heroSearch, setHeroSearch] = useState("");
+  const [alternativeHeroSearches, setAlternativeHeroSearches] = useState({});
   const [boxFilterEnabled, setBoxFilterEnabled] = useState(false);
   const [ownedChampionIds, setOwnedChampionIds] = useState([]);
   const [ownedHeroesLoading, setOwnedHeroesLoading] = useState(false);
@@ -198,6 +254,7 @@ export default function PveLibraryTab({
     notes: "",
     stageIds: [],
     heroIds: [],
+    heroAlternatives: {},
   });
 
   useEffect(() => {
@@ -332,6 +389,23 @@ export default function PveLibraryTab({
       .slice(0, 8);
   }, [championOptions, heroSearch, videoDraft.heroIds]);
 
+  const getAlternativeHeroSuggestions = (requiredChampionId) => {
+    const key = String(requiredChampionId || "");
+    const query = normalizeChampionLookupKey(alternativeHeroSearches[key]);
+    if (query.length < 2) return [];
+
+    const selectedAlternativeIds = new Set((videoDraft.heroAlternatives?.[key] || []).map(String));
+
+    return championOptions
+      .filter(
+        (champion) =>
+          String(champion.id) !== key &&
+          !selectedAlternativeIds.has(String(champion.id)) &&
+          champion.searchKey.includes(query),
+      )
+      .slice(0, 6);
+  };
+
   const selectedStage = useMemo(
     () => stages.find((stage) => String(stage.id) === String(selectedStageId)) || stages[0] || null,
     [selectedStageId, stages],
@@ -355,7 +429,12 @@ export default function PveLibraryTab({
 
         return video.heroes.every((hero) => {
           const championId = String(hero.championId || hero.id || "");
-          return championId && ownedChampionIdSet.has(championId);
+          if (championId && ownedChampionIdSet.has(championId)) return true;
+
+          return (hero.alternatives || []).some((alternative) => {
+            const alternativeId = String(alternative.championId || alternative.id || "");
+            return alternativeId && ownedChampionIdSet.has(alternativeId);
+          });
         });
       }),
     [ownedChampionIdSet, selectedStageVideos],
@@ -418,7 +497,7 @@ export default function PveLibraryTab({
     setLoading(true);
     setErrorMessage("");
 
-    const [stagesResult, videosResult, linksResult, heroLinksResult] = await Promise.all([
+    const [stagesResult, videosResult, linksResult, heroLinksResult, alternativeLinksResult] = await Promise.all([
       supabase
         .from("pve_content_stages")
         .select("id, content_id, stage_number, name, sort_order")
@@ -438,11 +517,24 @@ export default function PveLibraryTab({
         .from("pve_video_heroes")
         .select("id, content_id, video_id, champion_id, champion_name, sort_order")
         .eq("content_id", selectedContent.id),
+      supabase
+        .from("pve_video_hero_alternatives")
+        .select(
+          "id, content_id, video_id, required_champion_id, required_champion_name, alternative_champion_id, alternative_champion_name, sort_order",
+        )
+        .eq("content_id", selectedContent.id),
     ]);
 
     const heroLinksMissing = isMissingPveVideoHeroesError(heroLinksResult.error);
-    if (stagesResult.error || videosResult.error || linksResult.error || (heroLinksResult.error && !heroLinksMissing)) {
-      const error = stagesResult.error || videosResult.error || linksResult.error || heroLinksResult.error;
+    const alternativeLinksMissing = isMissingPveVideoHeroAlternativesError(alternativeLinksResult.error);
+    if (
+      stagesResult.error ||
+      videosResult.error ||
+      linksResult.error ||
+      (heroLinksResult.error && !heroLinksMissing) ||
+      (alternativeLinksResult.error && !alternativeLinksMissing)
+    ) {
+      const error = stagesResult.error || videosResult.error || linksResult.error || heroLinksResult.error || alternativeLinksResult.error;
       setErrorMessage(
         error?.code === "42P01"
           ? t(
@@ -459,7 +551,14 @@ export default function PveLibraryTab({
 
     const nextStages = (stagesResult.data || []).map(normalizeStage);
     const nextVideos = (videosResult.data || []).map((row) =>
-      normalizeVideo(row, linksResult.data || [], heroLinksMissing ? [] : heroLinksResult.data || [], championById, language),
+      normalizeVideo(
+        row,
+        linksResult.data || [],
+        heroLinksMissing ? [] : heroLinksResult.data || [],
+        alternativeLinksMissing ? [] : alternativeLinksResult.data || [],
+        championById,
+        language,
+      ),
     );
 
     setStages(nextStages);
@@ -472,6 +571,7 @@ export default function PveLibraryTab({
       ...previous,
       stageIds: nextStages[0]?.id ? [String(nextStages[0].id)] : [],
       heroIds: [],
+      heroAlternatives: {},
     }));
     setLoading(false);
   };
@@ -517,15 +617,59 @@ export default function PveLibraryTab({
       return {
         ...previous,
         heroIds: [...previous.heroIds, String(champion.id)],
+        heroAlternatives: {
+          ...(previous.heroAlternatives || {}),
+          [String(champion.id)]: previous.heroAlternatives?.[String(champion.id)] || [],
+        },
       };
     });
     setHeroSearch("");
   };
 
   const removeDraftHero = (championId) => {
+    const key = String(championId);
     setVideoDraft((previous) => ({
       ...previous,
-      heroIds: previous.heroIds.filter((id) => String(id) !== String(championId)),
+      heroIds: previous.heroIds.filter((id) => String(id) !== key),
+      heroAlternatives: Object.fromEntries(
+        Object.entries(previous.heroAlternatives || {}).filter(([requiredId]) => String(requiredId) !== key),
+      ),
+    }));
+    setAlternativeHeroSearches((previous) =>
+      Object.fromEntries(Object.entries(previous || {}).filter(([requiredId]) => String(requiredId) !== key)),
+    );
+  };
+
+  const addDraftAlternativeHero = (requiredChampionId, alternativeChampion) => {
+    const requiredKey = String(requiredChampionId || "");
+    if (!requiredKey || !alternativeChampion?.id) return;
+
+    setVideoDraft((previous) => {
+      const currentAlternatives = previous.heroAlternatives?.[requiredKey] || [];
+      if (currentAlternatives.some((id) => String(id) === String(alternativeChampion.id))) return previous;
+
+      return {
+        ...previous,
+        heroAlternatives: {
+          ...(previous.heroAlternatives || {}),
+          [requiredKey]: [...currentAlternatives, String(alternativeChampion.id)],
+        },
+      };
+    });
+    setAlternativeHeroSearches((previous) => ({ ...previous, [requiredKey]: "" }));
+  };
+
+  const removeDraftAlternativeHero = (requiredChampionId, alternativeChampionId) => {
+    const requiredKey = String(requiredChampionId || "");
+    const alternativeKey = String(alternativeChampionId || "");
+    if (!requiredKey || !alternativeKey) return;
+
+    setVideoDraft((previous) => ({
+      ...previous,
+      heroAlternatives: {
+        ...(previous.heroAlternatives || {}),
+        [requiredKey]: (previous.heroAlternatives?.[requiredKey] || []).filter((id) => String(id) !== alternativeKey),
+      },
     }));
   };
 
@@ -540,6 +684,7 @@ export default function PveLibraryTab({
       notes: "",
       stageIds: selectedStage?.id ? [String(selectedStage.id)] : [],
       heroIds: [],
+      heroAlternatives: {},
     });
     setVideoFormOpen((value) => !value || Boolean(editingVideoId));
   };
@@ -549,14 +694,24 @@ export default function PveLibraryTab({
 
     setEditingVideoId(video.id);
     setHeroSearch("");
+    setAlternativeHeroSearches({});
     setErrorMessage("");
     setMessage("");
+    const nextHeroAlternatives = {};
+    (video.heroes || []).forEach((hero) => {
+      const heroId = String(hero.championId || hero.id || "");
+      if (!heroId) return;
+      nextHeroAlternatives[heroId] = (hero.alternatives || [])
+        .map((alternative) => String(alternative.championId || alternative.id || ""))
+        .filter(Boolean);
+    });
     setVideoDraft({
       url: video.youtubeUrl || "",
       title: video.title || "",
       notes: video.notes || "",
       stageIds: video.stageIds?.length ? video.stageIds.map(String) : selectedStage?.id ? [String(selectedStage.id)] : [],
       heroIds: (video.heroes || []).map((hero) => String(hero.championId || hero.id)).filter(Boolean),
+      heroAlternatives: nextHeroAlternatives,
     });
     setVideoFormOpen(true);
   };
@@ -565,9 +720,10 @@ export default function PveLibraryTab({
     setVideoFormOpen(false);
     setEditingVideoId("");
     setHeroSearch("");
+    setAlternativeHeroSearches({});
   };
 
-  const replaceVideoLinks = async (videoId, selectedStageIds, selectedHeroIds) => {
+  const replaceVideoLinks = async (videoId, selectedStageIds, selectedHeroIds, heroAlternativeIdsByHeroId = {}) => {
     const { error: deleteStagesError } = await supabase
       .from("pve_video_stages")
       .delete()
@@ -594,6 +750,14 @@ export default function PveLibraryTab({
     if (deleteHeroesError && !heroTableMissing) throw deleteHeroesError;
     if (heroTableMissing) return;
 
+    const { error: deleteAlternativesError } = await supabase
+      .from("pve_video_hero_alternatives")
+      .delete()
+      .eq("video_id", videoId);
+
+    const alternativeTableMissing = isMissingPveVideoHeroAlternativesError(deleteAlternativesError);
+    if (deleteAlternativesError && !alternativeTableMissing) throw deleteAlternativesError;
+
     if (!selectedHeroIds.length) return;
 
     const heroRows = selectedHeroIds
@@ -615,6 +779,39 @@ export default function PveLibraryTab({
 
     const { error: insertHeroesError } = await supabase.from("pve_video_heroes").insert(heroRows);
     if (insertHeroesError) throw insertHeroesError;
+
+    if (alternativeTableMissing) return;
+
+    const alternativeRows = selectedHeroIds.flatMap((requiredChampionId) => {
+      const requiredChampion = championOptions.find((option) => String(option.id) === String(requiredChampionId));
+      if (!requiredChampion) return [];
+
+      return (heroAlternativeIdsByHeroId[String(requiredChampionId)] || [])
+        .map((alternativeChampionId, index) => {
+          const alternativeChampion = championOptions.find(
+            (option) => String(option.id) === String(alternativeChampionId),
+          );
+          if (!alternativeChampion) return null;
+
+          return {
+            content_id: selectedContent.id,
+            video_id: videoId,
+            required_champion_id: requiredChampion.id,
+            required_champion_name: requiredChampion.technicalName,
+            alternative_champion_id: alternativeChampion.id,
+            alternative_champion_name: alternativeChampion.technicalName,
+            sort_order: index + 1,
+          };
+        })
+        .filter(Boolean);
+    });
+
+    if (!alternativeRows.length) return;
+
+    const { error: insertAlternativesError } = await supabase
+      .from("pve_video_hero_alternatives")
+      .insert(alternativeRows);
+    if (insertAlternativesError) throw insertAlternativesError;
   };
 
   const saveVideo = async (event) => {
@@ -630,6 +827,19 @@ export default function PveLibraryTab({
     );
     const selectedHeroIds = videoDraft.heroIds.filter((championId) =>
       championOptions.some((champion) => String(champion.id) === String(championId)),
+    );
+    const selectedHeroIdSet = new Set(selectedHeroIds.map(String));
+    const selectedHeroAlternatives = Object.fromEntries(
+      Object.entries(videoDraft.heroAlternatives || {})
+        .filter(([requiredChampionId]) => selectedHeroIdSet.has(String(requiredChampionId)))
+        .map(([requiredChampionId, alternativeChampionIds]) => [
+          String(requiredChampionId),
+          (alternativeChampionIds || []).filter(
+            (alternativeChampionId) =>
+              String(alternativeChampionId) !== String(requiredChampionId) &&
+              championOptions.some((champion) => String(champion.id) === String(alternativeChampionId)),
+          ),
+        ]),
     );
 
     if (!youtubeVideoId) {
@@ -689,7 +899,7 @@ export default function PveLibraryTab({
     }
 
     try {
-      await replaceVideoLinks(result.data.id, selectedStageIds, selectedHeroIds);
+      await replaceVideoLinks(result.data.id, selectedStageIds, selectedHeroIds, selectedHeroAlternatives);
     } catch (error) {
       setErrorMessage(error?.message || t("pve.saveVideoError", "Ajout de la video impossible."));
       setSavingVideo(false);
@@ -702,6 +912,7 @@ export default function PveLibraryTab({
       notes: "",
       stageIds: selectedStage?.id ? [String(selectedStage.id)] : [],
       heroIds: [],
+      heroAlternatives: {},
     });
     closeVideoForm();
     setMessage(editingVideoId ? t("pve.videoUpdated", "Video modifiee.") : t("pve.videoAdded", "Video ajoutee."));
@@ -717,6 +928,17 @@ export default function PveLibraryTab({
     setDeletingVideoId(video.id);
     setErrorMessage("");
     setMessage("");
+
+    const { error: deleteAlternativeLinksError } = await supabase
+      .from("pve_video_hero_alternatives")
+      .delete()
+      .eq("video_id", video.id);
+
+    if (deleteAlternativeLinksError && !isMissingPveVideoHeroAlternativesError(deleteAlternativeLinksError)) {
+      setErrorMessage(deleteAlternativeLinksError.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
+      setDeletingVideoId("");
+      return;
+    }
 
     const { error: deleteHeroLinksError } = await supabase
       .from("pve_video_heroes")
@@ -1015,6 +1237,85 @@ export default function PveLibraryTab({
                       </div>
                     ) : null}
                   </div>
+
+                  {selectedDraftHeroes.length ? (
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                        {t("pve.alternatives", "Remplacants")}
+                      </div>
+                      {selectedDraftHeroes.map((champion) => {
+                        const championKey = String(champion.id);
+                        const selectedAlternativeIds = videoDraft.heroAlternatives?.[championKey] || [];
+                        const selectedAlternatives = selectedAlternativeIds
+                          .map((alternativeId) =>
+                            championOptions.find((option) => String(option.id) === String(alternativeId)),
+                          )
+                          .filter(Boolean);
+                        const alternativeSuggestions = getAlternativeHeroSuggestions(championKey);
+
+                        return (
+                          <div
+                            key={`alternatives-${championKey}`}
+                            className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-white">{champion.displayName}</span>
+                              <span className="text-xs text-zinc-500">
+                                {t("pve.alternativeHelp", "peut etre remplace par")}
+                              </span>
+                              {selectedAlternatives.map((alternative) => (
+                                <span
+                                  key={`alternative-${championKey}-${alternative.id}`}
+                                  className="inline-flex items-center gap-1 rounded-full border border-sky-700/70 bg-sky-950/40 px-2.5 py-1 text-xs font-semibold text-sky-100"
+                                >
+                                  {alternative.displayName}
+                                  <button
+                                    type="button"
+                                    onClick={() => removeDraftAlternativeHero(championKey, alternative.id)}
+                                    className="rounded-full p-0.5 text-sky-200 hover:bg-sky-800 hover:text-white"
+                                    title={t("common.remove", "Retirer")}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+
+                            <div className="relative mt-2">
+                              <input
+                                type="text"
+                                value={alternativeHeroSearches[championKey] || ""}
+                                onChange={(event) =>
+                                  setAlternativeHeroSearches((previous) => ({
+                                    ...previous,
+                                    [championKey]: event.target.value,
+                                  }))
+                                }
+                                placeholder={t("pve.alternativeSearchPlaceholder", "Ajouter un remplacant...")}
+                                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+                              />
+
+                              {alternativeSuggestions.length ? (
+                                <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-1 shadow-2xl">
+                                  {alternativeSuggestions.map((alternative) => (
+                                    <button
+                                      key={`alternative-suggestion-${championKey}-${alternative.id}`}
+                                      type="button"
+                                      onClick={() => addDraftAlternativeHero(championKey, alternative)}
+                                      className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+                                    >
+                                      <span className="font-semibold text-white">{alternative.displayName}</span>
+                                      <span className="ml-2 text-xs text-zinc-500">{alternative.technicalName}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div>
@@ -1130,14 +1431,33 @@ export default function PveLibraryTab({
                           <div className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                             {t("pve.composition", "Composition")}
                           </div>
-                          <div className="flex flex-wrap gap-1.5">
+                          <div className="space-y-1.5">
                             {video.heroes.map((hero) => (
-                              <Badge
+                              <div
                                 key={`hero-${video.id}-${hero.championId || hero.technicalName}`}
-                                className="border-emerald-700/70 bg-emerald-950/40 text-emerald-100"
+                                className="flex flex-wrap items-center gap-1.5"
                               >
-                                {hero.displayName}
-                              </Badge>
+                                <Badge className="border-emerald-700/70 bg-emerald-950/40 text-emerald-100">
+                                  {hero.displayName}
+                                </Badge>
+                                {hero.alternatives?.length ? (
+                                  <>
+                                    <span className="text-[0.7rem] text-zinc-500">
+                                      {t("pve.replaces", "ou")}
+                                    </span>
+                                    {hero.alternatives.map((alternative) => (
+                                      <Badge
+                                        key={`hero-alt-${video.id}-${hero.championId || hero.technicalName}-${
+                                          alternative.championId || alternative.technicalName
+                                        }`}
+                                        className="border-sky-700/70 bg-sky-950/40 text-sky-100"
+                                      >
+                                        {alternative.displayName}
+                                      </Badge>
+                                    ))}
+                                  </>
+                                ) : null}
+                              </div>
                             ))}
                           </div>
                         </div>
