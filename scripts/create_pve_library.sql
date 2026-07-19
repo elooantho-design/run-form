@@ -52,6 +52,17 @@ create table if not exists public.pve_video_stages (
   unique (video_id, stage_id)
 );
 
+create table if not exists public.pve_video_heroes (
+  id uuid primary key default gen_random_uuid(),
+  content_id uuid not null references public.pve_contents(id) on delete cascade,
+  video_id uuid not null references public.pve_videos(id) on delete cascade,
+  champion_id uuid null references public.champions(id) on delete set null,
+  champion_name text not null,
+  sort_order integer not null default 9999,
+  created_at timestamptz not null default now(),
+  unique (video_id, champion_name)
+);
+
 create index if not exists pve_contents_active_sort_idx
   on public.pve_contents (is_active, sort_order, name);
 
@@ -70,15 +81,23 @@ create index if not exists pve_video_stages_content_stage_idx
 create index if not exists pve_video_stages_video_idx
   on public.pve_video_stages (video_id);
 
+create index if not exists pve_video_heroes_content_video_idx
+  on public.pve_video_heroes (content_id, video_id, sort_order);
+
+create index if not exists pve_video_heroes_champion_idx
+  on public.pve_video_heroes (champion_id);
+
 grant select on public.pve_contents to anon, authenticated;
 grant select on public.pve_content_stages to anon, authenticated;
-grant select, insert on public.pve_videos to anon, authenticated;
-grant select, insert on public.pve_video_stages to anon, authenticated;
+grant select, insert, update, delete on public.pve_videos to anon, authenticated;
+grant select, insert, delete on public.pve_video_stages to anon, authenticated;
+grant select, insert, delete on public.pve_video_heroes to anon, authenticated;
 
 alter table public.pve_contents enable row level security;
 alter table public.pve_content_stages enable row level security;
 alter table public.pve_videos enable row level security;
 alter table public.pve_video_stages enable row level security;
+alter table public.pve_video_heroes enable row level security;
 
 drop policy if exists pve_contents_read on public.pve_contents;
 create policy pve_contents_read
@@ -108,6 +127,21 @@ create policy pve_videos_insert
   to anon, authenticated
   with check (true);
 
+drop policy if exists pve_videos_update on public.pve_videos;
+create policy pve_videos_update
+  on public.pve_videos
+  for update
+  to anon, authenticated
+  using (true)
+  with check (true);
+
+drop policy if exists pve_videos_delete on public.pve_videos;
+create policy pve_videos_delete
+  on public.pve_videos
+  for delete
+  to anon, authenticated
+  using (true);
+
 drop policy if exists pve_video_stages_read on public.pve_video_stages;
 create policy pve_video_stages_read
   on public.pve_video_stages
@@ -121,6 +155,34 @@ create policy pve_video_stages_insert
   for insert
   to anon, authenticated
   with check (true);
+
+drop policy if exists pve_video_stages_delete on public.pve_video_stages;
+create policy pve_video_stages_delete
+  on public.pve_video_stages
+  for delete
+  to anon, authenticated
+  using (true);
+
+drop policy if exists pve_video_heroes_read on public.pve_video_heroes;
+create policy pve_video_heroes_read
+  on public.pve_video_heroes
+  for select
+  to anon, authenticated
+  using (true);
+
+drop policy if exists pve_video_heroes_insert on public.pve_video_heroes;
+create policy pve_video_heroes_insert
+  on public.pve_video_heroes
+  for insert
+  to anon, authenticated
+  with check (true);
+
+drop policy if exists pve_video_heroes_delete on public.pve_video_heroes;
+create policy pve_video_heroes_delete
+  on public.pve_video_heroes
+  for delete
+  to anon, authenticated
+  using (true);
 
 with seed_contents as (
   select *

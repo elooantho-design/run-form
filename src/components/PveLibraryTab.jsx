@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BookOpen, ExternalLink, RefreshCw, Search, Youtube } from "lucide-react";
+import { BookOpen, Edit3, ExternalLink, RefreshCw, Search, Trash2, Youtube, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
+import { getChampionDisplayName, normalizeChampionLookupKey } from "@/lib/championDisplay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+
+function isAdminSession(session) {
+  const role = String(session?.role || "").trim().toLowerCase();
+  return role === "admin" || role === "leader";
+}
 
 function extractYoutubeVideoId(value) {
   const raw = String(value || "").trim();
@@ -72,7 +78,41 @@ function normalizeStage(row) {
   };
 }
 
-function normalizeVideo(row, linkRows = []) {
+function normalizeChampionOption(row, language = "fr") {
+  const technicalName = String(row?.name || "").trim();
+  const displayName = getChampionDisplayName(row, language) || technicalName;
+
+  return {
+    id: row?.id || "",
+    technicalName,
+    displayName,
+    searchKey: normalizeChampionLookupKey([
+      technicalName,
+      displayName,
+      row?.portal_name,
+      row?.PortalName,
+      row?.english_name,
+      row?.["English name"],
+    ].filter(Boolean).join(" ")),
+  };
+}
+
+function normalizeVideo(row, linkRows = [], heroLinkRows = [], championById = new Map(), language = "fr") {
+  const heroLinks = heroLinkRows
+    .filter((link) => String(link.video_id || link.videoId) === String(row.id))
+    .sort((left, right) => (left.sort_order ?? 9999) - (right.sort_order ?? 9999))
+    .map((link) => {
+      const champion = championById.get(String(link.champion_id || link.championId || ""));
+      const option = champion ? normalizeChampionOption(champion, language) : null;
+
+      return {
+        id: String(link.champion_id || link.championId || option?.id || link.champion_name || ""),
+        championId: link.champion_id || link.championId || option?.id || "",
+        technicalName: option?.technicalName || link.champion_name || "",
+        displayName: option?.displayName || link.champion_name || "",
+      };
+    });
+
   return {
     id: row.id,
     contentId: row.content_id || row.contentId,
@@ -85,6 +125,7 @@ function normalizeVideo(row, linkRows = []) {
     stageIds: linkRows
       .filter((link) => String(link.video_id || link.videoId) === String(row.id))
       .map((link) => String(link.stage_id || link.stageId)),
+    heroes: heroLinks,
   };
 }
 
@@ -93,14 +134,19 @@ export default function PveLibraryTab({
   contents = [],
   selectedContentId = "",
 }) {
-  const { t } = usePortalLanguage();
+  const { language, t } = usePortalLanguage();
+  const isAdminUser = isAdminSession(session);
   const [localContents, setLocalContents] = useState(contents.map(normalizeContent));
   const [selectedStageId, setSelectedStageId] = useState("");
   const [stages, setStages] = useState([]);
   const [videos, setVideos] = useState([]);
+  const [champions, setChampions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [savingVideo, setSavingVideo] = useState(false);
+  const [deletingVideoId, setDeletingVideoId] = useState("");
   const [videoFormOpen, setVideoFormOpen] = useState(false);
+  const [editingVideoId, setEditingVideoId] = useState("");
+  const [heroSearch, setHeroSearch] = useState("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [videoDraft, setVideoDraft] = useState({
@@ -108,11 +154,36 @@ export default function PveLibraryTab({
     title: "",
     notes: "",
     stageIds: [],
+    heroIds: [],
   });
 
   useEffect(() => {
     setLocalContents(contents.map(normalizeContent));
   }, [contents]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadChampions() {
+      const { data, error } = await supabase.from("champions").select("*").order("name", { ascending: true });
+
+      if (cancelled) return;
+
+      if (error) {
+        console.warn("[pve-champions]", error);
+        setChampions([]);
+        return;
+      }
+
+      setChampions(data || []);
+    }
+
+    void loadChampions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sortedContents = useMemo(
     () =>
@@ -143,6 +214,38 @@ export default function PveLibraryTab({
 
     return sortedContents[0] || null;
   }, [selectedContentId, sortedContents]);
+
+  const championOptions = useMemo(
+    () =>
+      champions
+        .map((champion) => normalizeChampionOption(champion, language))
+        .filter((champion) => champion.id && champion.technicalName)
+        .sort((left, right) => left.displayName.localeCompare(right.displayName, "fr", { sensitivity: "base" })),
+    [champions, language],
+  );
+
+  const championById = useMemo(
+    () => new Map(champions.map((champion) => [String(champion.id), champion])),
+    [champions],
+  );
+
+  const selectedDraftHeroes = useMemo(
+    () =>
+      videoDraft.heroIds
+        .map((id) => championOptions.find((champion) => String(champion.id) === String(id)))
+        .filter(Boolean),
+    [championOptions, videoDraft.heroIds],
+  );
+
+  const heroSuggestions = useMemo(() => {
+    const query = normalizeChampionLookupKey(heroSearch);
+    if (query.length < 2) return [];
+    const selectedIds = new Set(videoDraft.heroIds.map(String));
+
+    return championOptions
+      .filter((champion) => !selectedIds.has(String(champion.id)) && champion.searchKey.includes(query))
+      .slice(0, 8);
+  }, [championOptions, heroSearch, videoDraft.heroIds]);
 
   const selectedStage = useMemo(
     () => stages.find((stage) => String(stage.id) === String(selectedStageId)) || stages[0] || null,
@@ -190,7 +293,7 @@ export default function PveLibraryTab({
     setLoading(true);
     setErrorMessage("");
 
-    const [stagesResult, videosResult, linksResult] = await Promise.all([
+    const [stagesResult, videosResult, linksResult, heroLinksResult] = await Promise.all([
       supabase
         .from("pve_content_stages")
         .select("id, content_id, stage_number, name, sort_order")
@@ -206,10 +309,15 @@ export default function PveLibraryTab({
         .from("pve_video_stages")
         .select("id, content_id, video_id, stage_id")
         .eq("content_id", selectedContent.id),
+      supabase
+        .from("pve_video_heroes")
+        .select("id, content_id, video_id, champion_id, champion_name, sort_order")
+        .eq("content_id", selectedContent.id),
     ]);
 
-    if (stagesResult.error || videosResult.error || linksResult.error) {
-      const error = stagesResult.error || videosResult.error || linksResult.error;
+    const heroLinksMissing = heroLinksResult.error?.code === "42P01";
+    if (stagesResult.error || videosResult.error || linksResult.error || (heroLinksResult.error && !heroLinksMissing)) {
+      const error = stagesResult.error || videosResult.error || linksResult.error || heroLinksResult.error;
       setErrorMessage(
         error?.code === "42P01"
           ? t(
@@ -225,7 +333,9 @@ export default function PveLibraryTab({
     }
 
     const nextStages = (stagesResult.data || []).map(normalizeStage);
-    const nextVideos = (videosResult.data || []).map((row) => normalizeVideo(row, linksResult.data || []));
+    const nextVideos = (videosResult.data || []).map((row) =>
+      normalizeVideo(row, linksResult.data || [], heroLinksMissing ? [] : heroLinksResult.data || [], championById, language),
+    );
 
     setStages(nextStages);
     setVideos(nextVideos);
@@ -236,6 +346,7 @@ export default function PveLibraryTab({
     setVideoDraft((previous) => ({
       ...previous,
       stageIds: nextStages[0]?.id ? [String(nextStages[0].id)] : [],
+      heroIds: [],
     }));
     setLoading(false);
   };
@@ -273,14 +384,125 @@ export default function PveLibraryTab({
     });
   };
 
+  const addDraftHero = (champion) => {
+    if (!champion?.id) return;
+
+    setVideoDraft((previous) => {
+      if (previous.heroIds.some((id) => String(id) === String(champion.id))) return previous;
+      return {
+        ...previous,
+        heroIds: [...previous.heroIds, String(champion.id)],
+      };
+    });
+    setHeroSearch("");
+  };
+
+  const removeDraftHero = (championId) => {
+    setVideoDraft((previous) => ({
+      ...previous,
+      heroIds: previous.heroIds.filter((id) => String(id) !== String(championId)),
+    }));
+  };
+
+  const openAddVideoForm = () => {
+    setEditingVideoId("");
+    setHeroSearch("");
+    setErrorMessage("");
+    setMessage("");
+    setVideoDraft({
+      url: "",
+      title: "",
+      notes: "",
+      stageIds: selectedStage?.id ? [String(selectedStage.id)] : [],
+      heroIds: [],
+    });
+    setVideoFormOpen((value) => !value || Boolean(editingVideoId));
+  };
+
+  const openEditVideoForm = (video) => {
+    if (!isAdminUser || !video?.id) return;
+
+    setEditingVideoId(video.id);
+    setHeroSearch("");
+    setErrorMessage("");
+    setMessage("");
+    setVideoDraft({
+      url: video.youtubeUrl || "",
+      title: video.title || "",
+      notes: video.notes || "",
+      stageIds: video.stageIds?.length ? video.stageIds.map(String) : selectedStage?.id ? [String(selectedStage.id)] : [],
+      heroIds: (video.heroes || []).map((hero) => String(hero.championId || hero.id)).filter(Boolean),
+    });
+    setVideoFormOpen(true);
+  };
+
+  const closeVideoForm = () => {
+    setVideoFormOpen(false);
+    setEditingVideoId("");
+    setHeroSearch("");
+  };
+
+  const replaceVideoLinks = async (videoId, selectedStageIds, selectedHeroIds) => {
+    const { error: deleteStagesError } = await supabase
+      .from("pve_video_stages")
+      .delete()
+      .eq("video_id", videoId);
+
+    if (deleteStagesError) throw deleteStagesError;
+
+    const { error: insertStagesError } = await supabase.from("pve_video_stages").insert(
+      selectedStageIds.map((stageId) => ({
+        content_id: selectedContent.id,
+        video_id: videoId,
+        stage_id: stageId,
+      })),
+    );
+
+    if (insertStagesError) throw insertStagesError;
+
+    const { error: deleteHeroesError } = await supabase
+      .from("pve_video_heroes")
+      .delete()
+      .eq("video_id", videoId);
+
+    if (deleteHeroesError && deleteHeroesError.code !== "42P01") throw deleteHeroesError;
+
+    if (!selectedHeroIds.length) return;
+
+    const heroRows = selectedHeroIds
+      .map((championId, index) => {
+        const champion = championOptions.find((option) => String(option.id) === String(championId));
+        if (!champion) return null;
+
+        return {
+          content_id: selectedContent.id,
+          video_id: videoId,
+          champion_id: champion.id,
+          champion_name: champion.technicalName,
+          sort_order: index + 1,
+        };
+      })
+      .filter(Boolean);
+
+    if (!heroRows.length) return;
+
+    const { error: insertHeroesError } = await supabase.from("pve_video_heroes").insert(heroRows);
+    if (insertHeroesError) throw insertHeroesError;
+  };
+
   const saveVideo = async (event) => {
     event.preventDefault();
     if (!selectedContent?.id || savingVideo) return;
+
+    if (editingVideoId && !isAdminUser) return;
 
     const cleanUrl = videoDraft.url.trim();
     const youtubeVideoId = extractYoutubeVideoId(cleanUrl);
     const selectedStageIds = videoDraft.stageIds.filter((stageId) =>
       stages.some((stage) => String(stage.id) === String(stageId)),
+    );
+    const selectedHeroIds = videoDraft.heroIds.filter((championId) =>
+      championOptions.some((champion) => String(champion.id) === String(championId)),
     );
 
     if (!youtubeVideoId) {
@@ -297,36 +519,42 @@ export default function PveLibraryTab({
     setErrorMessage("");
     setMessage("");
 
-    const { data: video, error: videoError } = await supabase
-      .from("pve_videos")
-      .insert({
-        content_id: selectedContent.id,
-        youtube_url: cleanUrl,
-        youtube_video_id: youtubeVideoId,
-        title: videoDraft.title.trim() || `${selectedContent.name} - ${selectedStageLabel}`,
-        notes: videoDraft.notes.trim() || null,
-        created_by_member_id: session?.memberId || session?.id || null,
-        created_by_name: session?.watcherName || session?.name || "",
-      })
-      .select("id, content_id, youtube_url, youtube_video_id, title, notes, created_by_name, created_at")
-      .single();
+    const videoPayload = {
+      content_id: selectedContent.id,
+      youtube_url: cleanUrl,
+      youtube_video_id: youtubeVideoId,
+      title: videoDraft.title.trim() || `${selectedContent.name} - ${selectedStageLabel}`,
+      notes: videoDraft.notes.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
 
-    if (videoError) {
-      setErrorMessage(videoError.message || t("pve.saveVideoError", "Ajout de la video impossible."));
+    const result = editingVideoId
+      ? await supabase
+          .from("pve_videos")
+          .update(videoPayload)
+          .eq("id", editingVideoId)
+          .select("id")
+          .single()
+      : await supabase
+          .from("pve_videos")
+          .insert({
+            ...videoPayload,
+            created_by_member_id: session?.memberId || session?.id || null,
+            created_by_name: session?.watcherName || session?.name || "",
+          })
+          .select("id")
+          .single();
+
+    if (result.error) {
+      setErrorMessage(result.error.message || t("pve.saveVideoError", "Ajout de la video impossible."));
       setSavingVideo(false);
       return;
     }
 
-    const { error: linksError } = await supabase.from("pve_video_stages").insert(
-      selectedStageIds.map((stageId) => ({
-        content_id: selectedContent.id,
-        video_id: video.id,
-        stage_id: stageId,
-      })),
-    );
-
-    if (linksError) {
-      setErrorMessage(linksError.message || t("pve.saveVideoError", "Ajout de la video impossible."));
+    try {
+      await replaceVideoLinks(result.data.id, selectedStageIds, selectedHeroIds);
+    } catch (error) {
+      setErrorMessage(error?.message || t("pve.saveVideoError", "Ajout de la video impossible."));
       setSavingVideo(false);
       return;
     }
@@ -336,10 +564,55 @@ export default function PveLibraryTab({
       title: "",
       notes: "",
       stageIds: selectedStage?.id ? [String(selectedStage.id)] : [],
+      heroIds: [],
     });
-    setVideoFormOpen(false);
-    setMessage(t("pve.videoAdded", "Video ajoutee."));
+    closeVideoForm();
+    setMessage(editingVideoId ? t("pve.videoUpdated", "Video modifiee.") : t("pve.videoAdded", "Video ajoutee."));
     setSavingVideo(false);
+    await loadContentData();
+  };
+
+  const deleteVideo = async (video) => {
+    if (!isAdminUser || !video?.id || deletingVideoId) return;
+    const confirmed = window.confirm(t("pve.deleteVideoConfirm", "Supprimer cette video PVE ?"));
+    if (!confirmed) return;
+
+    setDeletingVideoId(video.id);
+    setErrorMessage("");
+    setMessage("");
+
+    const { error: deleteHeroLinksError } = await supabase
+      .from("pve_video_heroes")
+      .delete()
+      .eq("video_id", video.id);
+
+    if (deleteHeroLinksError && deleteHeroLinksError.code !== "42P01") {
+      setErrorMessage(deleteHeroLinksError.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
+      setDeletingVideoId("");
+      return;
+    }
+
+    const { error: deleteStageLinksError } = await supabase
+      .from("pve_video_stages")
+      .delete()
+      .eq("video_id", video.id);
+
+    if (deleteStageLinksError) {
+      setErrorMessage(deleteStageLinksError.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
+      setDeletingVideoId("");
+      return;
+    }
+
+    const { error } = await supabase.from("pve_videos").delete().eq("id", video.id);
+
+    if (error) {
+      setErrorMessage(error.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
+      setDeletingVideoId("");
+      return;
+    }
+
+    setMessage(t("pve.videoDeleted", "Video supprimee."));
+    setDeletingVideoId("");
     await loadContentData();
   };
 
@@ -465,7 +738,7 @@ export default function PveLibraryTab({
 
               <Button
                 type="button"
-                onClick={() => setVideoFormOpen((value) => !value)}
+                onClick={openAddVideoForm}
                 disabled={!selectedStage}
                 className="rounded-xl bg-red-600 text-white hover:bg-red-500"
               >
@@ -511,6 +784,64 @@ export default function PveLibraryTab({
                   />
                 </label>
 
+                <div className="space-y-2">
+                  <div>
+                    <div className="text-sm font-medium text-zinc-300">
+                      {t("pve.composition", "Composition")}
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      {t("pve.compositionHelp", "Optionnel : ajoute les heros utilises pour faciliter les futurs filtres.")}
+                    </div>
+                  </div>
+
+                  {selectedDraftHeroes.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedDraftHeroes.map((champion) => (
+                        <span
+                          key={`draft-hero-${champion.id}`}
+                          className="inline-flex items-center gap-1 rounded-full border border-emerald-700/70 bg-emerald-950/40 px-3 py-1 text-xs font-semibold text-emerald-100"
+                        >
+                          {champion.displayName}
+                          <button
+                            type="button"
+                            onClick={() => removeDraftHero(champion.id)}
+                            className="rounded-full p-0.5 text-emerald-200 hover:bg-emerald-800 hover:text-white"
+                            title={t("common.remove", "Retirer")}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={heroSearch}
+                      onChange={(event) => setHeroSearch(event.target.value)}
+                      placeholder={t("pve.heroSearchPlaceholder", "Chercher un heros...")}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
+                    />
+
+                    {heroSuggestions.length ? (
+                      <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-1 shadow-2xl">
+                        {heroSuggestions.map((champion) => (
+                          <button
+                            key={`suggestion-${champion.id}`}
+                            type="button"
+                            onClick={() => addDraftHero(champion)}
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-800"
+                          >
+                            <span className="font-semibold text-white">{champion.displayName}</span>
+                            <span className="ml-2 text-xs text-zinc-500">{champion.technicalName}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
                 <div>
                   <div className="mb-2 text-sm font-medium text-zinc-300">
                     {t("pve.validStages", "Niveaux concernes")}
@@ -541,14 +872,18 @@ export default function PveLibraryTab({
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => setVideoFormOpen(false)}
+                    onClick={closeVideoForm}
                     disabled={savingVideo}
                     className="rounded-xl border-zinc-700 bg-transparent text-zinc-200"
                   >
                     {t("common.cancel", "Annuler")}
                   </Button>
                   <Button type="submit" disabled={savingVideo} className="rounded-xl bg-red-600 text-white hover:bg-red-500">
-                    {savingVideo ? t("common.saving", "Sauvegarde...") : t("pve.saveVideo", "Enregistrer la video")}
+                    {savingVideo
+                      ? t("common.saving", "Sauvegarde...")
+                      : editingVideoId
+                        ? t("pve.updateVideo", "Modifier la video")
+                        : t("pve.saveVideo", "Enregistrer la video")}
                   </Button>
                 </div>
               </form>
@@ -558,19 +893,16 @@ export default function PveLibraryTab({
               <div className="grid gap-3 lg:grid-cols-2">
                 {selectedStageVideos.map((video) => (
                   <article key={video.id} className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
-                    <a
-                      href={video.youtubeUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="group block bg-black"
-                    >
-                      <img
-                        src={`https://img.youtube.com/vi/${video.youtubeVideoId}/hqdefault.jpg`}
-                        alt={video.title}
-                        className="aspect-video w-full object-cover opacity-90 transition group-hover:opacity-100"
+                    <div className="bg-black">
+                      <iframe
+                        src={`https://www.youtube.com/embed/${video.youtubeVideoId}`}
+                        title={video.title}
+                        className="aspect-video w-full"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
                         loading="lazy"
                       />
-                    </a>
+                    </div>
                     <div className="space-y-3 p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -580,19 +912,60 @@ export default function PveLibraryTab({
                             {video.createdAt ? ` - ${formatDate(video.createdAt)}` : ""}
                           </div>
                         </div>
-                        <a
-                          href={video.youtubeUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-300 hover:bg-zinc-800 hover:text-white"
-                          title={t("pve.openYoutube", "Ouvrir YouTube")}
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </a>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {isAdminUser ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => openEditVideoForm(video)}
+                                className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                                title={t("pve.editVideo", "Modifier la video")}
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteVideo(video)}
+                                disabled={deletingVideoId === video.id}
+                                className="rounded-lg border border-red-800 bg-red-950/40 p-2 text-red-200 hover:bg-red-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                title={t("pve.deleteVideo", "Supprimer la video")}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </>
+                          ) : null}
+                          <a
+                            href={video.youtubeUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                            title={t("pve.openYoutube", "Ouvrir YouTube")}
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
+                        </div>
                       </div>
 
                       {video.notes ? (
                         <p className="whitespace-pre-wrap text-sm text-zinc-300">{video.notes}</p>
+                      ) : null}
+
+                      {video.heroes?.length ? (
+                        <div>
+                          <div className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                            {t("pve.composition", "Composition")}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {video.heroes.map((hero) => (
+                              <Badge
+                                key={`hero-${video.id}-${hero.championId || hero.technicalName}`}
+                                className="border-emerald-700/70 bg-emerald-950/40 text-emerald-100"
+                              >
+                                {hero.displayName}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
                       ) : null}
 
                       <div className="flex flex-wrap gap-1.5">
