@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Shield, Plus, Pencil, Trash2 } from "lucide-react";
+import { Shield, Plus, Pencil, Trash2, ClipboardPaste } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -20,6 +20,8 @@ const [defenseBlocks, setDefenseBlocks] = useState([]);
 const [blocksLoading, setBlocksLoading] = useState(false);
 const [newTextBlock, setNewTextBlock] = useState("");
 const [infoBlocksByDefenseId, setInfoBlocksByDefenseId] = useState({});
+const [blockImageMessage, setBlockImageMessage] = useState("");
+const [blockImageUploading, setBlockImageUploading] = useState(false);
 
 const normalizeInfoBlock = (block) => ({
   ...block,
@@ -54,6 +56,8 @@ const openDefenseBlocksModal = async (defense) => {
   setSelectedDefenseForBlocks(editableDefense);
   setBlocksModalOpen(true);
   setBlocksLoading(true);
+  setBlockImageMessage("");
+  setBlockImageUploading(false);
 
   const { data, error } = await supabase
     .from("guild_defense_blocks")
@@ -255,11 +259,11 @@ const compressImageFile = (file, maxWidth = 1400, quality = 0.82) =>
     reader.readAsDataURL(file);
   });
 
-const addImageBlock = async (event) => {
-  const file = event.target.files?.[0];
-  event.target.value = "";
-
+const saveImageBlockFromFile = async (file, successMessage) => {
   if (!file || !selectedDefenseForBlocks?.id) return;
+
+  setBlockImageUploading(true);
+  setBlockImageMessage(t("adminDefenses.imageUploadInProgress", "Upload de l'image en cours..."));
 
   try {
     const compressedFile = await compressImageFile(file);
@@ -274,7 +278,8 @@ const addImageBlock = async (event) => {
 
     if (uploadError) {
       console.error("Erreur upload image bloc:", uploadError);
-      return;
+      setBlockImageMessage(t("adminDefenses.imageUploadFailed", "Impossible d'ajouter cette image."));
+      return false;
     }
 
     const { data: publicData } = supabase.storage
@@ -297,14 +302,89 @@ const addImageBlock = async (event) => {
 
     if (error) {
       console.error("Erreur ajout bloc image:", error);
-      return;
+      setBlockImageMessage(t("adminDefenses.imageUploadFailed", "Impossible d'ajouter cette image."));
+      return false;
     }
 
     const nextBlocks = sortInfoBlocks([...defenseBlocks, data]);
     setDefenseBlocks(nextBlocks);
     cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
+    setBlockImageMessage(successMessage || t("adminDefenses.fileImageAdded", "Image ajoutee."));
+    return true;
   } catch (error) {
     console.error("Erreur compression/upload image bloc:", error);
+    setBlockImageMessage(t("adminDefenses.imageUploadFailed", "Impossible d'ajouter cette image."));
+    return false;
+  } finally {
+    setBlockImageUploading(false);
+  }
+};
+
+const addImageBlock = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+
+  await saveImageBlockFromFile(file, t("adminDefenses.fileImageAdded", "Image ajoutee."));
+};
+
+const handlePasteImageBlock = async (event) => {
+  const clipboardItems = Array.from(event.clipboardData?.items || []);
+  const imageItem = clipboardItems.find((item) => item.type?.startsWith("image/"));
+
+  if (!imageItem) {
+    setBlockImageMessage(t("adminDefenses.clipboardNoImage", "Aucune image trouvee dans le presse-papier."));
+    return;
+  }
+
+  event.preventDefault();
+
+  const file = imageItem.getAsFile();
+  await saveImageBlockFromFile(
+    file,
+    t("adminDefenses.clipboardImageAdded", "Image collee depuis le presse-papier.")
+  );
+};
+
+const pasteImageBlockFromClipboard = async () => {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.read) {
+    setBlockImageMessage(
+      t(
+        "adminDefenses.clipboardUnsupported",
+        "Lecture directe du presse-papier indisponible. Clique dans la zone de collage puis fais Ctrl+V."
+      )
+    );
+    return;
+  }
+
+  try {
+    const clipboardItems = await navigator.clipboard.read();
+
+    for (const item of clipboardItems) {
+      const imageType = item.types.find((type) => type.startsWith("image/"));
+      if (!imageType) continue;
+
+      const blob = await item.getType(imageType);
+      const extension = imageType.split("/")[1]?.split("+")[0] || "png";
+      const file = new File([blob], `clipboard-defense-${Date.now()}.${extension}`, {
+        type: imageType,
+      });
+
+      await saveImageBlockFromFile(
+        file,
+        t("adminDefenses.clipboardImageAdded", "Image collee depuis le presse-papier.")
+      );
+      return;
+    }
+
+    setBlockImageMessage(t("adminDefenses.clipboardNoImage", "Aucune image trouvee dans le presse-papier."));
+  } catch (error) {
+    console.error("Erreur lecture presse-papier image:", error);
+    setBlockImageMessage(
+      t(
+        "adminDefenses.clipboardUnsupported",
+        "Lecture directe du presse-papier indisponible. Clique dans la zone de collage puis fais Ctrl+V."
+      )
+    );
   }
 };
 
@@ -561,16 +641,55 @@ const addImageBlock = async (event) => {
     {t("adminDefenses.saveText", "Enregistrer le texte")}
   </button>
 
-  <label className="cursor-pointer rounded-xl border border-blue-700 bg-blue-900/30 px-3 py-1.5 text-xs text-blue-300 hover:bg-blue-800/50">
+  <label
+    className={`cursor-pointer rounded-xl border border-blue-700 bg-blue-900/30 px-3 py-1.5 text-xs text-blue-300 hover:bg-blue-800/50 ${
+      blockImageUploading ? "pointer-events-none opacity-60" : ""
+    }`}
+  >
     {t("adminDefenses.addFile", "Ajouter un fichier")}
     <input
       type="file"
       accept="image/*"
       onChange={addImageBlock}
+      disabled={blockImageUploading}
       className="hidden"
     />
   </label>
+
+  <button
+    type="button"
+    onClick={pasteImageBlockFromClipboard}
+    disabled={blockImageUploading}
+    className="flex items-center gap-1.5 rounded-xl border border-violet-700 bg-violet-900/30 px-3 py-1.5 text-xs text-violet-200 hover:bg-violet-800/50 disabled:cursor-wait disabled:opacity-60"
+  >
+    <ClipboardPaste className="h-3.5 w-3.5" />
+    {t("adminDefenses.pasteImage", "Coller depuis le presse-papier")}
+  </button>
 </div>
+
+          <div
+            role="button"
+            tabIndex={0}
+            onPaste={handlePasteImageBlock}
+            className="mt-3 rounded-xl border border-dashed border-violet-800 bg-violet-950/20 p-3 outline-none transition focus:border-violet-400 focus:bg-violet-950/40"
+          >
+            <div className="flex items-center gap-2 text-xs font-semibold text-violet-200">
+              <ClipboardPaste className="h-4 w-4" />
+              {t("adminDefenses.pasteZoneTitle", "Collage rapide")}
+            </div>
+            <div className="mt-1 text-xs text-zinc-400">
+              {t(
+                "adminDefenses.pasteZoneHelp",
+                "Clique ici puis fais Ctrl+V pour ajouter directement l'image copiee."
+              )}
+            </div>
+          </div>
+
+          {blockImageMessage && (
+            <div className="mt-2 text-xs text-zinc-300">
+              {blockImageMessage}
+            </div>
+          )}
         </div>
 
         {blocksLoading ? (

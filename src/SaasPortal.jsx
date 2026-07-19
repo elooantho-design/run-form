@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Clock3,
   Compass,
+  ClipboardPaste,
   Cpu,
   FileJson,
   Gauge,
@@ -3397,6 +3398,7 @@ function PortalAdminDefensesView({ session }) {
   const [refreshTick, setRefreshTick] = useState(0);
   const [draftOpen, setDraftOpen] = useState(false);
   const [draft, setDraft] = useState(emptyPortalDefenseDraft);
+  const [draftImageMessage, setDraftImageMessage] = useState("");
   const [conditionOpen, setConditionOpen] = useState(false);
   const [conditionDefenseId, setConditionDefenseId] = useState("");
   const [conditionRemoveOpen, setConditionRemoveOpen] = useState(false);
@@ -3567,6 +3569,7 @@ function PortalAdminDefensesView({ session }) {
   function openAddDefense() {
     setMessage("");
     setErrorMessage("");
+    setDraftImageMessage("");
     setDraft({
       ...emptyPortalDefenseDraft,
       guildCode: activeGuildCode,
@@ -3731,6 +3734,7 @@ function PortalAdminDefensesView({ session }) {
       sourceDefenseId: editableDefense.sourceDefenseId || null,
       slots: [...(editableDefense.slots || []), "", "", "", "", ""].slice(0, 5),
     });
+    setDraftImageMessage("");
     setDraftOpen(true);
   }
 
@@ -3742,13 +3746,12 @@ function PortalAdminDefensesView({ session }) {
     });
   }
 
-  async function handleDefenseImageChange(event) {
-    const file = event.target.files?.[0] || null;
-    event.target.value = "";
+  async function uploadDraftDefenseImage(file, successMessage) {
     if (!file) return;
 
     setSaving(true);
     setErrorMessage("");
+    setDraftImageMessage(t("adminDefenses.imageUploadInProgress", "Upload de l'image en cours..."));
 
     try {
       const compressedFile = await compressPortalDefenseImage(file);
@@ -3767,10 +3770,80 @@ function PortalAdminDefensesView({ session }) {
 
       const { data } = supabase.storage.from("defense-images").getPublicUrl(filePath);
       setDraft((previous) => ({ ...previous, image: data.publicUrl }));
+      setDraftImageMessage(successMessage || t("adminDefenses.fileImageAdded", "Image ajoutee."));
+      return true;
     } catch (error) {
       setErrorMessage(error?.message || "Upload de l'image impossible.");
+      setDraftImageMessage(t("adminDefenses.imageUploadFailed", "Impossible d'ajouter cette image."));
+      return false;
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDefenseImageChange(event) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+
+    await uploadDraftDefenseImage(file, t("adminDefenses.fileImageAdded", "Image ajoutee."));
+  }
+
+  async function handleDraftDefenseImagePaste(event) {
+    const clipboardItems = Array.from(event.clipboardData?.items || []);
+    const imageItem = clipboardItems.find((item) => item.type?.startsWith("image/"));
+
+    if (!imageItem) {
+      setDraftImageMessage(t("adminDefenses.clipboardNoImage", "Aucune image trouvee dans le presse-papier."));
+      return;
+    }
+
+    event.preventDefault();
+    await uploadDraftDefenseImage(
+      imageItem.getAsFile(),
+      t("adminDefenses.clipboardImageAdded", "Image collee depuis le presse-papier.")
+    );
+  }
+
+  async function pasteDraftDefenseImageFromClipboard() {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.read) {
+      setDraftImageMessage(
+        t(
+          "adminDefenses.clipboardUnsupported",
+          "Lecture directe du presse-papier indisponible. Clique dans la zone de collage puis fais Ctrl+V."
+        )
+      );
+      return;
+    }
+
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (!imageType) continue;
+
+        const blob = await item.getType(imageType);
+        const extension = imageType.split("/")[1]?.split("+")[0] || "png";
+        const file = new File([blob], `portal-defense-${Date.now()}.${extension}`, {
+          type: imageType,
+        });
+
+        await uploadDraftDefenseImage(
+          file,
+          t("adminDefenses.clipboardImageAdded", "Image collee depuis le presse-papier.")
+        );
+        return;
+      }
+
+      setDraftImageMessage(t("adminDefenses.clipboardNoImage", "Aucune image trouvee dans le presse-papier."));
+    } catch (error) {
+      console.error("Erreur lecture presse-papier defense:", error);
+      setDraftImageMessage(
+        t(
+          "adminDefenses.clipboardUnsupported",
+          "Lecture directe du presse-papier indisponible. Clique dans la zone de collage puis fais Ctrl+V."
+        )
+      );
     }
   }
 
@@ -4379,11 +4452,53 @@ function PortalAdminDefensesView({ session }) {
                   )}
                 </div>
 
-                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800">
+                <label
+                  className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800 ${
+                    saving ? "pointer-events-none opacity-60" : ""
+                  }`}
+                >
                   <ImagePlus className="h-4 w-4" />
                   {t("adminDefenses.defenseImage", "Image defense")}
-                  <input type="file" accept="image/*" className="hidden" onChange={handleDefenseImageChange} />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleDefenseImageChange}
+                    disabled={saving}
+                  />
                 </label>
+
+                <button
+                  type="button"
+                  onClick={pasteDraftDefenseImageFromClipboard}
+                  disabled={saving}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-violet-700 bg-violet-900/30 px-3 py-2 text-sm text-violet-200 hover:bg-violet-800/50 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <ClipboardPaste className="h-4 w-4" />
+                  {t("adminDefenses.pasteImage", "Coller depuis le presse-papier")}
+                </button>
+
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onPaste={handleDraftDefenseImagePaste}
+                  className="rounded-lg border border-dashed border-violet-800 bg-violet-950/20 p-3 text-xs text-zinc-400 outline-none transition focus:border-violet-400 focus:bg-violet-950/40"
+                >
+                  <div className="flex items-center gap-2 font-semibold text-violet-200">
+                    <ClipboardPaste className="h-4 w-4" />
+                    {t("adminDefenses.pasteZoneTitle", "Collage rapide")}
+                  </div>
+                  <div className="mt-1">
+                    {t(
+                      "adminDefenses.pasteZoneHelp",
+                      "Clique ici puis fais Ctrl+V pour ajouter directement l'image copiee."
+                    )}
+                  </div>
+                </div>
+
+                {draftImageMessage ? (
+                  <div className="text-xs text-zinc-300">{draftImageMessage}</div>
+                ) : null}
 
                 {draft.isGlobal && isPaladinGuildCode(draft.guildCode || activeGuildCode) ? (
                   <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-200">{t("adminDefenses.globalDefense", "Defense globale")}</Badge>
