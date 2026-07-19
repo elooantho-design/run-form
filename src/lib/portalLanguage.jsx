@@ -390,6 +390,8 @@ const PORTAL_TRANSLATIONS = {
   "adminDefenses.deleteBlockConfirm": "Delete this block?",
   "pve.library": "PVE library",
   "pve.category.gearRaid": "Gear raids",
+  "pve.category.artifactRaid": "Artifact raid",
+  "pve.category.factionTrial": "Faction trial",
   "pve.category.guildBoss": "Guild boss",
   "pve.category.immortalCodex": "Immortal codex",
   "pve.description": "Centralize useful YouTube videos for clearing PVE content.",

@@ -184,6 +184,17 @@ const pveContentBlueprints = [
     categorySortOrder: 10,
   },
   {
+    slug: "artifact-raid",
+    name: "Raid d'artefacts",
+    description: "Raid de materiaux d'artefacts",
+    stageCount: 30,
+    sortOrder: 10,
+    categorySlug: "artifact-raid",
+    categoryName: "Raid d'artefacts",
+    categorySortOrder: 15,
+    directNav: true,
+  },
+  {
     slug: "dragon-chasm",
     name: "Gouffre du dragon",
     description: "Boss de guilde - Gouffre du dragon",
@@ -213,10 +224,102 @@ const pveContentBlueprints = [
     categoryName: "Codex immortel",
     categorySortOrder: 30,
   },
+  {
+    slug: "faction-trial-all",
+    name: "All",
+    description: "Épreuve de faction - All",
+    stageCount: 18,
+    sortOrder: 10,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-nordiste",
+    name: "Nordiste",
+    description: "Épreuve de faction - Nordiste",
+    stageCount: 18,
+    sortOrder: 20,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-arbiter-chaotic",
+    name: "Arbitre et chaotique",
+    description: "Épreuve de faction - Arbitre et chaotique",
+    stageCount: 18,
+    sortOrder: 30,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-infernal",
+    name: "Infernal",
+    description: "Épreuve de faction - Infernal",
+    stageCount: 18,
+    sortOrder: 40,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-perceur",
+    name: "Perceur",
+    description: "Épreuve de faction - Perceur",
+    stageCount: 18,
+    sortOrder: 50,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-cultiste",
+    name: "Cultiste",
+    description: "Épreuve de faction - Cultiste",
+    stageCount: 18,
+    sortOrder: 60,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-esoteriste",
+    name: "Ésotériste",
+    description: "Épreuve de faction - Ésotériste",
+    stageCount: 18,
+    sortOrder: 70,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-sentinelle",
+    name: "Sentinelle",
+    description: "Épreuve de faction - Sentinelle",
+    stageCount: 18,
+    sortOrder: 80,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
+  {
+    slug: "faction-trial-cauchemar",
+    name: "Cauchemar",
+    description: "Épreuve de faction - Cauchemar",
+    stageCount: 18,
+    sortOrder: 90,
+    categorySlug: "faction-trial",
+    categoryName: "Épreuve de faction",
+    categorySortOrder: 18,
+  },
 ];
 
 const pveCategoryTranslationKeys = {
   "gear-raid": "pve.category.gearRaid",
+  "artifact-raid": "pve.category.artifactRaid",
+  "faction-trial": "pve.category.factionTrial",
   "guild-boss": "pve.category.guildBoss",
   "immortal-codex": "pve.category.immortalCodex",
 };
@@ -237,6 +340,7 @@ function normalizePveContentNavItem(row) {
     categorySortOrder: row.categorySortOrder ?? row.category_sort_order ?? 9999,
     stageCount: row.stage_count ?? row.stageCount ?? 0,
     sortOrder: row.sort_order ?? row.sortOrder ?? 9999,
+    directNav: row.directNav ?? row.direct_nav ?? false,
     isActive: row.is_active ?? true,
     missingInDatabase: Boolean(row.missingInDatabase),
   };
@@ -260,6 +364,7 @@ function mergePveContentNavItems(rows = []) {
       categorySlug: blueprint.categorySlug,
       categoryName: blueprint.categoryName,
       categorySortOrder: row?.category_sort_order ?? blueprint.categorySortOrder,
+      directNav: blueprint.directNav,
       missingInDatabase: !row?.id,
     });
   });
@@ -275,11 +380,13 @@ function buildPveNavigationCategories(items = []) {
       slug,
       name: item.categoryName || "PVE",
       sortOrder: item.categorySortOrder ?? 9999,
+      directNav: Boolean(item.directNav),
       items: [],
     };
 
     category.name = item.categoryName || category.name;
     category.sortOrder = Math.min(category.sortOrder, item.categorySortOrder ?? 9999);
+    category.directNav = category.directNav || Boolean(item.directNav);
     category.items.push(item);
     categoriesBySlug.set(slug, category);
   });
@@ -1807,7 +1914,8 @@ function PortalShell({ session, onLogout }) {
             <div className="mt-1 space-y-1 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
               {pveNavigationCategories.length ? (
                 pveNavigationCategories.map((category) => {
-                  const categoryOpen = Boolean(pveCategoryNavOpen[category.slug]);
+                  const directContent = category.directNav && category.items.length === 1 ? category.items[0] : null;
+                  const categoryOpen = directContent ? false : Boolean(pveCategoryNavOpen[category.slug]);
                   const categoryLabelKey = getPveCategoryTranslationKey(category.slug);
                   const selectedCategory = activePveItem?.categorySlug === category.slug;
 
@@ -1816,6 +1924,11 @@ function PortalShell({ session, onLogout }) {
                       <button
                         type="button"
                         onClick={() => {
+                          if (directContent) {
+                            selectTab(`pve:${directContent.navId}`);
+                            return;
+                          }
+
                           setPveCategoryNavOpen((previous) => ({
                             ...previous,
                             [category.slug]: !previous[category.slug],
@@ -1832,9 +1945,11 @@ function PortalShell({ session, onLogout }) {
                         <span className="min-w-0 flex-1 truncate">
                           {categoryLabelKey ? t(categoryLabelKey, category.name) : category.name}
                         </span>
-                        <ChevronRight
-                          className={`h-4 w-4 shrink-0 transition-transform ${categoryOpen ? "rotate-90" : ""}`}
-                        />
+                        {directContent ? null : (
+                          <ChevronRight
+                            className={`h-4 w-4 shrink-0 transition-transform ${categoryOpen ? "rotate-90" : ""}`}
+                          />
+                        )}
                       </button>
 
                       {categoryOpen ? (
