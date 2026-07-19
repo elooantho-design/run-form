@@ -1831,8 +1831,7 @@ export default function PveLibraryTab({
                               ? CREATOR_MODE_NEW
                               : videoDraft.creatorId
                         }
-                        onChange={(event) => {
-                          const value = event.target.value;
+                        onChange={(value) => {
                           setVideoDraft((previous) => {
                             if (value === CREATOR_MODE_UNLISTED) {
                               return {
