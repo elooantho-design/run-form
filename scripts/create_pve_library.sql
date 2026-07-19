@@ -195,7 +195,8 @@ with seed_contents as (
       ('donjon2', 'Donjon 2', 'Donjon d''equipement 2', 13, 50, 'gear-raid', 'Raid d''equipement', 10),
       ('donjon3', 'Donjon 3', 'Donjon d''equipement 3', 13, 60, 'gear-raid', 'Raid d''equipement', 10),
       ('dragon-chasm', 'Gouffre du dragon', 'Boss de guilde - Gouffre du dragon', 8, 10, 'guild-boss', 'Boss de guilde', 20),
-      ('titan-ruins', 'Ruine de titan', 'Boss de guilde - Ruine de titan', 4, 20, 'guild-boss', 'Boss de guilde', 20)
+      ('titan-ruins', 'Ruine de titan', 'Boss de guilde - Ruine de titan', 4, 20, 'guild-boss', 'Boss de guilde', 20),
+      ('immortal-codex', 'Codex immortel', 'Codex immortel', 8, 10, 'immortal-codex', 'Codex immortel', 30)
   ) as value_rows(slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order)
 ),
 upserted_contents as (
@@ -248,7 +249,15 @@ stage_labels as (
       ('titan-ruins', 1, 'Apocalypse 1'),
       ('titan-ruins', 2, 'Apocalypse 2'),
       ('titan-ruins', 3, 'Matrice 1 - Magique'),
-      ('titan-ruins', 4, 'Matrice 1 - Physique')
+      ('titan-ruins', 4, 'Matrice 1 - Physique'),
+      ('immortal-codex', 1, 'L''empereur de l''Inferno'),
+      ('immortal-codex', 2, 'Juge de givre'),
+      ('immortal-codex', 3, 'Conquérant'),
+      ('immortal-codex', 4, 'Titan des friches'),
+      ('immortal-codex', 5, 'Seigneur de Styx'),
+      ('immortal-codex', 6, 'Maelström'),
+      ('immortal-codex', 7, 'Cauchemar fantasmatique'),
+      ('immortal-codex', 8, 'Mère des corbeaux')
   ) as value_rows(slug, stage_number, stage_name)
 )
 insert into public.pve_content_stages (

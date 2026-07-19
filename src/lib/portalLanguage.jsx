@@ -391,6 +391,7 @@ const PORTAL_TRANSLATIONS = {
   "pve.library": "PVE library",
   "pve.category.gearRaid": "Gear raids",
   "pve.category.guildBoss": "Guild boss",
+  "pve.category.immortalCodex": "Immortal codex",
   "pve.description": "Centralize useful YouTube videos for clearing PVE content.",
   "pve.addContent": "Add content",
   "pve.contentName": "Content name",

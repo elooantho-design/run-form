@@ -203,11 +203,22 @@ const pveContentBlueprints = [
     categoryName: "Boss de guilde",
     categorySortOrder: 20,
   },
+  {
+    slug: "immortal-codex",
+    name: "Codex immortel",
+    description: "Codex immortel",
+    stageCount: 8,
+    sortOrder: 10,
+    categorySlug: "immortal-codex",
+    categoryName: "Codex immortel",
+    categorySortOrder: 30,
+  },
 ];
 
 const pveCategoryTranslationKeys = {
   "gear-raid": "pve.category.gearRaid",
   "guild-boss": "pve.category.guildBoss",
+  "immortal-codex": "pve.category.immortalCodex",
 };
 
 function getPveCategoryTranslationKey(categorySlug) {
