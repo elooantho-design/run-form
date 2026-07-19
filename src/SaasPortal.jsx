@@ -122,16 +122,72 @@ const adminNavigation = [
   { id: "player-access", label: "Acces joueurs", labelKey: "nav.playerAccess", icon: Lock, adminOnly: true },
 ];
 
+const pveContentBlueprints = [
+  {
+    slug: "gr1",
+    name: "GR1",
+    description: "Raid d'equipement 1",
+    stageCount: 24,
+    sortOrder: 10,
+    categorySlug: "gear-raid",
+    categoryName: "Raid d'equipement",
+  },
+  {
+    slug: "gr2",
+    name: "GR2",
+    description: "Raid d'equipement 2",
+    stageCount: 24,
+    sortOrder: 20,
+    categorySlug: "gear-raid",
+    categoryName: "Raid d'equipement",
+  },
+  {
+    slug: "gr3",
+    name: "GR3",
+    description: "Raid d'equipement 3",
+    stageCount: 24,
+    sortOrder: 30,
+    categorySlug: "gear-raid",
+    categoryName: "Raid d'equipement",
+  },
+];
+
 function normalizePveContentNavItem(row) {
   return {
-    id: row.id,
+    id: row.id || "",
+    navId: row.navId || row.slug || row.id || "",
     label: row.name || row.slug || "PVE",
     slug: row.slug || "",
     description: row.description || "",
-    stageCount: row.stage_count ?? 0,
-    sortOrder: row.sort_order ?? 9999,
+    categorySlug: row.categorySlug || row.category_slug || "gear-raid",
+    categoryName: row.categoryName || row.category_name || "Raid d'equipement",
+    stageCount: row.stage_count ?? row.stageCount ?? 0,
+    sortOrder: row.sort_order ?? row.sortOrder ?? 9999,
     isActive: row.is_active ?? true,
+    missingInDatabase: Boolean(row.missingInDatabase),
   };
+}
+
+function mergePveContentNavItems(rows = []) {
+  const rowsBySlug = new Map(rows.map((row) => [String(row.slug || "").toLowerCase(), row]));
+
+  return pveContentBlueprints.map((blueprint) => {
+    const row = rowsBySlug.get(blueprint.slug);
+
+    return normalizePveContentNavItem({
+      ...blueprint,
+      ...(row || {}),
+      slug: blueprint.slug,
+      name: row?.name || blueprint.name,
+      description: row?.description || blueprint.description,
+      stage_count: row?.stage_count ?? blueprint.stageCount,
+      sort_order: row?.sort_order ?? blueprint.sortOrder,
+      is_active: row?.is_active ?? true,
+      categorySlug: blueprint.categorySlug,
+      categoryName: blueprint.categoryName,
+      missingInDatabase: !row?.id,
+    });
+  });
 }
 
 const PORTAL_VIEW_MODE_STORAGE_KEY = "portalViewMode";
@@ -1274,11 +1330,12 @@ function PortalShell({ session, onLogout }) {
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const [pveNavOpen, setPveNavOpen] = useState(false);
+  const [pveGearRaidNavOpen, setPveGearRaidNavOpen] = useState(false);
   const [viewMode, setViewMode] = useState(getInitialPortalViewMode);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [portalLicense, setPortalLicense] = useState(null);
   const [portalLicenseLoaded, setPortalLicenseLoaded] = useState(false);
-  const [pveContents, setPveContents] = useState([]);
+  const [pveContents, setPveContents] = useState(() => mergePveContentNavItems([]));
   const [pveContentsLoaded, setPveContentsLoaded] = useState(false);
   const [editRunInitialId, setEditRunInitialId] = useState("");
   const loggedTabViewsRef = useRef(new Set());
@@ -1336,8 +1393,17 @@ function PortalShell({ session, onLogout }) {
         }),
     [pveContents],
   );
+  const gearRaidPveNavigation = useMemo(
+    () => visiblePveNavigation.filter((item) => item.categorySlug === "gear-raid"),
+    [visiblePveNavigation],
+  );
   const activePveContentId = active.startsWith("pve:") ? active.slice(4) : "";
-  const activePveItem = visiblePveNavigation.find((item) => String(item.id) === String(activePveContentId));
+  const activePveItem = visiblePveNavigation.find(
+    (item) =>
+      String(item.id) === String(activePveContentId) ||
+      String(item.navId) === String(activePveContentId) ||
+      String(item.slug) === String(activePveContentId),
+  );
   const activePveTab = active === "pve" || active.startsWith("pve:");
   const mobileQuickNavigation = useMemo(
     () => [
@@ -1346,7 +1412,7 @@ function PortalShell({ session, onLogout }) {
         ? [
             { id: "pve", label: "PVE", labelKey: "nav.pve", icon: BookOpen },
             ...visiblePveNavigation.map((item) => ({
-              id: `pve:${item.id}`,
+              id: `pve:${item.navId}`,
               label: item.label,
               labelKey: null,
               icon: Play,
@@ -1453,12 +1519,12 @@ function PortalShell({ session, onLogout }) {
         if (error.code !== "42P01") {
           console.error("[pve-contents]", error);
         }
-        setPveContents([]);
+        setPveContents(mergePveContentNavItems([]));
         setPveContentsLoaded(true);
         return;
       }
 
-      setPveContents((data || []).map(normalizePveContentNavItem));
+      setPveContents(mergePveContentNavItems(data || []));
       setPveContentsLoaded(true);
     }
 
@@ -1489,7 +1555,10 @@ function PortalShell({ session, onLogout }) {
   }, [activeAdminItem]);
 
   useEffect(() => {
-    if (activePveTab) setPveNavOpen(true);
+    if (activePveTab) {
+      setPveNavOpen(true);
+      setPveGearRaidNavOpen(true);
+    }
   }, [activePveTab]);
 
   useEffect(() => {
@@ -1588,8 +1657,9 @@ function PortalShell({ session, onLogout }) {
             onClick={() => {
               setPveNavOpen((value) => !value);
               if (!activePveTab) {
-                const firstContent = visiblePveNavigation[0];
-                setActive(firstContent ? `pve:${firstContent.id}` : "pve");
+                const firstContent = gearRaidPveNavigation[0] || visiblePveNavigation[0];
+                setActive(firstContent ? `pve:${firstContent.navId}` : "pve");
+                setPveGearRaidNavOpen(true);
               }
             }}
             className={`flex w-full items-center gap-3 rounded-xl px-3 ${
@@ -1608,22 +1678,49 @@ function PortalShell({ session, onLogout }) {
 
           {pveNavOpen ? (
             <div className="mt-1 space-y-1 rounded-xl border border-zinc-800 bg-zinc-950/80 p-1">
-              {visiblePveNavigation.length ? (
-                visiblePveNavigation.map((item) => {
-                  const selected = active === `pve:${item.id}`;
+              {gearRaidPveNavigation.length ? (
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPveGearRaidNavOpen((value) => !value);
+                      if (!activePveTab) {
+                        const firstContent = gearRaidPveNavigation[0];
+                        if (firstContent) setActive(`pve:${firstContent.navId}`);
+                      }
+                    }}
+                    className={adminItemClass(activePveItem?.categorySlug === "gear-raid")}
+                    aria-expanded={pveGearRaidNavOpen}
+                  >
+                    <BookOpen className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t("pve.category.gearRaid", "Raid d'equipement")}
+                    </span>
+                    <ChevronRight
+                      className={`h-4 w-4 shrink-0 transition-transform ${pveGearRaidNavOpen ? "rotate-90" : ""}`}
+                    />
+                  </button>
 
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => selectTab(`pve:${item.id}`)}
-                      className={adminItemClass(selected)}
-                    >
-                      <Play className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                    </button>
-                  );
-                })
+                  {pveGearRaidNavOpen ? (
+                    <div className="space-y-1 pl-4">
+                      {gearRaidPveNavigation.map((item) => {
+                        const selected = active === `pve:${item.navId}`;
+
+                        return (
+                          <button
+                            key={item.navId}
+                            type="button"
+                            onClick={() => selectTab(`pve:${item.navId}`)}
+                            className={adminItemClass(selected)}
+                          >
+                            <Play className="h-4 w-4 shrink-0" />
+                            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               ) : (
                 <button
                   type="button"
@@ -1863,22 +1960,6 @@ function PortalShell({ session, onLogout }) {
               session={session}
               contents={visiblePveNavigation}
               selectedContentId={activePveContentId}
-              onContentCreated={(content) => {
-                setPveContents((previous) => [
-                  ...previous.filter((item) => String(item.id) !== String(content.id)),
-                  {
-                    id: content.id,
-                    label: content.name,
-                    slug: content.slug,
-                    description: content.description,
-                    stageCount: content.stageCount,
-                    sortOrder: content.sortOrder,
-                    isActive: content.isActive,
-                  },
-                ]);
-                setActive(`pve:${content.id}`);
-                setPveNavOpen(true);
-              }}
             />
           ) : null}
           {active === "launcher" ? <LauncherView session={session} /> : null}

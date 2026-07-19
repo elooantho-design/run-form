@@ -1,24 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BookOpen, ExternalLink, Plus, RefreshCw, Search, Youtube } from "lucide-react";
+import { BookOpen, ExternalLink, RefreshCw, Search, Youtube } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { usePortalLanguage } from "@/lib/portalLanguage";
-
-function isAdminSession(session) {
-  const role = String(session?.role || "").trim().toLowerCase();
-  return role === "admin" || role === "leader";
-}
-
-function slugifyContentName(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 function extractYoutubeVideoId(value) {
   const raw = String(value || "").trim();
@@ -64,13 +49,16 @@ function formatDate(value) {
 
 function normalizeContent(row) {
   return {
-    id: row.id,
+    id: row.id || "",
+    navId: row.navId || row.slug || row.id || "",
     name: row.name || row.label || "",
     slug: row.slug || "",
     description: row.description || "",
+    categoryName: row.categoryName || row.category_name || "",
     stageCount: row.stage_count ?? row.stageCount ?? 0,
     sortOrder: row.sort_order ?? row.sortOrder ?? 9999,
     isActive: row.is_active ?? row.isActive ?? true,
+    missingInDatabase: Boolean(row.missingInDatabase),
   };
 }
 
@@ -104,19 +92,15 @@ export default function PveLibraryTab({
   session,
   contents = [],
   selectedContentId = "",
-  onContentCreated,
 }) {
   const { t } = usePortalLanguage();
-  const isAdminUser = isAdminSession(session);
   const [localContents, setLocalContents] = useState(contents.map(normalizeContent));
   const [selectedStageId, setSelectedStageId] = useState("");
   const [stages, setStages] = useState([]);
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(false);
   const [savingVideo, setSavingVideo] = useState(false);
-  const [savingContent, setSavingContent] = useState(false);
   const [videoFormOpen, setVideoFormOpen] = useState(false);
-  const [contentFormOpen, setContentFormOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [videoDraft, setVideoDraft] = useState({
@@ -124,11 +108,6 @@ export default function PveLibraryTab({
     title: "",
     notes: "",
     stageIds: [],
-  });
-  const [contentDraft, setContentDraft] = useState({
-    name: "",
-    description: "",
-    stageCount: 24,
   });
 
   useEffect(() => {
@@ -153,7 +132,12 @@ export default function PveLibraryTab({
 
   const selectedContent = useMemo(() => {
     if (selectedContentId) {
-      const found = sortedContents.find((content) => String(content.id) === String(selectedContentId));
+      const found = sortedContents.find(
+        (content) =>
+          String(content.id) === String(selectedContentId) ||
+          String(content.navId) === String(selectedContentId) ||
+          String(content.slug) === String(selectedContentId),
+      );
       if (found) return found;
     }
 
@@ -192,6 +176,14 @@ export default function PveLibraryTab({
     if (!selectedContent?.id) {
       setStages([]);
       setVideos([]);
+      setErrorMessage(
+        selectedContent
+          ? t(
+              "pve.contentMissing",
+              "Ce contenu PVE n'est pas encore cree dans Supabase. Relance le script create_pve_library.sql.",
+            )
+          : "",
+      );
       return;
     }
 
@@ -351,72 +343,7 @@ export default function PveLibraryTab({
     await loadContentData();
   };
 
-  const createContent = async (event) => {
-    event.preventDefault();
-    if (!isAdminUser || savingContent) return;
-
-    const cleanName = contentDraft.name.trim();
-    const stageCount = Math.max(1, Math.min(60, Number(contentDraft.stageCount) || 1));
-    const slug = slugifyContentName(cleanName);
-
-    if (!cleanName || !slug) {
-      setErrorMessage(t("pve.contentNameRequired", "Renseigne un nom de contenu."));
-      return;
-    }
-
-    setSavingContent(true);
-    setErrorMessage("");
-    setMessage("");
-
-    const nextSortOrder =
-      sortedContents.reduce((max, content) => Math.max(max, Number(content.sortOrder) || 0), 0) + 10;
-
-    const { data: content, error: contentError } = await supabase
-      .from("pve_contents")
-      .insert({
-        slug,
-        name: cleanName,
-        description: contentDraft.description.trim() || null,
-        stage_count: stageCount,
-        sort_order: nextSortOrder,
-        is_active: true,
-        created_by_member_id: session?.memberId || session?.id || null,
-        created_by_name: session?.watcherName || session?.name || "",
-      })
-      .select("id, slug, name, description, stage_count, sort_order, is_active")
-      .single();
-
-    if (contentError) {
-      setErrorMessage(contentError.message || t("pve.createContentError", "Creation du contenu impossible."));
-      setSavingContent(false);
-      return;
-    }
-
-    const { error: stagesError } = await supabase.from("pve_content_stages").insert(
-      Array.from({ length: stageCount }, (_, index) => ({
-        content_id: content.id,
-        stage_number: index + 1,
-        name: `${t("pve.stage", "Niveau")} ${index + 1}`,
-        sort_order: index + 1,
-      })),
-    );
-
-    if (stagesError) {
-      setErrorMessage(stagesError.message || t("pve.createContentError", "Creation du contenu impossible."));
-      setSavingContent(false);
-      return;
-    }
-
-    const normalizedContent = normalizeContent(content);
-    setLocalContents((previous) => [...previous, normalizedContent]);
-    setContentDraft({ name: "", description: "", stageCount: 24 });
-    setContentFormOpen(false);
-    setMessage(t("pve.contentCreated", "Contenu PVE cree."));
-    setSavingContent(false);
-    onContentCreated?.(normalizedContent);
-  };
-
-  if (!selectedContent && !isAdminUser) {
+  if (!selectedContent) {
     return (
       <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-zinc-400">
         {t("pve.noContent", "Aucun contenu PVE disponible pour le moment.")}
@@ -452,65 +379,8 @@ export default function PveLibraryTab({
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             {t("common.refresh", "Rafraichir")}
           </Button>
-
-          {isAdminUser ? (
-            <Button
-              type="button"
-              onClick={() => setContentFormOpen((value) => !value)}
-              className="rounded-xl bg-emerald-600 text-white hover:bg-emerald-500"
-            >
-              <Plus className="h-4 w-4" />
-              {t("pve.addContent", "Ajouter un contenu")}
-            </Button>
-          ) : null}
         </div>
       </div>
-
-      {contentFormOpen && isAdminUser ? (
-        <form
-          onSubmit={createContent}
-          className="grid gap-3 rounded-2xl border border-emerald-900/60 bg-emerald-950/20 p-4 md:grid-cols-[minmax(0,1fr)_130px_auto]"
-        >
-          <label className="text-sm font-medium text-zinc-300">
-            {t("pve.contentName", "Nom du contenu")}
-            <input
-              type="text"
-              value={contentDraft.name}
-              onChange={(event) => setContentDraft((previous) => ({ ...previous, name: event.target.value }))}
-              placeholder="GR2, GR3, Guild Boss..."
-              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
-            />
-          </label>
-
-          <label className="text-sm font-medium text-zinc-300">
-            {t("pve.stageCount", "Niveaux")}
-            <input
-              type="number"
-              min="1"
-              max="60"
-              value={contentDraft.stageCount}
-              onChange={(event) => setContentDraft((previous) => ({ ...previous, stageCount: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
-            />
-          </label>
-
-          <div className="flex items-end">
-            <Button type="submit" disabled={savingContent} className="w-full rounded-xl bg-emerald-600 text-white hover:bg-emerald-500">
-              {savingContent ? t("common.saving", "Sauvegarde...") : t("common.save", "Sauvegarder")}
-            </Button>
-          </div>
-
-          <label className="text-sm font-medium text-zinc-300 md:col-span-3">
-            {t("common.description", "Description")}
-            <input
-              type="text"
-              value={contentDraft.description}
-              onChange={(event) => setContentDraft((previous) => ({ ...previous, description: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
-            />
-          </label>
-        </form>
-      ) : null}
 
       {message ? (
         <div className="rounded-xl border border-emerald-700 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-200">
