@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BookOpen, Edit3, ExternalLink, RefreshCw, Search, Trash2, Youtube, X } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Edit3, ExternalLink, RefreshCw, Search, Trash2, Youtube, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
@@ -180,6 +180,129 @@ function normalizeCreator(row) {
 
 function sortCreators(creators) {
   return [...creators].sort((left, right) => left.name.localeCompare(right.name, "fr", { sensitivity: "base" }));
+}
+
+function CreatorAvatar({ creator = null, label = "" }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const name = String(creator?.name || label || "").trim();
+  const avatarUrl = String(creator?.avatarUrl || "").trim();
+  const initial = name ? name.charAt(0).toUpperCase() : "-";
+
+  if (avatarUrl && !imageFailed) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        loading="lazy"
+        onError={() => setImageFailed(true)}
+        className="h-8 w-8 shrink-0 rounded-full border border-zinc-700 bg-zinc-900 object-cover"
+      />
+    );
+  }
+
+  return (
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-xs font-bold text-zinc-400">
+      {initial}
+    </span>
+  );
+}
+
+function PveCreatorSelect({
+  creators = [],
+  value = "",
+  onChange,
+  t,
+  includeSpecialModes = false,
+  accent = "red",
+}) {
+  const [open, setOpen] = useState(false);
+  const accentFocusClass = accent === "amber" ? "focus:border-amber-500" : "focus:border-red-500";
+  const accentRingClass = accent === "amber" ? "border-amber-500/60 bg-amber-500/10" : "border-red-500/60 bg-red-500/10";
+  const normalizedValue = String(value || "");
+  const options = [
+    { value: "", label: t("pve.creatorNone", "Aucun createur lie"), kind: "empty" },
+    ...creators.map((creator) => ({ value: creator.id, label: creator.name, creator, kind: "creator" })),
+    ...(includeSpecialModes
+      ? [
+          { value: CREATOR_MODE_UNLISTED, label: t("pve.creatorUnlisted", "Createur non repertorie"), kind: "special" },
+          { value: CREATOR_MODE_NEW, label: t("pve.creatorCreateNew", "Creer un createur officiel"), kind: "special" },
+        ]
+      : []),
+  ];
+  const selectedOption = options.find((option) => option.value === normalizedValue) || options[0];
+
+  const selectOption = (nextValue) => {
+    onChange?.(nextValue);
+    setOpen(false);
+  };
+
+  return (
+    <div
+      className="relative mt-1"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setOpen(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((previous) => !previous)}
+        className={`flex w-full items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-left text-sm text-white outline-none ${accentFocusClass}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="flex min-w-0 items-center gap-3">
+          {selectedOption.creator ? (
+            <CreatorAvatar creator={selectedOption.creator} />
+          ) : (
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-xs font-bold text-zinc-500">
+              {selectedOption.kind === "empty" ? "-" : "+"}
+            </span>
+          )}
+          <span className="truncate">{selectedOption.label}</span>
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-zinc-400 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open ? (
+        <div
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-40 mt-2 max-h-80 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-1 shadow-2xl shadow-black/60"
+        >
+          {options.map((option) => {
+            const isSelected = option.value === normalizedValue;
+
+            return (
+              <button
+                key={`creator-option-${option.value || "none"}`}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectOption(option.value)}
+                className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition ${
+                  isSelected ? accentRingClass : "border-transparent hover:border-zinc-700 hover:bg-zinc-900"
+                }`}
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  {option.creator ? (
+                    <CreatorAvatar creator={option.creator} />
+                  ) : (
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-xs font-bold text-zinc-500">
+                      {option.kind === "empty" ? "-" : "+"}
+                    </span>
+                  )}
+                  <span className="truncate text-zinc-100">{option.label}</span>
+                </span>
+                {isSelected ? <Check className="h-4 w-4 shrink-0 text-emerald-400" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function buildSuggestedCreatorGroupKey(value) {
@@ -1445,20 +1568,13 @@ export default function PveLibraryTab({
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <label className="text-sm font-medium text-zinc-300">
                       {t("pve.assignExistingCreator", "Associer a un createur existant")}
-                      <select
+                      <PveCreatorSelect
                         value={draft.existingCreatorId}
-                        onChange={(event) =>
-                          updateCreatorReviewDraft(group.key, { existingCreatorId: event.target.value })
-                        }
-                        className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
-                      >
-                        <option value="">{t("pve.creatorNone", "Aucun createur lie")}</option>
-                        {creators.map((creator) => (
-                          <option key={`review-creator-${creator.id}`} value={creator.id}>
-                            {creator.name}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(nextValue) => updateCreatorReviewDraft(group.key, { existingCreatorId: nextValue })}
+                        creators={creators}
+                        t={t}
+                        accent="amber"
+                      />
                     </label>
                     <div className="flex items-end">
                       <Button
@@ -1707,7 +1823,7 @@ export default function PveLibraryTab({
                   <div className="space-y-3 rounded-2xl border border-zinc-800 bg-zinc-950/70 p-3">
                     <label className="text-sm font-medium text-zinc-300">
                       {t("pve.creatorSelect", "Createur YouTube")}
-                      <select
+                      <PveCreatorSelect
                         value={
                           videoDraft.creatorMode === CREATOR_MODE_UNLISTED
                             ? CREATOR_MODE_UNLISTED
@@ -1751,21 +1867,10 @@ export default function PveLibraryTab({
                             };
                           });
                         }}
-                        className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
-                      >
-                        <option value="">{t("pve.creatorNone", "Aucun createur lie")}</option>
-                        {creators.map((creator) => (
-                          <option key={creator.id} value={creator.id}>
-                            {creator.name}
-                          </option>
-                        ))}
-                        <option value={CREATOR_MODE_UNLISTED}>
-                          {t("pve.creatorUnlisted", "Createur non repertorie")}
-                        </option>
-                        <option value={CREATOR_MODE_NEW}>
-                          {t("pve.creatorCreateNew", "Creer un createur officiel")}
-                        </option>
-                      </select>
+                        creators={creators}
+                        t={t}
+                        includeSpecialModes
+                      />
                     </label>
 
                     {videoDraft.creatorMode === CREATOR_MODE_NEW ? (
