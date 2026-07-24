@@ -236,6 +236,36 @@ const pveContentBlueprints = [
     categorySortOrder: 50,
   },
   {
+    slug: "campaign-normal",
+    name: "Normal",
+    description: "Campagne normale",
+    stageCount: 10,
+    sortOrder: 10,
+    categorySlug: "campaign",
+    categoryName: "Campagne",
+    categorySortOrder: 60,
+  },
+  {
+    slug: "campaign-hard",
+    name: "Difficile",
+    description: "Campagne difficile",
+    stageCount: 9,
+    sortOrder: 20,
+    categorySlug: "campaign",
+    categoryName: "Campagne",
+    categorySortOrder: 60,
+  },
+  {
+    slug: "campaign-expert",
+    name: "Expert",
+    description: "Campagne expert",
+    stageCount: 9,
+    sortOrder: 30,
+    categorySlug: "campaign",
+    categoryName: "Campagne",
+    categorySortOrder: 60,
+  },
+  {
     slug: "dragon-chasm",
     name: "Gouffre du dragon",
     description: "Boss de guilde - Gouffre du dragon",
@@ -375,6 +405,7 @@ const pveCategoryTranslationKeys = {
   "immortal-codex": "pve.category.immortalCodex",
   "illusion-tower": "pve.category.illusionTower",
   arena: "pve.category.arena",
+  campaign: "pve.category.campaign",
 };
 
 function getPveCategoryTranslationKey(categorySlug) {
