@@ -266,6 +266,17 @@ const pveContentBlueprints = [
     categorySortOrder: 60,
   },
   {
+    slug: "malrik",
+    name: "Malrik",
+    description: "Pierres de Malrik",
+    stageCount: 1,
+    sortOrder: 10,
+    categorySlug: "malrik",
+    categoryName: "Malrik",
+    categorySortOrder: 70,
+    directNav: true,
+  },
+  {
     slug: "dragon-chasm",
     name: "Gouffre du dragon",
     description: "Boss de guilde - Gouffre du dragon",
@@ -406,6 +417,7 @@ const pveCategoryTranslationKeys = {
   "illusion-tower": "pve.category.illusionTower",
   arena: "pve.category.arena",
   campaign: "pve.category.campaign",
+  malrik: "pve.category.malrik",
 };
 
 function getPveCategoryTranslationKey(categorySlug) {

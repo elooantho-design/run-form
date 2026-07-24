@@ -379,7 +379,8 @@ with seed_contents as (
       ('arena-single-target', 'Monocible', 'Arène - Monocible', 1, 30, 'arena', 'Arène', 50),
       ('campaign-normal', 'Normal', 'Campagne normale', 10, 10, 'campaign', 'Campagne', 60),
       ('campaign-hard', 'Difficile', 'Campagne difficile', 9, 20, 'campaign', 'Campagne', 60),
-      ('campaign-expert', 'Expert', 'Campagne expert', 9, 30, 'campaign', 'Campagne', 60)
+      ('campaign-expert', 'Expert', 'Campagne expert', 9, 30, 'campaign', 'Campagne', 60),
+      ('malrik', 'Malrik', 'Pierres de Malrik', 1, 10, 'malrik', 'Malrik', 70)
   ) as value_rows(slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order)
 ),
 upserted_contents as (
@@ -474,6 +475,7 @@ stage_labels as (
       ('campaign-expert', 7, 'Chapitre 7'),
       ('campaign-expert', 8, 'Chapitre 8'),
       ('campaign-expert', 9, 'Chapitre 9'),
+      ('malrik', 1, 'Malrik'),
       ('illusion-tower', 41, 'Chambre cachée 1'),
       ('illusion-tower', 42, 'Chambre cachée 2'),
       ('illusion-tower', 43, 'Chambre cachée 3'),
