@@ -15,6 +15,7 @@ const MAX_MEMBER_ROWS = 600;
 const MAX_SUGGESTIONS = 20;
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFENSE_FOLLOWUP_TABLE = "guild_defense_discord_followups";
+const COMMUNITY_REQUESTS_TABLE = "portal_community_access_requests";
 const TODO_STATUS = "\u00c0 faire";
 const VERIFY_STATUS = "\u00c0 v\u00e9rifier";
 const VALID_STATUS = "Valid\u00e9";
@@ -22,6 +23,9 @@ const DISCORD_STATUS_TODO = "\u274c";
 const DISCORD_STATUS_VERIFY = "\u26a0\uFE0F";
 const DISCORD_STATUS_DONE = "\u2705";
 const DEFENSE_STATUSES = new Set([TODO_STATUS, VERIFY_STATUS, VALID_STATUS]);
+const COMMUNITY_ROLES = new Set(["community_member", "content_creator"]);
+const COMMUNITY_STATUSES = new Set(["active", "inactive"]);
+const COMMUNITY_REQUEST_STATUSES = new Set(["pending", "accepted", "refused"]);
 
 function sendJson(res, status, payload) {
   res.statusCode = status;
@@ -48,6 +52,25 @@ function isAdminRole(role) {
 
 function isLeaderRole(role) {
   return normalizeText(role) === "leader";
+}
+
+function isCommunityRole(role) {
+  return COMMUNITY_ROLES.has(normalizeText(role));
+}
+
+function normalizeCommunityRole(role) {
+  const normalized = normalizeText(role);
+  return COMMUNITY_ROLES.has(normalized) ? normalized : "community_member";
+}
+
+function normalizeCommunityStatus(status) {
+  const normalized = normalizeText(status);
+  return COMMUNITY_STATUSES.has(normalized) ? normalized : "active";
+}
+
+function normalizeCommunityRequestStatus(status) {
+  const normalized = normalizeText(status);
+  return COMMUNITY_REQUEST_STATUSES.has(normalized) ? normalized : "pending";
 }
 
 function normalizeGuildCode(value) {
@@ -78,6 +101,39 @@ function serializeMember(member) {
     discordId: member.discord_id || "",
     guildCode: member.guild_code || "",
     role: member.role || "Joueur",
+  };
+}
+
+function serializeCommunityMember(member) {
+  return {
+    id: member.id,
+    watcherName: member.watcher_name || "",
+    name: getMemberName(member),
+    discordId: member.discord_id || "",
+    preferredLanguage: member.preferred_language || "fr",
+    role: normalizeCommunityRole(member.role),
+    status: normalizeCommunityStatus(member.community_status),
+    guildCode: member.guild_code || "",
+    accessType: member.community_access_type || (isCommunityRole(member.role) ? "community" : ""),
+    createdAt: member.created_at || null,
+  };
+}
+
+function serializeCommunityRequest(row) {
+  return {
+    id: row.id,
+    discordContact: row.discord_contact || "",
+    preferredLanguage: row.preferred_language || "fr",
+    guildName: row.guild_name || "",
+    message: row.message || "",
+    status: normalizeCommunityRequestStatus(row.status),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+    handledAt: row.handled_at || null,
+    handledByMemberId: row.handled_by_member_id || null,
+    handledByName: row.handled_by_name || "",
+    createdMemberId: row.created_member_id || null,
+    metadata: row.metadata || {},
   };
 }
 
@@ -146,6 +202,66 @@ async function requireAdminById(actorMemberId) {
   }
 
   return { admin: data };
+}
+
+async function requireLeaderById(actorMemberId) {
+  if (!actorMemberId) {
+    return { error: "Session leader manquante.", status: 401 };
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select("id, role, discord_id, watcher_name, guild_code")
+    .eq("id", actorMemberId)
+    .maybeSingle();
+
+  if (error) {
+    return { error: error.message || "Verification leader impossible.", status: 500 };
+  }
+
+  if (!data || !isLeaderRole(data.role)) {
+    return { error: "Acces leader refuse.", status: 403 };
+  }
+
+  return { leader: data };
+}
+
+async function initializeMemberData(memberId, memberName) {
+  const warnings = [];
+  const { data: champions, error: championsError } = await supabase
+    .from("champions")
+    .select("id, name")
+    .order("name", { ascending: true });
+
+  if (championsError) {
+    warnings.push("Initialisation des eveils impossible.");
+  } else {
+    const awakeningRows = (champions || [])
+      .filter((champion) => champion.id)
+      .map((champion) => ({
+        member_id: memberId,
+        champion_id: champion.id,
+        awakening_level: -1,
+      }));
+
+    if (awakeningRows.length) {
+      const { error } = await supabase.from("member_awakenings").insert(awakeningRows);
+      if (error) warnings.push("Initialisation des eveils impossible.");
+    }
+  }
+
+  const pbRows = [1, 2, 3, 4, 5].map((slotIndex) => ({
+    member_id: memberId,
+    member_name: memberName,
+    slot_index: slotIndex,
+    pb_raw: 0,
+    champion_id: null,
+  }));
+
+  const { error: pbError } = await supabase.from("member_pb_entries").insert(pbRows);
+  if (pbError) warnings.push("Initialisation des PB impossible.");
+
+  return warnings;
 }
 
 function canAdminManageTarget(admin, target) {
@@ -519,6 +635,478 @@ async function handleReset(body, res) {
     member: serializeMember(target),
     temporaryPassword,
   });
+}
+
+async function handleExternalAccountRequest(body, req, res) {
+  const discordContact = cleanText(body.discordContact || body.discord_contact || body.discordId || body.discord_id);
+  const preferredLanguage = cleanText(body.preferredLanguage || body.preferred_language || body.language || "fr") || "fr";
+  const guildName = cleanText(body.guildName || body.guild_name || body.guild || "");
+
+  if (discordContact.length < 2) {
+    sendJson(res, 400, { error: "Contact Discord obligatoire." });
+    return;
+  }
+
+  if (discordContact.length > 120 || guildName.length > 120) {
+    sendJson(res, 400, { error: "Demande trop longue." });
+    return;
+  }
+
+  const cleanLanguage = ["fr", "en"].includes(preferredLanguage.toLowerCase())
+    ? preferredLanguage.toLowerCase()
+    : "fr";
+
+  let existingMember = null;
+  if (/^\d{15,25}$/.test(discordContact)) {
+    const { data, error } = await supabase
+      .from("guild_members")
+      .select("id, watcher_name, discord_id, guild_code")
+      .eq("discord_id", discordContact)
+      .maybeSingle();
+
+    if (error) {
+      sendJson(res, 500, { error: error.message || "Verification du compte impossible." });
+      return;
+    }
+
+    existingMember = data || null;
+  }
+
+  if (existingMember) {
+    sendJson(res, 409, {
+      error: "Un compte existe deja pour cet ID Discord. Utilise mot de passe oublie ou contacte un admin.",
+      member: serializeMember(existingMember),
+    });
+    return;
+  }
+
+  const { data: members, error: leadersError } = await supabase
+    .from("guild_members")
+    .select("id, role, watcher_name, discord_id, guild_code")
+    .limit(MAX_MEMBER_ROWS);
+
+  if (leadersError) {
+    sendJson(res, 500, { error: leadersError.message || "Chargement leaders impossible." });
+    return;
+  }
+
+  const leaders = (members || []).filter((member) => isLeaderRole(member.role) && member.discord_id);
+  const sourceIp = cleanText(
+    req.headers["x-forwarded-for"] ||
+      req.headers["x-real-ip"] ||
+      req.socket?.remoteAddress ||
+      ""
+  ).split(",")[0] || "";
+  const summary = `Nouvelle demande de compte externe : ${discordContact}`;
+
+  const { data: requestRow, error: requestError } = await supabase
+    .from(COMMUNITY_REQUESTS_TABLE)
+    .insert({
+      discord_contact: discordContact,
+      preferred_language: cleanLanguage,
+      guild_name: guildName || null,
+      status: "pending",
+      source_ip: sourceIp || null,
+      metadata: {
+        source: "portal_login",
+      },
+    })
+    .select("id, created_at")
+    .maybeSingle();
+
+  if (requestError) {
+    sendJson(res, 500, { error: requestError.message || "Enregistrement de la demande impossible." });
+    return;
+  }
+
+  const { data: logRow, error: logError } = await supabase
+    .from("portal_activity_logs")
+    .insert({
+      actor_name: "Demande externe",
+      target_name: discordContact,
+      action_type: "external_account_request",
+      entity_type: "external_access",
+      entity_id: discordContact,
+      summary,
+      metadata: {
+        requestId: requestRow?.id || null,
+        discordContact,
+        preferredLanguage: cleanLanguage,
+        guildName,
+        sourceIp,
+      },
+    })
+    .select("id, created_at")
+    .maybeSingle();
+
+  if (logError) {
+    sendJson(res, 500, { error: logError.message || "Enregistrement de la demande impossible." });
+    return;
+  }
+
+  const warnings = [];
+  const dmMessageIds = [];
+  const leaderMessage = [
+    "**Nouvelle demande de compte Portal**",
+    "",
+    `Contact Discord : ${discordContact}`,
+    `Langue : ${cleanLanguage.toUpperCase()}`,
+    `Guilde indiquee : ${guildName || "-"}`,
+    `Demande : ${requestRow?.id || "-"}`,
+    `Log Portal : ${logRow?.id || "-"}`,
+  ].join("\n");
+
+  for (const leader of leaders) {
+    try {
+      const sentIds = await sendDiscordDm(leader.discord_id, leaderMessage);
+      dmMessageIds.push(...sentIds.filter(Boolean));
+    } catch (discordError) {
+      warnings.push(
+        serializeDiscordWarning(discordError, {
+          type: "external_request_dm_failed",
+          leaderId: leader.id,
+          leaderName: getMemberName(leader),
+        })
+      );
+    }
+  }
+
+  if (!leaders.length) {
+    warnings.push({
+      type: "missing_leader_discord_id",
+      message: "Aucun leader avec ID Discord trouve pour recevoir le MP.",
+    });
+  }
+
+  if (dmMessageIds.length || warnings.length) {
+    await supabase
+      .from("portal_activity_logs")
+      .update({
+        metadata: {
+          discordContact,
+          requestId: requestRow?.id || null,
+          preferredLanguage: cleanLanguage,
+          guildName,
+          sourceIp,
+          dmMessageIds,
+          warnings,
+        },
+      })
+      .eq("id", logRow?.id);
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    requestId: requestRow?.id || null,
+    logId: logRow?.id || null,
+    notifiedLeaders: dmMessageIds.length,
+    warnings,
+  });
+}
+
+async function handleCommunityList(body, res) {
+  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
+  const leaderCheck = await requireLeaderById(actorMemberId);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  const [requestsResult, membersResult] = await Promise.all([
+    supabase
+      .from(COMMUNITY_REQUESTS_TABLE)
+      .select(
+        "id, created_at, updated_at, discord_contact, preferred_language, guild_name, message, status, handled_at, handled_by_member_id, handled_by_name, created_member_id, metadata",
+      )
+      .order("created_at", { ascending: false })
+      .limit(200),
+    supabase
+      .from("guild_members")
+      .select(
+        "id, watcher_name, discord_id, guild_code, role, created_at, preferred_language, community_access_type, community_status",
+      )
+      .is("guild_code", null)
+      .order("watcher_name", { ascending: true })
+      .limit(MAX_MEMBER_ROWS),
+  ]);
+
+  if (requestsResult.error) {
+    sendJson(res, 500, { error: requestsResult.error.message || "Chargement des demandes impossible." });
+    return;
+  }
+
+  if (membersResult.error) {
+    sendJson(res, 500, { error: membersResult.error.message || "Chargement des membres communaute impossible." });
+    return;
+  }
+
+  const members = (membersResult.data || []).filter(
+    (member) => member.community_access_type === "community" || isCommunityRole(member.role),
+  );
+
+  sendJson(res, 200, {
+    requests: (requestsResult.data || []).map(serializeCommunityRequest),
+    members: members.map(serializeCommunityMember),
+  });
+}
+
+async function handleCommunityUpdateRequest(body, res) {
+  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
+  const requestId = cleanText(body.requestId || body.request_id);
+  const nextStatus = normalizeCommunityRequestStatus(body.status);
+  const leaderCheck = await requireLeaderById(actorMemberId);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  if (!requestId) {
+    sendJson(res, 400, { error: "Demande manquante." });
+    return;
+  }
+
+  const updatePayload = {
+    status: nextStatus,
+    handled_at: nextStatus === "pending" ? null : new Date().toISOString(),
+    handled_by_member_id: nextStatus === "pending" ? null : leaderCheck.leader.id,
+    handled_by_name: nextStatus === "pending" ? null : getMemberName(leaderCheck.leader),
+  };
+
+  const { data, error } = await supabase
+    .from(COMMUNITY_REQUESTS_TABLE)
+    .update(updatePayload)
+    .eq("id", requestId)
+    .select(
+      "id, created_at, updated_at, discord_contact, preferred_language, guild_name, message, status, handled_at, handled_by_member_id, handled_by_name, created_member_id, metadata",
+    )
+    .maybeSingle();
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Mise a jour de la demande impossible." });
+    return;
+  }
+
+  if (!data) {
+    sendJson(res, 404, { error: "Demande introuvable." });
+    return;
+  }
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: leaderCheck.leader.id,
+    actor_name: getMemberName(leaderCheck.leader),
+    target_name: data.discord_contact || "",
+    action_type: "community_request_update",
+    entity_type: COMMUNITY_REQUESTS_TABLE,
+    entity_id: data.id,
+    summary: `${getMemberName(leaderCheck.leader)} a passe une demande communaute en ${nextStatus}`,
+    metadata: { status: nextStatus },
+  });
+
+  sendJson(res, 200, { request: serializeCommunityRequest(data) });
+}
+
+async function handleCommunityCreateMember(body, res) {
+  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
+  const requestId = cleanText(body.requestId || body.request_id);
+  const watcherName = cleanText(body.watcherName || body.watcher_name || body.name);
+  const discordId = cleanText(body.discordId || body.discord_id);
+  const role = normalizeCommunityRole(body.role);
+  const preferredLanguage = ["fr", "en"].includes(cleanText(body.preferredLanguage || body.preferred_language).toLowerCase())
+    ? cleanText(body.preferredLanguage || body.preferred_language).toLowerCase()
+    : "fr";
+  const leaderCheck = await requireLeaderById(actorMemberId);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  if (!watcherName || !discordId) {
+    sendJson(res, 400, { error: "Pseudo et ID Discord obligatoires." });
+    return;
+  }
+
+  if (watcherName.length > 80 || discordId.length > 120) {
+    sendJson(res, 400, { error: "Informations trop longues." });
+    return;
+  }
+
+  const { data: existingMember, error: existingError } = await supabase
+    .from("guild_members")
+    .select("id, watcher_name, discord_id, guild_code, role")
+    .eq("discord_id", discordId)
+    .maybeSingle();
+
+  if (existingError) {
+    sendJson(res, 500, { error: existingError.message || "Verification du compte impossible." });
+    return;
+  }
+
+  if (existingMember) {
+    sendJson(res, 409, {
+      error: "Un compte existe deja pour cet ID Discord.",
+      member: serializeMember(existingMember),
+    });
+    return;
+  }
+
+  const temporaryPassword = generatePassword();
+  const { data: member, error: insertError } = await supabase
+    .from("guild_members")
+    .insert({
+      watcher_name: watcherName,
+      discord_id: discordId,
+      guild_code: null,
+      role,
+      password: temporaryPassword,
+      assignment: "Communaut\u00e9",
+      status: "Actif",
+      awakening_status: "En attente",
+      defense_1: "\u2014",
+      defense_2: "\u2014",
+      community_access_type: "community",
+      community_status: "active",
+      preferred_language: preferredLanguage,
+    })
+    .select("id, watcher_name, discord_id, guild_code, role, created_at, preferred_language, community_access_type, community_status")
+    .maybeSingle();
+
+  if (insertError) {
+    sendJson(res, 500, { error: insertError.message || "Creation du membre communaute impossible." });
+    return;
+  }
+
+  const warnings = await initializeMemberData(member.id, watcherName);
+
+  let updatedRequest = null;
+  if (requestId) {
+    const { data: requestRow } = await supabase
+      .from(COMMUNITY_REQUESTS_TABLE)
+      .update({
+        status: "accepted",
+        handled_at: new Date().toISOString(),
+        handled_by_member_id: leaderCheck.leader.id,
+        handled_by_name: getMemberName(leaderCheck.leader),
+        created_member_id: member.id,
+      })
+      .eq("id", requestId)
+      .select(
+        "id, created_at, updated_at, discord_contact, preferred_language, guild_name, message, status, handled_at, handled_by_member_id, handled_by_name, created_member_id, metadata",
+      )
+      .maybeSingle();
+
+    updatedRequest = requestRow || null;
+  }
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: leaderCheck.leader.id,
+    actor_name: getMemberName(leaderCheck.leader),
+    target_member_id: member.id,
+    target_name: watcherName,
+    action_type: "community_member_create",
+    entity_type: "guild_members",
+    entity_id: member.id,
+    summary: `${getMemberName(leaderCheck.leader)} a cree le compte communaute de ${watcherName}`,
+    metadata: { role, preferredLanguage, requestId: requestId || null },
+  });
+
+  sendJson(res, 200, {
+    member: serializeCommunityMember(member),
+    request: updatedRequest ? serializeCommunityRequest(updatedRequest) : null,
+    temporaryPassword,
+    warnings,
+  });
+}
+
+async function handleCommunityUpdateMember(body, res) {
+  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
+  const memberId = cleanText(body.memberId || body.member_id);
+  const watcherName = cleanText(body.watcherName || body.watcher_name || body.name);
+  const discordId = cleanText(body.discordId || body.discord_id);
+  const role = normalizeCommunityRole(body.role);
+  const status = normalizeCommunityStatus(body.status || body.community_status);
+  const preferredLanguage = ["fr", "en"].includes(cleanText(body.preferredLanguage || body.preferred_language).toLowerCase())
+    ? cleanText(body.preferredLanguage || body.preferred_language).toLowerCase()
+    : "fr";
+  const leaderCheck = await requireLeaderById(actorMemberId);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  if (!memberId || !watcherName || !discordId) {
+    sendJson(res, 400, { error: "Membre, pseudo et ID Discord obligatoires." });
+    return;
+  }
+
+  const { data: target, error: targetError } = await supabase
+    .from("guild_members")
+    .select("id, watcher_name, discord_id, guild_code, role, community_access_type")
+    .eq("id", memberId)
+    .maybeSingle();
+
+  if (targetError) {
+    sendJson(res, 500, { error: targetError.message || "Chargement du membre impossible." });
+    return;
+  }
+
+  if (!target || target.guild_code || (target.community_access_type !== "community" && !isCommunityRole(target.role))) {
+    sendJson(res, 404, { error: "Membre communaute introuvable." });
+    return;
+  }
+
+  const { data: duplicate, error: duplicateError } = await supabase
+    .from("guild_members")
+    .select("id")
+    .eq("discord_id", discordId)
+    .neq("id", memberId)
+    .maybeSingle();
+
+  if (duplicateError) {
+    sendJson(res, 500, { error: duplicateError.message || "Verification ID Discord impossible." });
+    return;
+  }
+
+  if (duplicate) {
+    sendJson(res, 409, { error: "Cet ID Discord est deja utilise par un autre compte." });
+    return;
+  }
+
+  const { data: member, error: updateError } = await supabase
+    .from("guild_members")
+    .update({
+      watcher_name: watcherName,
+      discord_id: discordId,
+      role,
+      community_access_type: "community",
+      community_status: status,
+      preferred_language: preferredLanguage,
+    })
+    .eq("id", memberId)
+    .select("id, watcher_name, discord_id, guild_code, role, created_at, preferred_language, community_access_type, community_status")
+    .maybeSingle();
+
+  if (updateError) {
+    sendJson(res, 500, { error: updateError.message || "Mise a jour du membre impossible." });
+    return;
+  }
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: leaderCheck.leader.id,
+    actor_name: getMemberName(leaderCheck.leader),
+    target_member_id: member.id,
+    target_name: watcherName,
+    action_type: "community_member_update",
+    entity_type: "guild_members",
+    entity_id: member.id,
+    summary: `${getMemberName(leaderCheck.leader)} a modifie ${watcherName}`,
+    metadata: { role, status, preferredLanguage },
+  });
+
+  sendJson(res, 200, { member: serializeCommunityMember(member) });
 }
 
 async function handleUpdateDefenseStatus(body, res) {
@@ -976,6 +1564,31 @@ export default async function handler(req, res) {
 
     if (action === "reset") {
       await handleReset(body, res);
+      return;
+    }
+
+    if (action === "external-account-request") {
+      await handleExternalAccountRequest(body, req, res);
+      return;
+    }
+
+    if (action === "community-list") {
+      await handleCommunityList(body, res);
+      return;
+    }
+
+    if (action === "community-update-request") {
+      await handleCommunityUpdateRequest(body, res);
+      return;
+    }
+
+    if (action === "community-create-member") {
+      await handleCommunityCreateMember(body, res);
+      return;
+    }
+
+    if (action === "community-update-member") {
+      await handleCommunityUpdateMember(body, res);
       return;
     }
 

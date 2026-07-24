@@ -55,6 +55,7 @@ import RunAddTab from "@/components/RunAddTab";
 import RunEditTab from "@/components/RunEditTab";
 import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
+import CommunityMembersTab from "@/components/CommunityMembersTab";
 import PveLibraryTab from "@/components/PveLibraryTab";
 import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
@@ -94,6 +95,14 @@ import {
   buildPublicCalquesBaseUrl,
   buildPublicDownloadUrl,
 } from "@/lib/vpsAssets";
+import {
+  canShowPortalAdminItem,
+  canShowPortalHomeCard,
+  canShowPortalNavItem,
+  canShowPortalPve,
+  isPortalCommunityRole,
+  isPortalCommunitySession,
+} from "@/lib/portalPermissions";
 
 const navigation = [
   { id: "home", label: "Accueil", labelKey: "nav.home", icon: LayoutDashboard },
@@ -116,6 +125,7 @@ const adminNavigation = [
   { id: "templates", label: "Ajout heros", labelKey: "nav.templates", icon: PlusCircle, leaderOnly: true },
   { id: "guilds", label: "Guildes", labelKey: "nav.guilds", icon: Users, leaderOnly: true },
   { id: "billing", label: "Licences", labelKey: "nav.billing", icon: WalletCards, leaderOnly: true },
+  { id: "community-members", label: "Membres communaute", labelKey: "nav.communityMembers", icon: Users, leaderOnly: true },
   { id: "launcher", label: "Launcher", labelKey: "nav.launcher", icon: Bot },
   { id: "validation", label: "Validation", labelKey: "nav.validation", icon: SearchCheck },
   { id: "logs", label: "Logs", labelKey: "nav.logs", icon: Activity },
@@ -721,8 +731,10 @@ function isMissingPortalLicenseTable(error) {
 
 function buildPortalSession(member) {
   const watcherName = member?.watcher_name || member?.discord_id || "Joueur";
-  const guildCode = member?.guild_code || "G1";
   const role = member?.role || "Joueur";
+  const communityAccessType = member?.community_access_type || (isPortalCommunityRole(role) ? "community" : "");
+  const community = communityAccessType === "community" || isPortalCommunityRole(role);
+  const guildCode = community ? "COMMUNITY" : member?.guild_code || "G1";
   const admin = isAdminRole(role);
   const leader = isLeaderRole(role);
 
@@ -738,6 +750,14 @@ function buildPortalSession(member) {
     guild: guildCode,
     guildCode,
     guild_code: guildCode,
+    accessType: community ? "community" : "guild",
+    access_type: community ? "community" : "guild",
+    communityAccessType,
+    community_access_type: communityAccessType,
+    communityStatus: member?.community_status || (community ? "active" : ""),
+    community_status: member?.community_status || (community ? "active" : ""),
+    preferredLanguage: member?.preferred_language || "",
+    preferred_language: member?.preferred_language || "",
     isAdmin: admin,
     admin,
     isLeader: leader,
@@ -1133,6 +1153,7 @@ const LOGIN_HOTSPOTS = {
   remember: { x: 590, y: 706, w: 205, h: 34 },
   rememberBox: { x: 590, y: 707, w: 22, h: 22 },
   forgot: { x: 900, y: 706, w: 165, h: 34 },
+  createAccount: { x: 690, y: 718, w: 292, h: 34 },
   submit: { x: 594, y: 753, w: 460, h: 73 },
 };
 
@@ -1150,6 +1171,15 @@ function LoginPanel({ onLogin }) {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotError, setForgotError] = useState("");
   const [forgotResult, setForgotResult] = useState(null);
+  const [accountRequestOpen, setAccountRequestOpen] = useState(false);
+  const [accountRequestDraft, setAccountRequestDraft] = useState({
+    discordContact: "",
+    preferredLanguage: language,
+    guildName: "",
+  });
+  const [accountRequestLoading, setAccountRequestLoading] = useState(false);
+  const [accountRequestError, setAccountRequestError] = useState("");
+  const [accountRequestResult, setAccountRequestResult] = useState(null);
   const [viewport, setViewport] = useState(LOGIN_IMAGE_SIZE);
   const scrollRef = useRef(null);
 
@@ -1229,7 +1259,7 @@ function LoginPanel({ onLogin }) {
     try {
       const { data, error } = await supabase
         .from("guild_members")
-        .select("id, role, discord_id, watcher_name, guild_code")
+        .select("id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language")
         .eq("discord_id", cleanDiscordId)
         .eq("password", cleanPassword)
         .maybeSingle();
@@ -1238,6 +1268,14 @@ function LoginPanel({ onLogin }) {
 
       if (!data) {
         setErrorMessage(t("login.invalidCredentials", "Identifiant Discord ou mot de passe incorrect."));
+        return;
+      }
+
+      if (
+        (data.community_access_type === "community" || isPortalCommunityRole(data.role)) &&
+        data.community_status === "inactive"
+      ) {
+        setErrorMessage(t("login.inactiveCommunityAccount", "Ce compte communaute est desactive. Contacte Darius."));
         return;
       }
 
@@ -1255,6 +1293,17 @@ function LoginPanel({ onLogin }) {
     setForgotError("");
     setForgotResult(null);
     setForgotOpen(true);
+  }
+
+  function openAccountRequestDialog() {
+    setAccountRequestDraft((current) => ({
+      ...current,
+      discordContact: identifier.trim() || current.discordContact,
+      preferredLanguage: language,
+    }));
+    setAccountRequestError("");
+    setAccountRequestResult(null);
+    setAccountRequestOpen(true);
   }
 
   async function submitForgotPassword(event) {
@@ -1317,6 +1366,51 @@ function LoginPanel({ onLogin }) {
       setForgotError(t("login.failed", "Connexion impossible. Reessaie ou contacte un admin."));
     } finally {
       setForgotLoading(false);
+    }
+  }
+
+  async function submitAccountRequest(event) {
+    event.preventDefault();
+    if (accountRequestLoading) return;
+
+    const discordContact = accountRequestDraft.discordContact.trim();
+    const guildName = accountRequestDraft.guildName.trim();
+    const preferredLanguage = accountRequestDraft.preferredLanguage || language;
+
+    if (!discordContact) {
+      setAccountRequestError(t("login.accountRequestMissingDiscord", "Renseigne ton ID Discord ou ton nom Discord exact."));
+      setAccountRequestResult(null);
+      return;
+    }
+
+    setAccountRequestLoading(true);
+    setAccountRequestError("");
+    setAccountRequestResult(null);
+
+    try {
+      const apiBase = getApiBase();
+      const response = await fetch(`${apiBase}/api/portal-access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "external-account-request",
+          discordContact,
+          preferredLanguage,
+          guildName,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.error || t("login.accountRequestFailed", "Demande impossible pour le moment."));
+      }
+
+      setAccountRequestResult(payload);
+    } catch (error) {
+      console.error("[portal-account-request]", error);
+      setAccountRequestError(error?.message || t("login.accountRequestFailed", "Demande impossible pour le moment."));
+    } finally {
+      setAccountRequestLoading(false);
     }
   }
 
@@ -1433,6 +1527,14 @@ function LoginPanel({ onLogin }) {
           <span className="sr-only">{t("login.forgot", "Mot de passe oublie ?")}</span>
         </button>
         <button
+          type="button"
+          onClick={openAccountRequestDialog}
+          className="absolute bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
+          style={hotspotStyle(LOGIN_HOTSPOTS.createAccount)}
+        >
+          <span className="sr-only">{t("login.createAccount", "Creer un nouveau compte")}</span>
+        </button>
+        <button
           type="submit"
           disabled={isSubmitting}
           className="absolute cursor-pointer bg-transparent outline-none transition focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/80 disabled:cursor-wait"
@@ -1539,6 +1641,105 @@ function LoginPanel({ onLogin }) {
                 className="w-full bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
               >
                 {forgotLoading ? t("login.forgotSearching", "Recherche...") : t("login.forgotSearch", "Trouver mes admins")}
+              </Button>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      {accountRequestOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-950 p-5 text-zinc-100 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold">{t("login.accountRequestTitle", "Creer un compte")}</h2>
+                <p className="mt-1 text-sm text-zinc-400">
+                  {t(
+                    "login.accountRequestHelp",
+                    "Envoie ta demande. Un leader verifiera les informations et creera ton acces Portal.",
+                  )}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                onClick={() => setAccountRequestOpen(false)}
+              >
+                {t("common.close", "Fermer")}
+              </Button>
+            </div>
+
+            <form onSubmit={submitAccountRequest} className="mt-5 space-y-4">
+              <label className="block space-y-2">
+                <span className="text-sm font-medium text-zinc-300">
+                  {t("login.accountRequestDiscordLabel", "ID Discord ou nom Discord exact")}
+                </span>
+                <input
+                  value={accountRequestDraft.discordContact}
+                  onChange={(event) =>
+                    setAccountRequestDraft((current) => ({ ...current, discordContact: event.target.value }))
+                  }
+                  className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 outline-none focus:border-cyan-400"
+                  placeholder={t("login.accountRequestDiscordPlaceholder", "Ex : 123456789012345678 ou PseudoDiscord")}
+                  autoComplete="username"
+                />
+              </label>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block space-y-2">
+                  <span className="text-sm font-medium text-zinc-300">
+                    {t("login.accountRequestLanguageLabel", "Langue")}
+                  </span>
+                  <select
+                    value={accountRequestDraft.preferredLanguage}
+                    onChange={(event) =>
+                      setAccountRequestDraft((current) => ({ ...current, preferredLanguage: event.target.value }))
+                    }
+                    className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 outline-none focus:border-cyan-400"
+                  >
+                    <option value="fr">Francais</option>
+                    <option value="en">English</option>
+                  </select>
+                </label>
+
+                <label className="block space-y-2">
+                  <span className="text-sm font-medium text-zinc-300">
+                    {t("login.accountRequestGuildLabel", "Guilde")}
+                  </span>
+                  <input
+                    value={accountRequestDraft.guildName}
+                    onChange={(event) =>
+                      setAccountRequestDraft((current) => ({ ...current, guildName: event.target.value }))
+                    }
+                    className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 outline-none focus:border-cyan-400"
+                    placeholder={t("login.accountRequestGuildPlaceholder", "Optionnel")}
+                  />
+                </label>
+              </div>
+
+              {accountRequestError ? (
+                <div className="rounded-xl border border-red-400/40 bg-red-950/60 px-3 py-2 text-sm text-red-100">
+                  {accountRequestError}
+                </div>
+              ) : null}
+
+              {accountRequestResult ? (
+                <div className="rounded-xl border border-emerald-400/30 bg-emerald-950/35 px-3 py-2 text-sm text-emerald-50">
+                  {t(
+                    "login.accountRequestSuccess",
+                    "Demande envoyee. Un leader reviendra vers toi sur Discord.",
+                  )}
+                </div>
+              ) : null}
+
+              <Button
+                type="submit"
+                disabled={accountRequestLoading || Boolean(accountRequestResult)}
+                className="w-full bg-cyan-500 text-zinc-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {accountRequestLoading
+                  ? t("login.accountRequestSending", "Envoi...")
+                  : t("login.accountRequestSubmit", "Envoyer la demande")}
               </Button>
             </form>
           </div>
@@ -1699,42 +1900,32 @@ function PortalShell({ session, onLogout }) {
   const isAdminUser = isAdminSession(session);
   const isLeaderUser = isLeaderSession(session);
   const isPaladinUser = isPaladinSession(session);
+  const isCommunityUser = isPortalCommunitySession(session);
   const isMobileMode = viewMode === "mobile";
   const controlBrand = getControlBrand(session);
   const guildScopeDescription = getGuildScopeDescription(session);
   const portalAccess = useMemo(
     () => {
       if (isPaladinUser) return getPaladinLicenseAccess();
+      if (isCommunityUser) return getPortalLicenseAccess({ plan: "manual", status: "active" });
       if (!portalLicenseLoaded) return getPortalLicenseAccess({ plan: "suspended", status: "suspended" });
       return getPortalLicenseAccess(portalLicense || { plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" });
     },
-    [isPaladinUser, portalLicense, portalLicenseLoaded],
+    [isCommunityUser, isPaladinUser, portalLicense, portalLicenseLoaded],
   );
   const visibleNavigation = useMemo(
     () =>
-      navigation.filter((item) => {
-        if (item.id === "home" || item.id === "settings") return true;
-        if (item.id === "gvg") return portalAccess.canUseGvg;
-        if (item.id === "run-search") return portalAccess.canSearchRuns;
-        return portalAccess.canUsePortalCore;
-      }),
-    [portalAccess],
+      navigation.filter((item) => canShowPortalNavItem(item, session, portalAccess)),
+    [portalAccess, session],
   );
   const visibleAdminNavigation = useMemo(
     () =>
-      adminNavigation.filter((item) => {
-        if (!isAdminUser) return false;
-        if (item.paladinOnly && !isPaladinUser) return false;
-        if (item.leaderOnly) return isLeaderUser;
-        if (!portalAccess.canUsePortalCore) return false;
-        if (item.id === "run-add" || item.id === "run-edit") return portalAccess.canManageOwnRuns;
-        if (item.id === "launcher") return portalAccess.canUseLauncher;
-        if (item.id === "validation") return portalAccess.canUseValidation;
-        if (item.adminOnly) return isAdminUser;
-        return true;
-      }),
-    [isAdminUser, isLeaderUser, isPaladinUser, portalAccess],
+      adminNavigation.filter((item) =>
+        canShowPortalAdminItem({ item, session, isAdminUser, isLeaderUser, isPaladinUser, portalAccess }),
+      ),
+    [isAdminUser, isLeaderUser, isPaladinUser, portalAccess, session],
   );
+  const canUsePve = canShowPortalPve(session, portalAccess);
   const visiblePveNavigation = useMemo(
     () =>
       pveContents
@@ -1769,7 +1960,7 @@ function PortalShell({ session, onLogout }) {
   const mobileQuickNavigation = useMemo(
     () => [
       ...visibleNavigation,
-      ...(portalAccess.canUsePortalCore
+      ...(canUsePve
         ? [
             { id: "pve", label: "PVE", labelKey: "nav.pve", icon: BookOpen },
             ...visiblePveNavigation.map((item) => ({
@@ -1782,7 +1973,7 @@ function PortalShell({ session, onLogout }) {
         : []),
       ...visibleAdminNavigation,
     ],
-    [portalAccess.canUsePortalCore, visibleAdminNavigation, visibleNavigation, visiblePveNavigation],
+    [canUsePve, visibleAdminNavigation, visibleNavigation, visiblePveNavigation],
   );
 
   const activeTitle = useMemo(() => {
@@ -1803,17 +1994,17 @@ function PortalShell({ session, onLogout }) {
     if (
       (isAdminTab && !isVisibleAdminTab) ||
       (isBaseTab && !isVisibleBaseTab) ||
-      (isPveTab && !portalAccess.canUsePortalCore)
+      (isPveTab && !canUsePve)
     ) {
       setActive("home");
     }
-  }, [active, portalAccess.canUsePortalCore, visibleAdminNavigation, visibleNavigation]);
+  }, [active, canUsePve, visibleAdminNavigation, visibleNavigation]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadPortalLicense() {
-      if (isPaladinUser) {
+      if (isPaladinUser || isCommunityUser) {
         setPortalLicense(null);
         setPortalLicenseLoaded(true);
         return;
@@ -1853,13 +2044,13 @@ function PortalShell({ session, onLogout }) {
     return () => {
       cancelled = true;
     };
-  }, [isPaladinUser, session]);
+  }, [isCommunityUser, isPaladinUser, session]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadPveContents() {
-      if (!portalAccess.canUsePortalCore) {
+      if (!canUsePve) {
         setPveContents([]);
         setPveContentsLoaded(true);
         return;
@@ -1895,7 +2086,7 @@ function PortalShell({ session, onLogout }) {
     return () => {
       cancelled = true;
     };
-  }, [portalAccess.canUsePortalCore]);
+  }, [canUsePve]);
 
   useEffect(() => {
     if (active === "home" || active === "logs" || loggedTabViewsRef.current.has(active)) return;
@@ -2018,7 +2209,7 @@ function PortalShell({ session, onLogout }) {
           );
         })}
 
-        {portalAccess.canUsePortalCore ? (
+        {canUsePve ? (
         <div className="pt-2">
           <button
             type="button"
@@ -2358,6 +2549,7 @@ function PortalShell({ session, onLogout }) {
           {active === "templates" ? <AddHeroView session={session} /> : null}
           {active === "guilds" ? <GuildsView session={session} /> : null}
           {active === "billing" ? <BillingView session={session} /> : null}
+          {active === "community-members" ? <CommunityMembersTab session={session} apiBase={getApiBase()} /> : null}
           {active === "logs" ? <LogsView session={session} /> : null}
           {active === "settings" ? <SettingsView session={session} onLogout={onLogout} /> : null}
         </main>
@@ -2426,7 +2618,7 @@ function HomeView({ session, setActive }) {
       </section>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {categoryCards.map((card) => {
+        {categoryCards.filter((card) => canShowPortalHomeCard(card, session)).map((card) => {
           const Icon = card.icon;
           const canOpen = Boolean(card.target);
           const isProfile = card.id === "profile";
@@ -7249,7 +7441,7 @@ function SaasPortalContent() {
       try {
         let query = supabase
           .from("guild_members")
-          .select("id, role, discord_id, watcher_name, guild_code");
+          .select("id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language");
 
         query = memberId ? query.eq("id", memberId) : query.eq("discord_id", discordId);
 

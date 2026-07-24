@@ -1,5 +1,29 @@
 export const PALADIN_CLUSTER_GUILD_CODES = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 export const PALADIN_SPACE_KEY = "PALADIN";
+export const COMMUNITY_SPACE_KEY = "COMMUNITY";
+
+function normalizeRoleValue(role) {
+  return String(role || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+export function isCommunitySession(session) {
+  const accessType = String(
+    session?.accessType ||
+      session?.access_type ||
+      session?.communityAccessType ||
+      session?.community_access_type ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const role = normalizeRoleValue(session?.role);
+  return accessType === "community" || role === "community_member" || role === "content_creator";
+}
 
 export function normalizeGuildCode(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
@@ -42,6 +66,7 @@ export function getGuildSpaceLabel(guildCode) {
 }
 
 export function getControlBrand(session) {
+  if (isCommunitySession(session)) return "Community Control";
   return `${getGuildSpaceLabel(session?.guildCode || session?.guild_code || session?.guild)} Control`;
 }
 
@@ -50,6 +75,7 @@ export function isSameGuildSpace(leftGuildCode, rightGuildCode) {
 }
 
 export function getSessionGuildCode(session) {
+  if (isCommunitySession(session)) return COMMUNITY_SPACE_KEY;
   return normalizeGuildCode(session?.guildCode || session?.guild_code || session?.guild || "G1");
 }
 
@@ -58,6 +84,7 @@ export function getSessionGuildSpaceKey(session) {
 }
 
 export function isPaladinSession(session) {
+  if (isCommunitySession(session)) return false;
   return getSessionGuildSpaceKey(session) === PALADIN_SPACE_KEY;
 }
 
@@ -90,6 +117,7 @@ export function isPaladinAdminSession(session) {
 }
 
 export function getVisibleGvgGuildCodes(session) {
+  if (isCommunitySession(session)) return [];
   if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
 
   const guildCode = normalizeGvgGuildCode(getSessionGuildCode(session));
@@ -112,6 +140,11 @@ export function isLeaderSession(session) {
 
 export function filterByGuildScope(rows, session, getGuildCode, options = {}) {
   const { leaderSeesAll = true } = options;
+  if (isCommunitySession(session)) {
+    const sessionMemberId = String(session?.memberId || session?.id || "");
+    return (rows || []).filter((row) => String(row?.id || row?.member_id || "") === sessionMemberId);
+  }
+
   if (leaderSeesAll && isLeaderSession(session)) return rows || [];
 
   const sessionGuildCode = getSessionGuildCode(session);
@@ -125,6 +158,10 @@ export function filterByGuildScope(rows, session, getGuildCode, options = {}) {
 }
 
 export function getGuildScopeDescription(session) {
+  if (isCommunitySession(session)) {
+    return "Espace communaute";
+  }
+
   const guildCode = getSessionGuildCode(session);
   if (isPaladinGuildCode(guildCode)) {
     return "Cluster Paladin G1-G7";
