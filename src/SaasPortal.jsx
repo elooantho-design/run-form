@@ -288,6 +288,28 @@ const pveContentBlueprints = [
     directNav: true,
   },
   {
+    slug: "war-gallery",
+    name: "Galerie de guerre",
+    description: "Galerie de guerre",
+    stageCount: 1,
+    sortOrder: 10,
+    categorySlug: "war-gallery",
+    categoryName: "Galerie de guerre",
+    categorySortOrder: 90,
+    directNav: true,
+  },
+  {
+    slug: "other",
+    name: "Autre",
+    description: "Autre",
+    stageCount: 1,
+    sortOrder: 10,
+    categorySlug: "other",
+    categoryName: "Autre",
+    categorySortOrder: 100,
+    directNav: true,
+  },
+  {
     slug: "dragon-chasm",
     name: "Gouffre du dragon",
     description: "Boss de guilde - Gouffre du dragon",
@@ -430,6 +452,8 @@ const pveCategoryTranslationKeys = {
   campaign: "pve.category.campaign",
   malrik: "pve.category.malrik",
   breche: "pve.category.breche",
+  "war-gallery": "pve.category.warGallery",
+  other: "pve.category.other",
 };
 
 function getPveCategoryTranslationKey(categorySlug) {
