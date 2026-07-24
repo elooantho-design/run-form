@@ -206,6 +206,36 @@ const pveContentBlueprints = [
     directNav: true,
   },
   {
+    slug: "arena-anti-air",
+    name: "Antiaérien",
+    description: "Arène - Antiaérien",
+    stageCount: 1,
+    sortOrder: 10,
+    categorySlug: "arena",
+    categoryName: "Arène",
+    categorySortOrder: 50,
+  },
+  {
+    slug: "arena-zde",
+    name: "ZDE",
+    description: "Arène - ZDE",
+    stageCount: 1,
+    sortOrder: 20,
+    categorySlug: "arena",
+    categoryName: "Arène",
+    categorySortOrder: 50,
+  },
+  {
+    slug: "arena-single-target",
+    name: "Monocible",
+    description: "Arène - Monocible",
+    stageCount: 1,
+    sortOrder: 30,
+    categorySlug: "arena",
+    categoryName: "Arène",
+    categorySortOrder: 50,
+  },
+  {
     slug: "dragon-chasm",
     name: "Gouffre du dragon",
     description: "Boss de guilde - Gouffre du dragon",
@@ -344,6 +374,7 @@ const pveCategoryTranslationKeys = {
   "guild-boss": "pve.category.guildBoss",
   "immortal-codex": "pve.category.immortalCodex",
   "illusion-tower": "pve.category.illusionTower",
+  arena: "pve.category.arena",
 };
 
 function getPveCategoryTranslationKey(categorySlug) {

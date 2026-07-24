@@ -373,7 +373,10 @@ with seed_contents as (
       ('dragon-chasm', 'Gouffre du dragon', 'Boss de guilde - Gouffre du dragon', 8, 10, 'guild-boss', 'Boss de guilde', 20),
       ('titan-ruins', 'Ruine de titan', 'Boss de guilde - Ruine de titan', 4, 20, 'guild-boss', 'Boss de guilde', 20),
       ('immortal-codex', 'Défi d''épreuve', 'Codex immortel - Défi d''épreuve', 8, 10, 'immortal-codex', 'Codex immortel', 30),
-      ('immortal-codex-conquest', 'Défi de conquête', 'Codex immortel - Défi de conquête', 2, 20, 'immortal-codex', 'Codex immortel', 30)
+      ('immortal-codex-conquest', 'Défi de conquête', 'Codex immortel - Défi de conquête', 2, 20, 'immortal-codex', 'Codex immortel', 30),
+      ('arena-anti-air', 'Antiaérien', 'Arène - Antiaérien', 1, 10, 'arena', 'Arène', 50),
+      ('arena-zde', 'ZDE', 'Arène - ZDE', 1, 20, 'arena', 'Arène', 50),
+      ('arena-single-target', 'Monocible', 'Arène - Monocible', 1, 30, 'arena', 'Arène', 50)
   ) as value_rows(slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order)
 ),
 upserted_contents as (
@@ -437,6 +440,9 @@ stage_labels as (
       ('immortal-codex', 8, 'Mère des corbeaux'),
       ('immortal-codex-conquest', 1, 'Commandant de légion du cauchemar'),
       ('immortal-codex-conquest', 2, 'Eris Del de l''aube'),
+      ('arena-anti-air', 1, 'Antiaérien'),
+      ('arena-zde', 1, 'ZDE'),
+      ('arena-single-target', 1, 'Monocible'),
       ('illusion-tower', 41, 'Chambre cachée 1'),
       ('illusion-tower', 42, 'Chambre cachée 2'),
       ('illusion-tower', 43, 'Chambre cachée 3'),
