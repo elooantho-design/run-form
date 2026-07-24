@@ -1147,14 +1147,14 @@ function statusClass(status) {
 
 const LOGIN_IMAGE_SIZE = { width: 1672, height: 941 };
 const LOGIN_HOTSPOTS = {
-  email: { x: 642, y: 545, w: 390, h: 58 },
-  password: { x: 642, y: 621, w: 318, h: 58 },
-  eye: { x: 993, y: 632, w: 38, h: 34 },
-  remember: { x: 590, y: 706, w: 205, h: 34 },
-  rememberBox: { x: 590, y: 707, w: 22, h: 22 },
-  forgot: { x: 900, y: 706, w: 165, h: 34 },
-  createAccount: { x: 690, y: 718, w: 292, h: 34 },
-  submit: { x: 594, y: 753, w: 460, h: 73 },
+  email: { x: 642, y: 501, w: 392, h: 66 },
+  password: { x: 642, y: 580, w: 318, h: 66 },
+  eye: { x: 996, y: 599, w: 42, h: 38 },
+  remember: { x: 589, y: 666, w: 208, h: 36 },
+  rememberBox: { x: 590, y: 668, w: 24, h: 24 },
+  forgot: { x: 902, y: 666, w: 166, h: 36 },
+  createAccount: { x: 683, y: 717, w: 310, h: 38 },
+  submit: { x: 596, y: 775, w: 462, h: 75 },
 };
 
 function LoginPanel({ onLogin }) {
@@ -1497,14 +1497,14 @@ function LoginPanel({ onLogin }) {
           type="button"
           onClick={() => setShowPassword((value) => !value)}
           aria-label={showPassword ? t("login.hidePassword", "Masquer le mot de passe") : t("login.showPassword", "Afficher le mot de passe")}
-          className="absolute rounded-full bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
+          className="absolute cursor-pointer rounded-full bg-transparent outline-none transition hover:bg-cyan-300/10 focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
           style={hotspotStyle(LOGIN_HOTSPOTS.eye)}
         />
         <button
           type="button"
           onClick={() => setRemember((value) => !value)}
           aria-pressed={remember}
-          className="absolute bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
+          className="absolute cursor-pointer rounded-md bg-transparent outline-none transition hover:bg-amber-200/10 focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
           style={hotspotStyle(LOGIN_HOTSPOTS.remember)}
         >
           <span className="sr-only">{t("login.remember", "Se souvenir de moi")}</span>
@@ -1521,7 +1521,7 @@ function LoginPanel({ onLogin }) {
         <button
           type="button"
           onClick={openForgotDialog}
-          className="absolute bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
+          className="absolute cursor-pointer rounded-full bg-transparent outline-none transition hover:bg-cyan-300/10 focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
           style={hotspotStyle(LOGIN_HOTSPOTS.forgot)}
         >
           <span className="sr-only">{t("login.forgot", "Mot de passe oublie ?")}</span>
@@ -1529,7 +1529,7 @@ function LoginPanel({ onLogin }) {
         <button
           type="button"
           onClick={openAccountRequestDialog}
-          className="absolute bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
+          className="absolute cursor-pointer rounded-full bg-transparent outline-none transition hover:bg-amber-200/10 focus-visible:ring-2 focus-visible:ring-[#4fc3ff]/70"
           style={hotspotStyle(LOGIN_HOTSPOTS.createAccount)}
         >
           <span className="sr-only">{t("login.createAccount", "Creer un nouveau compte")}</span>
