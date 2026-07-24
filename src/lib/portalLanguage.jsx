@@ -430,6 +430,7 @@ const PORTAL_TRANSLATIONS = {
   "pve.creatorLookupUrl": "YouTube channel or video URL",
   "pve.creatorLookupHelp": "If a YouTube URL is provided, the server fills empty fields once, then stores the creator in Supabase.",
   "pve.creatorNameOrUrlRequired": "Enter a creator name or a YouTube URL.",
+  "pve.creatorLookupUrlRequired": "Enter the creator's YouTube channel or video URL.",
   "pve.createCreatorError": "Unable to create this creator.",
   "pve.creatorAutoNamePlaceholder": "Automatic if the YouTube URL is recognized",
   "pve.suggestedCreatorName": "Creator name to suggest",

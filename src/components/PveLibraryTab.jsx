@@ -954,9 +954,6 @@ export default function PveLibraryTab({
 
   const getCreatorReviewDraft = (group) => ({
     existingCreatorId: "",
-    name: group?.suggestedName || "",
-    channelUrl: "",
-    avatarUrl: "",
     lookupUrl: "",
     ...(creatorReviewDrafts[group?.key] || {}),
   });
@@ -990,20 +987,15 @@ export default function PveLibraryTab({
 
       body.creatorId = draft.existingCreatorId;
     } else {
-      const name = String(draft.name || group.suggestedName || "").trim();
       const lookupUrl = String(draft.lookupUrl || "").trim();
-      const channelUrl = normalizeExternalUrl(draft.channelUrl);
 
-      if (!name && !lookupUrl && !channelUrl) {
-        setErrorMessage(t("pve.creatorNameOrUrlRequired", "Renseigne un nom ou une URL YouTube de createur."));
+      if (!lookupUrl) {
+        setErrorMessage(t("pve.creatorLookupUrlRequired", "Renseigne une URL YouTube de createur."));
         return;
       }
 
       body.creator = {
-        name,
         youtubeLookupUrl: lookupUrl,
-        channelUrl,
-        avatarUrl: normalizeExternalUrl(draft.avatarUrl),
       };
     }
 
@@ -1274,13 +1266,10 @@ export default function PveLibraryTab({
     }
 
     if (creatorSchemaReady && videoDraft.creatorMode === CREATOR_MODE_NEW) {
-      const hasCreatorDraft =
-        String(videoDraft.creatorName || "").trim() ||
-        String(videoDraft.creatorLookupUrl || "").trim() ||
-        normalizeExternalUrl(videoDraft.creatorChannelUrl);
+      const creatorLookupUrl = String(videoDraft.creatorLookupUrl || "").trim();
 
-      if (!hasCreatorDraft) {
-        setErrorMessage(t("pve.creatorNameOrUrlRequired", "Renseigne un nom ou une URL YouTube de createur."));
+      if (!creatorLookupUrl) {
+        setErrorMessage(t("pve.creatorLookupUrlRequired", "Renseigne une URL YouTube de createur."));
         return;
       }
     }
@@ -1302,10 +1291,7 @@ export default function PveLibraryTab({
           action: "create-or-reuse",
           actorMemberId: getSessionMemberId(session),
           creator: {
-            name: String(videoDraft.creatorName || "").trim(),
             youtubeLookupUrl: String(videoDraft.creatorLookupUrl || "").trim(),
-            channelUrl: normalizeExternalUrl(videoDraft.creatorChannelUrl),
-            avatarUrl: normalizeExternalUrl(videoDraft.creatorAvatarUrl),
           },
         }),
       });
@@ -1592,7 +1578,7 @@ export default function PveLibraryTab({
                     <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                       {t("pve.createOfficialCreator", "Creer une fiche officielle")}
                     </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="mt-3">
                       <label className="text-sm font-medium text-zinc-300">
                         {t("pve.creatorLookupUrl", "URL chaine ou video YouTube")}
                         <input
@@ -1600,35 +1586,6 @@ export default function PveLibraryTab({
                           value={draft.lookupUrl}
                           onChange={(event) => updateCreatorReviewDraft(group.key, { lookupUrl: event.target.value })}
                           placeholder="https://www.youtube.com/@... ou https://youtu.be/..."
-                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
-                        />
-                      </label>
-                      <label className="text-sm font-medium text-zinc-300">
-                        {t("pve.officialCreatorName", "Nom officiel")}
-                        <input
-                          type="text"
-                          value={draft.name}
-                          onChange={(event) => updateCreatorReviewDraft(group.key, { name: event.target.value })}
-                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
-                        />
-                      </label>
-                      <label className="text-sm font-medium text-zinc-300">
-                        {t("pve.officialCreatorChannelUrl", "URL chaine YouTube")}
-                        <input
-                          type="url"
-                          value={draft.channelUrl}
-                          onChange={(event) => updateCreatorReviewDraft(group.key, { channelUrl: event.target.value })}
-                          placeholder="https://www.youtube.com/@..."
-                          className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
-                        />
-                      </label>
-                      <label className="text-sm font-medium text-zinc-300">
-                        {t("pve.officialCreatorAvatarUrl", "Avatar ou logo")}
-                        <input
-                          type="url"
-                          value={draft.avatarUrl}
-                          onChange={(event) => updateCreatorReviewDraft(group.key, { avatarUrl: event.target.value })}
-                          placeholder="https://..."
                           className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
                         />
                       </label>
@@ -1642,14 +1599,7 @@ export default function PveLibraryTab({
                     <Button
                       type="button"
                       onClick={() => resolveCreatorGroup(group, "new")}
-                      disabled={
-                        resolving ||
-                        !(
-                          String(draft.name || "").trim() ||
-                          String(draft.lookupUrl || "").trim() ||
-                          normalizeExternalUrl(draft.channelUrl)
-                        )
-                      }
+                      disabled={resolving || !String(draft.lookupUrl || "").trim()}
                       className="mt-3 rounded-xl bg-zinc-100 text-zinc-950 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {resolving
@@ -1874,7 +1824,7 @@ export default function PveLibraryTab({
 
                     {videoDraft.creatorMode === CREATOR_MODE_NEW ? (
                       <div className="space-y-3">
-                        <div className="grid gap-3 md:grid-cols-2">
+                        <div>
                           <label className="text-sm font-medium text-zinc-300">
                             {t("pve.creatorLookupUrl", "URL chaine ou video YouTube")}
                             <input
@@ -1884,42 +1834,6 @@ export default function PveLibraryTab({
                                 setVideoDraft((previous) => ({ ...previous, creatorLookupUrl: event.target.value }))
                               }
                               placeholder="https://www.youtube.com/@... ou https://youtu.be/..."
-                              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
-                            />
-                          </label>
-                          <label className="text-sm font-medium text-zinc-300">
-                            {t("pve.officialCreatorName", "Nom officiel")}
-                            <input
-                              type="text"
-                              value={videoDraft.creatorName}
-                              onChange={(event) =>
-                                setVideoDraft((previous) => ({ ...previous, creatorName: event.target.value }))
-                              }
-                              placeholder={t("pve.creatorAutoNamePlaceholder", "Auto si URL YouTube reconnue")}
-                              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
-                            />
-                          </label>
-                          <label className="text-sm font-medium text-zinc-300">
-                            {t("pve.officialCreatorChannelUrl", "URL chaine YouTube")}
-                            <input
-                              type="url"
-                              value={videoDraft.creatorChannelUrl}
-                              onChange={(event) =>
-                                setVideoDraft((previous) => ({ ...previous, creatorChannelUrl: event.target.value }))
-                              }
-                              placeholder="https://www.youtube.com/@..."
-                              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
-                            />
-                          </label>
-                          <label className="text-sm font-medium text-zinc-300">
-                            {t("pve.officialCreatorAvatarUrl", "Avatar ou logo")}
-                            <input
-                              type="url"
-                              value={videoDraft.creatorAvatarUrl}
-                              onChange={(event) =>
-                                setVideoDraft((previous) => ({ ...previous, creatorAvatarUrl: event.target.value }))
-                              }
-                              placeholder="https://..."
                               className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-red-500"
                             />
                           </label>
