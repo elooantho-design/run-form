@@ -277,6 +277,17 @@ const pveContentBlueprints = [
     directNav: true,
   },
   {
+    slug: "breche",
+    name: "Brèche",
+    description: "Brèche",
+    stageCount: 2,
+    sortOrder: 10,
+    categorySlug: "breche",
+    categoryName: "Brèche",
+    categorySortOrder: 80,
+    directNav: true,
+  },
+  {
     slug: "dragon-chasm",
     name: "Gouffre du dragon",
     description: "Boss de guilde - Gouffre du dragon",
@@ -418,6 +429,7 @@ const pveCategoryTranslationKeys = {
   arena: "pve.category.arena",
   campaign: "pve.category.campaign",
   malrik: "pve.category.malrik",
+  breche: "pve.category.breche",
 };
 
 function getPveCategoryTranslationKey(categorySlug) {

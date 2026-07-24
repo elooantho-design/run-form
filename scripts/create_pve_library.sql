@@ -380,7 +380,8 @@ with seed_contents as (
       ('campaign-normal', 'Normal', 'Campagne normale', 10, 10, 'campaign', 'Campagne', 60),
       ('campaign-hard', 'Difficile', 'Campagne difficile', 9, 20, 'campaign', 'Campagne', 60),
       ('campaign-expert', 'Expert', 'Campagne expert', 9, 30, 'campaign', 'Campagne', 60),
-      ('malrik', 'Malrik', 'Pierres de Malrik', 1, 10, 'malrik', 'Malrik', 70)
+      ('malrik', 'Malrik', 'Pierres de Malrik', 1, 10, 'malrik', 'Malrik', 70),
+      ('breche', 'Brèche', 'Brèche', 2, 10, 'breche', 'Brèche', 80)
   ) as value_rows(slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order)
 ),
 upserted_contents as (
@@ -476,6 +477,8 @@ stage_labels as (
       ('campaign-expert', 8, 'Chapitre 8'),
       ('campaign-expert', 9, 'Chapitre 9'),
       ('malrik', 1, 'Malrik'),
+      ('breche', 1, 'Néant'),
+      ('breche', 2, 'Épilogue'),
       ('illusion-tower', 41, 'Chambre cachée 1'),
       ('illusion-tower', 42, 'Chambre cachée 2'),
       ('illusion-tower', 43, 'Chambre cachée 3'),

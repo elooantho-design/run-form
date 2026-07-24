@@ -398,6 +398,7 @@ const PORTAL_TRANSLATIONS = {
   "pve.category.arena": "Arena",
   "pve.category.campaign": "Campaign",
   "pve.category.malrik": "Malrik",
+  "pve.category.breche": "Rift",
   "pve.description": "Centralize useful YouTube videos for clearing PVE content.",
   "pve.addContent": "Add content",
   "pve.contentName": "Content name",
