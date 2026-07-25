@@ -46,12 +46,6 @@ function getStripeWebhookSecret() {
 }
 
 async function readRawBody(req) {
-  if (req.body && typeof req.body === "object") {
-    throw new StripeWebhookVerificationError(
-      "Corps brut webhook indisponible. La signature Stripe ne peut pas etre verifiee.",
-    );
-  }
-
   const chunks = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -385,6 +379,8 @@ export default async function handler(req, res) {
 
     logWebhookDiagnostic("raw_body_read", {
       hasStripeSignature: Boolean(stripeSignature),
+      parsedBodyType: typeof req.body,
+      parsedBodyIsBuffer: Buffer.isBuffer(req.body),
       rawBodyType: typeof rawBody,
       isBuffer: Buffer.isBuffer(rawBody),
       reqReadable: Boolean(req.readable),
