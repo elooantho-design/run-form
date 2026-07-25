@@ -11,7 +11,6 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_test_portal_webhook_verification");
 
 export const config = {
-  runtime: "nodejs",
   api: {
     bodyParser: false,
   },
