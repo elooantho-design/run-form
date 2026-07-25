@@ -8,12 +8,25 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
   auth: { persistSession: false },
 });
 
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 function cleanText(value, maxLength = 500) {
   return String(value || "").trim().slice(0, maxLength);
 }
 
+function getHeader(req, name) {
+  const lower = name.toLowerCase();
+  return req.headers?.[lower] || req.headers?.[name] || "";
+}
+
 async function readRawBody(req) {
+  if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
   if (req.rawBody) return Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(req.rawBody);
+  if (typeof req.rawBodyText === "string") return Buffer.from(req.rawBodyText, "utf8");
   if (Buffer.isBuffer(req.body)) return req.body;
   if (typeof req.body === "string") return Buffer.from(req.body, "utf8");
   if (req.body && typeof req.body === "object") {
@@ -24,7 +37,14 @@ async function readRawBody(req) {
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks);
+
+  const rawBody = Buffer.concat(chunks);
+  if (!rawBody.length) {
+    throw new Error("Corps brut webhook indisponible. La signature Stripe ne peut pas etre verifiee.");
+  }
+
+  req.rawBody = rawBody;
+  return rawBody;
 }
 
 function parseStripeSignature(header) {
@@ -50,13 +70,14 @@ function verifyStripeSignature(rawBody, signatureHeader) {
   const now = Math.floor(Date.now() / 1000);
   if (Math.abs(now - timestamp) > 300) throw new Error("Signature Stripe expiree.");
 
-  const signedPayload = `${timestamp}.${rawBody.toString("utf8")}`;
+  const signedPayload = Buffer.concat([Buffer.from(`${timestamp}.`, "utf8"), rawBody]);
   const expected = crypto.createHmac("sha256", endpointSecret).update(signedPayload).digest("hex");
-  const expectedBuffer = Buffer.from(expected);
+  const expectedBuffer = Buffer.from(expected, "hex");
 
   const valid = signatures.some((providedSignature) => {
-    const providedBuffer = Buffer.from(providedSignature);
-    return providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+    if (!/^[0-9a-f]{64}$/i.test(providedSignature)) return false;
+    const providedBuffer = Buffer.from(providedSignature, "hex");
+    return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
   });
 
   if (!valid) throw new Error("Signature Stripe refusee.");
@@ -357,7 +378,7 @@ export default async function handler(req, res) {
   let event;
   try {
     const rawBody = await readRawBody(req);
-    verifyStripeSignature(rawBody, req.headers["stripe-signature"]);
+    verifyStripeSignature(rawBody, getHeader(req, "stripe-signature"));
     event = JSON.parse(rawBody.toString("utf8"));
   } catch (error) {
     sendPortalJson(res, 400, { error: error?.message || "Webhook Stripe refuse." });
