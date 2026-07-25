@@ -33,13 +33,7 @@ const PB_ENTRY_SELECT_WITH_AWAKENING = `
   pb_raw,
   updated_at,
   awakening_level,
-  champions (*),
-  member_awakenings (
-    awakening_level,
-    champions (
-      name
-    )
-  )
+  champions (*)
 `;
 const PB_ENTRY_SELECT_FALLBACK = `
   id,
@@ -49,13 +43,7 @@ const PB_ENTRY_SELECT_FALLBACK = `
   champion_id,
   pb_raw,
   updated_at,
-  champions (*),
-  member_awakenings (
-    awakening_level,
-    champions (
-      name
-    )
-  )
+  champions (*)
 `;
 
 function createSupabaseAdminClient() {
