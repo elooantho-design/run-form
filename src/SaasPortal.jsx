@@ -14,6 +14,7 @@ import {
   Gauge,
   Grid3X3,
   HardDrive,
+  HeartHandshake,
   ImagePlus,
   LayoutDashboard,
   Lock,
@@ -57,6 +58,7 @@ import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
 import CommunityMembersTab from "@/components/CommunityMembersTab";
 import PveLibraryTab from "@/components/PveLibraryTab";
+import SupportProjectTab from "@/components/SupportProjectTab";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
@@ -113,6 +115,7 @@ const navigation = [
   { id: "defenses", label: "Mes defenses", labelKey: "nav.defenses", icon: Bot },
   { id: "gvg", label: "GVG", labelKey: "nav.gvg", icon: Shield },
   { id: "run-search", label: "Recherche de run", labelKey: "nav.runSearch", icon: Search },
+  { id: "support-project", label: "Soutenir le projet", labelKey: "nav.supportProject", icon: HeartHandshake },
   { id: "settings", label: "Parametres", labelKey: "nav.settings", icon: Settings },
 ];
 
@@ -2602,6 +2605,7 @@ function PortalShell({ session, onLogout }) {
           {active === "defenses" ? <MyDefensesTab session={session} /> : null}
           {active === "gvg" ? <GvgView session={session} onEditRun={openRunEditor} /> : null}
           {active === "run-search" ? <RunSearchGrid session={session} /> : null}
+          {active === "support-project" ? <SupportProjectTab session={session} /> : null}
           {activePveTab ? (
             <PveLibraryTab
               session={session}
