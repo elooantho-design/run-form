@@ -69,6 +69,7 @@ const PORTAL_TRANSLATIONS = {
   "login.forgotNotFound": "No Portal account was found for this Discord ID.",
   "login.forgotNoGuild": "This account has no guild assigned. Contact a Paladin admin.",
   "login.forgotResultTitle": "Contact your guild admins",
+  "login.forgotCommunityTitle": "Community Portal account",
   "login.forgotResultIntro": "Your account is linked to {guild}. Contact one of these admins to recover access.",
   "login.forgotNoAdmin": "No admin was found for this guild. Contact Darius or a Paladin leader.",
   "login.forgotDiscordId": "Discord ID",

@@ -10,6 +10,7 @@ import {
   isForcedPortalPassword,
   isPortalAdminRole,
   isPortalCommunityRole,
+  isPortalLeaderRole,
   loadPortalMemberByDiscordId,
   readJsonBody,
   requirePortalSession,
@@ -247,7 +248,7 @@ async function handleForgotAdmins(req, res, body) {
 
   const { data: member, error: memberError } = await supabase
     .from("guild_members")
-    .select("id, watcher_name, discord_id, guild_code")
+    .select("id, watcher_name, discord_id, guild_code, role, community_access_type, community_status")
     .eq("discord_id", discordId)
     .maybeSingle();
 
@@ -262,6 +263,42 @@ async function handleForgotAdmins(req, res, body) {
   }
 
   const guildCode = cleanText(member.guild_code);
+  const isCommunity = member.community_access_type === "community" || isPortalCommunityRole(member.role);
+  if (!guildCode && isCommunity) {
+    const inactiveCommunity = cleanText(member.community_status).toLowerCase() === "inactive";
+    const { data: leaders } = await supabase
+      .from("guild_members")
+      .select("watcher_name, role")
+      .ilike("role", "leader");
+
+    const leaderRows = (leaders || [])
+      .filter((row) => isPortalLeaderRole(row.role))
+      .sort((left, right) =>
+        String(left.watcher_name || "").localeCompare(String(right.watcher_name || ""), "fr", {
+          sensitivity: "base",
+        }),
+      )
+      .map((row) => ({
+        name: row.watcher_name || "Leader Portal",
+        role: row.role || "leader",
+      }));
+
+    clearRateLimit(rateKey);
+    sendPortalJson(
+      res,
+      200,
+      {
+        guildCode: "COMMUNITY",
+        admins: leaderRows,
+        message: inactiveCommunity
+          ? "Ce compte communaute est desactive. Contacte Darius ou un leader Portal pour reactiver ton acces."
+          : "Ce compte appartient au Portail Communaute. Contacte Darius ou un leader Portal pour reinitialiser ton mot de passe.",
+      },
+      req,
+    );
+    return;
+  }
+
   if (!guildCode) {
     sendPortalJson(res, 404, { error: "Ce compte n'a pas de guilde assignee. Contacte un admin Paladin." }, req);
     return;

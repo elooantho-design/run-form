@@ -1386,16 +1386,26 @@ function LoginPanel({ onLogin }) {
       const payload = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(payload?.error || t("login.forgotNotFound", "Aucun compte Portal trouve pour cet ID Discord."));
+        const fallbackMessage =
+          response.status >= 500
+            ? t("login.failed", "Connexion impossible. Reessaie ou contacte un admin.")
+            : t("login.forgotNotFound", "Aucun compte Portal trouve pour cet ID Discord.");
+        throw new Error(payload?.error || fallbackMessage);
       }
 
       setForgotResult({
         guildCode: payload.guildCode || "",
         admins: payload.admins || [],
+        message: payload.message || "",
       });
     } catch (error) {
       console.error("[portal-forgot-password]", error);
-      setForgotError(t("login.failed", "Connexion impossible. Reessaie ou contacte un admin."));
+      const errorMessage = String(error?.message || "").trim();
+      setForgotError(
+        errorMessage && errorMessage !== "Failed to fetch"
+          ? errorMessage
+          : t("login.failed", "Connexion impossible. Reessaie ou contacte un admin."),
+      );
     } finally {
       setForgotLoading(false);
     }
@@ -1641,12 +1651,17 @@ function LoginPanel({ onLogin }) {
 
               {forgotResult ? (
                 <div className="rounded-xl border border-emerald-400/30 bg-emerald-950/35 p-3 text-sm text-emerald-50">
-                  <div className="font-semibold">{t("login.forgotResultTitle", "Contacte les admins de ta guilde")}</div>
+                  <div className="font-semibold">
+                    {forgotResult.guildCode === "COMMUNITY"
+                      ? t("login.forgotCommunityTitle", "Compte Portail Communaute")
+                      : t("login.forgotResultTitle", "Contacte les admins de ta guilde")}
+                  </div>
                   <p className="mt-1 text-emerald-100/85">
-                    {t(
-                      "login.forgotResultIntro",
-                      "Ton compte est lie a {guild}. Contacte un de ces admins pour recuperer ton acces.",
-                    ).replace("{guild}", forgotResult.guildCode)}
+                    {forgotResult.message ||
+                      t(
+                        "login.forgotResultIntro",
+                        "Ton compte est lie a {guild}. Contacte un de ces admins pour recuperer ton acces.",
+                      ).replace("{guild}", forgotResult.guildCode)}
                   </p>
 
                   {forgotResult.admins.length ? (
@@ -1655,7 +1670,8 @@ function LoginPanel({ onLogin }) {
                         <div key={`${admin.discordId}-${admin.name}`} className="rounded-lg border border-emerald-300/20 bg-black/25 p-2">
                           <div className="font-medium">{admin.name}</div>
                           <div className="text-xs text-emerald-100/70">
-                            {t("login.forgotDiscordId", "ID Discord")} : {admin.discordId || "-"} · {t("login.forgotRole", "Role")} : {admin.role}
+                            {admin.discordId ? `${t("login.forgotDiscordId", "ID Discord")} : ${admin.discordId} · ` : ""}
+                            {t("login.forgotRole", "Role")} : {admin.role}
                           </div>
                         </div>
                       ))}
