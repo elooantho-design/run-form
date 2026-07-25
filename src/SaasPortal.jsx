@@ -57,9 +57,9 @@ import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
 import CommunityMembersTab from "@/components/CommunityMembersTab";
 import PveLibraryTab from "@/components/PveLibraryTab";
-import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
+import { fetchPortalChampions } from "@/lib/portalChampions";
 import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
 import moontonHeroImages from "@/data/moontonHeroImages.json";
 import {
@@ -691,6 +691,60 @@ function getApiBase() {
   return isLocalHost() ? "http://localhost:3000" : "";
 }
 
+async function callPortalPlayerData(payload) {
+  const apiBase = getApiBase();
+  const response = await fetch(`${apiBase}/api/portal-player-data`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.ok === false) {
+    throw new Error(json?.error || "Erreur API Portal.");
+  }
+  return json;
+}
+
+async function callPortalAccessApi(payload) {
+  const apiBase = getApiBase();
+  const response = await fetch(`${apiBase}/api/portal-access`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.ok === false) {
+    throw new Error(json?.error || "Erreur API Portal.");
+  }
+  return json;
+}
+
+async function callPortalAdminDefenses(payload) {
+  const apiBase = getApiBase();
+  const response = await fetch(`${apiBase}/api/portal-admin-defenses`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.ok === false) {
+    throw new Error(json?.error || "Erreur API gestion defense.");
+  }
+  return json;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Lecture fichier impossible."));
+    reader.readAsDataURL(file);
+  });
+}
+
 const PORTAL_SESSION_STORAGE_KEY = "paladinPortalSession";
 const DASHBOARD_SESSION_STORAGE_KEY = "guildDashboardSession";
 const portalDefaultPasswords = ["motdepassemembre", "motdepasseadmin"];
@@ -1257,29 +1311,26 @@ function LoginPanel({ onLogin }) {
     setIsSubmitting(true);
 
     try {
-      const { data, error } = await supabase
-        .from("guild_members")
-        .select("id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language")
-        .eq("discord_id", cleanDiscordId)
-        .eq("password", cleanPassword)
-        .maybeSingle();
+      const apiBase = getApiBase();
+      const response = await fetch(`${apiBase}/api/portal-auth?action=login`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "login",
+          discordId: cleanDiscordId,
+          password: cleanPassword,
+          remember,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
 
-      if (error) throw error;
-
-      if (!data) {
-        setErrorMessage(t("login.invalidCredentials", "Identifiant Discord ou mot de passe incorrect."));
+      if (!response.ok || !payload?.session) {
+        setErrorMessage(payload?.error || t("login.invalidCredentials", "Identifiant Discord ou mot de passe incorrect."));
         return;
       }
 
-      if (
-        (data.community_access_type === "community" || isPortalCommunityRole(data.role)) &&
-        data.community_status === "inactive"
-      ) {
-        setErrorMessage(t("login.inactiveCommunityAccount", "Ce compte communaute est desactive. Contacte Darius."));
-        return;
-      }
-
-      onLogin(buildPortalSession({ ...data, password_change_required: isForcedPortalPassword(cleanPassword) }), { remember });
+      onLogin(payload.session, { remember });
     } catch (error) {
       console.error("[portal-login]", error);
       setErrorMessage(t("login.failed", "Connexion impossible. Reessaie ou contacte un admin."));
@@ -1322,44 +1373,25 @@ function LoginPanel({ onLogin }) {
     setForgotResult(null);
 
     try {
-      const { data: member, error: memberError } = await supabase
-        .from("guild_members")
-        .select("id, watcher_name, discord_id, guild_code")
-        .eq("discord_id", cleanDiscordId)
-        .maybeSingle();
+      const apiBase = getApiBase();
+      const response = await fetch(`${apiBase}/api/portal-auth?action=forgot-admins`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "forgot-admins",
+          discordId: cleanDiscordId,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
 
-      if (memberError) throw memberError;
-
-      if (!member) {
-        setForgotError(t("login.forgotNotFound", "Aucun compte Portal trouve pour cet ID Discord."));
-        return;
+      if (!response.ok) {
+        throw new Error(payload?.error || t("login.forgotNotFound", "Aucun compte Portal trouve pour cet ID Discord."));
       }
-
-      const guildCode = String(member.guild_code || "").trim();
-      if (!guildCode) {
-        setForgotError(t("login.forgotNoGuild", "Ce compte n'a pas de guilde assignee. Contacte un admin Paladin."));
-        return;
-      }
-
-      const { data: admins, error: adminsError } = await supabase
-        .from("guild_members")
-        .select("watcher_name, discord_id, role, guild_code")
-        .eq("guild_code", guildCode);
-
-      if (adminsError) throw adminsError;
-
-      const adminRows = (admins || [])
-        .filter((row) => isAdminRole(row.role))
-        .sort((left, right) => String(left.watcher_name || "").localeCompare(String(right.watcher_name || ""), "fr", { sensitivity: "base" }))
-        .map((row) => ({
-          name: row.watcher_name || row.discord_id || "Admin",
-          discordId: row.discord_id || "",
-          role: row.role || "admin",
-        }));
 
       setForgotResult({
-        guildCode,
-        admins: adminRows,
+        guildCode: payload.guildCode || "",
+        admins: payload.admins || [],
       });
     } catch (error) {
       console.error("[portal-forgot-password]", error);
@@ -1391,6 +1423,7 @@ function LoginPanel({ onLogin }) {
       const apiBase = getApiBase();
       const response = await fetch(`${apiBase}/api/portal-access`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "external-account-request",
@@ -2018,24 +2051,34 @@ function PortalShell({ session, onLogout }) {
       }
 
       setPortalLicenseLoaded(false);
-      const { data, error } = await supabase
-        .from("portal_guild_licenses")
-        .select("plan, status, trial_started_at, trial_ends_at, current_period_started_at, current_period_ends_at")
-        .eq("guild_space_key", guildSpaceKey)
-        .maybeSingle();
+
+      let payload = {};
+      let response;
+      try {
+        response = await fetch(`${getApiBase()}/api/portal-licenses?scope=current`, {
+          method: "GET",
+          credentials: "include",
+        });
+        payload = await response.json().catch(() => ({}));
+      } catch (error) {
+        if (!cancelled) {
+          console.error("[portal-license]", error);
+          setPortalLicense(null);
+          setPortalLicenseLoaded(true);
+        }
+        return;
+      }
 
       if (cancelled) return;
 
-      if (error) {
-        if (!isMissingPortalLicenseTable(error)) {
-          console.error("[portal-license]", error);
-        }
+      if (!response?.ok) {
+        console.error("[portal-license]", payload?.error || "Chargement licence impossible.");
         setPortalLicense(null);
         setPortalLicenseLoaded(true);
         return;
       }
 
-      setPortalLicense(data || null);
+      setPortalLicense(payload?.license || null);
       setPortalLicenseLoaded(true);
     }
 
@@ -2058,26 +2101,35 @@ function PortalShell({ session, onLogout }) {
 
       setPveContentsLoaded(false);
 
-      const { data, error } = await supabase
-        .from("pve_contents")
-        .select("id, slug, name, description, stage_count, sort_order, category_slug, category_name, category_sort_order, is_active")
-        .eq("is_active", true)
-        .order("category_sort_order", { ascending: true })
-        .order("sort_order", { ascending: true })
-        .order("name", { ascending: true });
+      let payload = {};
+      let response;
+      try {
+        response = await fetch(`${getApiBase()}/api/pve-videos`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "navigation" }),
+        });
+        payload = await response.json().catch(() => ({}));
+      } catch (error) {
+        if (!cancelled) {
+          console.error("[pve-contents]", error);
+          setPveContents(mergePveContentNavItems([]));
+          setPveContentsLoaded(true);
+        }
+        return;
+      }
 
       if (cancelled) return;
 
-      if (error) {
-        if (error.code !== "42P01") {
-          console.error("[pve-contents]", error);
-        }
+      if (!response?.ok) {
+        console.error("[pve-contents]", payload?.error || "Chargement PVE impossible.");
         setPveContents(mergePveContentNavItems([]));
         setPveContentsLoaded(true);
         return;
       }
 
-      setPveContents(mergePveContentNavItems(data || []));
+      setPveContents(mergePveContentNavItems(payload?.contents || []));
       setPveContentsLoaded(true);
     }
 
@@ -2850,25 +2902,11 @@ function HeroBoxView({ session }) {
       setHeroBoxError("");
 
       try {
-        const [membersResult, championsResult] = await Promise.all([
-          supabase
-            .from("guild_members")
-            .select("id, role, discord_id, watcher_name, guild_code")
-            .order("watcher_name", { ascending: true }),
-          supabase.from("champions").select("*"),
-        ]);
-
-        if (membersResult.error) throw membersResult.error;
-        if (championsResult.error) throw championsResult.error;
+        const data = await callPortalPlayerData({ action: "heroBoxBase" });
         if (cancelled) return;
 
-        const nextMembers = filterByGuildScope(
-          membersResult.data || [],
-          session,
-          (member) => member.guild_code,
-          { leaderSeesAll: true },
-        );
-        const nextHeroCards = buildPortalHeroCards(championsResult.data || []);
+        const nextMembers = data.members || [];
+        const nextHeroCards = buildPortalHeroCards(data.champions || []);
         setMembers(nextMembers);
         setHeroCards(nextHeroCards);
         setHeroStates(createEmptyHeroStateMap(nextHeroCards));
@@ -2911,17 +2949,15 @@ function HeroBoxView({ session }) {
       setHeroBoxError("");
 
       try {
-        const { data, error } = await supabase
-          .from("member_awakenings")
-          .select("champion_id, awakening_level")
-          .eq("member_id", selectedPlayerKey)
-          .in("champion_id", championIds);
-
-        if (error) throw error;
+        const data = await callPortalPlayerData({
+          action: "heroAwakenings",
+          memberId: selectedPlayerKey,
+          championIds,
+        });
         if (cancelled) return;
 
         const awakeningByChampionId = new Map(
-          (data || []).map((row) => [String(row.champion_id), clampAwakeningLevel(row.awakening_level)]),
+          (data.awakenings || []).map((row) => [String(row.champion_id), clampAwakeningLevel(row.awakening_level)]),
         );
         const nextStates = createEmptyHeroStateMap(heroCards);
 
@@ -3063,16 +3099,12 @@ function HeroBoxView({ session }) {
     }));
 
     try {
-      const { error } = await supabase.from("member_awakenings").upsert(
-        {
-          member_id: selectedPlayerKey,
-          champion_id: championId,
-          awakening_level: awakeningLevel,
-        },
-        { onConflict: "member_id,champion_id" },
-      );
-
-      if (error) throw error;
+      await callPortalPlayerData({
+        action: "setHeroAwakening",
+        memberId: selectedPlayerKey,
+        championId,
+        awakeningLevel,
+      });
       void logPortalActivity(session, {
         targetMemberId: selectedPlayerKey,
         targetName: selectedPlayer ? getMemberDisplayName(selectedPlayer) : "",
@@ -3115,16 +3147,14 @@ function HeroBoxView({ session }) {
     }));
 
     try {
-      const { error } = await supabase.from("member_awakenings").upsert(
-        targetHeroes.map((hero) => ({
-          member_id: selectedPlayerKey,
-          champion_id: championIdByHeroId[hero.id],
-          awakening_level: 5,
+      await callPortalPlayerData({
+        action: "bulkHeroAwakening",
+        memberId: selectedPlayerKey,
+        entries: targetHeroes.map((hero) => ({
+          championId: championIdByHeroId[hero.id],
+          awakeningLevel: 5,
         })),
-        { onConflict: "member_id,champion_id" },
-      );
-
-      if (error) throw error;
+      });
       void logPortalActivity(session, {
         targetMemberId: selectedPlayerKey,
         targetName: selectedPlayer ? getMemberDisplayName(selectedPlayer) : "",
@@ -3799,7 +3829,8 @@ function LauncherView({ session: portalSession }) {
 
   async function fetchSessionStatus(nextSessionId) {
     const response = await fetch(
-      `${apiBase}/api/gvg-server?action=launcher-status&session=${encodeURIComponent(nextSessionId)}`
+      `${apiBase}/api/gvg-server?action=launcher-status&session=${encodeURIComponent(nextSessionId)}`,
+      { credentials: "include" }
     );
     const data = await readJson(response, "session launcher");
 
@@ -3861,6 +3892,7 @@ function LauncherView({ session: portalSession }) {
 
       const response = await fetch(`${apiBase}/api/gvg-server`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "launcher-create",
@@ -4310,99 +4342,25 @@ function PortalAdminDefensesView({ session }) {
       setLoading(true);
       setErrorMessage("");
 
-      let defensesQuery = supabase
-        .from("guild_defenses")
-        .select(`
-          *,
-          guild_defense_slots (
-            slot_index,
-            champion_id,
-            champions (
-              name
-            )
-          ),
-          guild_defense_conditions (
-            id,
-            champion_id,
-            min_awakening,
-            champions (
-              name
-            )
-          )
-        `);
-
-      defensesQuery = activeGuildIsPaladin
-        ? defensesQuery.or(`is_global.eq.true,guild_code.eq.${activeGuildCode}`)
-        : defensesQuery.eq("guild_code", activeGuildCode);
-
-      const [defensesResult, championsResult] = await Promise.all([
-        defensesQuery.order("created_at", { ascending: true }),
-        supabase.from("champions").select("*").order("name", { ascending: true }),
-      ]);
-
-      if (cancelled) return;
-
-      if (defensesResult.error || championsResult.error) {
-        console.error("Erreur chargement gestion defense Portal:", defensesResult.error || championsResult.error);
-        setDefenses([]);
-        setChampions([]);
-        setErrorMessage("Impossible de charger les defenses admin pour le moment.");
-        setLoading(false);
-        return;
-      }
-
-      const defenseRows = defensesResult.data || [];
-      const defenseIds = defenseRows.map((row) => row.id).filter(Boolean);
-      let blocksByDefenseId = new Map();
-
-      if (defenseIds.length > 0) {
-        const { data: blockRows, error: blocksError } = await supabase
-          .from("guild_defense_blocks")
-          .select("id, defense_id, block_type, content, sort_order")
-          .in("defense_id", defenseIds)
-          .order("sort_order", { ascending: true });
+      try {
+        const data = await callPortalAdminDefenses({
+          action: "load",
+          guildCode: activeGuildCode,
+        });
 
         if (cancelled) return;
 
-        if (blocksError) {
-          console.error("Erreur chargement infos gestion defense Portal:", blocksError);
-        } else {
-          blocksByDefenseId = (blockRows || []).reduce((grouped, block) => {
-            const defenseId = String(block.defense_id);
-            const previous = grouped.get(defenseId) || [];
-
-            grouped.set(defenseId, [
-              ...previous,
-              {
-                id: block.id,
-                blockType: block.block_type,
-                block_type: block.block_type,
-                content: block.content,
-                sortOrder: block.sort_order ?? 9999,
-                sort_order: block.sort_order ?? 9999,
-              },
-            ]);
-
-            return grouped;
-          }, new Map());
-        }
+        setDefenses(data.defenses || []);
+        setChampions(data.champions || []);
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Erreur chargement gestion defense Portal:", error);
+        setDefenses([]);
+        setChampions([]);
+        setErrorMessage(error?.message || "Impossible de charger les defenses admin pour le moment.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      const nextDefenses = resolveDefenseVariantsForGuild(
-        defenseRows.map((row) => mapPortalAdminDefenseRow(row, blocksByDefenseId)),
-        activeGuildCode,
-      )
-        .sort((left, right) => {
-          if ((left.sortOrder ?? 9999) !== (right.sortOrder ?? 9999)) {
-            return (left.sortOrder ?? 9999) - (right.sortOrder ?? 9999);
-          }
-
-          return String(left.name || "").localeCompare(String(right.name || ""), "fr", { sensitivity: "base" });
-        });
-
-      setDefenses(nextDefenses);
-      setChampions(championsResult.data || []);
-      setLoading(false);
     }
 
     loadAdminDefenses();
@@ -4447,98 +4405,14 @@ function PortalAdminDefensesView({ session }) {
   async function createLocalDefenseVariant(defense, { hidden = false } = {}) {
     if (!defense?.id) return null;
 
-    const rootId = getDefenseRootId(defense);
-    if (!rootId) return null;
+    const data = await callPortalAdminDefenses({
+      action: "ensure-local",
+      defenseId: defense.id,
+      guildCode: activeGuildCode,
+      hidden,
+    });
 
-    const { data: existingRows, error: existingError } = await supabase
-      .from("guild_defenses")
-      .select("*")
-      .eq("source_defense_id", rootId)
-      .eq("guild_code", activeGuildCode)
-      .limit(1);
-
-    if (existingError) throw existingError;
-
-    const existing = existingRows?.[0] || null;
-    const localPayload = {
-      name: defense.name || "",
-      tier: defense.tier || "meta_s",
-      type: defense.type || "Tour",
-      faction: defense.faction || null,
-      image_url: defense.image || defense.image_url || null,
-      guild_code: activeGuildCode,
-      is_global: false,
-      source_defense_id: rootId,
-      sort_order: defense.sortOrder ?? 9999,
-      is_hidden: hidden,
-    };
-
-    const { data: localRow, error: localError } = existing
-      ? await supabase
-          .from("guild_defenses")
-          .update(localPayload)
-          .eq("id", existing.id)
-          .select("*")
-          .single()
-      : await supabase
-          .from("guild_defenses")
-          .insert(localPayload)
-          .select("*")
-          .single();
-
-    if (localError) throw localError;
-
-    if (!existing && !hidden) {
-      const slotChampions = (defense.slots || [])
-        .map((heroName) => championByName.get(normalizeDefenseChampionName(heroName)))
-        .filter(Boolean);
-
-      if (slotChampions.length > 0) {
-        const { error: slotsError } = await supabase.from("guild_defense_slots").insert(
-          slotChampions.map((champion, index) => ({
-            defense_id: localRow.id,
-            champion_id: champion.id,
-            slot_index: index + 1,
-          })),
-        );
-
-        if (slotsError) throw slotsError;
-      }
-
-      const conditionRows = (defense.conditions || [])
-        .filter((condition) => condition.championId)
-        .map((condition) => ({
-          defense_id: localRow.id,
-          champion_id: condition.championId,
-          min_awakening: condition.minAwakening,
-        }));
-
-      if (conditionRows.length > 0) {
-        const { error: conditionsError } = await supabase.from("guild_defense_conditions").insert(conditionRows);
-        if (conditionsError) throw conditionsError;
-      }
-
-      const blockRows = (defense.infoBlocks || []).map((block, index) => ({
-        defense_id: localRow.id,
-        block_type: block.block_type || block.blockType || "text",
-        content: block.content,
-        sort_order: block.sort_order ?? block.sortOrder ?? index + 1,
-      }));
-
-      if (blockRows.length > 0) {
-        const { error: blocksError } = await supabase.from("guild_defense_blocks").insert(blockRows);
-        if (blocksError) throw blocksError;
-      }
-    }
-
-    const localDefense = {
-      ...defense,
-      id: localRow.id,
-      guildCode: localRow.guild_code || activeGuildCode,
-      isGlobal: false,
-      isHidden: Boolean(localRow.is_hidden),
-      sourceDefenseId: localRow.source_defense_id || rootId,
-    };
+    const localDefense = data.defense || null;
 
     addOrReplaceLocalDefense(localDefense);
     return localDefense;
@@ -4601,21 +4475,14 @@ function PortalAdminDefensesView({ session }) {
 
     try {
       const compressedFile = await compressPortalDefenseImage(file);
-      const randomId =
-        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
-      const filePath = `portal-defense-${Date.now()}-${randomId}.webp`;
+      const dataUrl = await fileToDataUrl(compressedFile);
+      const data = await callPortalAdminDefenses({
+        action: "upload-image",
+        dataUrl,
+        fileName: compressedFile.name || file.name || "portal-defense.webp",
+      });
 
-      const { error: uploadError } = await supabase.storage
-        .from("defense-images")
-        .upload(filePath, compressedFile, {
-          contentType: "image/webp",
-          upsert: false,
-        });
-
-      if (uploadError) throw uploadError;
-
-      const { data } = supabase.storage.from("defense-images").getPublicUrl(filePath);
-      setDraft((previous) => ({ ...previous, image: data.publicUrl }));
+      setDraft((previous) => ({ ...previous, image: data.imageUrl || "" }));
       setDraftImageMessage(successMessage || t("adminDefenses.fileImageAdded", "Image ajoutee."));
       return true;
     } catch (error) {
@@ -4719,56 +4586,29 @@ function PortalAdminDefensesView({ session }) {
     const isEditMode = draft.id && String(draft.id) !== "0";
     const nextIsGlobal = activeGuildIsPaladin && (isEditMode ? Boolean(draft.isGlobal) : activeGuildCode === "G1");
     const nextGuildCode = nextIsGlobal ? draft.guildCode || "G1" : activeGuildCode;
-    const defensePayload = {
-      name: cleanName,
-      tier: draft.tier,
-      type: draft.type,
-      faction: normalizePortalDefenseFaction(draft.faction) || null,
-      image_url: draft.image || null,
-      guild_code: nextGuildCode,
-      is_global: nextIsGlobal,
-      source_defense_id: draft.sourceDefenseId || null,
-    };
 
     try {
-      const { data: defenseData, error: defenseError } = isEditMode
-        ? await supabase
-            .from("guild_defenses")
-            .update(defensePayload)
-            .eq("id", draft.id)
-            .select("*")
-            .single()
-        : await supabase
-            .from("guild_defenses")
-            .insert(defensePayload)
-            .select("*")
-            .single();
-
-      if (defenseError) throw defenseError;
-
-      if (isEditMode) {
-        const { error: deleteSlotsError } = await supabase
-          .from("guild_defense_slots")
-          .delete()
-          .eq("defense_id", defenseData.id);
-
-        if (deleteSlotsError) throw deleteSlotsError;
-      }
-
-      const { error: slotsError } = await supabase.from("guild_defense_slots").insert(
-        slotChampions.map((champion, index) => ({
-          defense_id: defenseData.id,
-          champion_id: champion.id,
-          slot_index: index + 1,
-        })),
-      );
-
-      if (slotsError) throw slotsError;
+      const data = await callPortalAdminDefenses({
+        action: "save",
+        guildCode: activeGuildCode,
+        draft: {
+          id: isEditMode ? draft.id : null,
+          name: cleanName,
+          tier: draft.tier,
+          type: draft.type,
+          faction: normalizePortalDefenseFaction(draft.faction) || null,
+          imageUrl: draft.image || null,
+          guildCode: nextGuildCode,
+          isGlobal: nextIsGlobal,
+          sourceDefenseId: draft.sourceDefenseId || null,
+          slots: normalizedSlots,
+        },
+      });
 
       void logPortalActivity(session, {
         actionType: isEditMode ? "admin_defense_update" : "admin_defense_create",
         entityType: "defense",
-        entityId: String(defenseData.id),
+        entityId: String(data.defense?.id || draft.id || ""),
         summary: `${session?.watcherName || session?.name || "Admin"} a ${isEditMode ? "modifie" : "cree"} la defense ${cleanName}`,
         metadata: {
           defenseName: cleanName,
@@ -4838,13 +4678,13 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
 
     try {
-      const { error } = await supabase.from("guild_defense_conditions").insert({
-        defense_id: selectedConditionDefense.id,
-        champion_id: champion.id,
-        min_awakening: minAwakening,
+      await callPortalAdminDefenses({
+        action: "condition-add",
+        guildCode: activeGuildCode,
+        defenseId: selectedConditionDefense.id,
+        championId: champion.id,
+        minAwakening,
       });
-
-      if (error) throw error;
 
       void logPortalActivity(session, {
         actionType: "admin_defense_condition_add",
@@ -4877,22 +4717,12 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
 
     try {
-      const { data, error } = await supabase
-        .from("guild_defense_conditions")
-        .select(`
-          id,
-          champion_id,
-          min_awakening,
-          champions (
-            name
-          )
-        `)
-        .eq("defense_id", editableDefense.id)
-        .order("min_awakening", { ascending: false });
-
-      if (error) throw error;
-
-      const conditions = (data || []).map(mapPortalDefenseConditionRow);
+      const data = await callPortalAdminDefenses({
+        action: "conditions-load",
+        guildCode: activeGuildCode,
+        defenseId: editableDefense.id,
+      });
+      const conditions = data.conditions || [];
       if (conditions.length === 0) {
         setErrorMessage("Cette defense n'a aucune condition a retirer.");
         return;
@@ -4918,13 +4748,12 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
 
     try {
-      const { error } = await supabase
-        .from("guild_defense_conditions")
-        .delete()
-        .eq("id", condition.id)
-        .eq("defense_id", conditionRemoveDefense.id);
-
-      if (error) throw error;
+      await callPortalAdminDefenses({
+        action: "condition-remove",
+        guildCode: activeGuildCode,
+        defenseId: conditionRemoveDefense.id,
+        conditionId: condition.id,
+      });
 
       void logPortalActivity(session, {
         actionType: "admin_defense_condition_remove",
@@ -4986,109 +4815,37 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
 
     try {
-      const resetGuildCodes = shouldHideLocally
-        ? [activeGuildCode]
-        : defense.isGlobal || isPaladinGuildCode(defense.guildCode)
-          ? PALADIN_CLUSTER_GUILD_CODES
-          : [defense.guildCode || activeGuildCode].filter(Boolean);
+      const data = await callPortalAdminDefenses({
+        action: "delete",
+        guildCode: activeGuildCode,
+        defenseId: defense.id,
+      });
 
-      let resetDefense1Query = supabase
-        .from("guild_members")
-        .update({ defense_1: EMPTY_DEFENSE_SLOT })
-        .eq("defense_1", defense.name);
-      let resetDefense2Query = supabase
-        .from("guild_members")
-        .update({ defense_2: EMPTY_DEFENSE_SLOT })
-        .eq("defense_2", defense.name);
+      void logPortalActivity(session, {
+        actionType: data.hidden ? "admin_defense_local_hide" : "admin_defense_delete",
+        entityType: "defense",
+        entityId: String(defense.id),
+        summary: data.hidden
+          ? `${session?.watcherName || session?.name || "Admin"} a retire localement ${defense.name} pour ${activeGuildCode}`
+          : `${session?.watcherName || session?.name || "Admin"} a supprime la defense ${defense.name}`,
+        metadata: {
+          defenseName: defense.name,
+          guildCode: activeGuildCode,
+          isGlobal: defense.isGlobal,
+          sourceDefenseId: getDefenseRootId(defense),
+        },
+      });
 
-      if (resetGuildCodes.length > 0) {
-        resetDefense1Query = resetDefense1Query.in("guild_code", resetGuildCodes);
-        resetDefense2Query = resetDefense2Query.in("guild_code", resetGuildCodes);
-      }
-
-      if (shouldHideLocally) {
-        const localDefense = await createLocalDefenseVariant(defense, { hidden: true });
-        const [resetDefense1, resetDefense2] = await Promise.all([resetDefense1Query, resetDefense2Query]);
-
-        const mutationError = resetDefense1.error || resetDefense2.error;
-        if (mutationError) throw mutationError;
-
-        void logPortalActivity(session, {
-          actionType: "admin_defense_local_hide",
-          entityType: "defense",
-          entityId: String(localDefense?.id || defense.id),
-          summary: `${session?.watcherName || session?.name || "Admin"} a retire localement ${defense.name} pour ${activeGuildCode}`,
-          metadata: {
-            defenseName: defense.name,
-            guildCode: activeGuildCode,
-            sourceDefenseId: getDefenseRootId(defense),
-          },
-        });
-
+      if (data.hidden || shouldHideLocally) {
         setDefenses((previous) =>
           resolveDefenseVariantsForGuild(previous, activeGuildCode).filter(
             (item) => String(getDefenseRootId(item)) !== String(getDefenseRootId(defense)),
           ),
         );
         setMessage(`Defense retiree uniquement pour ${activeGuildCode} : ${defense.name}.`);
-        setRefreshTick((value) => value + 1);
-        return;
+      } else {
+        setMessage(`Defense supprimee : ${defense.name}.`);
       }
-
-      const { data: blocks, error: blocksError } = await supabase
-        .from("guild_defense_blocks")
-        .select("id, block_type, content")
-        .eq("defense_id", defense.id);
-
-      if (blocksError) throw blocksError;
-
-      const storagePaths = [
-        getDefenseStoragePathFromPublicUrl(defense.image || defense.image_url),
-        ...(blocks || [])
-          .filter((block) => block.block_type === "image")
-          .map((block) => getDefenseStoragePathFromPublicUrl(block.content)),
-      ].filter(Boolean);
-
-      const uniqueStoragePaths = [...new Set(storagePaths)];
-
-      if (uniqueStoragePaths.length > 0) {
-        const { error: storageError } = await supabase.storage.from("defense-images").remove(uniqueStoragePaths);
-        if (storageError) throw storageError;
-      }
-
-      const [resetDefense1, resetDefense2, blocksDelete, conditionsDelete, slotsDelete] = await Promise.all([
-        resetDefense1Query,
-        resetDefense2Query,
-        supabase.from("guild_defense_blocks").delete().eq("defense_id", defense.id),
-        supabase.from("guild_defense_conditions").delete().eq("defense_id", defense.id),
-        supabase.from("guild_defense_slots").delete().eq("defense_id", defense.id),
-      ]);
-
-      const mutationError =
-        resetDefense1.error ||
-        resetDefense2.error ||
-        blocksDelete.error ||
-        conditionsDelete.error ||
-        slotsDelete.error;
-
-      if (mutationError) throw mutationError;
-
-      const { error: defenseError } = await supabase.from("guild_defenses").delete().eq("id", defense.id);
-      if (defenseError) throw defenseError;
-
-      void logPortalActivity(session, {
-        actionType: "admin_defense_delete",
-        entityType: "defense",
-        entityId: String(defense.id),
-        summary: `${session?.watcherName || session?.name || "Admin"} a supprime la defense ${defense.name}`,
-        metadata: {
-          defenseName: defense.name,
-          guildCode: defense.guildCode,
-          isGlobal: defense.isGlobal,
-        },
-      });
-
-      setMessage(`Defense supprimee : ${defense.name}.`);
       setRefreshTick((value) => value + 1);
     } catch (error) {
       setErrorMessage(error?.message || "Suppression de la defense impossible.");
@@ -5171,6 +4928,7 @@ function PortalAdminDefensesView({ session }) {
       ) : (
         <AdminDefensesTab
           defenses={defenses}
+          activeGuildCode={activeGuildCode}
           onAdd={openAddDefense}
           onEdit={openEditDefense}
           onDelete={deleteDefense}
@@ -5730,6 +5488,7 @@ function AddHeroView({ session }) {
 
       const response = await fetch(`${apiBase}/api/portal-champions`, {
         method: "POST",
+        credentials: "include",
         body: formData,
       });
       const data = await response.json().catch(() => null);
@@ -6071,7 +5830,9 @@ function BillingView({ session }) {
 
     try {
       const params = new URLSearchParams({ actorMemberId });
-      const response = await fetch(`${apiBase}/api/portal-licenses?${params.toString()}`);
+      const response = await fetch(`${apiBase}/api/portal-licenses?${params.toString()}`, {
+        credentials: "include",
+      });
       const payload = await response.json().catch(() => ({}));
 
       if (!response.ok) {
@@ -6139,6 +5900,7 @@ function BillingView({ session }) {
     try {
       const response = await fetch(`${apiBase}/api/portal-licenses`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action,
@@ -6468,6 +6230,7 @@ function BillingView({ session }) {
 }
 
 function PasswordChangeRequiredView({ session, onPasswordChanged, onLogout }) {
+  const apiBase = useMemo(() => getApiBase(), []);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -6506,31 +6269,24 @@ function PasswordChangeRequiredView({ session, onPasswordChanged, onLogout }) {
     setErrorMessage("");
 
     try {
-      const { data, error } = await supabase
-        .from("guild_members")
-        .update({ password: cleanNewPassword })
-        .eq("id", session?.memberId || session?.id)
-        .eq("password", cleanCurrentPassword)
-        .select("id")
-        .maybeSingle();
+      const response = await fetch(`${apiBase}/api/portal-auth?action=change-password`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "change-password",
+          currentPassword: cleanCurrentPassword,
+          newPassword: cleanNewPassword,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
 
-      if (error) throw error;
-
-      if (!data) {
-        setErrorMessage("Le mot de passe actuel est incorrect.");
+      if (!response.ok || !payload?.session) {
+        setErrorMessage(payload?.error || "Changement impossible. Reessaie ou contacte un admin.");
         return;
       }
 
-      await logPortalActivity(session, {
-        targetMemberId: session?.memberId || session?.id || null,
-        targetName: session?.watcherName || session?.name || "",
-        actionType: "player_password_change",
-        entityType: "guild_members",
-        entityId: session?.memberId || session?.id || null,
-        summary: `${session?.watcherName || session?.name || "Joueur"} a change son mot de passe`,
-      });
-
-      onPasswordChanged();
+      onPasswordChanged(payload.session);
     } catch (error) {
       console.error("[portal-password-change]", error);
       setErrorMessage("Changement impossible. Reessaie ou contacte un admin.");
@@ -6641,22 +6397,13 @@ function PlayerAccessView({ session }) {
     async function loadMembers() {
       setLoadingMembers(true);
       try {
-        const { data, error } = await supabase
-          .from("guild_members")
-          .select("id, role, discord_id, watcher_name, guild_code")
-          .order("watcher_name", { ascending: true });
+        const payload = await callPortalAccessApi({ action: "members-list" });
 
-        if (error) throw error;
-
-        const scopedMembers = filterByGuildScope(data || [], session, (member) => member.guild_code, {
-          leaderSeesAll: true,
-        });
-
-        setMembers(scopedMembers.map((member) => ({
+        setMembers((payload.members || []).map((member) => ({
           id: member.id,
-          name: getMemberDisplayName(member),
-          discordId: member.discord_id || "",
-          guildCode: member.guild_code || "",
+          name: member.name || "",
+          discordId: member.discordId || "",
+          guildCode: member.guildCode || "",
           role: member.role || "Joueur",
         })));
       } catch (error) {
@@ -6702,6 +6449,7 @@ function PlayerAccessView({ session }) {
     try {
       const response = await fetch(`${apiBase}/api/portal-access`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "reset",
@@ -7177,28 +6925,29 @@ function LogsView({ session }) {
     let cancelled = false;
 
     async function loadMembers() {
-      const { data, error } = await supabase
-        .from("guild_members")
-        .select("id, role, discord_id, watcher_name, guild_code")
-        .order("watcher_name", { ascending: true });
+      try {
+        const payload = await callPortalAccessApi({ action: "members-list" });
+        if (cancelled) return;
 
-      if (cancelled) return;
-
-      if (error) {
-        setErrorMessage(error.message || t("playerAccess.loadPlayersError", "Impossible de charger les joueurs."));
-        return;
+        const nextMembers = (payload.members || []).map((member) => ({
+          id: member.id,
+          role: member.role || "member",
+          discord_id: member.discordId || "",
+          watcher_name: member.name || "",
+          guild_code: member.guildCode || "",
+        }));
+        setMembers(nextMembers);
+        setSelectedMemberId((current) => {
+          if (current && nextMembers.some((member) => String(member.id) === String(current))) return current;
+          const connectedId = session?.memberId || session?.id || "";
+          const connected = nextMembers.find((member) => String(member.id) === String(connectedId));
+          return connected?.id || nextMembers[0]?.id || "";
+        });
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error?.message || t("playerAccess.loadPlayersError", "Impossible de charger les joueurs."));
+        }
       }
-
-      const nextMembers = filterByGuildScope(data || [], session, (member) => member.guild_code, {
-        leaderSeesAll: true,
-      });
-      setMembers(nextMembers);
-      setSelectedMemberId((current) => {
-        if (current && nextMembers.some((member) => String(member.id) === String(current))) return current;
-        const connectedId = session?.memberId || session?.id || "";
-        const connected = nextMembers.find((member) => String(member.id) === String(connectedId));
-        return connected?.id || nextMembers[0]?.id || "";
-      });
     }
 
     loadMembers();
@@ -7221,7 +6970,9 @@ function LogsView({ session }) {
       params.set("limit", "120");
 
       try {
-        const response = await fetch(`${apiBase}/api/portal-activity?${params.toString()}`);
+        const response = await fetch(`${apiBase}/api/portal-activity?${params.toString()}`, {
+          credentials: "include",
+        });
         const data = await response.json().catch(() => null);
 
         if (!response.ok) {
@@ -7430,45 +7181,32 @@ function SaasPortalContent() {
   const [session, setSession] = useState(() => readStoredPortalSession());
 
   useEffect(() => {
-    const memberId = session?.memberId || session?.id || null;
-    const discordId = session?.discordId || session?.discord_id || null;
-
-    if (!memberId && !discordId) return undefined;
+    if (!session?.memberId && !session?.id) return undefined;
 
     let cancelled = false;
 
     async function refreshStoredSessionRole() {
       try {
-        let query = supabase
-          .from("guild_members")
-          .select("id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language");
-
-        query = memberId ? query.eq("id", memberId) : query.eq("discord_id", discordId);
-
-        const { data, error } = await query.maybeSingle();
+        const apiBase = getApiBase();
+        const response = await fetch(`${apiBase}/api/portal-auth?action=session`, {
+          method: "GET",
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => ({}));
 
         if (cancelled) return;
 
-        if (error) {
-          console.warn("[portal-session-refresh]", error);
+        if (!response.ok || !payload?.session) {
+          clearPortalSession();
+          setSession(null);
           return;
         }
 
-        if (!data) return;
-
         setSession((current) => {
           const currentMemberId = current?.memberId || current?.id || null;
-          const currentDiscordId = current?.discordId || current?.discord_id || null;
-
-          if (memberId && String(currentMemberId) !== String(memberId)) return current;
-          if (!memberId && discordId && String(currentDiscordId) !== String(discordId)) return current;
-
-          return refreshPortalSessionStorage(
-            buildPortalSession({
-              ...data,
-              password_change_required: Boolean(current?.passwordChangeRequired),
-            }),
-          );
+          const nextMemberId = payload.session?.memberId || payload.session?.id || null;
+          if (String(currentMemberId || "") !== String(nextMemberId || "")) return current;
+          return refreshPortalSessionStorage(payload.session);
         });
       } catch (error) {
         if (!cancelled) console.warn("[portal-session-refresh]", error);
@@ -7480,22 +7218,29 @@ function SaasPortalContent() {
     return () => {
       cancelled = true;
     };
-  }, [session?.memberId, session?.id, session?.discordId, session?.discord_id]);
+  }, [session?.memberId, session?.id]);
 
   function handleLogin(nextSession, options = {}) {
     persistPortalSession(nextSession, Boolean(options.remember));
     setSession(nextSession);
   }
 
-  function handlePasswordChanged() {
+  function handlePasswordChanged(nextSession = null) {
     setSession((current) => {
-      const nextSession = { ...(current || {}), passwordChangeRequired: false };
-      replaceStoredPortalSession(nextSession);
-      return nextSession;
+      const resolvedSession = nextSession || { ...(current || {}), passwordChangeRequired: false };
+      replaceStoredPortalSession(resolvedSession);
+      return resolvedSession;
     });
   }
 
   function handleLogout() {
+    const apiBase = getApiBase();
+    fetch(`${apiBase}/api/portal-auth?action=logout`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "logout" }),
+    }).catch(() => {});
     clearPortalSession();
     setSession(null);
   }

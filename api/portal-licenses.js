@@ -1,4 +1,4 @@
-/* global Buffer, process */
+/* global process */
 import { createClient } from "@supabase/supabase-js";
 import {
   PALADIN_SPACE_KEY,
@@ -17,6 +17,14 @@ import {
   normalizeLicensePlan,
   normalizeLicenseStatus,
 } from "../src/lib/portalLicensePlans.js";
+import {
+  applyPortalCorsHeaders,
+  readJsonBody,
+  requirePortalSession,
+  requirePortalLeaderSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -25,9 +33,7 @@ const supabase = createClient(
 );
 
 function sendJson(res, status, payload) {
-  res.statusCode = status;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
+  sendPortalJson(res, status, payload, res._portalReq || null);
 }
 
 function cleanText(value) {
@@ -60,37 +66,15 @@ function isMissingLicenseTable(error) {
 }
 
 async function readBody(req) {
-  if (req.body && typeof req.body === "object") return req.body;
-
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-
-  const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
+  return readJsonBody(req);
 }
 
-async function requireLeader(actorMemberId) {
-  if (!actorMemberId) {
-    return { error: "Session leader manquante.", status: 401 };
+async function requireLeader(req) {
+  const sessionCheck = await requirePortalLeaderSession(req, supabase);
+  if (sessionCheck.error) {
+    return { error: sessionCheck.error, status: sessionCheck.status };
   }
-
-  const { data, error } = await supabase
-    .from("guild_members")
-    .select("id, role, watcher_name, discord_id, guild_code")
-    .eq("id", actorMemberId)
-    .maybeSingle();
-
-  if (error) {
-    return { error: error.message || "Verification leader impossible.", status: 500 };
-  }
-
-  if (!data || normalizeRole(data.role) !== "leader") {
-    return { error: "Acces leader refuse.", status: 403 };
-  }
-
-  return { leader: data };
+  return { leader: sessionCheck.member };
 }
 
 function buildExternalSpaces(members, licenses) {
@@ -231,6 +215,40 @@ async function listLicenses(res) {
     plans: PORTAL_LICENSE_PLANS,
     licenses,
   });
+}
+
+async function readCurrentLicense(req, res) {
+  const sessionCheck = await requirePortalSession(req, supabase);
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
+  const guildCode = normalizeGuildCode(sessionCheck.member?.guild_code);
+  const guildSpaceKey = getGuildSpaceKey(guildCode);
+
+  if (!guildSpaceKey || guildSpaceKey === PALADIN_SPACE_KEY) {
+    sendJson(res, 200, { schemaReady: true, license: null });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("portal_guild_licenses")
+    .select("plan, status, trial_started_at, trial_ends_at, current_period_started_at, current_period_ends_at")
+    .eq("guild_space_key", guildSpaceKey)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingLicenseTable(error)) {
+      sendJson(res, 200, { schemaReady: false, license: null });
+      return;
+    }
+
+    sendJson(res, 500, { error: error.message || "Chargement licence impossible." });
+    return;
+  }
+
+  sendJson(res, 200, { schemaReady: true, license: data || null });
 }
 
 function buildUpsertPayload(body, existing, leader) {
@@ -385,12 +403,35 @@ async function handleMutation(req, res, leader) {
 
 export default async function handler(req, res) {
   try {
+    res._portalReq = req;
+    applyPortalCorsHeaders(req, res);
+
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (!["GET", "POST"].includes(req.method)) {
+      sendJson(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
+    if (!verifyPortalRequestOrigin(req)) {
+      sendJson(res, 403, { error: "Origine de la requete refusee." });
+      return;
+    }
+
+    const scope = cleanText(req.query?.scope || req.query?.action).toLowerCase();
+
+    if (req.method === "GET" && scope === "current") {
+      await readCurrentLicense(req, res);
+      return;
+    }
+
     const parsedBody = req.method === "POST" ? await readBody(req) : {};
     req.body = parsedBody;
-    const actorMemberId = cleanText(
-      req.query?.actorMemberId || req.query?.actor_member_id || parsedBody?.actorMemberId || parsedBody?.actor_member_id
-    );
-    const leaderCheck = await requireLeader(actorMemberId);
+    const leaderCheck = await requireLeader(req);
 
     if (leaderCheck.error) {
       sendJson(res, leaderCheck.status, { error: leaderCheck.error });

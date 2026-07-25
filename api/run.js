@@ -1,5 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import {
+  applyPortalCorsHeaders,
+  requirePortalSession,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import {
   canUseRunTargetGuild,
   getRunScopeForGvgGuild,
   getRunTargetGuildCode,
@@ -16,10 +21,8 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-function setCorsHeaders(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+function setCorsHeaders(req, res) {
+  applyPortalCorsHeaders(req, res);
 }
 
 function normalizePos(pos) {
@@ -345,7 +348,7 @@ async function searchDefenceStrict(
 
 async function handleAdd(req, res) {
   const { mode, youtubeUrl, attackCode, commentaire, slots } = req.body || {};
-  const scope = await resolveRunScope(supabase, req);
+  const scope = await resolveRunScope(supabase, req, req.portalMember);
   const normalizedSlots = normalizeSlots(slots);
 
   if (!scope.canManageOwnRuns) {
@@ -434,7 +437,7 @@ async function handleAdd(req, res) {
 
 async function handleSearch(req, res) {
   const { queryItems, includeBoycotted = false, targetGuildCode } = req.body || {};
-  const scope = await resolveRunScope(supabase, req);
+  const scope = await resolveRunScope(supabase, req, req.portalMember);
   const boycottGuildCode = getRunTargetGuildCode(scope, targetGuildCode);
 
   if (!scope.canSearchRuns) {
@@ -457,7 +460,7 @@ async function handleSearch(req, res) {
 
 async function handleGet(req, res) {
   const { id, targetGuildCode } = req.query || {};
-  const scope = await resolveRunScope(supabase, req);
+  const scope = await resolveRunScope(supabase, req, req.portalMember);
   const boycottGuildCode = getRunTargetGuildCode(scope, targetGuildCode);
 
   if (!scope.canSearchRuns) {
@@ -552,7 +555,7 @@ async function refreshGvgDefenseStatus(supabaseClient, gvgDefenseId, targetGuild
 
 async function handleBoycott(req, res) {
   const { strat_id, boycott = true, targetGuildCode, gvgDefenseId } = req.body || {};
-  const scope = await resolveRunScope(supabase, req);
+  const scope = await resolveRunScope(supabase, req, req.portalMember);
 
   if (!scope.canBoycottRuns) {
     return res.status(403).json({ error: "abonnement insuffisant pour boycotter un run" });
@@ -623,7 +626,7 @@ async function handleBoycott(req, res) {
 
 async function handleUpdate(req, res) {
   const { strat_id, youtubeUrl, attackCode, commentaire, slots } = req.body || {};
-  const scope = await resolveRunScope(supabase, req);
+  const scope = await resolveRunScope(supabase, req, req.portalMember);
 
   if (!scope.canManageOwnRuns) {
     return res.status(403).json({ error: "abonnement insuffisant pour modifier un run" });
@@ -705,7 +708,7 @@ async function handleUpdate(req, res) {
 
 async function handleDelete(req, res) {
   const { strat_id, targetGuildCode, gvgDefenseId } = req.body || {};
-  const scope = await resolveRunScope(supabase, req);
+  const scope = await resolveRunScope(supabase, req, req.portalMember);
 
   if (!scope.canManageOwnRuns) {
     return res.status(403).json({ error: "abonnement insuffisant pour supprimer un run" });
@@ -755,10 +758,14 @@ async function handleDelete(req, res) {
 }
 
 export default async function handler(req, res) {
-  setCorsHeaders(res);
+  setCorsHeaders(req, res);
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();
+  }
+
+  if (!verifyPortalRequestOrigin(req)) {
+    return res.status(403).json({ error: "origine de requete refusee" });
   }
 
   const action = String(
@@ -766,6 +773,12 @@ export default async function handler(req, res) {
   ).toLowerCase();
 
   try {
+    const sessionCheck = await requirePortalSession(req, supabase);
+    if (sessionCheck.error) {
+      return res.status(sessionCheck.status || 401).json({ error: sessionCheck.error });
+    }
+    req.portalMember = sessionCheck.member;
+
     if (req.method === "GET") {
       if (action === "get") return handleGet(req, res);
       return res.status(400).json({ error: "action GET inconnue" });

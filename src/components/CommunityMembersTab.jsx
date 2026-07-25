@@ -132,6 +132,7 @@ export default function CommunityMembersTab({ session, apiBase }) {
   async function post(action, payload = {}) {
     const response = await fetch(`${getApiBase(apiBase)}/api/portal-access`, {
       method: "POST",
+      credentials: "include",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action,

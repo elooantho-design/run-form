@@ -1,8 +1,17 @@
 import { createClient } from "@supabase/supabase-js";
 import {
+  applyPortalCorsHeaders,
+  applyPortalSecurityHeaders,
+  requirePortalAdminSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import {
+  canUseRunTargetGuild,
   getRunScopeForGvgGuild,
   isMissingGuildCodeColumn,
   isMissingRunBoycottTable,
+  resolveRunScope,
   stratMatchesRunScope,
 } from "../src/lib/runScopeServer.js";
 import { notifyDiscordReproRequestsForDefenses } from "../src/lib/discordReproServer.js";
@@ -311,16 +320,20 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  applyPortalCorsHeaders(req, res);
+  applyPortalSecurityHeaders(res);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "method not allowed" });
+    return sendPortalJson(res, 405, { error: "method not allowed" }, req);
+  }
+
+  if (!verifyPortalRequestOrigin(req)) {
+    return sendPortalJson(res, 403, { error: "origine invalide" }, req);
   }
 
   try {
@@ -328,14 +341,24 @@ export default async function handler(req, res) {
     const isAlly = is_ally === true;
 
     if (!isValidGuild(guild)) {
-      return res.status(400).json({ error: "guild manquante ou invalide" });
+      return sendPortalJson(res, 400, { error: "guild manquante ou invalide" }, req);
     }
 
     if (!Array.isArray(items) || !items.length) {
-      return res.status(400).json({ error: "items manquants" });
+      return sendPortalJson(res, 400, { error: "items manquants" }, req);
     }
 
     const normalizedGuild = normalizeGuildCode(guild);
+    const sessionCheck = await requirePortalAdminSession(req, supabase);
+    if (sessionCheck.error) {
+      return sendPortalJson(res, sessionCheck.status || 401, { error: sessionCheck.error }, req);
+    }
+
+    const actorScope = await resolveRunScope(supabase, req, sessionCheck.member);
+    if (!actorScope.canUseGvg || !canUseRunTargetGuild(actorScope, normalizedGuild)) {
+      return sendPortalJson(res, 403, { error: "acces gvg refuse" }, req);
+    }
+
     const runScope = getRunScopeForGvgGuild(normalizedGuild);
 
     const rows = [];
@@ -368,7 +391,7 @@ export default async function handler(req, res) {
     }
 
     if (!rows.length) {
-      return res.status(400).json({ error: "aucune défense exploitable" });
+      return sendPortalJson(res, 400, { error: "aucune defense exploitable" }, req);
     }
 
     const { data, error } = await supabase
@@ -378,19 +401,19 @@ export default async function handler(req, res) {
 
     if (error) {
       console.error("[api/gvg-import] insert error:", error);
-      return res.status(500).json({ error: "erreur insertion gvg" });
+      return sendPortalJson(res, 500, { error: "erreur insertion gvg" }, req);
     }
 
     const discordRepro = await notifyDiscordReproRequestsForDefenses(supabase, data || []);
 
-    return res.status(200).json({
+    return sendPortalJson(res, 200, {
       success: true,
       guild: normalizedGuild,
       inserted: data?.length || 0,
       discord_repro: discordRepro,
-    });
+    }, req);
   } catch (err) {
     console.error("[api/gvg-import]", err);
-    return res.status(500).json({ error: "server error" });
+    return sendPortalJson(res, err?.statusCode || 500, { error: err?.message || "server error" }, req);
   }
 }

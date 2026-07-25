@@ -1,5 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 import { purgeDiscordReproChannelForGuild } from "../src/lib/discordReproServer.js";
+import {
+  applyPortalCorsHeaders,
+  applyPortalSecurityHeaders,
+  requirePortalAdminSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -16,25 +24,6 @@ function normalizeGuildCode(value) {
 
 function isValidGuild(value) {
   return normalizeGuildCode(value) !== null;
-}
-
-function isUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    String(value || "").trim()
-  );
-}
-
-function getResetActor(body) {
-  const actor = body?.actor || {};
-  const memberId = actor.memberId || actor.id || null;
-  const name = String(actor.name || actor.watcherName || actor.discordId || "Inconnu").trim() || "Inconnu";
-
-  return {
-    memberId: isUuid(memberId) ? memberId : null,
-    name,
-    role: actor.role || null,
-    guildCode: actor.guildCode || actor.guild_code || null,
-  };
 }
 
 async function logGvgReset({
@@ -126,25 +115,45 @@ function extractStoragePathFromPublicUrl(url) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  applyPortalCorsHeaders(req, res);
+  applyPortalSecurityHeaders(res);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "method not allowed" });
+    return sendPortalJson(res, 405, { error: "method not allowed" }, req);
+  }
+
+  if (!verifyPortalRequestOrigin(req)) {
+    return sendPortalJson(res, 403, { error: "origine invalide" }, req);
   }
 
   try {
     const guild = normalizeGuildCode(req.body?.guild);
-    const actor = getResetActor(req.body);
 
     if (!isValidGuild(guild)) {
-      return res.status(400).json({ error: "guild manquante ou invalide" });
+      return sendPortalJson(res, 400, { error: "guild manquante ou invalide" }, req);
     }
+
+    const sessionCheck = await requirePortalAdminSession(req, supabase);
+    if (sessionCheck.error) {
+      return sendPortalJson(res, sessionCheck.status || 401, { error: sessionCheck.error }, req);
+    }
+
+    const runScope = await resolveRunScope(supabase, req, sessionCheck.member);
+    if (!runScope.canUseGvg || !canUseRunTargetGuild(runScope, guild)) {
+      return sendPortalJson(res, 403, { error: "acces gvg refuse" }, req);
+    }
+
+    const actor = {
+      memberId: sessionCheck.member.id,
+      name: sessionCheck.member.watcher_name || sessionCheck.member.discord_id || "Inconnu",
+      role: sessionCheck.member.role || null,
+      guildCode: sessionCheck.member.guild_code || null,
+    };
 
     // 1) Lire les défenses AVANT suppression
     const { data: defenses, error: readError } = await supabase
@@ -154,7 +163,7 @@ export default async function handler(req, res) {
 
     if (readError) {
       console.error("[gvg-reset] read error:", readError);
-      return res.status(500).json({ error: "erreur lecture gvg" });
+      return sendPortalJson(res, 500, { error: "erreur lecture gvg" }, req);
     }
 
     const defenseIds = (defenses || []).map((row) => row.id).filter(Boolean);
@@ -184,7 +193,7 @@ export default async function handler(req, res) {
 
       if (storageError) {
         console.error("[gvg-reset] storage remove error:", storageError);
-        return res.status(500).json({ error: "suppression storage impossible" });
+        return sendPortalJson(res, 500, { error: "suppression storage impossible" }, req);
       }
     }
 
@@ -197,7 +206,7 @@ export default async function handler(req, res) {
 
       if (reproError) {
         console.error("[gvg-reset] repro delete error:", reproError);
-        return res.status(500).json({ error: "suppression repro impossible" });
+        return sendPortalJson(res, 500, { error: "suppression repro impossible" }, req);
       }
     }
 
@@ -209,7 +218,7 @@ export default async function handler(req, res) {
 
     if (deleteError) {
       console.error("[gvg-reset] defense delete error:", deleteError);
-      return res.status(500).json({ error: "suppression gvg impossible" });
+      return sendPortalJson(res, 500, { error: "suppression gvg impossible" }, req);
     }
 
     let recordServerReset = null;
@@ -241,7 +250,7 @@ export default async function handler(req, res) {
       activityLogWarning = activityError?.message || "log reset impossible";
     }
 
-    return res.status(200).json({
+    return sendPortalJson(res, 200, {
       success: true,
       guild,
       deleted_defenses: defenseIds.length,
@@ -251,9 +260,9 @@ export default async function handler(req, res) {
       record_server_reset: recordServerReset,
       record_server_warning: recordServerWarning,
       activity_log_warning: activityLogWarning,
-    });
+    }, req);
   } catch (err) {
     console.error("[gvg-reset] server error:", err);
-    return res.status(500).json({ error: err?.message || "server error" });
+    return sendPortalJson(res, err?.statusCode || 500, { error: err?.message || "server error" }, req);
   }
 }

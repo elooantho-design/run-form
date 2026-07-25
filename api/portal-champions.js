@@ -2,6 +2,15 @@
 import { createClient } from "@supabase/supabase-js";
 import formidable from "formidable";
 import fs from "fs";
+import {
+  applyPortalCorsHeaders,
+  getPortalMemberName,
+  requirePortalSession,
+  requirePortalLeaderSession,
+  sendPortalJson,
+  verifyCurrentPortalPasswordForSession,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
 
 export const config = {
   api: {
@@ -38,9 +47,7 @@ const ALLOWED_FACTIONS = new Set([
 const ALLOWED_LORD_VALUES = new Set(["lord", "non-lord"]);
 
 function sendJson(res, status, payload) {
-  res.statusCode = status;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
+  sendPortalJson(res, status, payload, res._portalReq || null);
 }
 
 function cleanText(value) {
@@ -52,18 +59,6 @@ function normalizeText(value) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
-}
-
-function isAdminRole(role) {
-  return ["admin", "administrateur", "leader"].includes(normalizeText(role));
-}
-
-function isLeaderRole(role) {
-  return normalizeText(role) === "leader";
-}
-
-function getMemberName(member) {
-  return member?.watcher_name || member?.discord_id || "Joueur";
 }
 
 function parseJsonMaybe(text) {
@@ -147,41 +142,24 @@ async function readRequestPayload(req) {
   };
 }
 
-async function requireAdmin(actorMemberId, adminPassword) {
-  if (!actorMemberId || !adminPassword) {
-    return { error: "Mot de passe admin obligatoire.", status: 401 };
+async function requireLeader(req, adminPassword) {
+  if (!adminPassword) {
+    return { error: "Mot de passe leader obligatoire.", status: 401 };
   }
 
-  const { data, error } = await supabase
-    .from("guild_members")
-    .select("id, role, discord_id, watcher_name, guild_code")
-    .eq("id", actorMemberId)
-    .eq("password", adminPassword)
-    .maybeSingle();
+  const sessionCheck = await requirePortalLeaderSession(req, supabase, { includePassword: true });
+  if (sessionCheck.error) return sessionCheck;
 
-  if (error) {
-    return { error: error.message || "Verification admin impossible.", status: 500 };
-  }
+  const passwordCheck = await verifyCurrentPortalPasswordForSession(
+    supabase,
+    sessionCheck.member,
+    adminPassword
+  );
 
-  if (!data || !isAdminRole(data.role)) {
-    return { error: "Acces admin refuse.", status: 403 };
-  }
+  if (passwordCheck.error) return passwordCheck;
+  if (passwordCheck.updatedMember) sessionCheck.member = passwordCheck.updatedMember;
 
-  return { admin: data };
-}
-
-async function requireLeader(actorMemberId, adminPassword) {
-  const adminCheck = await requireAdmin(actorMemberId, adminPassword);
-
-  if (adminCheck.error) {
-    return adminCheck;
-  }
-
-  if (!isLeaderRole(adminCheck.admin.role)) {
-    return { error: "Acces leader refuse.", status: 403 };
-  }
-
-  return adminCheck;
+  return { admin: sessionCheck.member };
 }
 
 function normalizeList(values, allowedValues) {
@@ -337,9 +315,8 @@ async function prepareHeroCalque(file, expectedFileName) {
 }
 
 async function handleCreate(body, heroCalqueFile, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const adminPassword = cleanText(body.adminPassword || body.admin_password);
-  const adminCheck = await requireLeader(actorMemberId, adminPassword);
+  const adminCheck = await requireLeader(res._portalReq, adminPassword);
 
   if (adminCheck.error) {
     sendJson(res, adminCheck.status, { error: adminCheck.error });
@@ -455,7 +432,7 @@ async function handleCreate(body, heroCalqueFile, res) {
     return;
   }
 
-  const adminName = getMemberName(adminCheck.admin);
+  const adminName = getPortalMemberName(adminCheck.admin);
 
   await supabase.from("portal_activity_logs").insert({
     actor_member_id: adminCheck.admin.id,
@@ -488,8 +465,42 @@ async function handleCreate(body, heroCalqueFile, res) {
   });
 }
 
+async function handleList(req, res) {
+  const sessionCheck = await requirePortalSession(req, supabase);
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("champions")
+    .select("*")
+    .order("name", { ascending: true });
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Chargement champions impossible." });
+    return;
+  }
+
+  sendJson(res, 200, { champions: data || [] });
+}
+
 export default async function handler(req, res) {
+  res._portalReq = req;
+  applyPortalCorsHeaders(req, res);
+
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
   try {
+    if (!verifyPortalRequestOrigin(req)) {
+      sendJson(res, 403, { error: "Origine de requete refusee." });
+      return;
+    }
+
     if (req.method !== "POST") {
       sendJson(res, 405, { error: "Method not allowed" });
       return;
@@ -497,6 +508,11 @@ export default async function handler(req, res) {
 
     const { body, heroCalqueFile } = await readRequestPayload(req);
     const action = cleanText(body.action || "create");
+
+    if (action === "list") {
+      await handleList(req, res);
+      return;
+    }
 
     if (action === "create") {
       await handleCreate(body, heroCalqueFile, res);

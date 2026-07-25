@@ -1,4 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  applyPortalCorsHeaders,
+  applyPortalSecurityHeaders,
+  isPortalAdminRole,
+  requirePortalSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -67,6 +76,66 @@ function makeDefenseSignature(defense) {
 function canReceivePropagatedRepro(defense) {
   const status = String(defense?.status || "").toLowerCase();
   return !status || status === "def" || status === "repro";
+}
+
+async function loadScopedDefense(gvgDefenseId, runScope, select = "id, guild") {
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .select(select)
+    .eq("id", gvgDefenseId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) {
+    const notFound = new Error("defense introuvable");
+    notFound.statusCode = 404;
+    throw notFound;
+  }
+
+  if (!runScope.canUseGvg || !canUseRunTargetGuild(runScope, data.guild)) {
+    const denied = new Error("acces gvg refuse");
+    denied.statusCode = 403;
+    throw denied;
+  }
+
+  return data;
+}
+
+async function resolveRequestedReproMember({ sessionCheck, memberId, watcherName }) {
+  const sessionMember = sessionCheck.member;
+  const requestedMemberId = String(memberId || "").trim();
+  const canActForOther = isPortalAdminRole(sessionMember.role);
+
+  if (requestedMemberId && requestedMemberId !== String(sessionMember.id) && !canActForOther) {
+    const denied = new Error("acces membre refuse");
+    denied.statusCode = 403;
+    throw denied;
+  }
+
+  if (canActForOther && requestedMemberId && requestedMemberId !== String(sessionMember.id)) {
+    const { data, error } = await supabase
+      .from("guild_members")
+      .select("id, watcher_name, discord_id")
+      .eq("id", requestedMemberId)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      const notFound = new Error("membre introuvable");
+      notFound.statusCode = 404;
+      throw notFound;
+    }
+
+    return {
+      memberId: data.id,
+      watcherName: data.watcher_name || data.discord_id || watcherName || "Joueur",
+    };
+  }
+
+  return {
+    memberId: sessionMember.id,
+    watcherName: sessionMember.watcher_name || sessionMember.discord_id || watcherName || "Joueur",
+  };
 }
 
 async function findMatchingReproDefenseIds(gvgDefenseId) {
@@ -140,27 +209,15 @@ function buildMessageText({
   ].join("\n");
 }
 
-async function handleTemplate(req, res) {
+async function handleTemplate(req, res, sessionCheck, runScope) {
   const { gvgDefenseId, memberId, watcherName } = req.body || {};
 
   if (!gvgDefenseId) {
     return res.status(400).json({ error: "gvgDefenseId manquant" });
   }
 
-  if (!memberId) {
-    return res.status(400).json({ error: "memberId manquant" });
-  }
-
-  const { data: defense, error: defenseError } = await supabase
-    .from("gvg_defense")
-    .select("id, heroes")
-    .eq("id", gvgDefenseId)
-    .maybeSingle();
-
-  if (defenseError) {
-    console.error("[gvg-repro:template] defense error:", defenseError);
-    return res.status(500).json({ error: "erreur lecture défense" });
-  }
+  const defense = await loadScopedDefense(gvgDefenseId, runScope, "id, guild, heroes");
+  const requestedMember = await resolveRequestedReproMember({ sessionCheck, memberId, watcherName });
 
   if (!defense) {
     return res.status(404).json({ error: "défense introuvable" });
@@ -179,7 +236,7 @@ async function handleTemplate(req, res) {
         name
       )
     `)
-    .eq("member_id", memberId);
+    .eq("member_id", requestedMember.memberId);
 
   if (awakeningsError) {
     console.error("[gvg-repro:template] awakenings error:", awakeningsError);
@@ -203,13 +260,13 @@ async function handleTemplate(req, res) {
 
   return res.status(200).json({
     success: true,
-    watcherName: watcherName || "Joueur",
+    watcherName: requestedMember.watcherName,
     gvgDefenseId,
     heroLines,
   });
 }
 
-async function handleSave(req, res) {
+async function handleSave(req, res, sessionCheck, runScope) {
   const {
     gvgDefenseId,
     memberId,
@@ -224,16 +281,15 @@ async function handleSave(req, res) {
     return res.status(400).json({ error: "gvgDefenseId manquant" });
   }
 
-  if (!watcherName) {
-    return res.status(400).json({ error: "watcherName manquant" });
-  }
+  await loadScopedDefense(gvgDefenseId, runScope, "id, guild");
+  const requestedMember = await resolveRequestedReproMember({ sessionCheck, memberId, watcherName });
 
   if (!Array.isArray(heroLines) || heroLines.length !== 5) {
     return res.status(400).json({ error: "heroLines invalide" });
   }
 
   const messageText = buildMessageText({
-    watcherName,
+    watcherName: requestedMember.watcherName,
     playerPb,
     enemyPb,
     heroLines,
@@ -241,8 +297,8 @@ async function handleSave(req, res) {
   });
 
   const payloadBase = {
-    member_id: memberId || null,
-    watcher_name: watcherName,
+    member_id: requestedMember.memberId,
+    watcher_name: requestedMember.watcherName,
     player_pb: playerPb || null,
     enemy_pb: enemyPb || null,
     stuff_1: heroLines[0]?.stuff || null,
@@ -286,12 +342,14 @@ async function handleSave(req, res) {
   });
 }
 
-async function handleGet(req, res) {
+async function handleGet(req, res, runScope) {
   const gvgDefenseId = req.query?.gvgDefenseId;
 
   if (!gvgDefenseId) {
     return res.status(400).json({ error: "gvgDefenseId manquant" });
   }
+
+  await loadScopedDefense(gvgDefenseId, runScope, "id, guild");
 
   const { data, error } = await supabase
     .from("gvg_repro")
@@ -313,36 +371,47 @@ async function handleGet(req, res) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  applyPortalCorsHeaders(req, res);
+  applyPortalSecurityHeaders(res);
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   try {
+    if (!verifyPortalRequestOrigin(req)) {
+      return sendPortalJson(res, 403, { error: "origine invalide" }, req);
+    }
+
+    const sessionCheck = await requirePortalSession(req, supabase);
+    if (sessionCheck.error) {
+      return sendPortalJson(res, sessionCheck.status || 401, { error: sessionCheck.error }, req);
+    }
+
+    const runScope = await resolveRunScope(supabase, req, sessionCheck.member);
+
     if (req.method === "GET") {
-      return await handleGet(req, res);
+      return await handleGet(req, res, runScope);
     }
 
     if (req.method === "POST") {
       const action = req.body?.action;
 
       if (action === "template") {
-        return await handleTemplate(req, res);
+        return await handleTemplate(req, res, sessionCheck, runScope);
       }
 
       if (action === "save") {
-        return await handleSave(req, res);
+        return await handleSave(req, res, sessionCheck, runScope);
       }
 
-      return res.status(400).json({ error: "action invalide" });
+      return sendPortalJson(res, 400, { error: "action invalide" }, req);
     }
 
-    return res.status(405).json({ error: "method not allowed" });
+    return sendPortalJson(res, 405, { error: "method not allowed" }, req);
   } catch (err) {
     console.error("[gvg-repro] server error:", err);
-    return res.status(500).json({ error: err?.message || "server error" });
+    return sendPortalJson(res, err?.statusCode || 500, { error: err?.message || "server error" }, req);
   }
 }

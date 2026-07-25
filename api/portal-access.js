@@ -1,6 +1,18 @@
-/* global Buffer, process */
+/* global process */
 import { randomInt } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import {
+  applyPortalCorsHeaders,
+  hashPortalPassword,
+  readJsonBody,
+  requirePortalSession,
+  requirePortalAdminSession,
+  requirePortalLeaderSession,
+  sendPortalJson,
+  updatePortalMemberPassword,
+  verifyCurrentPortalPasswordForSession,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -26,11 +38,73 @@ const DEFENSE_STATUSES = new Set([TODO_STATUS, VERIFY_STATUS, VALID_STATUS]);
 const COMMUNITY_ROLES = new Set(["community_member", "content_creator"]);
 const COMMUNITY_STATUSES = new Set(["active", "inactive"]);
 const COMMUNITY_REQUEST_STATUSES = new Set(["pending", "accepted", "refused"]);
+const EMPTY_DEFENSE_SLOT = "--";
+const DEFAULT_MEMBER_PASSWORD = "motdepassemembre";
+const SAFE_MEMBER_SELECT =
+  "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required";
+const SAFE_MEMBER_SELECT_WITH_AWAKENINGS = `
+  id,
+  watcher_name,
+  discord_id,
+  guild_code,
+  assignment,
+  status,
+  defense_1,
+  defense_2,
+  awakening_status,
+  personal_forum_post_url,
+  role,
+  preferred_language,
+  community_access_type,
+  community_status,
+  member_awakenings (
+    awakening_level,
+    champion_id,
+    champions (
+      name
+    )
+  )
+`;
+const DEFENSE_SELECT = `
+  id,
+  name,
+  tier,
+  type,
+  faction,
+  guild_code,
+  is_global,
+  is_hidden,
+  source_defense_id,
+  sort_order,
+  image_url,
+  created_at,
+  guild_defense_slots (
+    slot_index,
+    champion_id,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  ),
+  guild_defense_conditions (
+    id,
+    champion_id,
+    min_awakening,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  )
+`;
+const CHAMPION_SAFE_SELECT =
+  "id, name, portal_name, english_name, rarity, image_file, faction, role";
 
 function sendJson(res, status, payload) {
-  res.statusCode = status;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
+  sendPortalJson(res, status, payload, res._portalReq || null);
 }
 
 function cleanText(value) {
@@ -148,82 +222,37 @@ function generatePassword() {
 }
 
 async function readBody(req) {
-  if (req.body && typeof req.body === "object") return req.body;
-
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-
-  const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
+  return readJsonBody(req);
 }
 
-async function requireAdmin(actorMemberId, adminPassword) {
-  if (!actorMemberId || !adminPassword) {
+async function requireAdmin(req, adminPassword) {
+  const sessionCheck = await requirePortalAdminSession(req, supabase, { includePassword: true });
+  if (sessionCheck.error) {
+    return { error: sessionCheck.error, status: sessionCheck.status };
+  }
+
+  if (!adminPassword) {
     return { error: "Mot de passe admin obligatoire.", status: 401 };
   }
 
-  const { data, error } = await supabase
-    .from("guild_members")
-    .select("id, role, discord_id, watcher_name, guild_code")
-    .eq("id", actorMemberId)
-    .eq("password", adminPassword)
-    .maybeSingle();
-
-  if (error) {
-    return { error: error.message || "Verification admin impossible.", status: 500 };
+  const passwordOk = await verifyCurrentPortalPasswordForSession(supabase, sessionCheck, adminPassword);
+  if (!passwordOk) {
+    return { error: "Mot de passe admin incorrect.", status: 403 };
   }
 
-  if (!data || !isAdminRole(data.role)) {
-    return { error: "Acces admin refuse.", status: 403 };
-  }
-
-  return { admin: data };
+  return { admin: sessionCheck.member };
 }
 
-async function requireAdminById(actorMemberId) {
-  if (!actorMemberId) {
-    return { error: "Session admin manquante.", status: 401 };
-  }
-
-  const { data, error } = await supabase
-    .from("guild_members")
-    .select("id, role, discord_id, watcher_name, guild_code")
-    .eq("id", actorMemberId)
-    .maybeSingle();
-
-  if (error) {
-    return { error: error.message || "Verification admin impossible.", status: 500 };
-  }
-
-  if (!data || !isAdminRole(data.role)) {
-    return { error: "Acces admin refuse.", status: 403 };
-  }
-
-  return { admin: data };
+async function requireAdminById(req) {
+  const sessionCheck = await requirePortalAdminSession(req, supabase);
+  if (sessionCheck.error) return { error: sessionCheck.error, status: sessionCheck.status };
+  return { admin: sessionCheck.member };
 }
 
-async function requireLeaderById(actorMemberId) {
-  if (!actorMemberId) {
-    return { error: "Session leader manquante.", status: 401 };
-  }
-
-  const { data, error } = await supabase
-    .from("guild_members")
-    .select("id, role, discord_id, watcher_name, guild_code")
-    .eq("id", actorMemberId)
-    .maybeSingle();
-
-  if (error) {
-    return { error: error.message || "Verification leader impossible.", status: 500 };
-  }
-
-  if (!data || !isLeaderRole(data.role)) {
-    return { error: "Acces leader refuse.", status: 403 };
-  }
-
-  return { leader: data };
+async function requireLeaderById(req) {
+  const sessionCheck = await requirePortalLeaderSession(req, supabase);
+  if (sessionCheck.error) return { error: sessionCheck.error, status: sessionCheck.status };
+  return { leader: sessionCheck.member };
 }
 
 async function initializeMemberData(memberId, memberName) {
@@ -262,6 +291,271 @@ async function initializeMemberData(memberId, memberName) {
   if (pbError) warnings.push("Initialisation des PB impossible.");
 
   return warnings;
+}
+
+function isCommunityAccount(member) {
+  return (
+    member?.community_access_type === "community" ||
+    isCommunityRole(member?.role) ||
+    (!member?.guild_code && isCommunityRole(member?.role))
+  );
+}
+
+function getGuildSpaceKeyLocal(value) {
+  const code = normalizeGuildCode(value);
+  if (!code) return "";
+  if (isPaladinGuildCode(code)) return "PALADIN";
+
+  const match = code.match(/^(.+?)(?:_?G\d+)$/i);
+  return (match?.[1] || code).replace(/_+$/g, "") || code;
+}
+
+function sameGuildSpace(left, right) {
+  const leftSpace = getGuildSpaceKeyLocal(left);
+  const rightSpace = getGuildSpaceKeyLocal(right);
+  return Boolean(leftSpace && rightSpace && leftSpace === rightSpace);
+}
+
+function canViewGuildCode(actor, guildCode, { leaderSeesAll = false } = {}) {
+  if (!actor || isCommunityAccount(actor)) return false;
+  if (leaderSeesAll && isLeaderRole(actor?.role)) return true;
+
+  const actorGuild = normalizeGuildCode(actor?.guild_code);
+  const targetGuild = normalizeGuildCode(guildCode);
+  if (!actorGuild || !targetGuild) return false;
+
+  if (isPaladinGuildCode(actorGuild)) return isPaladinGuildCode(targetGuild);
+  return sameGuildSpace(actorGuild, targetGuild);
+}
+
+function canViewDefense(actor, defense, { guildCode = "", leaderSeesAll = false } = {}) {
+  if (!actor || isCommunityAccount(actor)) return false;
+  if (leaderSeesAll && isLeaderRole(actor?.role)) return true;
+
+  const actorGuild = normalizeGuildCode(guildCode || actor?.guild_code);
+  if (!actorGuild) return false;
+
+  const defenseGuild = normalizeGuildCode(defense?.guild_code);
+  if (defense?.is_global || !defenseGuild) return isPaladinGuildCode(actorGuild);
+  if (isPaladinGuildCode(actorGuild)) return isPaladinGuildCode(defenseGuild);
+  return sameGuildSpace(actorGuild, defenseGuild);
+}
+
+function serializeManagedMember(row) {
+  const awakenings = {};
+
+  (row?.member_awakenings || []).forEach((entry) => {
+    const heroName = entry?.champions?.name;
+    if (heroName) {
+      awakenings[heroName] = entry.awakening_level;
+    }
+  });
+
+  return {
+    id: row.id,
+    name: row.watcher_name || row.discord_id || "Joueur",
+    discordId: row.discord_id || "",
+    guildCode: row.guild_code || "",
+    assignment: row.assignment || "Tour",
+    status: row.status || TODO_STATUS,
+    awakeningStatus: row.awakening_status || "En attente",
+    personalForumPostUrl: row.personal_forum_post_url || "",
+    role: row.role || "member",
+    preferredLanguage: row.preferred_language || "fr",
+    communityAccessType: row.community_access_type || "",
+    communityStatus: row.community_status || "",
+    defense1: row.defense_1 || EMPTY_DEFENSE_SLOT,
+    defense2: row.defense_2 || EMPTY_DEFENSE_SLOT,
+    awakenings,
+  };
+}
+
+function serializeDefenseBlock(row) {
+  return {
+    id: row.id,
+    blockType: row.block_type,
+    content: row.content,
+    sortOrder: row.sort_order ?? 9999,
+  };
+}
+
+function serializeDefenseRow(row, blocksByDefenseId = new Map()) {
+  const slots = [...(row?.guild_defense_slots || [])]
+    .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
+    .map((slot) => slot?.champions?.name || "")
+    .filter(Boolean);
+
+  const conditions = (row?.guild_defense_conditions || []).map((condition) => ({
+    id: condition.id,
+    championId: condition.champion_id,
+    minAwakening: condition.min_awakening,
+    label: `${condition.champions?.name || "Hero"} A${condition.min_awakening} minimum`,
+  }));
+
+  return {
+    id: row.id,
+    name: row.name,
+    tier: row.tier,
+    type: row.type,
+    faction: row.faction || "",
+    guildCode: row.guild_code || "",
+    isGlobal: Boolean(row.is_global),
+    isHidden: Boolean(row.is_hidden),
+    sourceDefenseId: row.source_defense_id || null,
+    sortOrder: row.sort_order ?? 9999,
+    slots,
+    conditions,
+    infoBlocks: blocksByDefenseId.get(String(row.id)) || [],
+    image: row.image_url || "",
+  };
+}
+
+function serializeVoteRow(row) {
+  return {
+    id: row.id,
+    defenseId: row.defense_id,
+    memberId: row.member_id,
+    value: row.value,
+    createdAt: row.created_at,
+  };
+}
+
+function sortByName(rows) {
+  return [...rows].sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || ""), "fr", {
+      numeric: true,
+      sensitivity: "base",
+    })
+  );
+}
+
+async function loadDefenseBlocks(defenseIds) {
+  const ids = [...new Set((defenseIds || []).map(cleanText).filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("guild_defense_blocks")
+    .select("id, defense_id, block_type, content, sort_order")
+    .in("defense_id", ids)
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    throw new Error(error.message || "Chargement des infos defenses impossible.");
+  }
+
+  return (data || []).reduce((grouped, block) => {
+    const key = String(block.defense_id);
+    const previous = grouped.get(key) || [];
+    grouped.set(key, [...previous, serializeDefenseBlock(block)]);
+    return grouped;
+  }, new Map());
+}
+
+async function loadVisibleDefenses(actor, { guildCode = "", leaderSeesAll = false } = {}) {
+  const { data, error } = await supabase
+    .from("guild_defenses")
+    .select(DEFENSE_SELECT)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw new Error(error.message || "Chargement des defenses impossible.");
+  }
+
+  const rows = (data || []).filter((row) =>
+    canViewDefense(actor, row, { guildCode, leaderSeesAll })
+  );
+  const blocksByDefenseId = await loadDefenseBlocks(rows.map((row) => row.id));
+
+  return rows
+    .map((row) => serializeDefenseRow(row, blocksByDefenseId))
+    .sort((a, b) => {
+      if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
+        return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
+      }
+      return String(a.name || "").localeCompare(String(b.name || ""), "fr", {
+        sensitivity: "base",
+      });
+    });
+}
+
+async function loadDefenseVotes(defenses) {
+  const defenseIds = [...new Set((defenses || []).flatMap((defense) => {
+    const ids = [defense?.id, defense?.sourceDefenseId].filter(Boolean);
+    return ids.map(String);
+  }))];
+  if (defenseIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("cluster_defense_likes")
+    .select("id, defense_id, member_id, value, created_at")
+    .in("defense_id", defenseIds);
+
+  if (error) {
+    throw new Error(error.message || "Chargement des votes defenses impossible.");
+  }
+
+  return (data || []).map(serializeVoteRow);
+}
+
+async function loadSafeMemberById(memberId, select = SAFE_MEMBER_SELECT) {
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(select)
+    .eq("id", memberId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message || "Chargement du membre impossible.");
+  }
+
+  return data || null;
+}
+
+function normalizeMemberPatch(patch) {
+  const payload = {};
+  const allowed = {
+    watcher_name: "watcher_name",
+    name: "watcher_name",
+    discord_id: "discord_id",
+    discordId: "discord_id",
+    guild_code: "guild_code",
+    guildCode: "guild_code",
+    assignment: "assignment",
+    status: "status",
+    awakening_status: "awakening_status",
+    awakeningStatus: "awakening_status",
+    personal_forum_post_url: "personal_forum_post_url",
+    personalForumPostUrl: "personal_forum_post_url",
+    defense_1: "defense_1",
+    defense1: "defense_1",
+    defense_2: "defense_2",
+    defense2: "defense_2",
+    role: "role",
+    preferred_language: "preferred_language",
+    preferredLanguage: "preferred_language",
+  };
+
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    const dbKey = allowed[key];
+    if (!dbKey) return;
+    payload[dbKey] = typeof value === "string" ? cleanText(value) : value;
+  });
+
+  if (payload.guild_code !== undefined) payload.guild_code = normalizeGuildCode(payload.guild_code);
+  if (payload.defense_1 === "") payload.defense_1 = EMPTY_DEFENSE_SLOT;
+  if (payload.defense_2 === "") payload.defense_2 = EMPTY_DEFENSE_SLOT;
+  if (payload.status && !DEFENSE_STATUSES.has(payload.status)) {
+    delete payload.status;
+  }
+
+  return payload;
+}
+
+async function deleteRowsIfPresent(table, column, value) {
+  const { error } = await supabase.from(table).delete().eq(column, value);
+  if (error && !isMissingFollowupTable(error)) {
+    throw new Error(error.message || `Suppression ${table} impossible.`);
+  }
 }
 
 function canAdminManageTarget(admin, target) {
@@ -530,9 +824,8 @@ async function loadMembers() {
 }
 
 async function handleSearch(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const adminPassword = cleanText(body.adminPassword || body.admin_password);
-  const adminCheck = await requireAdmin(actorMemberId, adminPassword);
+  const adminCheck = await requireAdmin(res._portalReq, adminPassword);
 
   if (adminCheck.error) {
     sendJson(res, adminCheck.status, { error: adminCheck.error });
@@ -565,11 +858,37 @@ async function handleSearch(body, res) {
   sendJson(res, 200, { members });
 }
 
+async function handleMembersList(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(SAFE_MEMBER_SELECT)
+    .order("watcher_name", { ascending: true })
+    .limit(MAX_MEMBER_ROWS);
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Chargement membres impossible." });
+    return;
+  }
+
+  const members = (data || [])
+    .filter((member) => !isCommunityAccount(member))
+    .filter((member) => canViewGuildCode(adminCheck.admin, member.guild_code, { leaderSeesAll: true }))
+    .map(serializeMember);
+
+  sendJson(res, 200, { members });
+}
+
 async function handleReset(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const adminPassword = cleanText(body.adminPassword || body.admin_password);
   const memberId = cleanText(body.memberId || body.member_id);
-  const adminCheck = await requireAdmin(actorMemberId, adminPassword);
+  const adminCheck = await requireAdmin(res._portalReq, adminPassword);
 
   if (adminCheck.error) {
     sendJson(res, adminCheck.status, { error: adminCheck.error });
@@ -603,12 +922,11 @@ async function handleReset(body, res) {
   }
 
   const temporaryPassword = generatePassword();
-  const { error: updateError } = await supabase
-    .from("guild_members")
-    .update({ password: temporaryPassword })
-    .eq("id", target.id);
-
-  if (updateError) {
+  try {
+    await updatePortalMemberPassword(supabase, target.id, hashPortalPassword(temporaryPassword), {
+      passwordChangeRequired: true,
+    });
+  } catch (updateError) {
     sendJson(res, 500, { error: updateError.message || "Reset du mot de passe impossible." });
     return;
   }
@@ -805,8 +1123,7 @@ async function handleExternalAccountRequest(body, req, res) {
 }
 
 async function handleCommunityList(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
-  const leaderCheck = await requireLeaderById(actorMemberId);
+  const leaderCheck = await requireLeaderById(res._portalReq);
 
   if (leaderCheck.error) {
     sendJson(res, leaderCheck.status, { error: leaderCheck.error });
@@ -852,10 +1169,9 @@ async function handleCommunityList(body, res) {
 }
 
 async function handleCommunityUpdateRequest(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const requestId = cleanText(body.requestId || body.request_id);
   const nextStatus = normalizeCommunityRequestStatus(body.status);
-  const leaderCheck = await requireLeaderById(actorMemberId);
+  const leaderCheck = await requireLeaderById(res._portalReq);
 
   if (leaderCheck.error) {
     sendJson(res, leaderCheck.status, { error: leaderCheck.error });
@@ -908,7 +1224,6 @@ async function handleCommunityUpdateRequest(body, res) {
 }
 
 async function handleCommunityCreateMember(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const requestId = cleanText(body.requestId || body.request_id);
   const watcherName = cleanText(body.watcherName || body.watcher_name || body.name);
   const discordId = cleanText(body.discordId || body.discord_id);
@@ -916,7 +1231,7 @@ async function handleCommunityCreateMember(body, res) {
   const preferredLanguage = ["fr", "en"].includes(cleanText(body.preferredLanguage || body.preferred_language).toLowerCase())
     ? cleanText(body.preferredLanguage || body.preferred_language).toLowerCase()
     : "fr";
-  const leaderCheck = await requireLeaderById(actorMemberId);
+  const leaderCheck = await requireLeaderById(res._portalReq);
 
   if (leaderCheck.error) {
     sendJson(res, leaderCheck.status, { error: leaderCheck.error });
@@ -960,7 +1275,8 @@ async function handleCommunityCreateMember(body, res) {
       discord_id: discordId,
       guild_code: null,
       role,
-      password: temporaryPassword,
+      password: hashPortalPassword(temporaryPassword),
+      password_change_required: true,
       assignment: "Communaut\u00e9",
       status: "Actif",
       awakening_status: "En attente",
@@ -1021,7 +1337,6 @@ async function handleCommunityCreateMember(body, res) {
 }
 
 async function handleCommunityUpdateMember(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const memberId = cleanText(body.memberId || body.member_id);
   const watcherName = cleanText(body.watcherName || body.watcher_name || body.name);
   const discordId = cleanText(body.discordId || body.discord_id);
@@ -1030,7 +1345,7 @@ async function handleCommunityUpdateMember(body, res) {
   const preferredLanguage = ["fr", "en"].includes(cleanText(body.preferredLanguage || body.preferred_language).toLowerCase())
     ? cleanText(body.preferredLanguage || body.preferred_language).toLowerCase()
     : "fr";
-  const leaderCheck = await requireLeaderById(actorMemberId);
+  const leaderCheck = await requireLeaderById(res._portalReq);
 
   if (leaderCheck.error) {
     sendJson(res, leaderCheck.status, { error: leaderCheck.error });
@@ -1109,11 +1424,707 @@ async function handleCommunityUpdateMember(body, res) {
   sendJson(res, 200, { member: serializeCommunityMember(member) });
 }
 
+async function handleMyDefensesLoad(body, res) {
+  const sessionCheck = await requirePortalSession(res._portalReq, supabase);
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
+  const actor = sessionCheck.member;
+  if (isCommunityAccount(actor)) {
+    sendJson(res, 403, { error: "Compte communaute : acces defenses indisponible." });
+    return;
+  }
+
+  const [membersResult, defenses, championsResult] = await Promise.all([
+    supabase
+      .from("guild_members")
+      .select(SAFE_MEMBER_SELECT)
+      .order("watcher_name", { ascending: true })
+      .limit(MAX_MEMBER_ROWS),
+    loadVisibleDefenses(actor, { leaderSeesAll: true }),
+    supabase.from("champions").select(CHAMPION_SAFE_SELECT),
+  ]);
+
+  if (membersResult.error) {
+    sendJson(res, 500, { error: membersResult.error.message || "Chargement joueurs impossible." });
+    return;
+  }
+
+  if (championsResult.error) {
+    sendJson(res, 500, { error: championsResult.error.message || "Chargement heros impossible." });
+    return;
+  }
+
+  const members = (membersResult.data || [])
+    .filter((member) => canViewGuildCode(actor, member.guild_code, { leaderSeesAll: true }))
+    .filter((member) => !isCommunityAccount(member))
+    .map(serializeManagedMember);
+  const defenseVotes = await loadDefenseVotes(defenses);
+
+  sendJson(res, 200, {
+    members,
+    defenses,
+    defenseVotes,
+    champions: championsResult.data || [],
+  });
+}
+
+async function handleMemberAwakeningsLoad(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const sessionCheck = await requirePortalSession(res._portalReq, supabase);
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Joueur manquant." });
+    return;
+  }
+
+  const actor = sessionCheck.member;
+  if (isCommunityAccount(actor)) {
+    sendJson(res, 403, { error: "Compte communaute : acces premium indisponible." });
+    return;
+  }
+
+  const target = await loadSafeMemberById(memberId);
+  if (!target || !canViewGuildCode(actor, target.guild_code, { leaderSeesAll: true })) {
+    sendJson(res, 404, { error: "Joueur introuvable dans ton perimetre." });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("member_awakenings")
+    .select(`
+      awakening_level,
+      champion_id,
+      champions (
+        name
+      )
+    `)
+    .eq("member_id", target.id);
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Chargement eveils impossible." });
+    return;
+  }
+
+  const awakenings = {};
+  (data || []).forEach((entry) => {
+    const heroName = entry?.champions?.name;
+    if (heroName) awakenings[heroName] = entry.awakening_level;
+  });
+
+  sendJson(res, 200, { memberId: target.id, awakenings });
+}
+
+async function handleMemberDefenseAssign(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const slot = Number(body.slot);
+  const defenseName = cleanText(body.defenseName || body.defense_name || body.name) || EMPTY_DEFENSE_SLOT;
+  const sessionCheck = await requirePortalSession(res._portalReq, supabase);
+
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
+  if (!memberId || ![1, 2].includes(slot)) {
+    sendJson(res, 400, { error: "Joueur ou slot manquant." });
+    return;
+  }
+
+  const actor = sessionCheck.member;
+  if (isCommunityAccount(actor)) {
+    sendJson(res, 403, { error: "Compte communaute : action non autorisee." });
+    return;
+  }
+
+  const target = await loadSafeMemberById(memberId, SAFE_MEMBER_SELECT_WITH_AWAKENINGS);
+  if (!target) {
+    sendJson(res, 404, { error: "Joueur introuvable." });
+    return;
+  }
+
+  const selfEdit = String(actor.id) === String(target.id);
+  const adminEdit = isAdminRole(actor.role) && canAdminManageTarget(actor, target);
+  if (!selfEdit && !adminEdit) {
+    sendJson(res, 403, { error: "Tu ne peux pas modifier ce joueur." });
+    return;
+  }
+
+  if (defenseName !== EMPTY_DEFENSE_SLOT) {
+    const defenses = await loadVisibleDefenses(target, { guildCode: target.guild_code });
+    const defenseAllowed = defenses.some((defense) => String(defense.name) === defenseName);
+    if (!defenseAllowed) {
+      sendJson(res, 403, { error: "Defense hors perimetre du joueur." });
+      return;
+    }
+  }
+
+  const column = slot === 1 ? "defense_1" : "defense_2";
+  const { data: updated, error } = await supabase
+    .from("guild_members")
+    .update({ [column]: defenseName })
+    .eq("id", target.id)
+    .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
+    .maybeSingle();
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Affectation defense impossible." });
+    return;
+  }
+
+  const actorName = getMemberName(actor);
+  const targetName = getMemberName(updated || target);
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: actor.id,
+    actor_name: actorName,
+    target_member_id: target.id,
+    target_name: targetName,
+    action_type: defenseName === EMPTY_DEFENSE_SLOT ? "defense_unassign" : "defense_assign",
+    entity_type: "defense",
+    entity_id: defenseName === EMPTY_DEFENSE_SLOT ? null : defenseName,
+    summary:
+      defenseName === EMPTY_DEFENSE_SLOT
+        ? `${targetName} : defense ${slot} retiree`
+        : `${targetName} : defense ${slot} affectee a ${defenseName}`,
+    metadata: { slot, defenseName, guildCode: target.guild_code || "" },
+  });
+
+  sendJson(res, 200, { member: serializeManagedMember(updated || target) });
+}
+
+async function handleDefenseVote(body, res) {
+  const defenseId = cleanText(body.defenseId || body.defense_id);
+  const value = Number(body.value);
+  const sessionCheck = await requirePortalSession(res._portalReq, supabase);
+
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
+  if (!defenseId || ![-1, 1].includes(value)) {
+    sendJson(res, 400, { error: "Vote invalide." });
+    return;
+  }
+
+  const actor = sessionCheck.member;
+  if (isCommunityAccount(actor)) {
+    sendJson(res, 403, { error: "Compte communaute : action non autorisee." });
+    return;
+  }
+
+  const { data: defense, error: defenseError } = await supabase
+    .from("guild_defenses")
+    .select("id, guild_code, is_global, source_defense_id")
+    .eq("id", defenseId)
+    .maybeSingle();
+
+  if (defenseError) {
+    sendJson(res, 500, { error: defenseError.message || "Chargement defense impossible." });
+    return;
+  }
+
+  if (!defense || !canViewDefense(actor, defense, { leaderSeesAll: true })) {
+    sendJson(res, 404, { error: "Defense introuvable dans ton perimetre." });
+    return;
+  }
+
+  const targetDefenseId = defense.source_defense_id || defense.id;
+  const { data: existingVote, error: existingError } = await supabase
+    .from("cluster_defense_likes")
+    .select("id, value")
+    .eq("defense_id", targetDefenseId)
+    .eq("member_id", actor.id)
+    .maybeSingle();
+
+  if (existingError) {
+    sendJson(res, 500, { error: existingError.message || "Verification vote impossible." });
+    return;
+  }
+
+  if (existingVote?.id && existingVote.value === value) {
+    const { error } = await supabase.from("cluster_defense_likes").delete().eq("id", existingVote.id);
+    if (error) {
+      sendJson(res, 500, { error: error.message || "Suppression vote impossible." });
+      return;
+    }
+  } else if (existingVote?.id) {
+    const { error } = await supabase
+      .from("cluster_defense_likes")
+      .update({ value })
+      .eq("id", existingVote.id);
+    if (error) {
+      sendJson(res, 500, { error: error.message || "Mise a jour vote impossible." });
+      return;
+    }
+  } else {
+    const { error } = await supabase.from("cluster_defense_likes").insert({
+      defense_id: targetDefenseId,
+      member_id: actor.id,
+      value,
+    });
+    if (error) {
+      sendJson(res, 500, { error: error.message || "Ajout vote impossible." });
+      return;
+    }
+  }
+
+  const defenses = await loadVisibleDefenses(actor, { leaderSeesAll: true });
+  const defenseVotes = await loadDefenseVotes(defenses);
+  sendJson(res, 200, { defenseVotes });
+}
+
+async function handleGuildManagementLoad(body, res) {
+  const activeGuildCode = normalizeGuildCode(body.guildCode || body.guild_code);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!activeGuildCode || !canViewGuildCode(adminCheck.admin, activeGuildCode, { leaderSeesAll: true })) {
+    sendJson(res, 403, { error: "Guilde hors perimetre." });
+    return;
+  }
+
+  const [membersResult, defenses] = await Promise.all([
+    supabase
+      .from("guild_members")
+      .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
+      .order("watcher_name", { ascending: true })
+      .limit(MAX_MEMBER_ROWS),
+    loadVisibleDefenses(adminCheck.admin, { guildCode: activeGuildCode, leaderSeesAll: true }),
+  ]);
+
+  if (membersResult.error) {
+    sendJson(res, 500, { error: membersResult.error.message || "Chargement joueurs impossible." });
+    return;
+  }
+
+  const members = (membersResult.data || [])
+    .filter((member) => canViewGuildCode(adminCheck.admin, member.guild_code, { leaderSeesAll: true }))
+    .filter((member) => !isCommunityAccount(member))
+    .map(serializeManagedMember);
+  const defenseVotes = await loadDefenseVotes(defenses);
+
+  sendJson(res, 200, { members, defenses, defenseVotes });
+}
+
+async function handleGuildMemberUpdate(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const patch = normalizeMemberPatch(body.patch || body);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!memberId || Object.keys(patch).length === 0) {
+    sendJson(res, 400, { error: "Membre ou modification manquante." });
+    return;
+  }
+
+  const target = await loadSafeMemberById(memberId, SAFE_MEMBER_SELECT_WITH_AWAKENINGS);
+  if (!target) {
+    sendJson(res, 404, { error: "Joueur introuvable." });
+    return;
+  }
+
+  if (!canAdminManageTarget(adminCheck.admin, target)) {
+    sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+    return;
+  }
+
+  if (patch.role && !isLeaderRole(adminCheck.admin.role)) {
+    sendJson(res, 403, { error: "Seul le leader peut modifier les roles." });
+    return;
+  }
+
+  if (patch.guild_code && !canViewGuildCode(adminCheck.admin, patch.guild_code, { leaderSeesAll: true })) {
+    sendJson(res, 403, { error: "Guilde cible hors perimetre." });
+    return;
+  }
+
+  if (patch.defense_1 && patch.defense_1 !== EMPTY_DEFENSE_SLOT) {
+    const defenses = await loadVisibleDefenses(target, { guildCode: target.guild_code });
+    if (!defenses.some((defense) => String(defense.name) === String(patch.defense_1))) {
+      sendJson(res, 403, { error: "Defense 1 hors perimetre du joueur." });
+      return;
+    }
+  }
+
+  if (patch.defense_2 && patch.defense_2 !== EMPTY_DEFENSE_SLOT) {
+    const defenses = await loadVisibleDefenses(target, { guildCode: target.guild_code });
+    if (!defenses.some((defense) => String(defense.name) === String(patch.defense_2))) {
+      sendJson(res, 403, { error: "Defense 2 hors perimetre du joueur." });
+      return;
+    }
+  }
+
+  const { data: updated, error } = await supabase
+    .from("guild_members")
+    .update(patch)
+    .eq("id", target.id)
+    .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
+    .maybeSingle();
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Mise a jour membre impossible." });
+    return;
+  }
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: adminCheck.admin.id,
+    actor_name: getMemberName(adminCheck.admin),
+    target_member_id: target.id,
+    target_name: getMemberName(updated || target),
+    action_type: "guild_member_update",
+    entity_type: "guild_members",
+    entity_id: target.id,
+    summary: `${getMemberName(adminCheck.admin)} a modifie ${getMemberName(updated || target)}`,
+    metadata: { fields: Object.keys(patch), guildCode: updated?.guild_code || target.guild_code || "" },
+  });
+
+  sendJson(res, 200, { member: serializeManagedMember(updated || target) });
+}
+
+async function handleGuildMemberDelete(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Membre manquant." });
+    return;
+  }
+
+  const target = await loadSafeMemberById(memberId);
+  if (!target) {
+    sendJson(res, 404, { error: "Joueur introuvable." });
+    return;
+  }
+
+  if (!canAdminManageTarget(adminCheck.admin, target)) {
+    sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+    return;
+  }
+
+  const { data: intersaisonAssignments, error: intersaisonAssignmentsError } = await supabase
+    .from("intersaison_assignments")
+    .select("id")
+    .eq("member_id", target.id);
+
+  if (intersaisonAssignmentsError && intersaisonAssignmentsError.code !== "42P01") {
+    sendJson(res, 500, { error: intersaisonAssignmentsError.message || "Chargement intersaison impossible." });
+    return;
+  }
+
+  const intersaisonIds = (intersaisonAssignments || []).map((row) => row.id).filter(Boolean);
+  if (intersaisonIds.length > 0) {
+    const { error: notesError } = await supabase
+      .from("intersaison_notes")
+      .delete()
+      .in("assignment_id", intersaisonIds);
+    if (notesError) {
+      sendJson(res, 500, { error: notesError.message || "Suppression notes intersaison impossible." });
+      return;
+    }
+  }
+
+  await deleteRowsIfPresent("intersaison_assignments", "member_id", target.id);
+  await deleteRowsIfPresent("cluster_defense_likes", "member_id", target.id);
+  await deleteRowsIfPresent("member_awakenings", "member_id", target.id);
+  await deleteRowsIfPresent("member_pb_entries", "member_id", target.id);
+  await deleteRowsIfPresent("member_demonic_monsters", "member_id", target.id);
+  await deleteRowsIfPresent("soul_stones", "member_id", target.id);
+  await deleteRowsIfPresent("gvg_repro", "member_id", target.id);
+
+  await supabase
+    .from("gvg_discord_repro_requests")
+    .update({
+      reproducer_member_id: null,
+      reproducer_discord_id: null,
+      reproducer_name: null,
+    })
+    .eq("reproducer_member_id", target.id);
+
+  await deleteRowsIfPresent("guild_members", "id", target.id);
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: adminCheck.admin.id,
+    actor_name: getMemberName(adminCheck.admin),
+    target_member_id: null,
+    target_name: getMemberName(target),
+    action_type: "guild_member_delete",
+    entity_type: "guild_members",
+    entity_id: target.id,
+    summary: `${getMemberName(target)} retire de ${target.guild_code || "sa guilde"}`,
+    metadata: { guildCode: target.guild_code || "" },
+  });
+
+  sendJson(res, 200, { ok: true, memberId: target.id });
+}
+
+async function createOrAttachGuildMember({ actor, name, discordId, guildCode, role = "member", forumPostUrl = "" }) {
+  const watcherName = cleanText(name);
+  const cleanDiscordId = cleanText(discordId);
+  const cleanGuildCode = normalizeGuildCode(guildCode);
+  const cleanRole = cleanText(role) || "member";
+  const cleanForumUrl = cleanText(forumPostUrl);
+
+  if (!watcherName || !cleanDiscordId || !cleanGuildCode) {
+    const error = new Error("Nom, ID Discord et guild code obligatoires.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!canViewGuildCode(actor, cleanGuildCode, { leaderSeesAll: true })) {
+    const error = new Error("Guilde hors perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const { data: existingMember, error: existingError } = await supabase
+    .from("guild_members")
+    .select(SAFE_MEMBER_SELECT)
+    .eq("discord_id", cleanDiscordId)
+    .maybeSingle();
+
+  if (existingError) {
+    throw new Error(existingError.message || "Verification du joueur impossible.");
+  }
+
+  if (existingMember?.guild_code && !sameGuildSpace(existingMember.guild_code, cleanGuildCode)) {
+    const error = new Error(`Ce joueur existe deja dans ${existingMember.guild_code}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+
+  if (existingMember && !canAdminManageTarget(actor, existingMember) && !isLeaderRole(actor.role)) {
+    const error = new Error("Ce joueur n'est pas dans ton perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (existingMember) {
+    const { data, error } = await supabase
+      .from("guild_members")
+      .update({
+        watcher_name: watcherName,
+        guild_code: cleanGuildCode,
+        role: cleanRole,
+        community_access_type: null,
+        community_status: null,
+        ...(cleanForumUrl ? { personal_forum_post_url: cleanForumUrl } : {}),
+      })
+      .eq("id", existingMember.id)
+      .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
+      .maybeSingle();
+
+    if (error) throw new Error(error.message || "Rattachement impossible.");
+    return { member: serializeManagedMember(data), warnings: [], attached: true, temporaryPassword: null };
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .insert({
+      watcher_name: watcherName,
+      discord_id: cleanDiscordId,
+      guild_code: cleanGuildCode,
+      role: cleanRole,
+      password: hashPortalPassword(DEFAULT_MEMBER_PASSWORD),
+      password_change_required: true,
+      assignment: "Tour",
+      status: TODO_STATUS,
+      awakening_status: "En attente",
+      defense_1: EMPTY_DEFENSE_SLOT,
+      defense_2: EMPTY_DEFENSE_SLOT,
+      personal_forum_post_url: cleanForumUrl || null,
+    })
+    .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message || "Creation du joueur impossible.");
+
+  const warnings = await initializeMemberData(data.id, data.watcher_name || watcherName);
+  return {
+    member: serializeManagedMember(data),
+    warnings,
+    attached: false,
+    temporaryPassword: DEFAULT_MEMBER_PASSWORD,
+  };
+}
+
+async function handleGuildMemberCreate(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const result = await createOrAttachGuildMember({
+      actor: adminCheck.admin,
+      name: body.name || body.watcherName || body.watcher_name,
+      discordId: body.discordId || body.discord_id,
+      guildCode: body.guildCode || body.guild_code || adminCheck.admin.guild_code,
+      role: body.role || "member",
+      forumPostUrl: body.forumPostUrl || body.personalForumPostUrl || body.personal_forum_post_url,
+    });
+
+    await supabase.from("portal_activity_logs").insert({
+      actor_member_id: adminCheck.admin.id,
+      actor_name: getMemberName(adminCheck.admin),
+      target_member_id: result.member.id,
+      target_name: result.member.name,
+      action_type: result.attached ? "guild_member_attach" : "guild_member_create",
+      entity_type: "guild_members",
+      entity_id: result.member.id,
+      summary: `${result.member.name} ${result.attached ? "rattache" : "ajoute"} a ${result.member.guildCode}`,
+      metadata: { guildCode: result.member.guildCode, role: result.member.role },
+    });
+
+    sendJson(res, 200, result);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Ajout impossible." });
+  }
+}
+
+async function handleGuildsList(body, res) {
+  const leaderCheck = await requireLeaderById(res._portalReq);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(SAFE_MEMBER_SELECT)
+    .order("guild_code", { ascending: true })
+    .order("watcher_name", { ascending: true })
+    .limit(MAX_MEMBER_ROWS);
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Chargement guildes impossible." });
+    return;
+  }
+
+  const members = (data || [])
+    .filter((member) => !isCommunityAccount(member))
+    .map(serializeManagedMember);
+  sendJson(res, 200, { members });
+}
+
+async function handleGuildsCreateOrAttachMember(body, res) {
+  const leaderCheck = await requireLeaderById(res._portalReq);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  try {
+    const result = await createOrAttachGuildMember({
+      actor: leaderCheck.leader,
+      name: body.name || body.watcherName || body.watcher_name,
+      discordId: body.discordId || body.discord_id,
+      guildCode: body.guildCode || body.guild_code,
+      role: body.role || "member",
+    });
+
+    await supabase.from("portal_activity_logs").insert({
+      actor_member_id: leaderCheck.leader.id,
+      actor_name: getMemberName(leaderCheck.leader),
+      target_member_id: result.member.id,
+      target_name: result.member.name,
+      action_type: result.attached ? "guild_member_attach" : "guild_member_create",
+      entity_type: "guild_members",
+      entity_id: result.member.id,
+      summary: `${result.member.name} ${result.attached ? "rattache" : "ajoute"} a ${result.member.guildCode}`,
+      metadata: { guildCode: result.member.guildCode, role: result.member.role },
+    });
+
+    sendJson(res, 200, result);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Ajout impossible." });
+  }
+}
+
+async function handleGuildsUpdateMember(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const patch = normalizeMemberPatch(body.patch || body);
+  const leaderCheck = await requireLeaderById(res._portalReq);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  if (!memberId || Object.keys(patch).length === 0) {
+    sendJson(res, 400, { error: "Membre ou modification manquante." });
+    return;
+  }
+
+  const allowedKeys = new Set(["role", "guild_code", "watcher_name", "discord_id"]);
+  Object.keys(patch).forEach((key) => {
+    if (!allowedKeys.has(key)) delete patch[key];
+  });
+
+  if (Object.keys(patch).length === 0) {
+    sendJson(res, 400, { error: "Modification non autorisee." });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .update(patch)
+    .eq("id", memberId)
+    .select(SAFE_MEMBER_SELECT)
+    .maybeSingle();
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Modification membre impossible." });
+    return;
+  }
+
+  if (!data || isCommunityAccount(data)) {
+    sendJson(res, 404, { error: "Membre introuvable." });
+    return;
+  }
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: leaderCheck.leader.id,
+    actor_name: getMemberName(leaderCheck.leader),
+    target_member_id: data.id,
+    target_name: getMemberName(data),
+    action_type: "guilds_member_update",
+    entity_type: "guild_members",
+    entity_id: data.id,
+    summary: `${getMemberName(data)} mis a jour depuis Guildes`,
+    metadata: { fields: Object.keys(patch), guildCode: data.guild_code || "" },
+  });
+
+  sendJson(res, 200, { member: serializeManagedMember(data) });
+}
+
 async function handleUpdateDefenseStatus(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const memberId = cleanText(body.memberId || body.member_id);
   const status = cleanText(body.status);
-  const adminCheck = await requireAdminById(actorMemberId);
+  const adminCheck = await requireAdminById(res._portalReq);
 
   if (adminCheck.error) {
     sendJson(res, adminCheck.status, { error: adminCheck.error });
@@ -1211,11 +2222,10 @@ async function handleUpdateDefenseStatus(body, res) {
 }
 
 async function handleResetDefenseStatuses(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const memberIds = Array.isArray(body.memberIds || body.member_ids)
     ? [...new Set((body.memberIds || body.member_ids).map(cleanText).filter(Boolean))]
     : [];
-  const adminCheck = await requireAdminById(actorMemberId);
+  const adminCheck = await requireAdminById(res._portalReq);
 
   if (adminCheck.error) {
     sendJson(res, adminCheck.status, { error: adminCheck.error });
@@ -1312,9 +2322,8 @@ async function handleResetDefenseStatuses(body, res) {
 }
 
 async function handleSendDefenses(body, res) {
-  const actorMemberId = cleanText(body.actorMemberId || body.actor_member_id);
   const memberId = cleanText(body.memberId || body.member_id);
-  const adminCheck = await requireAdminById(actorMemberId);
+  const adminCheck = await requireAdminById(res._portalReq);
 
   if (adminCheck.error) {
     sendJson(res, adminCheck.status, { error: adminCheck.error });
@@ -1549,8 +2558,22 @@ async function handleSendDefenses(body, res) {
 
 export default async function handler(req, res) {
   try {
+    res._portalReq = req;
+    applyPortalCorsHeaders(req, res);
+
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
     if (req.method !== "POST") {
       sendJson(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
+    if (!verifyPortalRequestOrigin(req)) {
+      sendJson(res, 403, { error: "Origine de la requete refusee." });
       return;
     }
 
@@ -1559,6 +2582,11 @@ export default async function handler(req, res) {
 
     if (action === "search") {
       await handleSearch(body, res);
+      return;
+    }
+
+    if (action === "members-list") {
+      await handleMembersList(body, res);
       return;
     }
 
@@ -1589,6 +2617,61 @@ export default async function handler(req, res) {
 
     if (action === "community-update-member") {
       await handleCommunityUpdateMember(body, res);
+      return;
+    }
+
+    if (action === "my-defenses-load") {
+      await handleMyDefensesLoad(body, res);
+      return;
+    }
+
+    if (action === "member-awakenings-load") {
+      await handleMemberAwakeningsLoad(body, res);
+      return;
+    }
+
+    if (action === "member-defense-assign") {
+      await handleMemberDefenseAssign(body, res);
+      return;
+    }
+
+    if (action === "defense-vote") {
+      await handleDefenseVote(body, res);
+      return;
+    }
+
+    if (action === "guild-management-load") {
+      await handleGuildManagementLoad(body, res);
+      return;
+    }
+
+    if (action === "guild-member-update") {
+      await handleGuildMemberUpdate(body, res);
+      return;
+    }
+
+    if (action === "guild-member-delete") {
+      await handleGuildMemberDelete(body, res);
+      return;
+    }
+
+    if (action === "guild-member-create") {
+      await handleGuildMemberCreate(body, res);
+      return;
+    }
+
+    if (action === "guilds-list") {
+      await handleGuildsList(body, res);
+      return;
+    }
+
+    if (action === "guilds-create-or-attach-member") {
+      await handleGuildsCreateOrAttachMember(body, res);
+      return;
+    }
+
+    if (action === "guilds-update-member") {
+      await handleGuildsUpdateMember(body, res);
       return;
     }
 

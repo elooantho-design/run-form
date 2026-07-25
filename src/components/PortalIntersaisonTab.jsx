@@ -20,8 +20,27 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { supabase } from "@/lib/supabase";
-import { logPortalActivity } from "@/lib/portalActivity";
+
+function getApiBase() {
+  const configured = import.meta.env.VITE_API_BASE_URL;
+  if (configured) return configured.replace(/\/$/, "");
+  if (typeof window !== "undefined") return window.location.origin;
+  return "http://localhost:3001";
+}
+
+async function callPortalIntersaison(payload) {
+  const response = await fetch(`${getApiBase()}/api/portal-intersaison`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || `Erreur Portal (${response.status})`);
+  }
+  return data;
+}
 
 function normalizeRoleValue(role) {
   return String(role || "")
@@ -44,14 +63,6 @@ function canManageIntersaison(session) {
   );
 }
 
-function getActorMemberId(session) {
-  return session?.memberId || session?.id || null;
-}
-
-function getActorName(session) {
-  return session?.watcherName || session?.memberName || session?.name || "Admin";
-}
-
 function emptyIntersaisonState() {
   return {
     campaign: null,
@@ -69,8 +80,6 @@ function sortByName(a, b) {
 
 export default function PortalIntersaisonTab({ session }) {
   const canManage = canManageIntersaison(session);
-  const actorMemberId = getActorMemberId(session);
-  const actorName = getActorName(session);
 
   const [campaign, setCampaign] = useState(null);
   const [dashboards, setDashboards] = useState([]);
@@ -116,101 +125,12 @@ export default function PortalIntersaisonTab({ session }) {
     setHighlightedRowId(null);
   }, []);
 
-  const loadIntersaisonData = useCallback(async () => {
-    if (!canManage) return;
-
-    setLoading(true);
-    setMessage("");
-
-    const { data: activeCampaign, error: campaignError } = await supabase
-      .from("intersaison_campaigns")
-      .select("*")
-      .eq("status", "active")
-      .maybeSingle();
-
-    if (campaignError) {
-      console.error("Erreur chargement campagne intersaison:", campaignError);
-      resetState();
-      setMessage(campaignError.message || "Impossible de charger la campagne intersaison.");
-      setLoading(false);
-      return;
-    }
-
-    if (!activeCampaign) {
-      resetState();
-      setLoading(false);
-      return;
-    }
-
-    const { data: dashboardRows, error: dashboardsError } = await supabase
-      .from("intersaison_dashboards")
-      .select("*")
-      .eq("campaign_id", activeCampaign.id)
-      .order("sort_order", { ascending: true });
-
-    if (dashboardsError) {
-      console.error("Erreur chargement dashboards intersaison:", dashboardsError);
-      resetState();
-      setMessage(dashboardsError.message || "Impossible de charger les dashboards.");
-      setLoading(false);
-      return;
-    }
-
-    const { data: assignmentRows, error: assignmentsError } = await supabase
-      .from("intersaison_assignments")
-      .select(
-        `
-        id,
-        campaign_id,
-        dashboard_id,
-        member_id,
-        watcher_name,
-        discord_id_raw,
-        source_guild_code,
-        target_guild_code,
-        poll_choice,
-        assignment_source,
-        has_note,
-        created_at,
-        updated_at,
-        is_manually_confirmed,
-        wished_guild_codes
-      `,
-      )
-      .eq("campaign_id", activeCampaign.id)
-      .order("created_at", { ascending: true });
-
-    if (assignmentsError) {
-      console.error("Erreur chargement assignations intersaison:", assignmentsError);
-      resetState();
-      setMessage(assignmentsError.message || "Impossible de charger les assignations.");
-      setLoading(false);
-      return;
-    }
-
-    const assignmentIds = (assignmentRows || []).map((item) => item.id).filter(Boolean);
-    let noteRows = [];
-
-    if (assignmentIds.length > 0) {
-      const { data: loadedNotes, error: notesError } = await supabase
-        .from("intersaison_notes")
-        .select("*")
-        .in("assignment_id", assignmentIds)
-        .order("updated_at", { ascending: false });
-
-      if (notesError) {
-        console.error("Erreur chargement notes intersaison:", notesError);
-        setMessage(notesError.message || "Notes intersaison non chargees.");
-      } else {
-        noteRows = loadedNotes || [];
-      }
-    }
-
-    const dashboardsList = dashboardRows || [];
-    setCampaign(activeCampaign);
+  const applyLoadedState = useCallback((state = emptyIntersaisonState()) => {
+    const dashboardsList = state.dashboards || [];
+    setCampaign(state.campaign || null);
     setDashboards(dashboardsList);
-    setAssignments(assignmentRows || []);
-    setNotes(noteRows);
+    setAssignments(state.assignments || []);
+    setNotes(state.notes || []);
     setSelectedDashboardId((previous) => {
       if (previous && dashboardsList.some((dashboard) => String(dashboard.id) === String(previous))) {
         return previous;
@@ -219,8 +139,46 @@ export default function PortalIntersaisonTab({ session }) {
       const firstRealDashboard = dashboardsList.find((dashboard) => !dashboard.is_draft);
       return String(firstRealDashboard?.id || dashboardsList[0]?.id || "");
     });
-    setLoading(false);
-  }, [canManage, resetState]);
+  }, []);
+
+  const runIntersaisonAction = useCallback(
+    async (action, payload = {}) => {
+      const data = await callPortalIntersaison({ action, ...payload });
+      if (data.state) {
+        const state = data.state || emptyIntersaisonState();
+        if (!state.campaign) {
+          resetState();
+        } else {
+          applyLoadedState(state);
+        }
+      }
+      return data;
+    },
+    [applyLoadedState, resetState],
+  );
+
+  const loadIntersaisonData = useCallback(async () => {
+    if (!canManage) return;
+
+    setLoading(true);
+    setMessage("");
+
+    try {
+      const data = await runIntersaisonAction("load");
+      const state = data.state || emptyIntersaisonState();
+      if (!state.campaign) {
+        resetState();
+      } else {
+        applyLoadedState(state);
+      }
+    } catch (error) {
+      console.error("Erreur chargement intersaison:", error);
+      resetState();
+      setMessage(error.message || "Impossible de charger l'intersaison.");
+    } finally {
+      setLoading(false);
+    }
+  }, [applyLoadedState, canManage, resetState, runIntersaisonAction]);
 
   useEffect(() => {
     void loadIntersaisonData();
@@ -342,27 +300,17 @@ export default function PortalIntersaisonTab({ session }) {
     setCreating(true);
     setMessage("");
 
-    const { error } = await supabase.rpc("create_intersaison_campaign", {
-      p_guild_count: parsedGuildCount,
-      p_poll_channel_id: null,
-    });
-
-    setCreating(false);
-
-    if (error) {
+    try {
+      await runIntersaisonAction("create-campaign", {
+        guildCount: parsedGuildCount,
+      });
+      setCreateDialogOpen(false);
+    } catch (error) {
       console.error("Erreur creation campagne intersaison:", error);
       setMessage(error.message || "Creation impossible.");
-      return;
+    } finally {
+      setCreating(false);
     }
-
-    setCreateDialogOpen(false);
-    await logPortalActivity(session, {
-      actionType: "intersaison_campaign_create",
-      entityType: "intersaison_campaign",
-      summary: `${actorName} a lance une intersaison`,
-      metadata: { guildCount: parsedGuildCount },
-    });
-    await loadIntersaisonData();
   };
 
   const openNoteDialog = (row) => {
@@ -374,167 +322,55 @@ export default function PortalIntersaisonTab({ session }) {
 
   const saveNote = async () => {
     if (!selectedNoteRow?.id || savingNote) return;
-    if (!actorMemberId) {
-      setMessage("Impossible d'enregistrer la note sans membre admin identifie.");
-      return;
-    }
-
-    const cleanNote = noteInput.trim();
-    const existingNote = getNoteForAssignment(selectedNoteRow.id);
 
     setSavingNote(true);
 
-    if (!cleanNote) {
-      if (existingNote) {
-        const { error } = await supabase.from("intersaison_notes").delete().eq("id", existingNote.id);
-
-        if (error) {
-          console.error("Erreur suppression note intersaison:", error);
-          setMessage(error.message || "Suppression impossible.");
-          setSavingNote(false);
-          return;
-        }
-
-        setNotes((previous) => previous.filter((note) => String(note.id) !== String(existingNote.id)));
-      }
-
-      setSavingNote(false);
+    try {
+      await runIntersaisonAction("save-note", {
+        assignmentId: selectedNoteRow.id,
+        note: noteInput.trim(),
+      });
       setNoteDialogOpen(false);
       setSelectedNoteRow(null);
       setNoteInput("");
-      return;
+    } catch (error) {
+      console.error("Erreur enregistrement note intersaison:", error);
+      setMessage(error.message || "Enregistrement impossible.");
+    } finally {
+      setSavingNote(false);
     }
-
-    const nowIso = new Date().toISOString();
-
-    if (existingNote) {
-      const { error } = await supabase
-        .from("intersaison_notes")
-        .update({ note: cleanNote, updated_at: nowIso })
-        .eq("id", existingNote.id);
-
-      if (error) {
-        console.error("Erreur mise a jour note intersaison:", error);
-        setMessage(error.message || "Enregistrement impossible.");
-        setSavingNote(false);
-        return;
-      }
-
-      setNotes((previous) =>
-        previous.map((note) =>
-          String(note.id) === String(existingNote.id)
-            ? { ...note, note: cleanNote, updated_at: nowIso }
-            : note,
-        ),
-      );
-    } else {
-      const { data, error } = await supabase
-        .from("intersaison_notes")
-        .insert({
-          assignment_id: selectedNoteRow.id,
-          note: cleanNote,
-          created_by_member_id: actorMemberId,
-        })
-        .select("*")
-        .single();
-
-      if (error) {
-        console.error("Erreur creation note intersaison:", error);
-        setMessage(error.message || "Creation impossible.");
-        setSavingNote(false);
-        return;
-      }
-
-      setNotes((previous) => [data, ...previous]);
-    }
-
-    setSavingNote(false);
-    setNoteDialogOpen(false);
-    setSelectedNoteRow(null);
-    setNoteInput("");
   };
 
   const toggleConfirmation = async (assignmentId) => {
     if (!canManage || !assignmentId) return;
 
-    const currentAssignment = assignments.find((assignment) => String(assignment.id) === String(assignmentId));
-    if (!currentAssignment) return;
-
-    const nextConfirmedValue = !currentAssignment.is_manually_confirmed;
-    const nowIso = new Date().toISOString();
-
-    const { error } = await supabase
-      .from("intersaison_assignments")
-      .update({
-        is_manually_confirmed: nextConfirmedValue,
-        updated_at: nowIso,
-      })
-      .eq("id", assignmentId);
-
-    if (error) {
+    try {
+      await runIntersaisonAction("toggle-confirmation", { assignmentId });
+    } catch (error) {
       console.error("Erreur toggle validation intersaison:", error);
       setMessage(error.message || "Changement impossible.");
-      return;
     }
-
-    setAssignments((previous) =>
-      previous.map((assignment) =>
-        String(assignment.id) === String(assignmentId)
-          ? {
-              ...assignment,
-              is_manually_confirmed: nextConfirmedValue,
-              updated_at: nowIso,
-            }
-          : assignment,
-      ),
-    );
   };
 
   const moveAssignment = async () => {
     if (!canManage || moving || !assignmentToMove?.id || !moveDashboardId) return;
 
-    const nextDashboard = dashboards.find((dashboard) => String(dashboard.id) === String(moveDashboardId));
-    if (!nextDashboard) return;
-
-    const nextTargetGuildCode = nextDashboard.is_draft ? null : nextDashboard.code;
-    const nowIso = new Date().toISOString();
-
     setMoving(true);
 
-    const { error } = await supabase
-      .from("intersaison_assignments")
-      .update({
-        dashboard_id: nextDashboard.id,
-        target_guild_code: nextTargetGuildCode,
-        is_manually_confirmed: true,
-        updated_at: nowIso,
-      })
-      .eq("id", assignmentToMove.id);
-
-    setMoving(false);
-
-    if (error) {
+    try {
+      await runIntersaisonAction("move-assignment", {
+        assignmentId: assignmentToMove.id,
+        dashboardId: moveDashboardId,
+      });
+      setMoveDialogOpen(false);
+      setAssignmentToMove(null);
+      setMoveDashboardId("");
+    } catch (error) {
       console.error("Erreur deplacement manuel intersaison:", error);
       setMessage(error.message || "Deplacement impossible.");
-      return;
+    } finally {
+      setMoving(false);
     }
-
-    setAssignments((previous) =>
-      previous.map((assignment) =>
-        String(assignment.id) === String(assignmentToMove.id)
-          ? {
-              ...assignment,
-              dashboard_id: nextDashboard.id,
-              target_guild_code: nextTargetGuildCode,
-              is_manually_confirmed: true,
-              updated_at: nowIso,
-            }
-          : assignment,
-      ),
-    );
-    setMoveDialogOpen(false);
-    setAssignmentToMove(null);
-    setMoveDashboardId("");
   };
 
   const saveWish = async () => {
@@ -543,28 +379,19 @@ export default function PortalIntersaisonTab({ session }) {
     const cleaned = [...new Set(wishInput)].sort((a, b) => a.localeCompare(b, "fr"));
     setSavingWish(true);
 
-    const { error } = await supabase
-      .from("intersaison_assignments")
-      .update({ wished_guild_codes: cleaned })
-      .eq("id", wishRow.id);
-
-    setSavingWish(false);
-
-    if (error) {
+    try {
+      await runIntersaisonAction("save-wish", {
+        assignmentId: wishRow.id,
+        wishedGuildCodes: cleaned,
+      });
+      setWishRow(null);
+      setWishInput([]);
+    } catch (error) {
       console.error("Erreur sauvegarde souhait intersaison:", error);
       setMessage(error.message || "Enregistrement impossible.");
-      return;
+    } finally {
+      setSavingWish(false);
     }
-
-    setAssignments((previous) =>
-      previous.map((assignment) =>
-        String(assignment.id) === String(wishRow.id)
-          ? { ...assignment, wished_guild_codes: cleaned }
-          : assignment,
-      ),
-    );
-    setWishRow(null);
-    setWishInput([]);
   };
 
   const copyTransferSummary = async () => {
@@ -591,70 +418,19 @@ export default function PortalIntersaisonTab({ session }) {
 
     setFinalizing(true);
 
-    const assignmentIds = assignments.map((assignment) => assignment.id).filter(Boolean);
-
-    if (assignmentIds.length > 0) {
-      const { error: notesError } = await supabase
-        .from("intersaison_notes")
-        .delete()
-        .in("assignment_id", assignmentIds);
-
-      if (notesError) {
-        console.error("Erreur suppression notes intersaison:", notesError);
-        setMessage(notesError.message || "Suppression des notes impossible.");
-        setFinalizing(false);
-        return;
-      }
-    }
-
-    const { error: assignmentsError } = await supabase
-      .from("intersaison_assignments")
-      .delete()
-      .eq("campaign_id", campaign.id);
-
-    if (assignmentsError) {
-      console.error("Erreur suppression assignations intersaison:", assignmentsError);
-      setMessage(assignmentsError.message || "Suppression des assignations impossible.");
+    try {
+      await runIntersaisonAction("cancel-campaign", {
+        campaignId: campaign.id,
+      });
+      setFinalizeDialogOpen(false);
+      resetState();
+      setMessage("Campagne intersaison annulee.");
+    } catch (error) {
+      console.error("Erreur suppression campagne intersaison:", error);
+      setMessage(error.message || "Suppression de la campagne impossible.");
+    } finally {
       setFinalizing(false);
-      return;
     }
-
-    const { error: dashboardsError } = await supabase
-      .from("intersaison_dashboards")
-      .delete()
-      .eq("campaign_id", campaign.id);
-
-    if (dashboardsError) {
-      console.error("Erreur suppression dashboards intersaison:", dashboardsError);
-      setMessage(dashboardsError.message || "Suppression des dashboards impossible.");
-      setFinalizing(false);
-      return;
-    }
-
-    const { error: campaignError } = await supabase
-      .from("intersaison_campaigns")
-      .delete()
-      .eq("id", campaign.id);
-
-    if (campaignError) {
-      console.error("Erreur suppression campagne intersaison:", campaignError);
-      setMessage(campaignError.message || "Suppression de la campagne impossible.");
-      setFinalizing(false);
-      return;
-    }
-
-    await logPortalActivity(session, {
-      actionType: "intersaison_campaign_cancel",
-      entityType: "intersaison_campaign",
-      entityId: campaign.id,
-      summary: `${actorName} a annule la campagne intersaison`,
-      metadata: { assignmentCount: assignments.length },
-    });
-
-    setFinalizing(false);
-    setFinalizeDialogOpen(false);
-    resetState();
-    setMessage("Campagne intersaison annulee.");
   };
 
   const launchRealTransfers = async () => {
@@ -686,84 +462,19 @@ export default function PortalIntersaisonTab({ session }) {
 
     setFinalizing(true);
 
-    for (const assignment of confirmedAssignments) {
-      const { error } = await supabase
-        .from("guild_members")
-        .update({ guild_code: assignment.target_guild_code })
-        .eq("id", assignment.member_id);
-
-      if (error) {
-        console.error("Erreur transfert reel membre:", error, assignment);
-        setMessage(`Erreur pendant le transfert reel de ${assignment.watcher_name}. Operation interrompue.`);
-        setFinalizing(false);
-        return;
-      }
-    }
-
-    const assignmentIds = assignments.map((assignment) => assignment.id).filter(Boolean);
-
-    if (assignmentIds.length > 0) {
-      const { error: notesError } = await supabase
-        .from("intersaison_notes")
-        .delete()
-        .in("assignment_id", assignmentIds);
-
-      if (notesError) {
-        console.error("Erreur suppression notes apres transferts reels:", notesError);
-        setMessage(notesError.message || "Transferts faits, mais suppression des notes impossible.");
-        setFinalizing(false);
-        return;
-      }
-    }
-
-    const { error: assignmentsError } = await supabase
-      .from("intersaison_assignments")
-      .delete()
-      .eq("campaign_id", campaign.id);
-
-    if (assignmentsError) {
-      console.error("Erreur suppression assignations apres transferts reels:", assignmentsError);
-      setMessage(assignmentsError.message || "Transferts faits, mais suppression des assignations impossible.");
+    try {
+      await runIntersaisonAction("launch-transfers", {
+        campaignId: campaign.id,
+      });
+      setFinalizeDialogOpen(false);
+      resetState();
+      setMessage("Transferts reels appliques et campagne cloturee.");
+    } catch (error) {
+      console.error("Erreur lancement transferts intersaison:", error);
+      setMessage(error.message || "Transfert impossible.");
+    } finally {
       setFinalizing(false);
-      return;
     }
-
-    const { error: dashboardsError } = await supabase
-      .from("intersaison_dashboards")
-      .delete()
-      .eq("campaign_id", campaign.id);
-
-    if (dashboardsError) {
-      console.error("Erreur suppression dashboards apres transferts reels:", dashboardsError);
-      setMessage(dashboardsError.message || "Transferts faits, mais suppression des dashboards impossible.");
-      setFinalizing(false);
-      return;
-    }
-
-    const { error: campaignError } = await supabase
-      .from("intersaison_campaigns")
-      .delete()
-      .eq("id", campaign.id);
-
-    if (campaignError) {
-      console.error("Erreur suppression campagne apres transferts reels:", campaignError);
-      setMessage(campaignError.message || "Transferts faits, mais suppression de la campagne impossible.");
-      setFinalizing(false);
-      return;
-    }
-
-    await logPortalActivity(session, {
-      actionType: "intersaison_transfers_apply",
-      entityType: "intersaison_campaign",
-      entityId: campaign.id,
-      summary: `${actorName} a applique les transferts intersaison`,
-      metadata: { transferCount: confirmedAssignments.length },
-    });
-
-    setFinalizing(false);
-    setFinalizeDialogOpen(false);
-    resetState();
-    setMessage("Transferts reels appliques et campagne cloturee.");
   };
 
   if (!canManage) {

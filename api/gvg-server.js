@@ -4,6 +4,14 @@ import http from "node:http";
 import https from "node:https";
 import { createClient } from "@supabase/supabase-js";
 import {
+  applyPortalCorsHeaders,
+  applyPortalSecurityHeaders,
+  requirePortalAdminSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
+import {
   buildDiscordReproModal,
   buildReproTemplateData,
   getDiscordReproRequestById,
@@ -43,12 +51,13 @@ let launcherScopeCache = {
   overrides: new Map(),
 };
 
-function setCorsHeaders(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+function setCorsHeaders(req, res) {
+  applyPortalSecurityHeaders(res);
+  applyPortalCorsHeaders(req, res);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, X-GVG-Token, X-Discord-Repro-Token, X-Signature-Ed25519, X-Signature-Timestamp"
+    "Content-Type, X-Requested-With, X-GVG-Token, X-Discord-Repro-Token, X-Signature-Ed25519, X-Signature-Timestamp"
   );
 }
 
@@ -751,13 +760,51 @@ async function deleteVpsJob(sourceGuild, jobId) {
   throw error;
 }
 
+async function requireGvgServerAdminContext(req, res) {
+  if (!verifyPortalRequestOrigin(req)) {
+    sendPortalJson(res, 403, { error: "Origine refusee." }, req);
+    return null;
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    sendPortalJson(res, 500, { error: "configuration Supabase manquante" }, req);
+    return null;
+  }
+
+  const sessionCheck = await requirePortalAdminSession(req, supabase);
+  if (sessionCheck.error) {
+    sendPortalJson(res, sessionCheck.status, { error: sessionCheck.error }, req);
+    return null;
+  }
+
+  const runScope = await resolveRunScope(supabase, req, sessionCheck.member);
+  if (!runScope?.canUseGvg && !runScope?.isLeader) {
+    sendPortalJson(res, 403, { error: "Acces GVG refuse." }, req);
+    return null;
+  }
+
+  return { supabase, sessionCheck, runScope };
+}
+
+function assertGvgServerGuildAccess(res, context, guildCode) {
+  if (canUseRunTargetGuild(context.runScope, guildCode)) return true;
+  sendPortalJson(res, 403, { error: "Guilde non autorisee pour cette session." });
+  return false;
+}
+
 async function handleJobs(req, res) {
+  const context = await requireGvgServerAdminContext(req, res);
+  if (!context) return;
+
   const rawGuild = req.query?.guild || "";
   const targetGuild = rawGuild ? normalizeTargetGuild(rawGuild) : "";
 
   if (rawGuild && !targetGuild) {
     return res.status(400).json({ error: "guild invalide" });
   }
+
+  if (targetGuild && !assertGvgServerGuildAccess(res, context, targetGuild)) return;
 
   const limit = Math.min(
     Math.max(Number(req.query?.limit || 50) || 50, 1),
@@ -785,12 +832,17 @@ async function handleJobs(req, res) {
 }
 
 async function handlePayload(req, res) {
+  const context = await requireGvgServerAdminContext(req, res);
+  if (!context) return;
+
   const guild = String(req.query?.sourceGuild || req.query?.guild || "").trim();
   const jobId = String(req.query?.jobId || req.query?.job_id || "");
 
   if (!isValidJobRef(guild) || !isValidJobRef(jobId)) {
     return res.status(400).json({ error: "guild ou jobId invalide" });
   }
+
+  if (!assertGvgServerGuildAccess(res, context, guild)) return;
 
   const data = await requestVpsJson(
     `/api/v1/jobs/${encodeURIComponent(guild)}/${encodeURIComponent(jobId)}/payload`
@@ -867,6 +919,9 @@ async function handleCalque(req, res) {
 }
 
 async function handleLauncherCreate(req, res) {
+  const context = await requireGvgServerAdminContext(req, res);
+  if (!context) return;
+
   const body = req.body || {};
   const sessionId = String(body.sessionId || body.session_id || "").trim();
   const guild = normalizeTargetGuild(body.guild);
@@ -880,6 +935,8 @@ async function handleLauncherCreate(req, res) {
   if (!["enemy", "ally"].includes(side)) {
     return res.status(400).json({ error: "side invalide" });
   }
+
+  if (!assertGvgServerGuildAccess(res, context, guild)) return;
 
   const data = await requestVpsJson("/api/v1/launcher/sessions", {
     method: "POST",
@@ -895,6 +952,9 @@ async function handleLauncherCreate(req, res) {
 }
 
 async function handleLauncherStatus(req, res) {
+  const context = await requireGvgServerAdminContext(req, res);
+  if (!context) return;
+
   const sessionId = String(req.query?.session || req.query?.sessionId || "").trim();
 
   if (!isValidSessionId(sessionId)) {
@@ -962,6 +1022,9 @@ async function fetchPayload(sourceGuild, jobId) {
 }
 
 async function handleImport(req, res) {
+  const context = await requireGvgServerAdminContext(req, res);
+  if (!context) return;
+
   const body = req.body || {};
   const targetGuild = normalizeTargetGuild(body.targetGuild || body.guild || "");
   const sourceGuild = String(body.sourceGuild || body.resolved_guild || "").trim();
@@ -971,6 +1034,9 @@ async function handleImport(req, res) {
   if (!isValidGuild(targetGuild) || !isValidJobRef(sourceGuild) || !isValidJobRef(jobId)) {
     return res.status(400).json({ error: "targetGuild, sourceGuild ou jobId invalide" });
   }
+
+  if (!assertGvgServerGuildAccess(res, context, targetGuild)) return;
+  if (!assertGvgServerGuildAccess(res, context, sourceGuild)) return;
 
   const data = await fetchPayload(sourceGuild, jobId);
   const rawItems = Array.isArray(data?.payload?.items)
@@ -1009,6 +1075,9 @@ async function handleImport(req, res) {
 }
 
 async function handleDeleteJob(req, res) {
+  const context = await requireGvgServerAdminContext(req, res);
+  if (!context) return;
+
   const body = req.method === "GET" ? req.query || {} : req.body || {};
   const sourceGuild = String(body.sourceGuild || body.resolved_guild || body.guild || "").trim();
   const jobId = String(body.jobId || body.job_id || body.resolved_job_id || "");
@@ -1016,6 +1085,8 @@ async function handleDeleteJob(req, res) {
   if (!isValidJobRef(sourceGuild) || !isValidJobRef(jobId)) {
     return res.status(400).json({ error: "sourceGuild ou jobId invalide" });
   }
+
+  if (!assertGvgServerGuildAccess(res, context, sourceGuild)) return;
 
   const data = await deleteVpsJob(sourceGuild, jobId);
 
@@ -1167,7 +1238,7 @@ async function handleDiscordRepro(req, res) {
 }
 
 export default async function handler(req, res) {
-  setCorsHeaders(res);
+  setCorsHeaders(req, res);
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();

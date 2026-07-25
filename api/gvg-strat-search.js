@@ -1,5 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import {
+  applyPortalCorsHeaders,
+  requirePortalSession,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import {
   canUseRunTargetGuild,
   isMissingGuildCodeColumn,
   isMissingRunBoycottTable,
@@ -241,12 +246,14 @@ async function searchDefenceStrict(
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  applyPortalCorsHeaders(req, res);
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
+  }
+
+  if (!verifyPortalRequestOrigin(req)) {
+    return res.status(403).json({ error: "origine de requete refusee" });
   }
 
   if (req.method !== "GET") {
@@ -254,6 +261,12 @@ export default async function handler(req, res) {
   }
 
   try {
+    const sessionCheck = await requirePortalSession(req, supabase);
+    if (sessionCheck.error) {
+      return res.status(sessionCheck.status || 401).json({ error: sessionCheck.error });
+    }
+    req.portalMember = sessionCheck.member;
+
     const gvgDefenseId = req.query?.gvgDefenseId;
 
     if (!gvgDefenseId) {
@@ -283,7 +296,7 @@ export default async function handler(req, res) {
       }))
       .filter((hero) => hero.champion);
 
-    const scope = await resolveRunScope(supabase, req);
+    const scope = await resolveRunScope(supabase, req, req.portalMember);
 
     if (!scope.canUseGvg || !scope.canSearchRuns) {
       return res.status(403).json({ error: "abonnement insuffisant pour consulter les strats GVG" });

@@ -214,15 +214,19 @@ create trigger pve_creators_normalize
   for each row
   execute function public.pve_creators_normalize();
 
+revoke all on public.pve_creators from anon, authenticated;
+revoke all on public.pve_videos from anon, authenticated;
+revoke all on public.pve_video_stages from anon, authenticated;
+revoke all on public.pve_video_heroes from anon, authenticated;
+revoke all on public.pve_video_hero_alternatives from anon, authenticated;
+
 grant select on public.pve_contents to anon, authenticated;
 grant select on public.pve_content_stages to anon, authenticated;
-revoke insert, update, delete on public.pve_creators from anon, authenticated;
-grant select on public.pve_creators to anon, authenticated;
 grant select, insert, update, delete on public.pve_creators to service_role;
-grant select, insert, update, delete on public.pve_videos to anon, authenticated;
-grant select, insert, delete on public.pve_video_stages to anon, authenticated;
-grant select, insert, delete on public.pve_video_heroes to anon, authenticated;
-grant select, insert, delete on public.pve_video_hero_alternatives to anon, authenticated;
+grant select, insert, update, delete on public.pve_videos to service_role;
+grant select, insert, update, delete on public.pve_video_stages to service_role;
+grant select, insert, update, delete on public.pve_video_heroes to service_role;
+grant select, insert, update, delete on public.pve_video_hero_alternatives to service_role;
 
 alter table public.pve_contents enable row level security;
 alter table public.pve_content_stages enable row level security;
@@ -247,107 +251,26 @@ create policy pve_content_stages_read
   using (true);
 
 drop policy if exists pve_creators_read on public.pve_creators;
-create policy pve_creators_read
-  on public.pve_creators
-  for select
-  to anon, authenticated
-  using (true);
-
 drop policy if exists pve_creators_insert on public.pve_creators;
 drop policy if exists pve_creators_update on public.pve_creators;
 drop policy if exists pve_creators_delete on public.pve_creators;
 
 drop policy if exists pve_videos_read on public.pve_videos;
-create policy pve_videos_read
-  on public.pve_videos
-  for select
-  to anon, authenticated
-  using (true);
-
 drop policy if exists pve_videos_insert on public.pve_videos;
-create policy pve_videos_insert
-  on public.pve_videos
-  for insert
-  to anon, authenticated
-  with check (true);
-
 drop policy if exists pve_videos_update on public.pve_videos;
-create policy pve_videos_update
-  on public.pve_videos
-  for update
-  to anon, authenticated
-  using (true)
-  with check (true);
-
 drop policy if exists pve_videos_delete on public.pve_videos;
-create policy pve_videos_delete
-  on public.pve_videos
-  for delete
-  to anon, authenticated
-  using (true);
 
 drop policy if exists pve_video_stages_read on public.pve_video_stages;
-create policy pve_video_stages_read
-  on public.pve_video_stages
-  for select
-  to anon, authenticated
-  using (true);
-
 drop policy if exists pve_video_stages_insert on public.pve_video_stages;
-create policy pve_video_stages_insert
-  on public.pve_video_stages
-  for insert
-  to anon, authenticated
-  with check (true);
-
 drop policy if exists pve_video_stages_delete on public.pve_video_stages;
-create policy pve_video_stages_delete
-  on public.pve_video_stages
-  for delete
-  to anon, authenticated
-  using (true);
 
 drop policy if exists pve_video_heroes_read on public.pve_video_heroes;
-create policy pve_video_heroes_read
-  on public.pve_video_heroes
-  for select
-  to anon, authenticated
-  using (true);
-
 drop policy if exists pve_video_heroes_insert on public.pve_video_heroes;
-create policy pve_video_heroes_insert
-  on public.pve_video_heroes
-  for insert
-  to anon, authenticated
-  with check (true);
-
 drop policy if exists pve_video_heroes_delete on public.pve_video_heroes;
-create policy pve_video_heroes_delete
-  on public.pve_video_heroes
-  for delete
-  to anon, authenticated
-  using (true);
 
 drop policy if exists pve_video_hero_alternatives_read on public.pve_video_hero_alternatives;
-create policy pve_video_hero_alternatives_read
-  on public.pve_video_hero_alternatives
-  for select
-  to anon, authenticated
-  using (true);
-
 drop policy if exists pve_video_hero_alternatives_insert on public.pve_video_hero_alternatives;
-create policy pve_video_hero_alternatives_insert
-  on public.pve_video_hero_alternatives
-  for insert
-  to anon, authenticated
-  with check (true);
-
 drop policy if exists pve_video_hero_alternatives_delete on public.pve_video_hero_alternatives;
-create policy pve_video_hero_alternatives_delete
-  on public.pve_video_hero_alternatives
-  for delete
-  to anon, authenticated
-  using (true);
 
 with seed_contents as (
   select *

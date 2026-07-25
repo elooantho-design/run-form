@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { BarChart3, CalendarDays, Crown, Search, Trophy, UserRound } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -11,7 +10,6 @@ import { getChampionDisplayName, getChampionEnglishName } from "@/lib/championDi
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
-  filterByGuildScope,
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
@@ -24,28 +22,6 @@ const PB_SORT_OPTIONS = [
 ];
 
 const PB_BOX_AWAKENING_VALUE = "__box__";
-const PB_ENTRY_SELECT_WITH_AWAKENING = `
-  id,
-  member_id,
-  member_name,
-  slot_index,
-  pb_raw,
-  awakening_level,
-  champion_id,
-  updated_at,
-  champions (*)
-`;
-const PB_ENTRY_SELECT_FALLBACK = `
-  id,
-  member_id,
-  member_name,
-  slot_index,
-  pb_raw,
-  champion_id,
-  updated_at,
-  champions (*)
-`;
-
 function normalizeText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -143,6 +119,25 @@ function isMissingPbAwakeningColumn(error) {
     (message.includes("awakening_level") &&
       (message.includes("schema cache") || message.includes("does not exist") || message.includes("column")))
   );
+}
+
+async function callPortalPlayerData(payload) {
+  const configuredBase = import.meta.env?.VITE_API_BASE_URL;
+  const isLocal =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  const apiBase = configuredBase ? configuredBase.replace(/\/$/, "") : isLocal ? "http://localhost:3000" : "";
+  const response = await fetch(`${apiBase}/api/portal-player-data`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.ok === false) {
+    throw new Error(json?.error || "Erreur API Portal.");
+  }
+  return json;
 }
 
 function formatShortDate(value) {
@@ -253,7 +248,6 @@ export default function PersonalBestTab({ session }) {
 
   const guildCode = getSessionGuildCode(session);
   const isPaladinScope = isPaladinSession(session);
-  const memberIds = useMemo(() => members.map((member) => member.id).filter(Boolean), [members]);
 
   const isAdmin = useMemo(() => {
     const role = getSessionRole(session);
@@ -282,121 +276,38 @@ export default function PersonalBestTab({ session }) {
       setLoading(true);
       setErrorMessage("");
 
-      const [membersResult, heroesResult] = await Promise.all([
-        supabase
-          .from("guild_members")
-          .select(`
-            id,
-            watcher_name,
-            discord_id,
-            guild_code,
-            assignment,
-            member_awakenings (
-              awakening_level,
-              champion_id,
-              champions (*)
-            )
-          `)
-          .order("watcher_name", { ascending: true }),
-        supabase.from("champions").select("*").order("name", { ascending: true }),
-      ]);
+      try {
+        const data = await callPortalPlayerData({
+          action: "personalBest",
+          guildCode: activeGuildCode,
+        });
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (membersResult.error) {
-        console.error("Erreur chargement membres PB:", membersResult.error);
-        setErrorMessage("Impossible de charger les membres de guilde.");
-        setLoading(false);
-        return;
-      }
-
-      if (heroesResult.error) {
-        console.error("Erreur chargement champions PB:", heroesResult.error);
-        setErrorMessage("Impossible de charger la liste des heros.");
-        setLoading(false);
-        return;
-      }
-
-      const scopedMembers = isPaladinScope
-        ? (membersResult.data || []).filter(
-            (row) => normalizeGuildCodeKey(row.guild_code) === normalizeGuildCodeKey(activeGuildCode),
-          )
-        : filterByGuildScope(membersResult.data || [], session, (row) => row.guild_code, {
-            leaderSeesAll: false,
-          });
-
-      setMembers(
-        scopedMembers.map((row) => ({
+        setMembers(
+          (data.members || []).map((row) => ({
           id: row.id,
-          name: row.watcher_name || "Joueur",
+          name: row.name || row.watcher_name || "Joueur",
           discordId: row.discord_id || "",
           guildCode: row.guild_code || activeGuildCode || guildCode,
           assignment: row.assignment || "Tour",
-          awakenings: buildMemberAwakenings(row.member_awakenings),
-        })),
-      );
+          awakenings: buildMemberAwakenings(row.awakenings),
+          })),
+        );
 
-      setAllHeroesData(
-        (heroesResult.data || []).map((row) => ({
-          id: row.id,
-          name: row.name,
-          englishName: getChampionEnglishName(row),
-          lord: row.lord || "non-lord",
-        })),
-      );
+        setAllHeroesData(
+          (data.champions || []).map((row) => ({
+            id: row.id,
+            name: row.name,
+            englishName: getChampionEnglishName(row),
+            lord: row.lord || "non-lord",
+          })),
+        );
 
-      setLoading(false);
-    }
+        setPbAwakeningColumnReady(data.pbAwakeningColumnReady !== false);
 
-    loadMembersAndHeroes();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeGuildCode, guildCode, isPaladinScope, session]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPbEntries() {
-      if (memberIds.length === 0) {
-        setPbEntries([]);
-        return;
-      }
-
-      let hasAwakeningColumn = true;
-      let { data, error } = await supabase
-        .from("member_pb_entries")
-        .select(PB_ENTRY_SELECT_WITH_AWAKENING)
-        .in("member_id", memberIds)
-        .order("member_name", { ascending: true })
-        .order("slot_index", { ascending: true });
-
-      if (error && isMissingPbAwakeningColumn(error)) {
-        hasAwakeningColumn = false;
-        const fallbackResult = await supabase
-          .from("member_pb_entries")
-          .select(PB_ENTRY_SELECT_FALLBACK)
-          .in("member_id", memberIds)
-          .order("member_name", { ascending: true })
-          .order("slot_index", { ascending: true });
-
-        data = fallbackResult.data;
-        error = fallbackResult.error;
-      }
-
-      if (cancelled) return;
-
-      setPbAwakeningColumnReady(hasAwakeningColumn);
-
-      if (error) {
-        console.error("Erreur chargement PB entries:", error);
-        setErrorMessage("Impossible de charger les PB.");
-        return;
-      }
-
-      setPbEntries(
-        (data || []).map((row) => ({
+        setPbEntries(
+          (data.entries || []).map((row) => ({
           id: row.id,
           memberId: row.member_id,
           memberName: row.member_name || "",
@@ -408,16 +319,24 @@ export default function PersonalBestTab({ session }) {
           championEnglishName: getChampionEnglishName(row.champions),
           championLord: row.champions?.lord || "non-lord",
           updatedAt: row.updated_at || null,
-        })),
-      );
+          })),
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Erreur chargement PB:", error);
+          setErrorMessage(error?.message || "Impossible de charger les PB.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
 
-    loadPbEntries();
+    loadMembersAndHeroes();
 
     return () => {
       cancelled = true;
     };
-  }, [memberIds]);
+  }, [activeGuildCode, guildCode]);
 
   const pbRows = useMemo(() => {
     const grouped = new Map();
@@ -559,17 +478,15 @@ export default function PersonalBestTab({ session }) {
     const targetMember = members.find((member) => String(member.id) === String(pbSlotToEdit.memberId));
     const previousHeroName = pbSlotToEdit.currentChampionName || "";
 
-    const { error } = await supabase
-      .from("member_pb_entries")
-      .update({
-        champion_id: champion.id,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", pbSlotToEdit.entryId);
-
-    if (error) {
+    try {
+      await callPortalPlayerData({
+        action: "updatePersonalBestHero",
+        entryId: pbSlotToEdit.entryId,
+        championId: champion.id,
+      });
+    } catch (error) {
       console.error("Erreur mise a jour heros PB:", error);
-      setErrorMessage("Impossible de mettre a jour le heros PB.");
+      setErrorMessage(error?.message || "Impossible de mettre a jour le heros PB.");
       return;
     }
 
@@ -630,30 +547,20 @@ export default function PersonalBestTab({ session }) {
     }
 
     const now = new Date().toISOString();
-    const updatePayload = {
-      pb_raw: normalizedValue,
-      updated_at: now,
-    };
 
-    if (pbAwakeningColumnReady) {
-      updatePayload.awakening_level = normalizedAwakening;
-    }
-
-    const { error } = await supabase
-      .from("member_pb_entries")
-      .update(updatePayload)
-      .eq("id", entryId);
-
-    if (error) {
-      if (isMissingPbAwakeningColumn(error)) {
+    try {
+      const result = await callPortalPlayerData({
+        action: "updatePersonalBestValue",
+        entryId,
+        pbRaw: normalizedValue,
+        awakeningLevel: normalizedAwakening,
+      });
+      if (result.pbAwakeningColumnReady === false) {
         setPbAwakeningColumnReady(false);
       }
+    } catch (error) {
       console.error("Erreur mise a jour PB brut:", error);
-      setErrorMessage(
-        isMissingPbAwakeningColumn(error)
-          ? "La colonne Supabase awakening_level manque sur member_pb_entries."
-          : "Impossible de mettre a jour le PB brut.",
-      );
+      setErrorMessage(error?.message || "Impossible de mettre a jour le PB brut.");
       return false;
     }
 

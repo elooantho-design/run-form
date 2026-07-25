@@ -228,7 +228,9 @@ const recordCounts = useMemo(
         if (value) params.set(key, String(value));
       });
 
-      const response = await fetch(`${apiBase}/api/gvg-data?${params.toString()}`);
+      const response = await fetch(`${apiBase}/api/gvg-data?${params.toString()}`, {
+        credentials: "include",
+      });
 
       const rawText = await response.text();
       let data = null;
@@ -268,6 +270,7 @@ const recordCounts = useMemo(
 
       const response = await fetch(`${apiBase}/api/gvg-data`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "record_sessions",
@@ -350,6 +353,7 @@ async function createRecordLauncherSession(scope) {
     const sessionId = makeRecordSessionId();
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "record_session_create",
@@ -413,6 +417,7 @@ async function calculateGroups() {
 
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -700,6 +705,7 @@ function getMirrorGroup(defense) {
   try {
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -778,6 +784,7 @@ async function saveComment() {
   try {
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -826,6 +833,7 @@ async function saveAttackCode() {
   try {
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -959,6 +967,7 @@ async function markRecordOk() {
 
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -1016,6 +1025,7 @@ async function pushToBase() {
 
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -1056,6 +1066,7 @@ async function confirmReturnToCurrent() {
 
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -1116,6 +1127,7 @@ const queryItems = Array.isArray(defense.heroes)
 
 const response = await fetch(`${apiBase}/api/run?action=search`, {
   method: "POST",
+  credentials: "include",
   headers: {
     "Content-Type": "application/json",
   },
@@ -1173,6 +1185,7 @@ const handleDeleteStrat = async (run) => {
   try {
     const response = await fetch(`${apiBase}/api/run?action=delete`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -1227,6 +1240,7 @@ const handleBoycottStrat = async (run) => {
   try {
     const response = await fetch(`${apiBase}/api/run?action=boycott`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },

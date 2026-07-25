@@ -8,15 +8,12 @@ import {
   ThumbsUp,
   XCircle,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { logPortalActivity } from "@/lib/portalActivity";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import {
-  filterByGuildScope,
   isPaladinGuildCode,
   isSameGuildSpace,
   normalizeGuildCodeKey,
@@ -136,6 +133,20 @@ function getCompatibilityState(member, defense) {
     badge: "border-red-300/30 bg-red-300/12 text-red-100",
     icon: XCircle,
   };
+}
+
+async function postPortalAccess(action, payload = {}) {
+  const response = await fetch("/api/portal-access", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+  return data;
 }
 
 export default function MyDefensesTab({ session }) {
@@ -307,166 +318,44 @@ export default function MyDefensesTab({ session }) {
       setErrorMessage("");
       const sessionWatcherName = session?.watcherName || session?.name || "";
 
-      const [membersResult, defensesResult, votesResult, championsResult] = await Promise.all([
-        supabase
-          .from("guild_members")
-          .select("id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2")
-          .order("watcher_name", { ascending: true }),
-        supabase
-          .from("guild_defenses")
-          .select(`
-            *,
-            guild_defense_slots (
-              slot_index,
-              champion_id,
-              champions (
-                name
-              )
-            ),
-            guild_defense_conditions (
-              id,
-              champion_id,
-              min_awakening,
-              champions (
-                name
-              )
-            )
-          `)
-          .order("created_at", { ascending: true }),
-        supabase.from("cluster_defense_likes").select("id, defense_id, member_id, value, created_at"),
-        supabase.from("champions").select("*"),
-      ]);
-
-      if (cancelled) return;
-
-      if (membersResult.error || defensesResult.error || votesResult.error || championsResult.error) {
-        console.error(
-          "Erreur chargement mes defenses:",
-          membersResult.error || defensesResult.error || votesResult.error || championsResult.error
-        );
-        setErrorMessage("Impossible de charger tes defenses pour le moment.");
-        setLoading(false);
-        return;
-      }
-
-      const defenseRows = defensesResult.data || [];
-      const defenseIds = defenseRows.map((row) => row.id).filter(Boolean);
-      let blocksByDefenseId = new Map();
-
-      if (defenseIds.length > 0) {
-        const { data: blockRows, error: blocksError } = await supabase
-          .from("guild_defense_blocks")
-          .select("id, defense_id, block_type, content, sort_order")
-          .in("defense_id", defenseIds)
-          .order("sort_order", { ascending: true });
+      try {
+        const payload = await postPortalAccess("my-defenses-load");
 
         if (cancelled) return;
 
-        if (blocksError) {
-          console.error("Erreur chargement infos defenses:", blocksError);
-        } else {
-          blocksByDefenseId = (blockRows || []).reduce((grouped, block) => {
-            const defenseId = String(block.defense_id);
-            const previous = grouped.get(defenseId) || [];
-            grouped.set(defenseId, [
-              ...previous,
-              {
-                id: block.id,
-                blockType: block.block_type,
-                content: block.content,
-                sortOrder: block.sort_order ?? 9999,
-              },
-            ]);
-            return grouped;
-          }, new Map());
+        const mappedMembers = payload.members || [];
+        if (mappedMembers.length === 0) {
+          setMembers([]);
+          setDefenses([]);
+          setDefenseVotes([]);
+          setErrorMessage("Aucun profil joueur trouve dans le cluster.");
+          setLoading(false);
+          return;
         }
-      }
 
-      const mappedMembers = filterByGuildScope(membersResult.data || [], session, (row) => row.guild_code, {
-        leaderSeesAll: true,
-      }).map((row) => ({
-        id: row.id,
-        name: row.watcher_name || "Joueur",
-        discordId: row.discord_id || "",
-        guildCode: row.guild_code || "",
-        assignment: row.assignment || "Tour",
-        status: row.status || "A faire",
-        defense1: row.defense_1 || EMPTY_DEFENSE,
-        defense2: row.defense_2 || EMPTY_DEFENSE,
-      }));
+        setMembers(mappedMembers);
+        setDefenses(payload.defenses || []);
+        setDefenseVotes(payload.defenseVotes || []);
+        setChampionDisplayMap(buildChampionDisplayMap(payload.champions || []));
+        const normalizedSessionName = normalizeText(sessionWatcherName);
+        const selectedMember =
+          mappedMembers.find((item) => String(item.id) === String(connectedMemberId)) ||
+          mappedMembers.find((item) => normalizedSessionName && normalizeText(item.name) === normalizedSessionName) ||
+          mappedMembers[0] ||
+          null;
 
-      if (mappedMembers.length === 0) {
+        setSelectedMemberId(selectedMember?.id || "");
+        setDefenseTypeFilter(normalizeText(selectedMember?.assignment).includes("bastion") ? "bastion" : "tour");
+        setLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Erreur chargement mes defenses:", error);
+        setErrorMessage(error?.message || "Impossible de charger tes defenses pour le moment.");
         setMembers([]);
         setDefenses([]);
         setDefenseVotes([]);
-        setErrorMessage("Aucun profil joueur trouve dans le cluster.");
         setLoading(false);
-        return;
       }
-
-      const mappedDefenses = filterByGuildScope(defenseRows, session, (row) => row.guild_code, {
-        leaderSeesAll: true,
-      })
-        .map((row) => {
-          const slots = [...(row.guild_defense_slots || [])]
-            .sort((a, b) => a.slot_index - b.slot_index)
-            .map((slot) => slot.champions?.name || "")
-            .filter(Boolean);
-
-          const conditions = (row.guild_defense_conditions || []).map((condition) => ({
-            id: condition.id,
-            championId: condition.champion_id,
-            minAwakening: condition.min_awakening,
-            label: `${condition.champions?.name} A${condition.min_awakening} minimum`,
-          }));
-
-          return {
-            id: row.id,
-            name: row.name,
-            tier: row.tier,
-            type: row.type,
-            faction: row.faction || "",
-            guildCode: row.guild_code,
-            isGlobal: row.is_global,
-            isHidden: Boolean(row.is_hidden),
-            sourceDefenseId: row.source_defense_id,
-            sortOrder: row.sort_order ?? 9999,
-            slots,
-            conditions,
-            infoBlocks: blocksByDefenseId.get(String(row.id)) || [],
-            image: row.image_url,
-          };
-        })
-        .sort((a, b) => {
-          if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
-            return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
-          }
-
-          return String(a.name || "").localeCompare(String(b.name || ""), "fr", { sensitivity: "base" });
-        });
-
-      const mappedVotes = (votesResult.data || []).map((row) => ({
-        id: row.id,
-        defenseId: row.defense_id,
-        memberId: row.member_id,
-        value: row.value,
-        createdAt: row.created_at,
-      }));
-
-      setMembers(mappedMembers);
-      setDefenses(mappedDefenses);
-      setDefenseVotes(mappedVotes);
-      setChampionDisplayMap(buildChampionDisplayMap(championsResult.data || []));
-      const normalizedSessionName = normalizeText(sessionWatcherName);
-      const selectedMember =
-        mappedMembers.find((item) => String(item.id) === String(connectedMemberId)) ||
-        mappedMembers.find((item) => normalizedSessionName && normalizeText(item.name) === normalizedSessionName) ||
-        mappedMembers[0] ||
-        null;
-
-      setSelectedMemberId(selectedMember?.id || "");
-      setDefenseTypeFilter(normalizeText(selectedMember?.assignment).includes("bastion") ? "bastion" : "tour");
-      setLoading(false);
     }
 
     loadData();
@@ -484,41 +373,25 @@ export default function MyDefensesTab({ session }) {
     let cancelled = false;
 
     async function loadSelectedMemberAwakenings() {
-      const { data, error } = await supabase
-        .from("member_awakenings")
-        .select(`
-          awakening_level,
-          champion_id,
-          champions (
-            name
-          )
-        `)
-        .eq("member_id", selectedMemberBase.id);
+      try {
+        const payload = await postPortalAccess("member-awakenings-load", {
+          memberId: selectedMemberBase.id,
+        });
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (error) {
+        setMemberAwakeningsByMemberId((previous) => ({
+          ...previous,
+          [String(selectedMemberBase.id)]: payload.awakenings || {},
+        }));
+      } catch (error) {
+        if (cancelled) return;
         console.error("Erreur chargement eveils defenses:", error);
         setMemberAwakeningsByMemberId((previous) => ({
           ...previous,
           [String(selectedMemberBase.id)]: {},
         }));
-        return;
       }
-
-      const awakenings = {};
-
-      (data || []).forEach((entry) => {
-        const heroName = entry.champions?.name;
-        if (heroName) {
-          awakenings[heroName] = entry.awakening_level;
-        }
-      });
-
-      setMemberAwakeningsByMemberId((previous) => ({
-        ...previous,
-        [String(selectedMemberBase.id)]: awakenings,
-      }));
     }
 
     loadSelectedMemberAwakenings();
@@ -531,78 +404,61 @@ export default function MyDefensesTab({ session }) {
   async function assignDefense(slot, defense) {
     if (!member?.id || !defense?.name || !canEdit) return;
 
-    const column = slot === 1 ? "defense_1" : "defense_2";
     const localKey = slot === 1 ? "defense1" : "defense2";
     setSavingSlot(`${slot}-${defense.id}`);
     setErrorMessage("");
 
-    const { error } = await supabase
-      .from("guild_members")
-      .update({ [column]: defense.name })
-      .eq("id", member.id);
-
-    setSavingSlot("");
-
-    if (error) {
-      console.error("Erreur assignation defense:", error);
-      setErrorMessage("Impossible d'assigner cette defense.");
-      return;
-    }
-
-    setMembers((previous) =>
-      previous.map((item) => (String(item.id) === String(member.id) ? { ...item, [localKey]: defense.name } : item))
-    );
-    void logPortalActivity(session, {
-      targetMemberId: member.id,
-      targetName: member.name,
-      actionType: "defense_assign",
-      entityType: "defense",
-      entityId: String(defense.id),
-      summary: `${member.name} : defense ${slot} affectee a ${defense.name}`,
-      metadata: {
+    try {
+      const payload = await postPortalAccess("member-defense-assign", {
+        memberId: member.id,
         slot,
-        defenseId: defense.id,
         defenseName: defense.name,
-      },
-    });
+      });
+
+      const updatedMember = payload.member || {};
+      setMembers((previous) =>
+        previous.map((item) =>
+          String(item.id) === String(member.id)
+            ? { ...item, ...updatedMember, [localKey]: updatedMember[localKey] || defense.name }
+            : item
+        )
+      );
+    } catch (error) {
+      console.error("Erreur assignation defense:", error);
+      setErrorMessage(error?.message || "Impossible d'assigner cette defense.");
+    } finally {
+      setSavingSlot("");
+    }
   }
 
   async function clearAssignedDefense(slot) {
     if (!member?.id || !canEdit) return;
 
-    const previousDefenseName = slot === 1 ? member.defense1 : member.defense2;
-    const column = slot === 1 ? "defense_1" : "defense_2";
     const localKey = slot === 1 ? "defense1" : "defense2";
     setSavingSlot(`clear-${slot}`);
     setErrorMessage("");
 
-    const { error } = await supabase
-      .from("guild_members")
-      .update({ [column]: EMPTY_DEFENSE })
-      .eq("id", member.id);
-
-    setSavingSlot("");
-
-    if (error) {
-      console.error("Erreur suppression defense:", error);
-      setErrorMessage("Impossible de retirer cette defense.");
-      return;
-    }
-
-    setMembers((previous) =>
-      previous.map((item) => (String(item.id) === String(member.id) ? { ...item, [localKey]: EMPTY_DEFENSE } : item))
-    );
-    void logPortalActivity(session, {
-      targetMemberId: member.id,
-      targetName: member.name,
-      actionType: "defense_unassign",
-      entityType: "defense",
-      summary: `${member.name} : defense ${slot} retiree (${previousDefenseName || "-"})`,
-      metadata: {
+    try {
+      const payload = await postPortalAccess("member-defense-assign", {
+        memberId: member.id,
         slot,
-        previousDefenseName,
-      },
-    });
+        defenseName: EMPTY_DEFENSE,
+      });
+
+      const updatedMember = payload.member || {};
+      setMembers((previous) =>
+        previous.map((item) =>
+          String(item.id) === String(member.id)
+            ? { ...item, ...updatedMember, [localKey]: updatedMember[localKey] || EMPTY_DEFENSE }
+            : item
+        )
+      );
+    } catch (error) {
+      console.error("Erreur suppression defense:", error);
+      setErrorMessage(error?.message || "Impossible de retirer cette defense.");
+    } finally {
+      setSavingSlot("");
+    }
   }
 
   async function setDefenseVote(defense, value) {
@@ -611,77 +467,19 @@ export default function MyDefensesTab({ session }) {
     const targetDefenseId = getDefenseLikeTargetId(defense);
     if (!targetDefenseId) return;
 
-    const existingVote = defenseVotes.find(
-      (vote) =>
-        String(vote.defenseId) === String(targetDefenseId) &&
-        String(vote.memberId) === String(connectedMemberId)
-    );
-
     setVoteSavingId(`${targetDefenseId}-${value}`);
 
-    if (existingVote) {
-      if (existingVote.value === value) {
-        const { error } = await supabase.from("cluster_defense_likes").delete().eq("id", existingVote.id);
-
-        setVoteSavingId("");
-
-        if (error) {
-          console.error("Erreur suppression vote defense:", error);
-          return;
-        }
-
-        setDefenseVotes((previous) => previous.filter((vote) => vote.id !== existingVote.id));
-        return;
-      }
-
-      const { error } = await supabase
-        .from("cluster_defense_likes")
-        .update({ value })
-        .eq("id", existingVote.id);
-
+    try {
+      const payload = await postPortalAccess("defense-vote", {
+        defenseId: targetDefenseId,
+        value,
+      });
+      setDefenseVotes(payload.defenseVotes || []);
+    } catch (error) {
+      console.error("Erreur vote defense:", error);
+    } finally {
       setVoteSavingId("");
-
-      if (error) {
-        console.error("Erreur mise a jour vote defense:", error);
-        return;
-      }
-
-      setDefenseVotes((previous) =>
-        previous.map((vote) => (vote.id === existingVote.id ? { ...vote, value } : vote))
-      );
-      return;
     }
-
-    const { data, error } = await supabase
-      .from("cluster_defense_likes")
-      .upsert(
-        {
-          defense_id: targetDefenseId,
-          member_id: connectedMemberId,
-          value,
-        },
-        { onConflict: "defense_id,member_id" }
-      )
-      .select()
-      .single();
-
-    setVoteSavingId("");
-
-    if (error) {
-      console.error("Erreur ajout vote defense:", error);
-      return;
-    }
-
-    setDefenseVotes((previous) => [
-      ...previous,
-      {
-        id: data.id,
-        defenseId: data.defense_id,
-        memberId: data.member_id,
-        value: data.value,
-        createdAt: data.created_at,
-      },
-    ]);
   }
 
   function assignToFirstFreeSlot(defense) {

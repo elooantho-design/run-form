@@ -3,8 +3,6 @@ import { ArrowRightLeft, ExternalLink, MessageSquare, Plus, RefreshCw, Save, Sen
 import GestionDefenseTab from "@/components/GestionDefenseTab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
-import { logPortalActivity } from "@/lib/portalActivity";
 import {
   getDefenseLikeTargetId,
   getMetaDefenseCounters,
@@ -71,47 +69,6 @@ function normalizeAssignment(value) {
   return cleanValue || "Tour";
 }
 
-function mapDefenseRow(row, blocksByDefenseId = new Map()) {
-  const slots = [...(row.guild_defense_slots || [])]
-    .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
-    .map((slot) => slot.champions?.name || "")
-    .filter(Boolean);
-
-  const conditions = (row.guild_defense_conditions || []).map((condition) => ({
-    id: condition.id,
-    championId: condition.champion_id,
-    minAwakening: condition.min_awakening,
-    label: `${condition.champions?.name || "Hero"} A${condition.min_awakening} minimum`,
-  }));
-
-  return {
-    id: row.id,
-    name: row.name,
-    tier: row.tier,
-    type: row.type,
-    faction: row.faction || "",
-    guildCode: row.guild_code,
-    isGlobal: row.is_global,
-    isHidden: Boolean(row.is_hidden),
-    sourceDefenseId: row.source_defense_id,
-    sortOrder: row.sort_order ?? 9999,
-    slots,
-    conditions,
-    infoBlocks: blocksByDefenseId.get(String(row.id)) || [],
-    image: row.image_url,
-  };
-}
-
-function mapVoteRow(row) {
-  return {
-    id: row.id,
-    defenseId: row.defense_id,
-    memberId: row.member_id,
-    value: row.value,
-    createdAt: row.created_at,
-  };
-}
-
 function normalizeRoleValue(role) {
   return String(role || "")
     .trim()
@@ -130,6 +87,20 @@ function isAdminSession(session) {
       role.includes("administrateur") ||
       role.includes("leader"),
   );
+}
+
+async function postPortalAccess(action, payload = {}) {
+  const response = await fetch("/api/portal-access", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+  return data;
 }
 
 export default function PortalGuildManagementTab({ session }) {
@@ -257,153 +228,38 @@ export default function PortalGuildManagementTab({ session }) {
       setLoading(true);
       setErrorMessage("");
 
-      const [membersResult, defensesResult, votesResult] = await Promise.all([
-        supabase
-          .from("guild_members")
-          .select(`
-            id,
-            watcher_name,
-            discord_id,
-            guild_code,
-            assignment,
-            status,
-            defense_1,
-            defense_2,
-            awakening_status,
-            personal_forum_post_url,
-            member_awakenings (
-              awakening_level,
-              champion_id,
-              champions (
-                name
-              )
-            )
-          `)
-          .order("watcher_name", { ascending: true }),
-        supabase
-          .from("guild_defenses")
-          .select(`
-            *,
-            guild_defense_slots (
-              slot_index,
-              champion_id,
-              champions (
-                name
-              )
-            ),
-            guild_defense_conditions (
-              id,
-              champion_id,
-              min_awakening,
-              champions (
-                name
-              )
-            )
-          `)
-          .order("created_at", { ascending: true }),
-        supabase.from("cluster_defense_likes").select("id, defense_id, member_id, value, created_at"),
-      ]);
+      try {
+        const payload = await postPortalAccess("guild-management-load", {
+          guildCode: activeGuildCode,
+        });
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (membersResult.error || defensesResult.error || votesResult.error) {
-        console.error(
-          "Erreur chargement gestion guildes Portal:",
-          membersResult.error || defensesResult.error || votesResult.error
-        );
-        setErrorMessage("Impossible de charger la gestion des guildes pour le moment.");
+        const mappedMembers = payload.members || [];
+        setMembers(mappedMembers);
+        setDefenses(payload.defenses || []);
+        setDefenseVotes(payload.defenseVotes || []);
+        setSelectedMemberId((current) => {
+          if (current && mappedMembers.some((member) => String(member.id) === String(current))) return current;
+          const connectedMember = mappedMembers.find((member) => String(member.id) === String(connectedMemberId));
+          return (
+            connectedMember?.id ||
+            mappedMembers.find(
+              (member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode),
+            )?.id ||
+            null
+          );
+        });
+        setLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Erreur chargement gestion guildes Portal:", error);
+        setErrorMessage(error?.message || "Impossible de charger la gestion des guildes pour le moment.");
         setMembers([]);
         setDefenses([]);
         setDefenseVotes([]);
         setLoading(false);
-        return;
       }
-
-      const defenseRows = defensesResult.data || [];
-      const defenseIds = defenseRows.map((row) => row.id).filter(Boolean);
-      let blocksByDefenseId = new Map();
-
-      if (defenseIds.length > 0) {
-        const { data: blockRows, error: blocksError } = await supabase
-          .from("guild_defense_blocks")
-          .select("id, defense_id, block_type, content, sort_order")
-          .in("defense_id", defenseIds)
-          .order("sort_order", { ascending: true });
-
-        if (cancelled) return;
-
-        if (blocksError) {
-          console.error("Erreur chargement infos defenses Portal:", blocksError);
-        } else {
-          blocksByDefenseId = (blockRows || []).reduce((grouped, block) => {
-            const defenseId = String(block.defense_id);
-            const previous = grouped.get(defenseId) || [];
-
-            grouped.set(defenseId, [
-              ...previous,
-              {
-                id: block.id,
-                blockType: block.block_type,
-                content: block.content,
-                sortOrder: block.sort_order ?? 9999,
-              },
-            ]);
-
-            return grouped;
-          }, new Map());
-        }
-      }
-
-      const mappedMembers = (membersResult.data || []).map((row) => {
-        const awakenings = {};
-
-        (row.member_awakenings || []).forEach((entry) => {
-          const heroName = entry.champions?.name;
-          if (heroName) {
-            awakenings[heroName] = entry.awakening_level;
-          }
-        });
-
-        return {
-          id: row.id,
-          name: row.watcher_name || row.discord_id || "Joueur",
-          discordId: row.discord_id || "",
-          guildCode: row.guild_code || "",
-          assignment: normalizeAssignment(row.assignment),
-          status: row.status || "À faire",
-          awakeningStatus: row.awakening_status || "En attente",
-          personalForumPostUrl: row.personal_forum_post_url || "",
-          defense1: row.defense_1 || EMPTY_DEFENSE,
-          defense2: row.defense_2 || EMPTY_DEFENSE,
-          awakenings,
-        };
-      });
-
-      const mappedDefenses = defenseRows
-        .map((row) => mapDefenseRow(row, blocksByDefenseId))
-        .sort((a, b) => {
-          if ((a.sortOrder ?? 9999) !== (b.sortOrder ?? 9999)) {
-            return (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999);
-          }
-
-          return String(a.name || "").localeCompare(String(b.name || ""), "fr", { sensitivity: "base" });
-        });
-
-      setMembers(mappedMembers);
-      setDefenses(mappedDefenses);
-      setDefenseVotes((votesResult.data || []).map(mapVoteRow));
-      setSelectedMemberId((current) => {
-        if (current && mappedMembers.some((member) => String(member.id) === String(current))) return current;
-        const connectedMember = mappedMembers.find((member) => String(member.id) === String(connectedMemberId));
-        return (
-          connectedMember?.id ||
-          mappedMembers.find(
-            (member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode),
-          )?.id ||
-          null
-        );
-      });
-      setLoading(false);
     }
 
     loadGuildManagementData();
@@ -425,25 +281,29 @@ export default function PortalGuildManagementTab({ session }) {
     );
   }
 
-  async function updateMemberField(memberId, patch, errorLabel, logPayload) {
+  async function updateMemberField(memberId, patch, errorLabel) {
     setSavingMessage("Sauvegarde en cours...");
     setErrorMessage("");
 
-    const { error } = await supabase.from("guild_members").update(patch).eq("id", memberId);
-
-    setSavingMessage("");
-
-    if (error) {
+    try {
+      const payload = await postPortalAccess("guild-member-update", {
+        memberId,
+        patch,
+      });
+      setSavingMessage("");
+      if (payload.member) {
+        updateMemberLocal(memberId, payload.member);
+        setMemberPanelMember((previous) =>
+          previous && String(previous.id) === String(memberId) ? { ...previous, ...payload.member } : previous
+        );
+      }
+      return true;
+    } catch (error) {
+      setSavingMessage("");
       console.error(errorLabel, error);
-      setErrorMessage(error.message || "Sauvegarde impossible.");
+      setErrorMessage(error?.message || "Sauvegarde impossible.");
       return false;
     }
-
-    if (logPayload) {
-      void logPortalActivity(session, logPayload);
-    }
-
-    return true;
   }
 
   function openMemberPanel(member) {
@@ -608,6 +468,7 @@ export default function PortalGuildManagementTab({ session }) {
 
       const response = await fetch("/api/portal-access", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "send-defenses",
@@ -756,6 +617,7 @@ export default function PortalGuildManagementTab({ session }) {
     try {
       const response = await fetch("/api/portal-access", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "update-defense-status",
@@ -813,6 +675,7 @@ export default function PortalGuildManagementTab({ session }) {
     try {
       const response = await fetch("/api/portal-access", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "reset-defense-statuses",
@@ -862,60 +725,16 @@ export default function PortalGuildManagementTab({ session }) {
     const targetDefenseId = getDefenseLikeTargetId(defense);
     if (!targetDefenseId) return;
 
-    const existingVote = defenseVotes.find(
-      (vote) =>
-        String(vote.defenseId) === String(targetDefenseId) &&
-        String(vote.memberId) === String(connectedMemberId)
-    );
-
-    if (existingVote) {
-      if (existingVote.value === value) {
-        const { error } = await supabase.from("cluster_defense_likes").delete().eq("id", existingVote.id);
-
-        if (error) {
-          console.error("Erreur suppression vote defense Portal:", error);
-          setErrorMessage(error.message || "Vote impossible.");
-          return;
-        }
-
-        setDefenseVotes((previous) => previous.filter((vote) => vote.id !== existingVote.id));
-        return;
-      }
-
-      const { error } = await supabase.from("cluster_defense_likes").update({ value }).eq("id", existingVote.id);
-
-      if (error) {
-        console.error("Erreur mise a jour vote defense Portal:", error);
-        setErrorMessage(error.message || "Vote impossible.");
-        return;
-      }
-
-      setDefenseVotes((previous) =>
-        previous.map((vote) => (vote.id === existingVote.id ? { ...vote, value } : vote))
-      );
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("cluster_defense_likes")
-      .upsert(
-        {
-          defense_id: targetDefenseId,
-          member_id: connectedMemberId,
-          value,
-        },
-        { onConflict: "defense_id,member_id" }
-      )
-      .select()
-      .single();
-
-    if (error) {
+    try {
+      const payload = await postPortalAccess("defense-vote", {
+        defenseId: targetDefenseId,
+        value,
+      });
+      setDefenseVotes(payload.defenseVotes || []);
+    } catch (error) {
       console.error("Erreur ajout vote defense Portal:", error);
-      setErrorMessage(error.message || "Vote impossible.");
-      return;
+      setErrorMessage(error?.message || "Vote impossible.");
     }
-
-    setDefenseVotes((previous) => [...previous, mapVoteRow(data)]);
   }
 
   async function transferMemberToGuild() {
@@ -955,19 +774,9 @@ export default function PortalGuildManagementTab({ session }) {
     setSelectedMemberId((current) => (String(current) === String(memberToTransfer.id) ? null : current));
   }
 
-  async function deleteRows(table, column, value, errorLabel) {
-    const { error } = await supabase.from(table).delete().eq(column, value);
-
-    if (error) {
-      console.error(errorLabel, error);
-      throw error;
-    }
-  }
-
   async function removeMemberFromGuild() {
     if (!isAdmin || !memberToTransfer?.id || removingMemberId) return;
 
-    const currentGuildCode = memberToTransfer.guildCode || activeGuildCode;
     const confirmMessage = formatText(
       isPaladinSession(session)
         ? t(
@@ -988,60 +797,8 @@ export default function PortalGuildManagementTab({ session }) {
     setErrorMessage("");
 
     try {
-      const { data: intersaisonAssignments, error: intersaisonAssignmentsFetchError } = await supabase
-        .from("intersaison_assignments")
-        .select("id")
-        .eq("member_id", memberToTransfer.id);
-
-      if (intersaisonAssignmentsFetchError) {
-        console.error("Erreur chargement assignations intersaison membre Portal:", intersaisonAssignmentsFetchError);
-        throw intersaisonAssignmentsFetchError;
-      }
-
-      const intersaisonAssignmentIds = (intersaisonAssignments || []).map((row) => row.id).filter(Boolean);
-
-      if (intersaisonAssignmentIds.length > 0) {
-        const { error: intersaisonNotesError } = await supabase
-          .from("intersaison_notes")
-          .delete()
-          .in("assignment_id", intersaisonAssignmentIds);
-
-        if (intersaisonNotesError) {
-          console.error("Erreur suppression notes intersaison membre Portal:", intersaisonNotesError);
-          throw intersaisonNotesError;
-        }
-      }
-
-      await deleteRows("intersaison_assignments", "member_id", memberToTransfer.id, "Erreur suppression assignations intersaison membre Portal:");
-      await deleteRows("cluster_defense_likes", "member_id", memberToTransfer.id, "Erreur suppression votes defenses membre Portal:");
-      await deleteRows("member_awakenings", "member_id", memberToTransfer.id, "Erreur suppression eveils membre Portal:");
-      await deleteRows("member_pb_entries", "member_id", memberToTransfer.id, "Erreur suppression PB membre Portal:");
-      await deleteRows("member_demonic_monsters", "member_id", memberToTransfer.id, "Erreur suppression monstres membre Portal:");
-      await deleteRows("soul_stones", "member_id", memberToTransfer.id, "Erreur suppression pierres membre Portal:");
-      await deleteRows("gvg_repro", "member_id", memberToTransfer.id, "Erreur suppression repros GVG membre Portal:");
-
-      await supabase
-        .from("gvg_discord_repro_requests")
-        .update({
-          reproducer_member_id: null,
-          reproducer_discord_id: null,
-          reproducer_name: null,
-        })
-        .eq("reproducer_member_id", memberToTransfer.id);
-
-      await deleteRows("guild_members", "id", memberToTransfer.id, "Erreur suppression membre Portal:");
-
-      void logPortalActivity(session, {
-        targetMemberId: null,
-        targetName: memberToTransfer.name,
-        actionType: "guild_management_member_delete",
-        entityType: "member",
-        entityId: String(memberToTransfer.id),
-        summary: `${memberToTransfer.name} retire de ${currentGuildCode}`,
-        metadata: {
-          guildCode: currentGuildCode,
-          removedFrom: isPaladinSession(session) ? "cluster" : "guild",
-        },
+      await postPortalAccess("guild-member-delete", {
+        memberId: memberToTransfer.id,
       });
 
       setMembers((previous) => previous.filter((member) => String(member.id) !== String(memberToTransfer.id)));
@@ -1071,204 +828,36 @@ export default function PortalGuildManagementTab({ session }) {
     setAddingMember(true);
     setErrorMessage("");
 
-    const { data: existingMember, error: existingMemberError } = await supabase
-      .from("guild_members")
-      .select("id, watcher_name, discord_id, guild_code")
-      .eq("discord_id", cleanDiscordId)
-      .maybeSingle();
+    try {
+      const payload = await postPortalAccess("guild-member-create", {
+        name: cleanName,
+        discordId: cleanDiscordId,
+        forumPostUrl: cleanForumPostUrl,
+        guildCode: activeGuildCode,
+        role: "member",
+      });
 
-    if (existingMemberError) {
-      console.error("Erreur verification membre existant Portal:", existingMemberError);
-      setErrorMessage(existingMemberError.message || "Verification du membre impossible.");
-      setAddingMember(false);
-      return;
-    }
-
-    if (existingMember?.guild_code) {
-      setErrorMessage(`Ce joueur existe deja dans ${existingMember.guild_code}.`);
-      setAddingMember(false);
-      return;
-    }
-
-    if (existingMember) {
-      const confirmed = window.confirm(
-        `Ce joueur existe deja en externe. Le rattacher a la guilde ${activeGuildCode} ?`
-      );
-
-      if (!confirmed) {
-        setAddingMember(false);
-        return;
+      const createdMember = payload.member;
+      if (!createdMember?.id) {
+        throw new Error("Creation du membre impossible.");
       }
-
-      const { data, error } = await supabase
-        .from("guild_members")
-        .update({
-          watcher_name: cleanName,
-          personal_forum_post_url: cleanForumPostUrl || null,
-          guild_code: activeGuildCode,
-        })
-        .eq("id", existingMember.id)
-        .select("id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, awakening_status, personal_forum_post_url")
-        .single();
-
-      if (error) {
-        console.error("Erreur rattachement membre externe Portal:", error);
-        setErrorMessage(error.message || "Rattachement impossible.");
-        setAddingMember(false);
-        return;
-      }
-
-      const attachedMember = {
-        id: data.id,
-        name: data.watcher_name || cleanName,
-        discordId: data.discord_id || cleanDiscordId,
-        guildCode: data.guild_code || activeGuildCode,
-        assignment: normalizeAssignment(data.assignment),
-        status: data.status || "À faire",
-        awakeningStatus: data.awakening_status || "En attente",
-        personalForumPostUrl: data.personal_forum_post_url || "",
-        defense1: data.defense_1 || EMPTY_DEFENSE,
-        defense2: data.defense_2 || EMPTY_DEFENSE,
-        awakenings: {},
-      };
 
       setMembers((previous) => [
-        ...previous.filter((member) => String(member.id) !== String(attachedMember.id)),
-        attachedMember,
+        ...previous.filter((member) => String(member.id) !== String(createdMember.id)),
+        createdMember,
       ]);
-      setSelectedMemberId(attachedMember.id);
+      setSelectedMemberId(createdMember.id);
       setNewMember({ name: "", discordId: "", forumPostUrl: "" });
       setAddMemberOpen(false);
-      setAddingMember(false);
-      void logPortalActivity(session, {
-        targetMemberId: attachedMember.id,
-        targetName: attachedMember.name,
-        actionType: "guild_management_member_attach",
-        entityType: "member",
-        entityId: String(attachedMember.id),
-        summary: `${attachedMember.name} rattache a ${activeGuildCode}`,
-        metadata: { guildCode: activeGuildCode, discordId: cleanDiscordId },
-      });
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("guild_members")
-      .insert([
-        {
-          watcher_name: cleanName,
-          discord_id: cleanDiscordId,
-          personal_forum_post_url: cleanForumPostUrl || null,
-          guild_code: activeGuildCode,
-          role: "member",
-          password: "motdepassemembre",
-          assignment: "Tour",
-          status: "À faire",
-          awakening_status: "En attente",
-          defense_1: EMPTY_DEFENSE,
-          defense_2: EMPTY_DEFENSE,
-        },
-      ])
-      .select("id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, awakening_status, personal_forum_post_url")
-      .single();
-
-    if (error) {
+      if (payload.warnings?.length) {
+        setErrorMessage(`Membre cree, mais ${payload.warnings.join(" ")}`);
+      }
+    } catch (error) {
       console.error("Erreur ajout membre Portal:", error);
-      setErrorMessage(error.message || "Ajout du membre impossible.");
+      setErrorMessage(error?.message || "Ajout du membre impossible.");
+    } finally {
       setAddingMember(false);
-      return;
     }
-
-    let createdWarnings = [];
-    let championsData = [];
-
-    const { data: loadedChampions, error: championsError } = await supabase
-      .from("champions")
-      .select("id, name")
-      .order("name", { ascending: true });
-
-    if (championsError) {
-      console.error("Erreur chargement champions pour nouveau membre Portal:", championsError);
-      createdWarnings = [...createdWarnings, "Initialisation des eveils impossible."];
-    } else {
-      championsData = loadedChampions || [];
-    }
-
-    const awakeningRows = championsData
-      .filter((champion) => champion.id)
-      .map((champion) => ({
-        member_id: data.id,
-        champion_id: champion.id,
-        awakening_level: -1,
-      }));
-
-    if (awakeningRows.length > 0) {
-      const { error: awakeningInsertError } = await supabase.from("member_awakenings").insert(awakeningRows);
-
-      if (awakeningInsertError) {
-        console.error("Erreur creation eveils nouveau membre Portal:", awakeningInsertError);
-        createdWarnings = [...createdWarnings, "Initialisation des eveils impossible."];
-      }
-    }
-
-    const pbRows = [1, 2, 3, 4, 5].map((slotIndex) => ({
-      member_id: data.id,
-      member_name: data.watcher_name,
-      slot_index: slotIndex,
-      pb_raw: 0,
-      champion_id: null,
-    }));
-
-    const { error: pbInsertError } = await supabase.from("member_pb_entries").insert(pbRows);
-
-    if (pbInsertError) {
-      console.error("Erreur creation PB nouveau membre Portal:", pbInsertError);
-      createdWarnings = [...createdWarnings, "Initialisation des PB impossible."];
-    }
-
-    const awakenings = {};
-    championsData.forEach((champion) => {
-      if (champion.name) {
-        awakenings[champion.name] = -1;
-      }
-    });
-
-    const createdMember = {
-      id: data.id,
-      name: data.watcher_name || cleanName,
-      discordId: data.discord_id || cleanDiscordId,
-      guildCode: data.guild_code || activeGuildCode,
-      assignment: normalizeAssignment(data.assignment),
-      status: data.status || "À faire",
-      awakeningStatus: data.awakening_status || "En attente",
-      personalForumPostUrl: data.personal_forum_post_url || "",
-      defense1: data.defense_1 || EMPTY_DEFENSE,
-      defense2: data.defense_2 || EMPTY_DEFENSE,
-      awakenings,
-    };
-
-    setMembers((previous) => [...previous, createdMember]);
-    setSelectedMemberId(createdMember.id);
-    setNewMember({ name: "", discordId: "", forumPostUrl: "" });
-    setAddMemberOpen(false);
-    setAddingMember(false);
-    if (createdWarnings.length > 0) {
-      setErrorMessage(`Membre cree, mais ${createdWarnings.join(" ")}`);
-    }
-    void logPortalActivity(session, {
-      targetMemberId: createdMember.id,
-      targetName: createdMember.name,
-      actionType: "guild_management_member_create",
-      entityType: "member",
-      entityId: String(createdMember.id),
-      summary: `${createdMember.name} ajoute a ${activeGuildCode}`,
-      metadata: {
-        guildCode: activeGuildCode,
-        discordId: cleanDiscordId,
-        pbSlotsCreated: pbRows.length,
-        awakeningsCreated: awakeningRows.length,
-      },
-    });
   }
 
   return (

@@ -4,8 +4,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { supabase } from "@/lib/supabase";
-import { logPortalActivity } from "@/lib/portalActivity";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
   PALADIN_SPACE_KEY,
@@ -17,8 +15,6 @@ import {
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
 
-const EMPTY_DEFENSE = "--";
-const DEFAULT_PASSWORD = "motdepassemembre";
 const ROLE_OPTIONS = [
   { value: "member", label: "Membre" },
   { value: "officier", label: "Officier" },
@@ -45,11 +41,25 @@ function normalizeSpaceInput(value) {
 function mapMember(row) {
   return {
     id: row.id,
-    name: row.watcher_name || row.discord_id || "Joueur",
-    discordId: row.discord_id || "",
-    guildCode: row.guild_code || "",
+    name: row.name || row.watcher_name || row.discordId || row.discord_id || "Joueur",
+    discordId: row.discordId || row.discord_id || "",
+    guildCode: row.guildCode || row.guild_code || "",
     role: row.role || "member",
   };
+}
+
+async function postPortalAccess(action, payload = {}) {
+  const response = await fetch("/api/portal-access", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+  return data;
 }
 
 function buildGuildRows(members) {
@@ -161,20 +171,17 @@ export default function PortalGuildsTab({ session }) {
     setLoading(true);
     setErrorMessage("");
 
-    const { data, error } = await supabase
-      .from("guild_members")
-      .select("id, role, discord_id, watcher_name, guild_code")
-      .order("guild_code", { ascending: true })
-      .order("watcher_name", { ascending: true });
-
-    if (error) {
+    let mapped = [];
+    try {
+      const payload = await postPortalAccess("guilds-list");
+      mapped = (payload.members || []).map(mapMember);
+    } catch (error) {
       console.error("Erreur chargement guildes:", error);
-      setErrorMessage(error.message || "Impossible de charger les guildes.");
+      setErrorMessage(error?.message || "Impossible de charger les guildes.");
       setLoading(false);
       return;
     }
 
-    const mapped = (data || []).map(mapMember);
     setMembers(mapped);
     setSelectedGuildCode((current) => {
       if (current && mapped.some((member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(current))) {
@@ -191,51 +198,6 @@ export default function PortalGuildsTab({ session }) {
     void loadMembers();
   }, [isLeader]);
 
-  async function initializeMemberData(memberId, memberName) {
-    let warnings = [];
-    const { data: champions, error: championsError } = await supabase
-      .from("champions")
-      .select("id, name")
-      .order("name", { ascending: true });
-
-    if (championsError) {
-      console.error("Erreur chargement champions:", championsError);
-      warnings = [...warnings, "eveils non initialises"];
-    } else {
-      const awakeningRows = (champions || [])
-        .filter((champion) => champion.id)
-        .map((champion) => ({
-          member_id: memberId,
-          champion_id: champion.id,
-          awakening_level: -1,
-        }));
-
-      if (awakeningRows.length > 0) {
-        const { error } = await supabase.from("member_awakenings").insert(awakeningRows);
-        if (error) {
-          console.error("Erreur creation eveils:", error);
-          warnings = [...warnings, "eveils non initialises"];
-        }
-      }
-    }
-
-    const pbRows = [1, 2, 3, 4, 5].map((slotIndex) => ({
-      member_id: memberId,
-      member_name: memberName,
-      slot_index: slotIndex,
-      pb_raw: 0,
-      champion_id: null,
-    }));
-
-    const { error: pbError } = await supabase.from("member_pb_entries").insert(pbRows);
-    if (pbError) {
-      console.error("Erreur creation PB:", pbError);
-      warnings = [...warnings, "PB non initialises"];
-    }
-
-    return warnings;
-  }
-
   async function createOrAttachMember({ name, discordId, guildCode, role }) {
     const cleanName = String(name || "").trim();
     const cleanDiscordId = String(discordId || "").trim();
@@ -246,59 +208,19 @@ export default function PortalGuildsTab({ session }) {
       throw new Error("Nom, ID Discord et guild code sont obligatoires.");
     }
 
-    const { data: existingMember, error: existingError } = await supabase
-      .from("guild_members")
-      .select("id, watcher_name, discord_id, guild_code")
-      .eq("discord_id", cleanDiscordId)
-      .maybeSingle();
+    const payload = await postPortalAccess("guilds-create-or-attach-member", {
+      name: cleanName,
+      discordId: cleanDiscordId,
+      guildCode: cleanGuildCode,
+      role: cleanRole,
+    });
 
-    if (existingError) {
-      throw new Error(existingError.message || "Verification du joueur impossible.");
-    }
-
-    if (existingMember?.guild_code && normalizeGuildCodeKey(existingMember.guild_code) !== normalizeGuildCodeKey(cleanGuildCode)) {
-      throw new Error(`Ce joueur existe deja dans ${existingMember.guild_code}.`);
-    }
-
-    if (existingMember) {
-      const { data, error } = await supabase
-        .from("guild_members")
-        .update({
-          watcher_name: cleanName,
-          guild_code: cleanGuildCode,
-          role: cleanRole,
-        })
-        .eq("id", existingMember.id)
-        .select("id, role, discord_id, watcher_name, guild_code")
-        .single();
-
-      if (error) throw new Error(error.message || "Rattachement impossible.");
-      return { member: mapMember(data), warnings: [], attached: true };
-    }
-
-    const { data, error } = await supabase
-      .from("guild_members")
-      .insert([
-        {
-          watcher_name: cleanName,
-          discord_id: cleanDiscordId,
-          guild_code: cleanGuildCode,
-          role: cleanRole,
-          password: DEFAULT_PASSWORD,
-          assignment: "Tour",
-          status: "A faire",
-          awakening_status: "En attente",
-          defense_1: EMPTY_DEFENSE,
-          defense_2: EMPTY_DEFENSE,
-        },
-      ])
-      .select("id, role, discord_id, watcher_name, guild_code")
-      .single();
-
-    if (error) throw new Error(error.message || "Creation du joueur impossible.");
-
-    const warnings = await initializeMemberData(data.id, data.watcher_name || cleanName);
-    return { member: mapMember(data), warnings, attached: false };
+    return {
+      member: mapMember(payload.member),
+      warnings: payload.warnings || [],
+      attached: Boolean(payload.attached),
+      temporaryPassword: payload.temporaryPassword || null,
+    };
   }
 
   async function handleCreateGuild(event) {
@@ -313,7 +235,7 @@ export default function PortalGuildsTab({ session }) {
     setErrorMessage("");
 
     try {
-      const { member, warnings, attached } = await createOrAttachMember({
+      const { member, warnings, attached, temporaryPassword } = await createOrAttachMember({
         name: newGuild.firstMemberName,
         discordId: newGuild.firstMemberDiscordId,
         guildCode,
@@ -332,20 +254,12 @@ export default function PortalGuildsTab({ session }) {
         firstMemberDiscordId: "",
         firstMemberRole: "officier",
       });
+      const passwordText = temporaryPassword ? ` Mot de passe initial : ${temporaryPassword}.` : "";
       setMessage(
-        `${member.guildCode} cree avec ${member.name}${attached ? " rattache" : ""}. Mot de passe initial : ${DEFAULT_PASSWORD}.${
+        `${member.guildCode} cree avec ${member.name}${attached ? " rattache" : ""}.${passwordText}${
           warnings.length ? ` Attention : ${warnings.join(", ")}.` : ""
         }`,
       );
-      void logPortalActivity(session, {
-        targetMemberId: member.id,
-        targetName: member.name,
-        actionType: "guild_external_create",
-        entityType: "guild_members",
-        entityId: String(member.id),
-        summary: `${member.guildCode} cree via l'onglet Guildes`,
-        metadata: { guildCode: member.guildCode, role: member.role },
-      });
     } catch (error) {
       setErrorMessage(error?.message || "Creation impossible.");
     } finally {
@@ -362,7 +276,7 @@ export default function PortalGuildsTab({ session }) {
     setErrorMessage("");
 
     try {
-      const { member, warnings, attached } = await createOrAttachMember({
+      const { member, warnings, attached, temporaryPassword } = await createOrAttachMember({
         name: newMember.name,
         discordId: newMember.discordId,
         guildCode: selectedGuild.guildCode,
@@ -374,20 +288,12 @@ export default function PortalGuildsTab({ session }) {
         member,
       ]);
       setNewMember({ name: "", discordId: "", role: "member" });
+      const passwordText = temporaryPassword ? ` Mot de passe initial : ${temporaryPassword}.` : "";
       setMessage(
-        `${member.name} ${attached ? "rattache" : "ajoute"} a ${member.guildCode}. Mot de passe initial : ${DEFAULT_PASSWORD}.${
+        `${member.name} ${attached ? "rattache" : "ajoute"} a ${member.guildCode}.${passwordText}${
           warnings.length ? ` Attention : ${warnings.join(", ")}.` : ""
         }`,
       );
-      void logPortalActivity(session, {
-        targetMemberId: member.id,
-        targetName: member.name,
-        actionType: "guild_member_create",
-        entityType: "guild_members",
-        entityId: String(member.id),
-        summary: `${member.name} ajoute a ${member.guildCode}`,
-        metadata: { guildCode: member.guildCode, role: member.role },
-      });
     } catch (error) {
       setErrorMessage(error?.message || "Ajout impossible.");
     } finally {
@@ -406,26 +312,23 @@ export default function PortalGuildsTab({ session }) {
     if (patch.role) payload.role = patch.role;
     if (patch.guildCode) payload.guild_code = normalizeGuildCode(patch.guildCode);
 
-    const { data, error } = await supabase
-      .from("guild_members")
-      .update(payload)
-      .eq("id", member.id)
-      .select("id, role, discord_id, watcher_name, guild_code")
-      .single();
+    try {
+      const result = await postPortalAccess("guilds-update-member", {
+        memberId: member.id,
+        patch: payload,
+      });
 
-    if (error) {
-      setErrorMessage(error.message || "Modification impossible.");
+      const nextMember = mapMember(result.member);
+      setMembers((previous) =>
+        previous.map((item) => (String(item.id) === String(nextMember.id) ? nextMember : item)),
+      );
+      setSelectedGuildCode(nextMember.guildCode || selectedGuildCode);
+      setMessage(`${nextMember.name} mis a jour.`);
+    } catch (error) {
+      setErrorMessage(error?.message || "Modification impossible.");
+    } finally {
       setSaving(false);
-      return;
     }
-
-    const nextMember = mapMember(data);
-    setMembers((previous) =>
-      previous.map((item) => (String(item.id) === String(nextMember.id) ? nextMember : item)),
-    );
-    setSelectedGuildCode(nextMember.guildCode || selectedGuildCode);
-    setMessage(`${nextMember.name} mis a jour.`);
-    setSaving(false);
   }
 
   if (!isLeader) {

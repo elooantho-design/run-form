@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Edit3, RefreshCw, SearchCheck, Shield, Trash2, UploadCloud } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { fetchPortalChampions } from "@/lib/portalChampions";
 import { getGvgGuildLabel, getVisibleGvgGuildCodes, normalizeGvgGuildCode } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicPreviewUrl, resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
@@ -296,12 +296,7 @@ export default function GvgValidationTab({ session }) {
 
     async function loadChampionPool() {
       try {
-        const { data, error } = await supabase
-          .from("champions")
-          .select("*")
-          .order("name", { ascending: true });
-
-        if (error) throw error;
+        const data = await fetchPortalChampions();
         if (!cancelled) {
           setChampionPool((data || []).map((row) => row.name).filter(Boolean));
           setChampionDisplayMap(buildChampionDisplayMap(data || []));
@@ -329,7 +324,8 @@ export default function GvgValidationTab({ session }) {
       setMessage("");
 
       const response = await fetch(
-        `${apiBase}/api/gvg-server?action=jobs&limit=100&guild=${encodeURIComponent(guild)}`
+        `${apiBase}/api/gvg-server?action=jobs&limit=100&guild=${encodeURIComponent(guild)}`,
+        { credentials: "include" }
       );
       const data = await readJsonResponse(response, "jobs VPS");
 
@@ -365,7 +361,8 @@ export default function GvgValidationTab({ session }) {
       const response = await fetch(
         `${apiBase}/api/gvg-server?action=payload&guild=${encodeURIComponent(
           getJobSourceGuild(job)
-        )}&jobId=${encodeURIComponent(getJobId(job))}`
+        )}&jobId=${encodeURIComponent(getJobId(job))}`,
+        { credentials: "include" }
       );
       const data = await readJsonResponse(response, "payload VPS");
 
@@ -411,6 +408,7 @@ export default function GvgValidationTab({ session }) {
 
       const response = await fetch(`${apiBase}/api/gvg-server`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -533,6 +531,7 @@ export default function GvgValidationTab({ session }) {
 
       const response = await fetch(`${apiBase}/api/gvg-import`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },

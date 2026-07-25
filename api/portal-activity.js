@@ -1,5 +1,13 @@
-/* global Buffer, process */
+/* global process */
 import { createClient } from "@supabase/supabase-js";
+import {
+  applyPortalCorsHeaders,
+  readJsonBody,
+  requirePortalAdminSession,
+  requirePortalSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -10,9 +18,7 @@ const supabase = createClient(
 const MAX_LIMIT = 200;
 
 function sendJson(res, status, payload) {
-  res.statusCode = status;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
+  sendPortalJson(res, status, payload, res._portalReq || null);
 }
 
 function cleanText(value, fallback = "") {
@@ -30,18 +36,16 @@ function cleanMetadata(value) {
 }
 
 async function readBody(req) {
-  if (req.body && typeof req.body === "object") return req.body;
-
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-
-  const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
+  return readJsonBody(req);
 }
 
 async function handleGet(req, res) {
+  const sessionCheck = await requirePortalAdminSession(req, supabase);
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
   const url = new URL(req.url, "http://localhost");
   const memberId = cleanMemberId(url.searchParams.get("memberId"));
   const actionType = cleanText(url.searchParams.get("actionType"));
@@ -72,6 +76,12 @@ async function handleGet(req, res) {
 }
 
 async function handlePost(req, res) {
+  const sessionCheck = await requirePortalSession(req, supabase);
+  if (sessionCheck.error) {
+    sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+    return;
+  }
+
   const body = await readBody(req);
   const actionType = cleanText(body.actionType || body.action_type);
   const summary = cleanText(body.summary);
@@ -82,8 +92,8 @@ async function handlePost(req, res) {
   }
 
   const row = {
-    actor_member_id: cleanMemberId(body.actorMemberId || body.actor_member_id),
-    actor_name: cleanText(body.actorName || body.actor_name, "Systeme"),
+    actor_member_id: cleanMemberId(sessionCheck.member.id),
+    actor_name: cleanText(sessionCheck.member.watcher_name || sessionCheck.member.discord_id, "Systeme"),
     target_member_id: cleanMemberId(body.targetMemberId || body.target_member_id),
     target_name: cleanText(body.targetName || body.target_name),
     action_type: actionType,
@@ -109,6 +119,20 @@ async function handlePost(req, res) {
 
 export default async function handler(req, res) {
   try {
+    res._portalReq = req;
+    applyPortalCorsHeaders(req, res);
+
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (!verifyPortalRequestOrigin(req)) {
+      sendJson(res, 403, { error: "Origine de la requete refusee." });
+      return;
+    }
+
     if (req.method === "GET") {
       await handleGet(req, res);
       return;

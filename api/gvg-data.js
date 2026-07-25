@@ -2,6 +2,13 @@ import { createClient } from "@supabase/supabase-js";
 import fs from "fs";
 import path from "path";
 import {
+  applyPortalCorsHeaders,
+  isPortalAdminRole,
+  requirePortalSession,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import {
+  canUseRunTargetGuild,
   getRunScopeForGvgGuild,
   isMissingGuildCodeColumn,
   isMissingRunBoycottTable,
@@ -429,7 +436,7 @@ async function buildRunAvailabilityForDefenses(req, defenses, guild, timing) {
   });
 
   const ownerScope = getRunScopeForGvgGuild(guild);
-  const visibleScope = await resolveRunScope(supabase, req);
+  const visibleScope = await resolveRunScope(supabase, req, req.portalMember);
   timing?.mark("supabase:resolve_run_scope", {
     owner_space: ownerScope?.spaceKey,
     visible_space: visibleScope?.spaceKey,
@@ -574,6 +581,55 @@ function buildGvgDefenseListQuery(selectColumns, guild) {
     .order("created_at", { ascending: true });
 }
 
+async function resolveGvgActionScope(req, guild, options = {}) {
+  const normalizedGuild = normalizeGuildCode(guild);
+  if (!normalizedGuild) {
+    return { error: "guild manquante ou invalide", status: 400 };
+  }
+
+  const scope = await resolveRunScope(supabase, req, req.portalMember);
+  if (!scope.canUseGvg) {
+    return { error: "abonnement insuffisant pour acceder a la GVG", status: 403 };
+  }
+
+  if (!canUseRunTargetGuild(scope, normalizedGuild)) {
+    return { error: "guilde hors perimetre", status: 403 };
+  }
+
+  if (options.adminOnly && !isPortalAdminRole(req.portalMember?.role)) {
+    return { error: "acces admin requis", status: 403 };
+  }
+
+  return { scope, guild: normalizedGuild };
+}
+
+async function loadGvgDefenseForAction(req, res, id, selectColumns, options = {}) {
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .select(selectColumns)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[gvg-data:access] read error:", error);
+    res.status(500).json({ error: "read failed" });
+    return null;
+  }
+
+  if (!data) {
+    res.status(404).json({ error: "defense introuvable" });
+    return null;
+  }
+
+  const access = await resolveGvgActionScope(req, data.guild, options);
+  if (access.error) {
+    res.status(access.status || 403).json({ error: access.error });
+    return null;
+  }
+
+  return { defense: data, scope: access.scope, guild: access.guild };
+}
+
 async function handleList(req, res) {
   const guild = normalizeGuildCode(req.query?.guild);
   const timing = createTimingLogger("gvg-data:list", {
@@ -589,10 +645,14 @@ async function handleList(req, res) {
 
   timing.mark("params_read", { guild });
 
-  const visibleScope = await resolveRunScope(supabase, req);
+  const visibleScope = await resolveRunScope(supabase, req, req.portalMember);
   if (!visibleScope.canUseGvg) {
     timing.end({ error: "license_gvg_denied" });
     return res.status(403).json({ error: "abonnement insuffisant pour acceder a la GVG" });
+  }
+  if (!canUseRunTargetGuild(visibleScope, guild)) {
+    timing.end({ error: "guild_scope_denied" });
+    return res.status(403).json({ error: "guilde hors perimetre" });
   }
 
   let mirrorGroupSchemaReady = true;
@@ -680,11 +740,12 @@ async function handleUpdate(req, res) {
     return res.status(400).json({ error: "action invalide" });
   }
 
+  const actorName = req.portalMember?.watcher_name || watcher || "Joueur";
   const updatePayload =
     action === "repro"
       ? {
           status: "repro",
-          repro_by: watcher || "Joueur",
+          repro_by: actorName,
           updated_at: new Date().toISOString(),
         }
       : {
@@ -693,23 +754,9 @@ async function handleUpdate(req, res) {
           updated_at: new Date().toISOString(),
         };
 
-  const { data: targetDefense, error: readError } = await supabase
-    .from("gvg_defense")
-    .select("id, guild, is_ally, heroes, status")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (readError) {
-    console.error("[gvg-data:update] read error:", readError);
-    return res.status(500).json({
-      error: readError.message || "read failed",
-      details: readError,
-    });
-  }
-
-  if (!targetDefense) {
-    return res.status(404).json({ error: "defense introuvable" });
-  }
+  const access = await loadGvgDefenseForAction(req, res, id, "id, guild, is_ally, heroes, status");
+  if (!access) return;
+  const targetDefense = access.defense;
 
   const targetIds =
     action === "repro"
@@ -753,16 +800,11 @@ async function handleDelete(req, res) {
     return res.status(400).json({ error: "id manquant" });
   }
 
-  const { data: defense, error: readError } = await supabase
-    .from("gvg_defense")
-    .select("id, image_url")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (readError) {
-    console.error("[gvg-data:delete] read error:", readError);
-    return res.status(500).json({ error: "read failed" });
-  }
+  const access = await loadGvgDefenseForAction(req, res, id, "id, guild, image_url", {
+    adminOnly: true,
+  });
+  if (!access) return;
+  const defense = access.defense;
 
   if (!defense) {
     return res.status(404).json({ error: "défense introuvable" });
@@ -784,7 +826,8 @@ async function handleDelete(req, res) {
   const { error: deleteError } = await supabase
     .from("gvg_defense")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .eq("guild", access.guild);
 
   if (deleteError) {
     console.error("[gvg-data:delete] db delete error:", deleteError);
@@ -797,9 +840,15 @@ async function handleDelete(req, res) {
 async function handleImportGroups(req, res) {
   try {
     const { guild, data } = req.body;
+    const normalizedGuild = normalizeGuildCode(guild);
 
-    if (!guild || !data?.map) {
+    if (!normalizedGuild || !data?.map) {
       return res.status(400).json({ error: "data invalide" });
+    }
+
+    const access = await resolveGvgActionScope(req, normalizedGuild, { adminOnly: true });
+    if (access.error) {
+      return res.status(access.status || 403).json({ error: access.error });
     }
 
     const entries = Object.entries(data.map);
@@ -821,7 +870,7 @@ async function handleImportGroups(req, res) {
       let query = supabase
         .from("gvg_defense")
         .update({ group_num: groupNum })
-        .eq("guild", guild)
+        .eq("guild", normalizedGuild)
         .eq("bastion", bastion)
         .eq("type", type)
         .eq("team", team);
@@ -950,6 +999,11 @@ async function handleCalculateGroups(req, res) {
 
     if (!guild) {
       return res.status(400).json({ error: "guild manquante ou invalide" });
+    }
+
+    const access = await resolveGvgActionScope(req, guild, { adminOnly: true });
+    if (access.error) {
+      return res.status(access.status || 403).json({ error: access.error });
     }
 
     const { data: defenses, error: readError } = await supabase
@@ -1089,11 +1143,10 @@ async function handleReproCandidates(req, res) {
     return res.status(400).json({ error: "defenseId manquant" });
   }
 
-  const { data: defense, error: defenseError } = await supabase
-    .from("gvg_defense")
-    .select("id, guild, heroes")
-    .eq("id", defenseId)
-    .maybeSingle();
+  const access = await loadGvgDefenseForAction(req, res, defenseId, "id, guild, heroes");
+  if (!access) return;
+  const defense = access.defense;
+  const defenseError = null;
 
   if (defenseError) {
     console.error("[gvg-data:repro-candidates] defense error:", defenseError);
@@ -1237,20 +1290,9 @@ async function handlePanelOpen(req, res) {
     return res.status(400).json({ error: "id manquant" });
   }
 
-  const { data: defense, error: readError } = await supabase
-    .from("gvg_defense")
-    .select(GVG_DEFENSE_LIST_SELECT_BASE)
-    .eq("id", id)
-    .maybeSingle();
-
-  if (readError) {
-    console.error("[gvg-data:panel_open] read error:", readError);
-    return res.status(500).json({ error: "read failed" });
-  }
-
-  if (!defense) {
-    return res.status(404).json({ error: "défense introuvable" });
-  }
+  const access = await loadGvgDefenseForAction(req, res, id, GVG_DEFENSE_LIST_SELECT_BASE);
+  if (!access) return;
+  const defense = access.defense;
 
   let discordReproCleanup = null;
   let discordReproWarning = null;
@@ -1317,20 +1359,11 @@ async function handleRecordToggle(req, res) {
     return res.status(400).json({ error: "id manquant" });
   }
 
-  const { data: defense, error: readError } = await supabase
-    .from("gvg_defense")
-    .select("id, record_status")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (readError) {
-    console.error("[gvg-data:record_toggle] read error:", readError);
-    return res.status(500).json({ error: "read failed" });
-  }
-
-  if (!defense) {
-    return res.status(404).json({ error: "défense introuvable" });
-  }
+  const access = await loadGvgDefenseForAction(req, res, id, "id, guild, record_status", {
+    adminOnly: true,
+  });
+  if (!access) return;
+  const defense = access.defense;
 
   if (!defense.record_status) {
     return res.status(400).json({ error: "défense non ouverte dans le panel" });
@@ -1370,6 +1403,11 @@ async function handlePanelUpdateFields(req, res) {
   if (!id) {
     return res.status(400).json({ error: "id manquant" });
   }
+
+  const access = await loadGvgDefenseForAction(req, res, id, "id, guild", {
+    adminOnly: true,
+  });
+  if (!access) return;
 
   const payload = {
     updated_at: new Date().toISOString(),
@@ -1483,6 +1521,11 @@ async function handleCreateRecordSession(req, res) {
     return res.status(400).json({ error: "session_id invalide" });
   }
 
+  const access = await resolveGvgActionScope(req, guild, { adminOnly: true });
+  if (access.error) {
+    return res.status(access.status || 403).json({ error: access.error });
+  }
+
   let query = supabase
     .from("gvg_defense")
     .select(`
@@ -1583,6 +1626,11 @@ async function handleRecordSessions(req, res) {
     return res.status(400).json({ error: "guild invalide" });
   }
 
+  const access = await resolveGvgActionScope(req, guild, { adminOnly: true });
+  if (access.error) {
+    return res.status(access.status || 403).json({ error: access.error });
+  }
+
   try {
     const params = new URLSearchParams({
       guild,
@@ -1677,6 +1725,11 @@ async function handleRecordYoutubeUpload(req, res) {
     return res.status(400).json({ error: "guild invalide" });
   }
 
+  const access = await resolveGvgActionScope(req, guild, { adminOnly: true });
+  if (access.error) {
+    return res.status(access.status || 403).json({ error: access.error });
+  }
+
   try {
     const vps = await requestGvgVps("/api/v1/record/youtube/upload", {
       method: "POST",
@@ -1719,7 +1772,11 @@ async function handleRecordOk(req, res) {
   }
 
   const normalizedGuild = String(guild).toUpperCase();
-  const runScope = getRunScopeForGvgGuild(normalizedGuild);
+
+  const access = await resolveGvgActionScope(req, normalizedGuild, { adminOnly: true });
+  if (access.error) {
+    return res.status(access.status || 403).json({ error: access.error });
+  }
 
   if (!UPLOADED_DIR) {
     return res.status(500).json({
@@ -1932,7 +1989,11 @@ async function handlePushToBase(req, res) {
   }
 
   const normalizedGuild = String(guild).toUpperCase();
-  const runScope = getRunScopeForGvgGuild(normalizedGuild);
+  const access = await resolveGvgActionScope(req, normalizedGuild, { adminOnly: true });
+  if (access.error) {
+    return res.status(access.status || 403).json({ error: access.error });
+  }
+  const runScope = access.scope;
 
   const { data: defenses, error: readError } = await supabase
     .from("gvg_defense")
@@ -2119,6 +2180,11 @@ async function handlePanelReturn(req, res) {
     return res.status(400).json({ error: "id manquant" });
   }
 
+  const access = await loadGvgDefenseForAction(req, res, id, "id, guild", {
+    adminOnly: true,
+  });
+  if (!access) return;
+
   const { data, error } = await supabase
     .from("gvg_defense")
     .update({
@@ -2161,15 +2227,23 @@ async function handlePanelReturn(req, res) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  applyPortalCorsHeaders(req, res);
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   try {
+    if (!verifyPortalRequestOrigin(req)) {
+      return res.status(403).json({ error: "origine de requete refusee" });
+    }
+
+    const sessionCheck = await requirePortalSession(req, supabase);
+    if (sessionCheck.error) {
+      return res.status(sessionCheck.status || 401).json({ error: sessionCheck.error });
+    }
+    req.portalMember = sessionCheck.member;
+
     if (req.method === "GET") {
       return await handleList(req, res);
     }

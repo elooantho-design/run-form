@@ -1,6 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 import formidable from "formidable";
 import fs from "fs";
+import {
+  applyPortalCorsHeaders,
+  applyPortalSecurityHeaders,
+  requirePortalAdminSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
+import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
 
 export const config = {
   api: {
@@ -13,8 +21,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+function normalizeGuildCode(value) {
+  const code = String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
+  return /^[A-Z0-9_-]{2,24}$/.test(code) ? code : null;
+}
+
 function isValidGuild(value) {
-  return /^G[1-7]$/.test(String(value || "").toUpperCase());
+  return normalizeGuildCode(value) !== null;
 }
 
 function parseFileName(fileName) {
@@ -34,16 +47,25 @@ function parseFileName(fileName) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  applyPortalCorsHeaders(req, res);
+  applyPortalSecurityHeaders(res);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "method not allowed" });
+    return sendPortalJson(res, 405, { error: "method not allowed" }, req);
+  }
+
+  if (!verifyPortalRequestOrigin(req)) {
+    return sendPortalJson(res, 403, { error: "origine invalide" }, req);
+  }
+
+  const sessionCheck = await requirePortalAdminSession(req, supabase);
+  if (sessionCheck.error) {
+    return sendPortalJson(res, sessionCheck.status || 401, { error: sessionCheck.error }, req);
   }
 
   const form = formidable({ multiples: true });
@@ -52,14 +74,19 @@ export default async function handler(req, res) {
     try {
       if (err) {
         console.error("[gvg-upload-images] form parse error:", err);
-        return res.status(500).json({ error: "form parse error" });
+        return sendPortalJson(res, 500, { error: "form parse error" }, req);
       }
 
       const guildRaw = Array.isArray(fields.guild) ? fields.guild[0] : fields.guild;
-      const guild = String(guildRaw || "").toUpperCase();
+      const guild = normalizeGuildCode(guildRaw);
 
       if (!isValidGuild(guild)) {
-        return res.status(400).json({ error: "guild manquante ou invalide" });
+        return sendPortalJson(res, 400, { error: "guild manquante ou invalide" }, req);
+      }
+
+      const runScope = await resolveRunScope(supabase, req, sessionCheck.member);
+      if (!runScope.canUseGvg || !canUseRunTargetGuild(runScope, guild)) {
+        return sendPortalJson(res, 403, { error: "acces gvg refuse" }, req);
       }
 
       const incomingFiles = Array.isArray(files.files)
@@ -69,7 +96,7 @@ export default async function handler(req, res) {
           : [];
 
       if (!incomingFiles.length) {
-        return res.status(400).json({ error: "aucun fichier reçu" });
+        return sendPortalJson(res, 400, { error: "aucun fichier recu" }, req);
       }
 
       const results = [];
@@ -166,14 +193,14 @@ export default async function handler(req, res) {
         });
       }
 
-      return res.status(200).json({
+      return sendPortalJson(res, 200, {
         success: true,
         guild,
         results,
-      });
+      }, req);
     } catch (e) {
       console.error("[gvg-upload-images] server error:", e);
-      return res.status(500).json({ error: "server error" });
+      return sendPortalJson(res, e?.statusCode || 500, { error: e?.message || "server error" }, req);
     }
   });
 }

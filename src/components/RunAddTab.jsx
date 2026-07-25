@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { fetchPortalChampions } from "@/lib/portalChampions";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 
@@ -291,6 +291,7 @@ async function saveRun() {
 
     const response = await fetch(`${apiBase}/api/run?action=add`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -347,12 +348,7 @@ useEffect(() => {
     setHeroesError("");
 
     try {
-      const { data, error } = await supabase
-        .from("champions")
-        .select("*")
-        .order("name", { ascending: true });
-
-      if (error) throw error;
+      const data = await fetchPortalChampions();
 
       const seen = new Set();
       const uniq = [];

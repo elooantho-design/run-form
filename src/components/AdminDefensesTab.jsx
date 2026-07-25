@@ -1,10 +1,43 @@
 import React, { useMemo, useState } from "react";
 import { Shield, Plus, Pencil, Trash2, ClipboardPaste } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+
+function getApiBase() {
+  if (typeof window === "undefined") return "";
+  const configured = import.meta.env.VITE_API_BASE_URL;
+  if (configured) return configured.replace(/\/$/, "");
+  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+    return "http://localhost:3001";
+  }
+  return "";
+}
+
+async function callPortalAdminDefenses(payload) {
+  const response = await fetch(`${getApiBase()}/api/portal-admin-defenses`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || "Action defense impossible.");
+  }
+  return data;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function AdminDefensesTab({
   defenses = [],
+  activeGuildCode = "",
   onEdit,
   onDelete,
   onAdd,
@@ -59,22 +92,21 @@ const openDefenseBlocksModal = async (defense) => {
   setBlockImageMessage("");
   setBlockImageUploading(false);
 
-  const { data, error } = await supabase
-    .from("guild_defense_blocks")
-    .select("id, defense_id, block_type, content, sort_order")
-    .eq("defense_id", editableDefense.id)
-    .order("sort_order", { ascending: true });
-
-  if (error) {
-    console.error("Erreur chargement blocs défense:", error);
-    setDefenseBlocks([]);
-  } else {
-    const nextBlocks = sortInfoBlocks(data || []);
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "blocks-load",
+      guildCode: activeGuildCode,
+      defenseId: editableDefense.id,
+    });
+    const nextBlocks = sortInfoBlocks(data.blocks || []);
     setDefenseBlocks(nextBlocks);
     cacheDefenseInfoBlocks(editableDefense.id, nextBlocks);
+  } catch (error) {
+    console.error("Erreur chargement blocs defense:", error);
+    setDefenseBlocks([]);
+  } finally {
+    setBlocksLoading(false);
   }
-
-  setBlocksLoading(false);
 };
 
   const displayedDefenses = useMemo(() => {
@@ -137,54 +169,38 @@ const moveBlock = async (index, direction) => {
   setDefenseBlocks(updated);
   cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, updated);
 
-  await Promise.all(
-    updated.map((block) =>
-      supabase
-        .from("guild_defense_blocks")
-        .update({ sort_order: block.sort_order })
-        .eq("id", block.id)
-    )
-  );
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "block-reorder",
+      guildCode: activeGuildCode,
+      defenseId: selectedDefenseForBlocks?.id,
+      blocks: updated.map((block) => ({ id: block.id })),
+    });
+    const nextBlocks = sortInfoBlocks(data.blocks || updated);
+    setDefenseBlocks(nextBlocks);
+    cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
+  } catch (error) {
+    console.error("Erreur tri blocs defense:", error);
+  }
 };
 
 const deleteBlock = async (block) => {
   const confirmDelete = window.confirm(t("adminDefenses.deleteBlockConfirm", "Supprimer ce bloc ?"));
   if (!confirmDelete) return;
 
-  // 🔥 si c’est une image → supprimer du storage
-  if (block.block_type === "image" && block.content) {
-    try {
-      const url = new URL(block.content);
-      const filePath = url.pathname.split("/defense-images/")[1];
-
-      if (filePath) {
-        const { error: storageError } = await supabase.storage
-          .from("defense-images")
-          .remove([filePath]);
-
-        if (storageError) {
-          console.error("Erreur suppression image storage:", storageError);
-        }
-      }
-    } catch (e) {
-      console.error("Erreur parsing URL image:", e);
-    }
-  }
-
-  // 🔥 suppression DB
-  const { error } = await supabase
-    .from("guild_defense_blocks")
-    .delete()
-    .eq("id", block.id);
-
-  if (error) {
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "block-delete",
+      guildCode: activeGuildCode,
+      defenseId: selectedDefenseForBlocks?.id,
+      blockId: block.id,
+    });
+    const nextBlocks = sortInfoBlocks(data.blocks || []);
+    setDefenseBlocks(nextBlocks);
+    cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
+  } catch (error) {
     console.error("Erreur suppression bloc:", error);
-    return;
   }
-
-  const nextBlocks = defenseBlocks.filter((b) => b.id !== block.id);
-  setDefenseBlocks(nextBlocks);
-  cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
 };
 
 const addTextBlock = async () => {
@@ -193,28 +209,20 @@ const addTextBlock = async () => {
   const cleanText = newTextBlock.trim();
   if (!cleanText) return;
 
-  const nextSortOrder = defenseBlocks.length + 1;
-
-  const { data, error } = await supabase
-    .from("guild_defense_blocks")
-    .insert({
-      defense_id: selectedDefenseForBlocks.id,
-      block_type: "text",
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "block-add-text",
+      guildCode: activeGuildCode,
+      defenseId: selectedDefenseForBlocks.id,
       content: cleanText,
-      sort_order: nextSortOrder,
-    })
-    .select("id, defense_id, block_type, content, sort_order")
-    .single();
-
-  if (error) {
+    });
+    const nextBlocks = sortInfoBlocks(data.blocks || []);
+    setDefenseBlocks(nextBlocks);
+    cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
+    setNewTextBlock("");
+  } catch (error) {
     console.error("Erreur ajout bloc texte:", error);
-    return;
   }
-
-  const nextBlocks = sortInfoBlocks([...defenseBlocks, data]);
-  setDefenseBlocks(nextBlocks);
-  cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
-  setNewTextBlock("");
 };
 
 const compressImageFile = (file, maxWidth = 1400, quality = 0.82) =>
@@ -267,46 +275,16 @@ const saveImageBlockFromFile = async (file, successMessage) => {
 
   try {
     const compressedFile = await compressImageFile(file);
-    const filePath = `editor-block-${Date.now()}-${crypto.randomUUID()}.webp`;
+    const dataUrl = await fileToDataUrl(compressedFile);
+    const data = await callPortalAdminDefenses({
+      action: "block-add-image",
+      guildCode: activeGuildCode,
+      defenseId: selectedDefenseForBlocks.id,
+      fileName: compressedFile.name || file.name || "defense-block.webp",
+      dataUrl,
+    });
 
-    const { error: uploadError } = await supabase.storage
-      .from("defense-images")
-      .upload(filePath, compressedFile, {
-        contentType: "image/webp",
-        upsert: false,
-      });
-
-    if (uploadError) {
-      console.error("Erreur upload image bloc:", uploadError);
-      setBlockImageMessage(t("adminDefenses.imageUploadFailed", "Impossible d'ajouter cette image."));
-      return false;
-    }
-
-    const { data: publicData } = supabase.storage
-      .from("defense-images")
-      .getPublicUrl(filePath);
-
-    const imageUrl = publicData.publicUrl;
-    const nextSortOrder = defenseBlocks.length + 1;
-
-    const { data, error } = await supabase
-      .from("guild_defense_blocks")
-      .insert({
-        defense_id: selectedDefenseForBlocks.id,
-        block_type: "image",
-        content: imageUrl,
-        sort_order: nextSortOrder,
-      })
-      .select("id, defense_id, block_type, content, sort_order")
-      .single();
-
-    if (error) {
-      console.error("Erreur ajout bloc image:", error);
-      setBlockImageMessage(t("adminDefenses.imageUploadFailed", "Impossible d'ajouter cette image."));
-      return false;
-    }
-
-    const nextBlocks = sortInfoBlocks([...defenseBlocks, data]);
+    const nextBlocks = sortInfoBlocks(data.blocks || []);
     setDefenseBlocks(nextBlocks);
     cacheDefenseInfoBlocks(selectedDefenseForBlocks?.id, nextBlocks);
     setBlockImageMessage(successMessage || t("adminDefenses.fileImageAdded", "Image ajoutee."));

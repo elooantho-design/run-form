@@ -67,15 +67,45 @@ export function isMissingRunBoycottTable(error) {
   );
 }
 
-export async function resolveRunScope(supabase, req) {
-  const memberId = readSessionField(req, ["memberId", "member_id"]);
-  const discordId = readSessionField(req, ["discordId", "discord_id"]);
-  const fallbackGuildCode = readSessionField(req, ["guildCode", "guild_code", "guild"]);
-  const fallbackRole = readSessionField(req, ["role"]);
+function buildDeniedRunScope(member = null) {
+  const guildCode = normalizeGuildCode(member?.guild_code || "");
 
-  let member = null;
+  return {
+    memberId: member?.id || "",
+    actorName: member?.watcher_name || "",
+    guildCode,
+    role: member?.role || "",
+    spaceKey: guildCode ? getGuildSpaceKey(guildCode) : "",
+    isLeader: false,
+    isAdmin: false,
+    isPaladin: false,
+    stratGuildCode: guildCode || null,
+    license: null,
+    licenseAccess: null,
+    canUsePortalCore: false,
+    canUseGvg: false,
+    canSearchRuns: false,
+    canManageOwnRuns: false,
+    canBoycottRuns: false,
+    canAccessPaladinRuns: false,
+  };
+}
 
-  if (memberId || discordId) {
+export async function resolveRunScope(supabase, req, trustedMember = null) {
+  const allowUntrustedFallback =
+    process.env.PORTAL_ALLOW_UNTRUSTED_RUN_SCOPE === "1" &&
+    process.env.NODE_ENV !== "production" &&
+    !process.env.VERCEL;
+  const memberId = allowUntrustedFallback ? readSessionField(req, ["memberId", "member_id"]) : "";
+  const discordId = allowUntrustedFallback ? readSessionField(req, ["discordId", "discord_id"]) : "";
+  const fallbackGuildCode = allowUntrustedFallback
+    ? readSessionField(req, ["guildCode", "guild_code", "guild"])
+    : "";
+  const fallbackRole = allowUntrustedFallback ? readSessionField(req, ["role"]) : "";
+
+  let member = trustedMember?.id ? trustedMember : null;
+
+  if (!member && allowUntrustedFallback && (memberId || discordId)) {
     let query = supabase
       .from("guild_members")
       .select("id, role, discord_id, watcher_name, guild_code")
@@ -85,6 +115,10 @@ export async function resolveRunScope(supabase, req) {
 
     const { data, error } = await query.maybeSingle();
     if (!error && data) member = data;
+  }
+
+  if (!member && !allowUntrustedFallback) {
+    return buildDeniedRunScope();
   }
 
   const guildCode = normalizeGuildCode(member?.guild_code || fallbackGuildCode || "G1");

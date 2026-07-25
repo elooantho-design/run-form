@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { fetchPortalChampions } from "@/lib/portalChampions";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 
@@ -307,6 +307,7 @@ async function saveRun() {
 
     const response = await fetch(`${apiBase}/api/run?action=update`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -372,6 +373,7 @@ async function deleteRun() {
 
     const response = await fetch(`${apiBase}/api/run?action=delete`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -429,7 +431,10 @@ async function loadRun(nextRunId = runId) {
 
     const scopeQuery = buildRunScopeQuery(session);
     const response = await fetch(
-      `${apiBase}/api/run?action=get&id=${encodeURIComponent(targetRunId)}${scopeQuery ? `&${scopeQuery}` : ""}`
+      `${apiBase}/api/run?action=get&id=${encodeURIComponent(targetRunId)}${scopeQuery ? `&${scopeQuery}` : ""}`,
+      {
+        credentials: "include",
+      }
     );
 
     const rawText = await response.text();
@@ -493,12 +498,7 @@ useEffect(() => {
     setHeroesError("");
 
     try {
-      const { data, error } = await supabase
-        .from("champions")
-        .select("*")
-        .order("name", { ascending: true });
-
-      if (error) throw error;
+      const data = await fetchPortalChampions();
 
       const seen = new Set();
       const uniq = [];

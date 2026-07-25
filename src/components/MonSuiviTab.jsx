@@ -1,5 +1,34 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
+
+function getApiBase() {
+  const configured = import.meta.env.VITE_API_BASE_URL;
+  if (configured) return configured.replace(/\/$/, "");
+  if (typeof window !== "undefined") return window.location.origin;
+  return "http://localhost:3001";
+}
+
+async function callPortalFollowup(payload) {
+  const response = await fetch(`${getApiBase()}/api/portal-followup`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || `Erreur Portal (${response.status})`);
+  }
+  return data;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Impossible de lire le fichier image."));
+    reader.readAsDataURL(file);
+  });
+}
 
 function badgeClass(value) {
   if (value <= 0) return "hidden";
@@ -193,123 +222,55 @@ const addTextComment = async () => {
   const content = draftComment.trim();
   if (!content || !selectedDefenseId || !selectedMember?.id) return;
 
-  const isUuid =
-    typeof selectedDefenseId === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      selectedDefenseId
-    );
-
-  if (!isUuid) {
-    console.warn("⛔ thread_id invalide, on bloque :", selectedDefenseId);
-    return;
-  }
-
-  const mentions = extractMentions(content);
-
-  const { data: insertedMessage, error } = await supabase
-    .from("member_defense_messages")
-    .insert({
-      thread_id: selectedDefenseId,
-      author_member_id: selectedMember.id,
-      author_name: player.name,
+  try {
+    await callPortalFollowup({
+      action: "add-message",
+      threadId: selectedDefenseId,
       kind: "text",
       content,
-    })
-    .select()
-    .single();
-
-  if (error) {
+    });
+    setDraftComment("");
+    await loadMessagesForThread(selectedDefenseId);
+  } catch (error) {
     console.error("Erreur ajout message texte :", error);
-    return;
   }
-
-  if (mentions.length > 0 && insertedMessage?.id) {
-    const resolvedMembers = await resolveMentionedMembers(mentions);
-
-    const mentionRows = resolvedMembers.map((member) => ({
-      message_id: insertedMessage.id,
-      mentioned_member_id: member.id,
-      mentioned_name: member.name,
-    }));
-
-    if (mentionRows.length > 0) {
-      const { error: mentionError } = await supabase
-        .from("member_defense_message_mentions")
-        .insert(mentionRows);
-
-      if (mentionError) {
-        console.error("Erreur ajout mentions :", mentionError);
-      }
-    }
-
-    if (mentions.includes(player.name)) {
-      setMentionUnread((prev) => prev + 1);
-    }
-  }
-
-  setDraftComment("");
-  await loadMessagesForThread(selectedDefenseId);
 };
 
 const addYoutubeComment = async () => {
   const content = draftYoutube.trim();
   if (!content || !selectedDefenseId || !selectedMember?.id) return;
 
-  const isUuid =
-    typeof selectedDefenseId === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      selectedDefenseId
-    );
-
-  if (!isUuid) {
-    console.warn("⛔ thread_id invalide, on bloque :", selectedDefenseId);
-    return;
-  }
-
-  const { error } = await supabase
-    .from("member_defense_messages")
-    .insert({
-      thread_id: selectedDefenseId,
-      author_member_id: selectedMember.id,
-      author_name: player.name,
+  try {
+    await callPortalFollowup({
+      action: "add-message",
+      threadId: selectedDefenseId,
       kind: "youtube",
       content,
-      youtube_url: content,
     });
-
-  if (error) {
+    setDraftYoutube("");
+    await loadMessagesForThread(selectedDefenseId);
+  } catch (error) {
     console.error("Erreur ajout message youtube :", error);
-    return;
   }
-
-  setDraftYoutube("");
-  await loadMessagesForThread(selectedDefenseId);
 };
 
 const addImageComment = async () => {
   if (!draftImage?.file || !selectedDefenseId || !selectedMember?.id) return;
 
-  const publicUrl = await uploadImageToSupabase(draftImage.file);
-  if (!publicUrl) return;
-
-  const { error } = await supabase
-    .from("member_defense_messages")
-    .insert({
-      thread_id: selectedDefenseId,
-      author_member_id: selectedMember.id,
-      author_name: player.name,
+  try {
+    const imageDataUrl = await fileToDataUrl(draftImage.file);
+    await callPortalFollowup({
+      action: "add-message",
+      threadId: selectedDefenseId,
       kind: "image",
-      content: publicUrl,
-      image_path: publicUrl,
+      imageDataUrl,
+      fileName: draftImage.name,
     });
-
-  if (error) {
+    setDraftImage(null);
+    await loadMessagesForThread(selectedDefenseId);
+  } catch (error) {
     console.error("Erreur ajout message image :", error);
-    return;
   }
-
-  setDraftImage(null);
-  await loadMessagesForThread(selectedDefenseId);
 };
 
 const loadOrCreateThreads = async () => {
@@ -320,98 +281,7 @@ const loadOrCreateThreads = async () => {
 
   if (!defensesReady) return;
 
-  const slots = ["defense1", "defense2"];
-  let resultThreads = [];
-
-  const normalizeDefenseName = (value) => {
-    if (!value || value === "--" || value === "—") {
-      return "Aucune défense";
-    }
-    return value;
-  };
-
-  for (const slot of slots) {
-    const defenseName = normalizeDefenseName(
-      slot === "defense1"
-        ? selectedMember.defense1
-        : selectedMember.defense2
-    );
-
-    const { data: existing, error } = await supabase
-      .from("member_defense_threads")
-      .select("*")
-      .eq("member_id", selectedMember.id)
-      .eq("slot", slot)
-      .maybeSingle();
-
-    if (error) {
-      console.error("Erreur lecture thread :", slot, error);
-      continue;
-    }
-
-if (existing) {
-  if (defenseName === "Aucune défense") {
-    resultThreads.push(existing);
-    continue;
-  }
-
-  if (existing.defense_name !== defenseName) {
-    const { data: updated, error: updateError } = await supabase
-      .from("member_defense_threads")
-      .update({
-        defense_name: defenseName,
-        wins: 0,
-        losses: 0,
-      })
-      .eq("id", existing.id)
-      .select()
-      .single();
-
-    if (updateError) {
-      console.error("Erreur update thread :", slot, updateError);
-      resultThreads.push(existing);
-    } else {
-      const { error: deleteMessagesError } = await supabase
-        .from("member_defense_messages")
-        .delete()
-        .eq("thread_id", existing.id);
-
-      if (deleteMessagesError) {
-        console.error("Erreur suppression anciens messages :", deleteMessagesError);
-      }
-
-      resultThreads.push({
-        ...(updated || existing),
-        comments: [],
-      });
-    }
-  } else {
-    resultThreads.push(existing);
-  }
-
-  continue;
-}
-
-    const { data: created, error: createError } = await supabase
-      .from("member_defense_threads")
-      .insert({
-        member_id: selectedMember.id,
-        slot,
-        defense_name: defenseName,
-      })
-      .select()
-      .single();
-
-    if (createError) {
-      console.error("Erreur création thread :", slot, createError);
-      continue;
-    }
-
-    if (created) {
-      resultThreads.push(created);
-    }
-  }
-
+  const normalize = (str) => String(str || "").toLowerCase().trim();
   const currentDefense1 =
     selectedMember?.defense1 &&
     selectedMember.defense1 !== "--" &&
@@ -426,104 +296,69 @@ if (existing) {
       ? selectedMember.defense2
       : "Aucune défense";
 
-  console.log("RESULT THREADS", resultThreads);
+  try {
+    const data = await callPortalFollowup({
+      action: "load-threads",
+      memberId: selectedMember.id,
+    });
 
-const formatted = resultThreads.map((thread) => {
-  console.log("THREAD DEF:", thread.defense_name);
-console.log("DEFENSES:", defenses.map(d => d.name));
-  const normalize = (str) =>
-    str?.toLowerCase().trim();
+    const formatted = (data.threads || []).map((thread) => {
+      const title = thread.slot === "defense1" ? currentDefense1 : currentDefense2;
+      const tier = defenses.find(
+        (defense) => normalize(defense.name) === normalize(thread.defenseName || title)
+      )?.tier;
 
-  const tier = defenses.find(
-    (defense) =>
-      normalize(defense.name) === normalize(thread.defense_name)
-  )?.tier;
+      return {
+        id: thread.id,
+        slot: thread.slot === "defense1" ? "Défense 1" : "Défense 2",
+        title,
+        type:
+          tier === "meta_s"
+            ? "META S"
+            : tier === "meta_a"
+              ? "META A"
+              : "Secondaire",
+        wins: thread.wins ?? 0,
+        losses: thread.losses ?? 0,
+        unread: thread.unread ?? 0,
+        comments: [],
+      };
+    });
 
-  return {
-    id: thread.id,
-    slot: thread.slot === "defense1" ? "Défense 1" : "Défense 2",
-    title: thread.slot === "defense1" ? currentDefense1 : currentDefense2,
-    type:
-      tier === "meta_s"
-        ? "META S"
-        : tier === "meta_a"
-          ? "META A"
-          : "Secondaire",
-    wins: thread.wins ?? 0,
-    losses: thread.losses ?? 0,
-    unread: 0,
-    comments: [],
-  };
-});
+    if (formatted.length === 0) return;
 
-  if (formatted.length === 0) {
-    console.warn("⚠️ Threads vides → on ne touche pas au state");
-    return;
+    setThreads(formatted);
+    setTabUnread(formatted.reduce((sum, item) => sum + item.unread, 0));
+    setSelectedDefenseId((previous) =>
+      previous && formatted.some((thread) => String(thread.id) === String(previous))
+        ? previous
+        : formatted[0].id
+    );
+  } catch (error) {
+    console.error("Erreur chargement threads :", error);
   }
-
-  const threadsWithUnread = await computeUnreadCounts(formatted);
-
-  setThreads(threadsWithUnread);
-  setTabUnread(
-    threadsWithUnread.reduce((sum, item) => sum + item.unread, 0)
-  );
-  setSelectedDefenseId(threadsWithUnread[0].id);
 };
 
 const loadMessagesForThread = async (threadId) => {
   if (!threadId) return;
 
-  const { data, error } = await supabase
-    .from("member_defense_messages")
-    .select("*")
-    .eq("thread_id", threadId)
-    .order("created_at", { ascending: true });
+  try {
+    const data = await callPortalFollowup({
+      action: "load-messages",
+      threadId,
+    });
 
-  if (error) {
+    const formattedMessages = data.messages || [];
+    setThreads((prev) =>
+      prev.map((thread) =>
+        thread.id === threadId
+          ? { ...thread, comments: formattedMessages }
+          : thread
+      )
+    );
+  } catch (error) {
     console.error("Erreur chargement messages :", error);
-    return;
   }
-
-const messageIds = (data || []).map((message) => message.id);
-
-let mentionsMap = {};
-
-if (messageIds.length > 0) {
-  const { data: mentionsData, error: mentionsError } = await supabase
-    .from("member_defense_message_mentions")
-    .select("message_id, mentioned_name")
-    .in("message_id", messageIds);
-
-  if (mentionsError) {
-    console.error("Erreur chargement mentions :", mentionsError);
-  } else {
-    mentionsMap = (mentionsData || []).reduce((acc, item) => {
-      if (!acc[item.message_id]) {
-        acc[item.message_id] = [];
-      }
-      acc[item.message_id].push(item.mentioned_name);
-      return acc;
-    }, {});
-  }
-}
-
-const formattedMessages = (data || []).map((message) => ({
-  id: message.id,
-  author: message.author_name,
-  kind: message.kind,
-  content: message.content,
-  createdAt: message.created_at,
-  isOwn: String(message.author_member_id) === String(selectedMember?.id),
-  mentions: mentionsMap[message.id] || [],
-}));
-
-setThreads((prev) =>
-  prev.map((thread) =>
-    thread.id === threadId
-      ? { ...thread, comments: formattedMessages }
-      : thread
-  )
-);
 };
 
 useEffect(() => {
@@ -536,127 +371,17 @@ useEffect(() => {
   }
 }, [selectedDefenseId]);
 
-const resolveMentionedMembers = async (mentionNames) => {
-  if (!mentionNames.length) return [];
-
-  const { data, error } = await supabase
-    .from("guild_members")
-    .select("*"); // 👈 on prend tout
-
-  if (error) {
-    console.error("Erreur résolution mentions :", error);
-    return [];
-  }
-
-  // ⚠️ adapte ici le champ réel du nom
-  const members = data || [];
-
-  const resolved = members
-    .filter((member) =>
-      mentionNames.includes(
-        (member.name || member.username || member.display_name || "").trim()
-      )
-    )
-    .map((member) => ({
-      id: member.id,
-      name: member.name || member.username || member.display_name,
-    }));
-
-  return resolved;
-};
-
-const uploadImageToSupabase = async (file) => {
-  if (!file) return null;
-
-  const fileExt = file.name.split(".").pop();
-  const fileName = `${selectedMember.id}_${Date.now()}.${fileExt}`;
-  const filePath = `threads/${fileName}`;
-
-  const { error: uploadError } = await supabase.storage
-    .from("member-defense-media")
-    .upload(filePath, file);
-
-  if (uploadError) {
-    console.error("Erreur upload image :", uploadError);
-    return null;
-  }
-
-  const { data } = supabase.storage
-    .from("member-defense-media")
-    .getPublicUrl(filePath);
-
-  return data?.publicUrl || null;
-};
-
 const markThreadAsRead = async (threadId) => {
   if (!threadId || !selectedMember?.id) return;
 
-  const { error } = await supabase
-    .from("member_defense_thread_reads")
-    .upsert(
-      {
-        thread_id: threadId,
-        member_id: selectedMember.id,
-        last_read_at: new Date().toISOString(),
-      },
-      {
-        onConflict: "thread_id,member_id",
-      }
-    );
-
-  if (error) {
+  try {
+    await callPortalFollowup({
+      action: "mark-read",
+      threadId,
+    });
+  } catch (error) {
     console.error("Erreur markThreadAsRead :", error);
   }
-};
-
-const computeUnreadCounts = async (threadsList) => {
-  if (!threadsList.length || !selectedMember?.id) return threadsList;
-
-  const threadIds = threadsList.map((t) => t.id);
-
-  // 1. récupérer last_read
-  const { data: reads } = await supabase
-    .from("member_defense_thread_reads")
-    .select("thread_id, last_read_at")
-    .eq("member_id", selectedMember.id)
-    .in("thread_id", threadIds);
-
-  const readMap = {};
-  (reads || []).forEach((r) => {
-    readMap[r.thread_id] = r.last_read_at;
-  });
-
-  // 2. récupérer les messages
-  const { data: messages } = await supabase
-    .from("member_defense_messages")
-    .select("thread_id, created_at")
-    .in("thread_id", threadIds);
-
-  const messagesByThread = {};
-  (messages || []).forEach((m) => {
-    if (!messagesByThread[m.thread_id]) {
-      messagesByThread[m.thread_id] = [];
-    }
-    messagesByThread[m.thread_id].push(m);
-  });
-
-  // 3. calcul unread
-  const updatedThreads = threadsList.map((thread) => {
-    const lastRead = readMap[thread.id];
-    const msgs = messagesByThread[thread.id] || [];
-
-    const unreadCount = msgs.filter((msg) => {
-      if (!lastRead) return true;
-      return new Date(msg.created_at) > new Date(lastRead);
-    }).length;
-
-    return {
-      ...thread,
-      unread: unreadCount,
-    };
-  });
-
-  return updatedThreads;
 };
 
 useEffect(() => {
@@ -686,12 +411,28 @@ const updateThreadScore = async (threadId, field, value) => {
     )
   );
 
-  const { error } = await supabase
-    .from("member_defense_threads")
-    .update({ [field]: numericValue })
-    .eq("id", threadId);
+  try {
+    const data = await callPortalFollowup({
+      action: "update-score",
+      threadId,
+      field,
+      value: numericValue,
+    });
 
-  if (error) {
+    if (data.thread) {
+      setThreads((prev) =>
+        prev.map((thread) =>
+          thread.id === threadId
+            ? {
+                ...thread,
+                wins: data.thread.wins ?? thread.wins,
+                losses: data.thread.losses ?? thread.losses,
+              }
+            : thread
+        )
+      );
+    }
+  } catch (error) {
     console.error("Erreur update score :", error);
   }
 };

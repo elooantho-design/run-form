@@ -128,6 +128,7 @@ export default function GvgAdminTab({ session } = {}) {
 
     const response = await fetch(`${apiBase}/api/gvg-import`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -218,6 +219,7 @@ export default function GvgAdminTab({ session } = {}) {
 
       const response = await fetch(`${apiBase}/api/gvg-reset`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -256,7 +258,8 @@ export default function GvgAdminTab({ session } = {}) {
       setMessage("");
 
       const response = await fetch(
-        `${apiBase}/api/gvg-server?action=jobs&limit=25&guild=${encodeURIComponent(guild)}`
+        `${apiBase}/api/gvg-server?action=jobs&limit=25&guild=${encodeURIComponent(guild)}`,
+        { credentials: "include" }
       );
       const data = await readJsonResponse(response, "jobs VPS");
 
@@ -290,6 +293,7 @@ export default function GvgAdminTab({ session } = {}) {
 
       const response = await fetch(`${apiBase}/api/gvg-server`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -341,6 +345,7 @@ export default function GvgAdminTab({ session } = {}) {
 
       const response = await fetch(`${apiBase}/api/gvg-server`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -380,6 +385,7 @@ export default function GvgAdminTab({ session } = {}) {
 
       const response = await fetch(`${apiBase}/api/gvg-data`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -427,6 +433,7 @@ export default function GvgAdminTab({ session } = {}) {
 
         const response = await fetch(`${apiBase}/api/gvg-upload-images`, {
           method: "POST",
+          credentials: "include",
           body: formData,
         });
 

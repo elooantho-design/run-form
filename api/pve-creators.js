@@ -1,5 +1,12 @@
-/* global Buffer, process, fetch */
+/* global process */
 import { createClient } from "@supabase/supabase-js";
+import {
+  applyPortalCorsHeaders,
+  readJsonBody,
+  requirePortalAdminSession,
+  sendPortalJson,
+  verifyPortalRequestOrigin,
+} from "./_portal-auth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -12,21 +19,11 @@ const CREATOR_SELECT = "id, name, creator_key, channel_url, avatar_url";
 const CREATOR_SELECT_WITH_YOUTUBE_ID = `${CREATOR_SELECT}, youtube_channel_id`;
 
 function sendJson(res, status, payload) {
-  res.statusCode = status;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
+  sendPortalJson(res, status, payload, res._portalReq || null);
 }
 
 async function readBody(req) {
-  if (req.body && typeof req.body === "object") return req.body;
-
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
-
-  const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
+  return readJsonBody(req);
 }
 
 function cleanText(value) {
@@ -38,10 +35,6 @@ function normalizeText(value) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
-}
-
-function isAdminRole(role) {
-  return ["admin", "administrateur", "leader"].includes(normalizeText(role));
 }
 
 function buildCreatorKey(name) {
@@ -107,27 +100,12 @@ function isMissingYoutubeChannelColumn(error) {
   );
 }
 
-async function requirePortalAdmin(actorMemberId) {
-  const memberId = cleanText(actorMemberId);
-  if (!memberId) {
-    return { status: 401, error: "Session Portal manquante." };
+async function requirePortalAdmin(req) {
+  const sessionCheck = await requirePortalAdminSession(req, supabase);
+  if (sessionCheck.error) {
+    return { status: sessionCheck.status, error: sessionCheck.error };
   }
-
-  const { data, error } = await supabase
-    .from("guild_members")
-    .select("id, role, watcher_name, discord_id, guild_code")
-    .eq("id", memberId)
-    .maybeSingle();
-
-  if (error) {
-    return { status: 500, error: error.message || "Verification admin impossible." };
-  }
-
-  if (!data || !isAdminRole(data.role)) {
-    return { status: 403, error: "Acces admin refuse." };
-  }
-
-  return { admin: data };
+  return { admin: sessionCheck.member };
 }
 
 async function listCreators() {
@@ -542,8 +520,8 @@ async function createOrReuseCreator(input) {
   return { creator, youtubeWarning };
 }
 
-async function resolveSuggestion(body) {
-  const auth = await requirePortalAdmin(body.actorMemberId);
+async function resolveSuggestion(req, body) {
+  const auth = await requirePortalAdmin(req);
   if (auth.error) return { status: auth.status, payload: { error: auth.error } };
 
   const videoIds = Array.isArray(body.videoIds)
@@ -597,8 +575,8 @@ async function resolveSuggestion(body) {
   };
 }
 
-async function createOrReuseCreatorAction(body) {
-  const auth = await requirePortalAdmin(body.actorMemberId);
+async function createOrReuseCreatorAction(req, body) {
+  const auth = await requirePortalAdmin(req);
   if (auth.error) return { status: auth.status, payload: { error: auth.error } };
 
   const result = await createOrReuseCreator(body.creator || {});
@@ -613,8 +591,8 @@ async function createOrReuseCreatorAction(body) {
   };
 }
 
-async function updateCreatorAction(body) {
-  const auth = await requirePortalAdmin(body.actorMemberId);
+async function updateCreatorAction(req, body) {
+  const auth = await requirePortalAdmin(req);
   if (auth.error) return { status: auth.status, payload: { error: auth.error } };
 
   const creatorId = cleanText(body.creatorId);
@@ -664,29 +642,43 @@ async function updateCreatorAction(body) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    sendJson(res, 405, { error: "Method not allowed" });
-    return;
-  }
-
   try {
+    res._portalReq = req;
+    applyPortalCorsHeaders(req, res);
+
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (req.method !== "POST") {
+      sendJson(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
+    if (!verifyPortalRequestOrigin(req)) {
+      sendJson(res, 403, { error: "Origine de la requete refusee." });
+      return;
+    }
+
     const body = await readBody(req);
     const action = cleanText(body.action || "resolve-suggestion");
 
     if (action === "resolve-suggestion") {
-      const result = await resolveSuggestion(body);
+      const result = await resolveSuggestion(req, body);
       sendJson(res, result.status, result.payload);
       return;
     }
 
     if (action === "create-or-reuse") {
-      const result = await createOrReuseCreatorAction(body);
+      const result = await createOrReuseCreatorAction(req, body);
       sendJson(res, result.status, result.payload);
       return;
     }
 
     if (action === "update-creator") {
-      const result = await updateCreatorAction(body);
+      const result = await updateCreatorAction(req, body);
       sendJson(res, result.status, result.payload);
       return;
     }

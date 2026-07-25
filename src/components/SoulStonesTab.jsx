@@ -1,11 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Crown, Gem, History, Minus, Plus, Search, Shield, Trophy } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { logPortalActivity } from "@/lib/portalActivity";
-import { filterByGuildScope, isLeaderSession } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const SOUL_STONE_TABS = [
@@ -23,6 +21,23 @@ function normalizeText(value) {
 
 function getSessionRole(session) {
   return normalizeText(session?.role || "");
+}
+
+async function callPortalPlayerData(payload) {
+  const configuredBase = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+  const isLocal = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  const apiBase = configuredBase ? configuredBase.replace(/\/$/, "") : isLocal ? "http://localhost:3000" : "";
+  const response = await fetch(`${apiBase}/api/portal-player-data`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error || `Erreur Portal ${response.status}`);
+  }
+  return data;
 }
 
 function formatDate(value) {
@@ -120,7 +135,6 @@ export default function SoulStonesTab({ session }) {
   const [clusterSoulStoneRows, setClusterSoulStoneRows] = useState([]);
   const [clusterSoulStonesLoading, setClusterSoulStonesLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
-  const visibleMemberIds = useMemo(() => new Set(members.map((member) => String(member.id))), [members]);
 
   const selectedMember = useMemo(() => {
     return members.find((member) => String(member.id) === String(selectedMemberId)) || members[0] || null;
@@ -156,142 +170,86 @@ export default function SoulStonesTab({ session }) {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadMembers() {
-      const { data, error } = await supabase
-        .from("guild_members")
-        .select("id, watcher_name, discord_id, guild_code")
-        .order("watcher_name", { ascending: true });
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error("Erreur chargement membres pierres d'ame:", error);
-        setErrorMessage("Impossible de charger les membres du cluster.");
-        return;
-      }
-
-      const mapped = filterByGuildScope(data || [], session, (row) => row.guild_code, {
-        leaderSeesAll: true,
-      }).map((row) => ({
-        id: row.id,
-        name: row.watcher_name || "Joueur",
-        discordId: row.discord_id || "",
-        guildCode: row.guild_code || "",
-      }));
-
-      setMembers(mapped);
-      setSelectedMemberId((current) => {
-        if (current && mapped.some((member) => String(member.id) === String(current))) {
-          return current;
-        }
-
-        const bySessionId = mapped.find((member) => String(member.id) === String(session?.memberId));
-        if (bySessionId) return bySessionId.id;
-
-        const sessionName = normalizeText(session?.watcherName || session?.name);
-        const byName = mapped.find((member) => normalizeText(member.name) === sessionName);
-        if (byName) return byName.id;
-
-        return mapped[0]?.id || "";
-      });
-    }
-
-    loadMembers();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [session]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadSoulStones() {
-      if (!selectedMember?.id) {
-        setSoulStones([]);
-        return;
-      }
-
+    async function loadSoulStoneData() {
       setSoulStonesLoading(true);
+      setClusterSoulStonesLoading(true);
       setErrorMessage("");
 
-      const { data, error } = await supabase
-        .from("soul_stones")
-        .select("id, member_id, watcher_name, type, created_at")
-        .eq("member_id", selectedMember.id)
-        .order("created_at", { ascending: false });
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error("Erreur chargement pierres d'ame:", error);
-        setSoulStones([]);
-        setErrorMessage("Impossible de charger les pierres d'ame du joueur.");
-        setSoulStonesLoading(false);
-        return;
-      }
-
-      setSoulStones(
-        (data || []).map((row) => ({
-          id: row.id,
-          memberId: row.member_id,
-          watcherName: row.watcher_name || "",
-          type: row.type,
-          createdAt: row.created_at,
-        })),
-      );
-      setSoulStonesLoading(false);
-    }
-
-    loadSoulStones();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedMember?.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadClusterSoulStoneRows() {
-      setClusterSoulStonesLoading(true);
-
-      const { data, error } = await supabase.rpc("get_soulstone_ranking");
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error("Erreur chargement classement pierres d'ame:", error);
-        setClusterSoulStoneRows([]);
-        setClusterSoulStonesLoading(false);
-        return;
-      }
-
-      const rows = (data || [])
-        .filter((row) => isLeaderSession(session) || visibleMemberIds.has(String(row.member_id)))
-        .map((row) => ({
-          memberId: row.member_id,
-          watcherName: row.watcher_name || "Inconnu",
-          lord: Number(row.lord_count || 0),
-          brute: Number(row.brute_count || 0),
-          total: Number(row.total || 0),
-        }))
-        .sort((a, b) => {
-          if (b.total !== a.total) return b.total - a.total;
-          if (b.lord !== a.lord) return b.lord - a.lord;
-          return a.watcherName.localeCompare(b.watcherName, "fr", { sensitivity: "base" });
+      try {
+        const data = await callPortalPlayerData({
+          action: "soulStones",
+          memberId: selectedMemberId,
         });
 
-      setClusterSoulStoneRows(rows);
-      setClusterSoulStonesLoading(false);
+        if (cancelled) return;
+
+        const mappedMembers = (data.members || []).map((row) => ({
+          id: row.id,
+          name: row.name || row.watcher_name || "Joueur",
+          discordId: row.discordId || row.discord_id || "",
+          guildCode: row.guildCode || row.guild_code || "",
+        }));
+
+        setMembers(mappedMembers);
+        setSelectedMemberId((current) => {
+          if (current && mappedMembers.some((member) => String(member.id) === String(current))) {
+            return current;
+          }
+          if (data.selectedMemberId) return data.selectedMemberId;
+          const bySessionId = mappedMembers.find((member) => String(member.id) === String(session?.memberId));
+          if (bySessionId) return bySessionId.id;
+          return mappedMembers[0]?.id || "";
+        });
+
+        setSoulStones(
+          (data.stones || []).map((row) => ({
+            id: row.id,
+            memberId: row.member_id,
+            watcherName: row.watcher_name || "",
+            type: row.type,
+            createdAt: row.created_at,
+          })),
+        );
+
+        const rows = (data.rankingRows || [])
+          .map((row) => ({
+            memberId: row.member_id,
+            watcherName: row.watcher_name || "Inconnu",
+            lord: Number(row.lord_count || 0),
+            brute: Number(row.brute_count || 0),
+            total: Number(row.total || 0),
+          }))
+          .sort((a, b) => {
+            if (b.total !== a.total) return b.total - a.total;
+            if (b.lord !== a.lord) return b.lord - a.lord;
+            return a.watcherName.localeCompare(b.watcherName, "fr", { sensitivity: "base" });
+          });
+
+        setClusterSoulStoneRows(rows);
+        if (data.rankingError) {
+          console.warn("Classement pierres d'ame partiel:", data.rankingError);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Erreur chargement pierres d'ame:", error);
+        setMembers([]);
+        setSoulStones([]);
+        setClusterSoulStoneRows([]);
+        setErrorMessage(error.message || "Impossible de charger les pierres d'ame.");
+      } finally {
+        if (!cancelled) {
+          setSoulStonesLoading(false);
+          setClusterSoulStonesLoading(false);
+        }
+      }
     }
 
-    loadClusterSoulStoneRows();
+    loadSoulStoneData();
 
     return () => {
       cancelled = true;
     };
-  }, [session, soulStones.length, visibleMemberIds]);
+  }, [selectedMemberId, session]);
 
   const totalLordSoulStones = useMemo(() => {
     return soulStones.filter((stone) => stone.type === "lord").length;
@@ -313,21 +271,12 @@ export default function SoulStonesTab({ session }) {
     if (!selectedMember?.id || !canEditSoulStones) return;
 
     try {
-      const { data, error } = await supabase
-        .from("soul_stones")
-        .insert({
-          member_id: selectedMember.id,
-          watcher_name: selectedMember.name,
-          type,
-        })
-        .select("id, member_id, watcher_name, type, created_at")
-        .single();
-
-      if (error) {
-        console.error("Erreur ajout pierre d'ame:", error);
-        setErrorMessage("Impossible d'ajouter la pierre d'ame.");
-        return;
-      }
+      const response = await callPortalPlayerData({
+        action: "addSoulStone",
+        memberId: selectedMember.id,
+        stoneType: type,
+      });
+      const data = response.stone;
 
       const created = {
         id: data.id,
@@ -360,15 +309,14 @@ export default function SoulStonesTab({ session }) {
     if (!lastStone) return;
 
     try {
-      const { error } = await supabase.from("soul_stones").delete().eq("id", lastStone.id);
+      const response = await callPortalPlayerData({
+        action: "removeSoulStone",
+        memberId: selectedMember.id,
+        stoneType: type,
+      });
+      const removedId = response.stoneId || lastStone.id;
 
-      if (error) {
-        console.error("Erreur suppression pierre d'ame:", error);
-        setErrorMessage("Impossible de supprimer la derniere pierre d'ame.");
-        return;
-      }
-
-      setSoulStones((previous) => previous.filter((stone) => stone.id !== lastStone.id));
+      setSoulStones((previous) => previous.filter((stone) => String(stone.id) !== String(removedId)));
       void logPortalActivity(session, {
         targetMemberId: selectedMember.id,
         targetName: selectedMember.name,

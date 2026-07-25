@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { BookOpen, Check, ChevronDown, Edit3, ExternalLink, RefreshCw, Search, Trash2, Youtube, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
 import { getChampionDisplayName, normalizeChampionLookupKey } from "@/lib/championDisplay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -84,18 +83,6 @@ function normalizeExternalUrl(value) {
   if (!raw) return "";
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   return withProtocol.replace(/\/+$/, "");
-}
-
-function buildCreatorKey(name) {
-  const base = String(name || "")
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  return base || "creator";
 }
 
 function extractYoutubeVideoId(value) {
@@ -331,6 +318,22 @@ function getSessionMemberId(session) {
   return session?.memberId || session?.member_id || session?.id || "";
 }
 
+async function callPveVideosApi(payload) {
+  const response = await fetch("/api/pve-videos", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload || {}),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result?.error || "Chargement PVE impossible.");
+  }
+  return result;
+}
+
 function normalizeChampionOption(row, language = "fr") {
   const technicalName = String(row?.name || "").trim();
   const displayName = getChampionDisplayName(row, language) || technicalName;
@@ -475,68 +478,6 @@ export default function PveLibraryTab({
   useEffect(() => {
     setLocalContents(contents.map(normalizeContent));
   }, [contents]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadChampions() {
-      const { data, error } = await supabase.from("champions").select("*").order("name", { ascending: true });
-
-      if (cancelled) return;
-
-      if (error) {
-        console.warn("[pve-champions]", error);
-        setChampions([]);
-        return;
-      }
-
-      setChampions(data || []);
-    }
-
-    void loadChampions();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    const memberId = getSessionMemberId(session);
-    let cancelled = false;
-
-    async function loadOwnedHeroes() {
-      if (!memberId) {
-        setOwnedChampionIds([]);
-        setOwnedHeroesLoading(false);
-        return;
-      }
-
-      setOwnedHeroesLoading(true);
-      const { data, error } = await supabase
-        .from("member_awakenings")
-        .select("champion_id, awakening_level")
-        .eq("member_id", memberId)
-        .gte("awakening_level", 0);
-
-      if (cancelled) return;
-
-      if (error) {
-        console.warn("[pve-owned-heroes]", error);
-        setOwnedChampionIds([]);
-        setOwnedHeroesLoading(false);
-        return;
-      }
-
-      setOwnedChampionIds((data || []).map((row) => String(row.champion_id || "")).filter(Boolean));
-      setOwnedHeroesLoading(false);
-    }
-
-    void loadOwnedHeroes();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [session?.memberId, session?.member_id, session?.id]);
 
   const sortedContents = useMemo(
     () =>
@@ -740,98 +681,47 @@ export default function PveLibraryTab({
     setLoading(true);
     setErrorMessage("");
 
-    const [stagesResult, initialVideosResult, linksResult, heroLinksResult, alternativeLinksResult, creatorsResult] = await Promise.all([
-      supabase
-        .from("pve_content_stages")
-        .select("id, content_id, stage_number, name, sort_order")
-        .eq("content_id", selectedContent.id)
-        .order("sort_order", { ascending: true })
-        .order("stage_number", { ascending: true }),
-      supabase
-        .from("pve_videos")
-        .select("id, content_id, creator_id, suggested_creator_name, youtube_url, youtube_video_id, title, notes, created_by_name, created_at")
-        .eq("content_id", selectedContent.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("pve_video_stages")
-        .select("id, content_id, video_id, stage_id")
-        .eq("content_id", selectedContent.id),
-      supabase
-        .from("pve_video_heroes")
-        .select("id, content_id, video_id, champion_id, champion_name, sort_order")
-        .eq("content_id", selectedContent.id),
-      supabase
-        .from("pve_video_hero_alternatives")
-        .select(
-          "id, content_id, video_id, required_champion_id, required_champion_name, alternative_champion_id, alternative_champion_name, sort_order",
-        )
-        .eq("content_id", selectedContent.id),
-      supabase
-        .from("pve_creators")
-        .select("id, name, creator_key, channel_url, avatar_url")
-        .order("name", { ascending: true }),
-    ]);
-
-    let videosResult = initialVideosResult;
-    const videoCreatorColumnMissing = isMissingPveVideoCreatorColumnError(initialVideosResult.error);
-    if (videoCreatorColumnMissing) {
-      videosResult = await supabase
-        .from("pve_videos")
-        .select("id, content_id, youtube_url, youtube_video_id, title, notes, created_by_name, created_at")
-        .eq("content_id", selectedContent.id)
-        .order("created_at", { ascending: false });
-    }
-
-    const heroLinksMissing = isMissingPveVideoHeroesError(heroLinksResult.error);
-    const alternativeLinksMissing = isMissingPveVideoHeroAlternativesError(alternativeLinksResult.error);
-    const creatorsMissing = isMissingPveCreatorsError(creatorsResult.error);
-    setCreatorSchemaReady(!videoCreatorColumnMissing && !creatorsMissing);
-
-    if (
-      stagesResult.error ||
-      videosResult.error ||
-      linksResult.error ||
-      (heroLinksResult.error && !heroLinksMissing) ||
-      (alternativeLinksResult.error && !alternativeLinksMissing) ||
-      (creatorsResult.error && !creatorsMissing)
-    ) {
-      const error =
-        stagesResult.error ||
-        videosResult.error ||
-        linksResult.error ||
-        heroLinksResult.error ||
-        alternativeLinksResult.error ||
-        creatorsResult.error;
-      setErrorMessage(
-        error?.code === "42P01"
-          ? t(
-              "pve.missingTables",
-              "Les tables PVE ne sont pas encore creees. Lance le script SQL create_pve_library.sql dans Supabase.",
-            )
-          : error?.message || t("pve.loadError", "Chargement PVE impossible."),
-      );
+    let payload;
+    try {
+      setOwnedHeroesLoading(true);
+      payload = await callPveVideosApi({
+        action: "load",
+        contentId: selectedContent.id,
+      });
+    } catch (error) {
+      setErrorMessage(error?.message || t("pve.loadError", "Chargement PVE impossible."));
       setStages([]);
       setVideos([]);
       setCreators([]);
+      setChampions([]);
+      setOwnedChampionIds([]);
+      setOwnedHeroesLoading(false);
       setLoading(false);
       return;
     }
 
-    const nextStages = (stagesResult.data || []).map(normalizeStage);
-    const nextCreators = creatorsMissing ? [] : sortCreators((creatorsResult.data || []).map(normalizeCreator).filter((creator) => creator.id && creator.name));
+    setCreatorSchemaReady(Boolean(payload.creatorSchemaReady));
+
+    const nextChampions = payload.champions || [];
+    const nextStages = (payload.stages || []).map(normalizeStage);
+    const nextCreators = sortCreators((payload.creators || []).map(normalizeCreator).filter((creator) => creator.id && creator.name));
+    const nextChampionById = new Map(nextChampions.map((champion) => [String(champion.id), champion]));
     const creatorById = new Map(nextCreators.map((creator) => [String(creator.id), creator]));
-    const nextVideos = (videosResult.data || []).map((row) =>
+    const nextVideos = (payload.videos || []).map((row) =>
       normalizeVideo(
         row,
-        linksResult.data || [],
-        heroLinksMissing ? [] : heroLinksResult.data || [],
-        alternativeLinksMissing ? [] : alternativeLinksResult.data || [],
-        championById,
+        payload.videoStages || [],
+        payload.videoHeroes || [],
+        payload.videoHeroAlternatives || [],
+        nextChampionById,
         creatorById,
         language,
       ),
     );
 
+    setChampions(nextChampions);
+    setOwnedChampionIds(payload.ownedChampionIds || []);
+    setOwnedHeroesLoading(false);
     setStages(nextStages);
     setVideos(nextVideos);
     setCreators(nextCreators);
@@ -1005,6 +895,7 @@ export default function PveLibraryTab({
 
     const response = await fetch("/api/pve-creators", {
       method: "POST",
+      credentials: "include",
       headers: {
         "content-type": "application/json",
       },
@@ -1116,97 +1007,6 @@ export default function PveLibraryTab({
     setAlternativeHeroSearches({});
   };
 
-  const replaceVideoLinks = async (videoId, selectedStageIds, selectedHeroIds, heroAlternativeIdsByHeroId = {}) => {
-    const { error: deleteStagesError } = await supabase
-      .from("pve_video_stages")
-      .delete()
-      .eq("video_id", videoId);
-
-    if (deleteStagesError) throw deleteStagesError;
-
-    const { error: insertStagesError } = await supabase.from("pve_video_stages").insert(
-      selectedStageIds.map((stageId) => ({
-        content_id: selectedContent.id,
-        video_id: videoId,
-        stage_id: stageId,
-      })),
-    );
-
-    if (insertStagesError) throw insertStagesError;
-
-    const { error: deleteHeroesError } = await supabase
-      .from("pve_video_heroes")
-      .delete()
-      .eq("video_id", videoId);
-
-    const heroTableMissing = isMissingPveVideoHeroesError(deleteHeroesError);
-    if (deleteHeroesError && !heroTableMissing) throw deleteHeroesError;
-    if (heroTableMissing) return;
-
-    const { error: deleteAlternativesError } = await supabase
-      .from("pve_video_hero_alternatives")
-      .delete()
-      .eq("video_id", videoId);
-
-    const alternativeTableMissing = isMissingPveVideoHeroAlternativesError(deleteAlternativesError);
-    if (deleteAlternativesError && !alternativeTableMissing) throw deleteAlternativesError;
-
-    if (!selectedHeroIds.length) return;
-
-    const heroRows = selectedHeroIds
-      .map((championId, index) => {
-        const champion = championOptions.find((option) => String(option.id) === String(championId));
-        if (!champion) return null;
-
-        return {
-          content_id: selectedContent.id,
-          video_id: videoId,
-          champion_id: champion.id,
-          champion_name: champion.technicalName,
-          sort_order: index + 1,
-        };
-      })
-      .filter(Boolean);
-
-    if (!heroRows.length) return;
-
-    const { error: insertHeroesError } = await supabase.from("pve_video_heroes").insert(heroRows);
-    if (insertHeroesError) throw insertHeroesError;
-
-    if (alternativeTableMissing) return;
-
-    const alternativeRows = selectedHeroIds.flatMap((requiredChampionId) => {
-      const requiredChampion = championOptions.find((option) => String(option.id) === String(requiredChampionId));
-      if (!requiredChampion) return [];
-
-      return (heroAlternativeIdsByHeroId[String(requiredChampionId)] || [])
-        .map((alternativeChampionId, index) => {
-          const alternativeChampion = championOptions.find(
-            (option) => String(option.id) === String(alternativeChampionId),
-          );
-          if (!alternativeChampion) return null;
-
-          return {
-            content_id: selectedContent.id,
-            video_id: videoId,
-            required_champion_id: requiredChampion.id,
-            required_champion_name: requiredChampion.technicalName,
-            alternative_champion_id: alternativeChampion.id,
-            alternative_champion_name: alternativeChampion.technicalName,
-            sort_order: index + 1,
-          };
-        })
-        .filter(Boolean);
-    });
-
-    if (!alternativeRows.length) return;
-
-    const { error: insertAlternativesError } = await supabase
-      .from("pve_video_hero_alternatives")
-      .insert(alternativeRows);
-    if (insertAlternativesError) throw insertAlternativesError;
-  };
-
   const saveVideo = async (event) => {
     event.preventDefault();
     if (!selectedContent?.id || savingVideo) return;
@@ -1284,6 +1084,7 @@ export default function PveLibraryTab({
     if (creatorSchemaReady && videoDraft.creatorMode === CREATOR_MODE_NEW) {
       const response = await fetch("/api/pve-creators", {
         method: "POST",
+        credentials: "include",
         headers: {
           "content-type": "application/json",
         },
@@ -1317,46 +1118,31 @@ export default function PveLibraryTab({
       );
     }
 
-    const videoPayload = {
-      content_id: selectedContent.id,
-      youtube_url: cleanUrl,
-      youtube_video_id: youtubeVideoId,
-      title: videoDraft.title.trim() || `${selectedContent.name} - ${selectedStageLabel}`,
-      notes: videoDraft.notes.trim() || null,
-      updated_at: new Date().toISOString(),
-    };
-    if (creatorSchemaReady) {
-      videoPayload.creator_id = videoCreatorId || null;
-      videoPayload.suggested_creator_name = suggestedCreatorName || null;
-    }
+    const response = await fetch("/api/pve-videos", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "save",
+        videoId: editingVideoId || "",
+        contentId: selectedContent.id,
+        youtubeUrl: cleanUrl,
+        youtubeVideoId,
+        title: videoDraft.title.trim() || `${selectedContent.name} - ${selectedStageLabel}`,
+        notes: videoDraft.notes.trim() || "",
+        creatorId: creatorSchemaReady ? videoCreatorId || "" : "",
+        suggestedCreatorName: creatorSchemaReady ? suggestedCreatorName || "" : "",
+        stageIds: selectedStageIds,
+        heroIds: selectedHeroIds,
+        heroAlternatives: selectedHeroAlternatives,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
 
-    const result = editingVideoId
-      ? await supabase
-          .from("pve_videos")
-          .update(videoPayload)
-          .eq("id", editingVideoId)
-          .select("id")
-          .single()
-      : await supabase
-          .from("pve_videos")
-          .insert({
-            ...videoPayload,
-            created_by_member_id: session?.memberId || session?.id || null,
-            created_by_name: session?.watcherName || session?.name || "",
-          })
-          .select("id")
-          .single();
-
-    if (result.error) {
-      setErrorMessage(result.error.message || t("pve.saveVideoError", "Ajout de la video impossible."));
-      setSavingVideo(false);
-      return;
-    }
-
-    try {
-      await replaceVideoLinks(result.data.id, selectedStageIds, selectedHeroIds, selectedHeroAlternatives);
-    } catch (error) {
-      setErrorMessage(error?.message || t("pve.saveVideoError", "Ajout de la video impossible."));
+    if (!response.ok) {
+      setErrorMessage(result.error || t("pve.saveVideoError", "Ajout de la video impossible."));
       setSavingVideo(false);
       return;
     }
@@ -1392,43 +1178,21 @@ export default function PveLibraryTab({
     setErrorMessage("");
     setMessage("");
 
-    const { error: deleteAlternativeLinksError } = await supabase
-      .from("pve_video_hero_alternatives")
-      .delete()
-      .eq("video_id", video.id);
+    const response = await fetch("/api/pve-videos", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "delete",
+        videoId: video.id,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
 
-    if (deleteAlternativeLinksError && !isMissingPveVideoHeroAlternativesError(deleteAlternativeLinksError)) {
-      setErrorMessage(deleteAlternativeLinksError.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
-      setDeletingVideoId("");
-      return;
-    }
-
-    const { error: deleteHeroLinksError } = await supabase
-      .from("pve_video_heroes")
-      .delete()
-      .eq("video_id", video.id);
-
-    if (deleteHeroLinksError && !isMissingPveVideoHeroesError(deleteHeroLinksError)) {
-      setErrorMessage(deleteHeroLinksError.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
-      setDeletingVideoId("");
-      return;
-    }
-
-    const { error: deleteStageLinksError } = await supabase
-      .from("pve_video_stages")
-      .delete()
-      .eq("video_id", video.id);
-
-    if (deleteStageLinksError) {
-      setErrorMessage(deleteStageLinksError.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
-      setDeletingVideoId("");
-      return;
-    }
-
-    const { error } = await supabase.from("pve_videos").delete().eq("id", video.id);
-
-    if (error) {
-      setErrorMessage(error.message || t("pve.deleteVideoError", "Suppression de la video impossible."));
+    if (!response.ok) {
+      setErrorMessage(payload.error || t("pve.deleteVideoError", "Suppression de la video impossible."));
       setDeletingVideoId("");
       return;
     }

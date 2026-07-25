@@ -14,6 +14,7 @@ export async function logPortalActivity(session, payload) {
   try {
     const response = await fetch(`${getApiBaseUrl()}/api/portal-activity`, {
       method: "POST",
+      credentials: "include",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         actorMemberId: getSessionMemberId(session),

@@ -1,5 +1,4 @@
 import React, { useState } from "react";
-import { supabase } from "@/lib/supabase";
 import MonSuiviTab from "./MonSuiviTab";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import {
@@ -8,6 +7,30 @@ import {
   getDefenseConditionRequirements,
   getDefenseAwakeningScore,
 } from "@/calculations";
+
+function getApiBase() {
+  if (typeof window === "undefined") return "";
+  const configured = import.meta.env.VITE_API_BASE_URL;
+  if (configured) return configured.replace(/\/$/, "");
+  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+    return "http://localhost:3001";
+  }
+  return "";
+}
+
+async function callPortalAdminDefenses(payload) {
+  const response = await fetch(`${getApiBase()}/api/portal-admin-defenses`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || "Lecture defense impossible.");
+  }
+  return data;
+}
 
 export default function GestionDefenseTab({
   members = [],
@@ -216,20 +239,19 @@ const openDefenseInfoModal = async (defense) => {
   setInfoModalOpen(true);
   setInfoBlocksLoading(true);
 
-  const { data, error } = await supabase
-    .from("guild_defense_blocks")
-    .select("id, block_type, content, sort_order")
-    .eq("defense_id", defense.id)
-    .order("sort_order", { ascending: true });
-
-  if (error) {
-    console.error("Erreur chargement infos défense:", error);
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "blocks-load",
+      guildCode: activeGuildCode,
+      defenseId: defense.id,
+    });
+    setInfoBlocks(data.blocks || []);
+  } catch (error) {
+    console.error("Erreur chargement infos defense:", error);
     setInfoBlocks([]);
-  } else {
-    setInfoBlocks(data || []);
+  } finally {
+    setInfoBlocksLoading(false);
   }
-
-  setInfoBlocksLoading(false);
 };
 
 const metaSList = metaDefenseCounters.filter(

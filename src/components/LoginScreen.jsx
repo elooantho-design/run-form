@@ -1,7 +1,16 @@
 import React, { useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+function getApiBase() {
+  if (typeof window === "undefined") return "";
+
+  const configuredBase = import.meta.env?.VITE_API_BASE_URL;
+  if (configuredBase) return configuredBase.replace(/\/$/, "");
+
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" ? "http://localhost:3000" : "";
+}
 
 export default function LoginScreen({ onLogin }) {
   const [discordId, setDiscordId] = useState("");
@@ -17,33 +26,33 @@ export default function LoginScreen({ onLogin }) {
     const cleanDiscordId = discordId.trim();
     const cleanPassword = password.trim();
 
-    const { data, error: dbError } = await supabase
-      .from("guild_members")
-      .select("id, role, discord_id, watcher_name, password, guild_code")
-      .eq("discord_id", cleanDiscordId)
-      .eq("password", cleanPassword)
-      .maybeSingle();
+    try {
+      const response = await fetch(`${getApiBase()}/api/portal-auth`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "login",
+          discordId: cleanDiscordId,
+          password: cleanPassword,
+          remember: false,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
 
-    setLoading(false);
+      setLoading(false);
 
-    if (dbError) {
+      if (!response.ok || payload?.ok === false || !payload?.session) {
+        setError(payload?.error || "Identifiant Discord ou mot de passe incorrect.");
+        return;
+      }
+
+      onLogin(payload.session);
+    } catch (loginError) {
+      console.error("Erreur connexion Portal:", loginError);
+      setLoading(false);
       setError("Erreur lors de la connexion.");
-      return;
     }
-
-    if (!data) {
-      setError("Identifiant Discord ou mot de passe incorrect.");
-      return;
-    }
-
-    onLogin({
-      memberId: data.id,
-      role: data.role,
-      discordId: data.discord_id,
-      name: data.watcher_name,
-      password: data.password,
-      guild_code: data.guild_code || null,
-    });
   };
 
   return (

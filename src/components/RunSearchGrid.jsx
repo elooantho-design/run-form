@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { fetchPortalChampions } from "@/lib/portalChampions";
 import { getGvgGuildLabel, isExternalRunGuildCode, isPaladinAdminSession } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
@@ -304,6 +304,7 @@ const gridSpec = useMemo(() => {
 
     const res = await fetch(`${apiBase}/api/run?action=search`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -359,6 +360,7 @@ async function runBotCommandSearch() {
 
     const res = await fetch(`${apiBase}/api/run?action=search`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -458,12 +460,7 @@ async function runBotCommandSearch() {
       setHeroesError("");
 
       try {
-        const { data, error } = await supabase
-          .from("champions")
-          .select("*")
-          .order("name", { ascending: true });
-
-        if (error) throw error;
+        const data = await fetchPortalChampions();
 
         const seen = new Set();
         const uniq = [];
@@ -574,6 +571,7 @@ async function toggleResultBoycott(result, nextBoycott) {
 
     const response = await fetch(`${apiBase}/api/run?action=boycott`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },

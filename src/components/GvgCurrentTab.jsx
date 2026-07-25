@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Ban, Pencil, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { fetchPortalChampions } from "@/lib/portalChampions";
 import {
   getGuildSpaceKey,
   getGvgGuildLabel,
@@ -268,14 +268,14 @@ const [refreshTick, setRefreshTick] = useState(0);
     let cancelled = false;
 
     async function loadChampionDisplayMap() {
-      const { data, error } = await supabase.from("champions").select("*");
-      if (cancelled) return;
-      if (error) {
+      try {
+        const data = await fetchPortalChampions();
+        if (cancelled) return;
+        setChampionDisplayMap(buildChampionDisplayMap(data || []));
+      } catch (error) {
+        if (cancelled) return;
         console.warn("champions display map unavailable:", error);
-        return;
       }
-
-      setChampionDisplayMap(buildChampionDisplayMap(data || []));
     }
 
     loadChampionDisplayMap();
@@ -310,7 +310,9 @@ async function loadGvg(cancelled = false) {
       if (value) params.set(key, String(value));
     });
 
-    const response = await fetch(`${apiBase}/api/gvg-data?${params.toString()}`);
+    const response = await fetch(`${apiBase}/api/gvg-data?${params.toString()}`, {
+      credentials: "include",
+    });
 
     const rawText = await response.text();
     let data = null;
@@ -502,6 +504,7 @@ async function markDefenseAsRepro(defenseId) {
   try {
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -554,6 +557,7 @@ async function openReproCandidates(defense) {
 
     const res = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -590,7 +594,9 @@ async function openStratView(defenseId) {
       if (value) params.set(key, String(value));
     });
 
-    const response = await fetch(`${apiBase}/api/gvg-strat-search?${params.toString()}`);
+    const response = await fetch(`${apiBase}/api/gvg-strat-search?${params.toString()}`, {
+      credentials: "include",
+    });
 
     const rawText = await response.text();
     let data = null;
@@ -648,7 +654,10 @@ async function openReproView(defenseId) {
     setReproViewText("");
 
     const response = await fetch(
-      `${apiBase}/api/gvg-repro?gvgDefenseId=${encodeURIComponent(defenseId)}`
+      `${apiBase}/api/gvg-repro?gvgDefenseId=${encodeURIComponent(defenseId)}`,
+      {
+        credentials: "include",
+      }
     );
 
     const rawText = await response.text();
@@ -711,6 +720,7 @@ async function openReproModal(defenseId) {
 
     const response = await fetch(`${apiBase}/api/gvg-repro`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -765,6 +775,7 @@ async function cancelDefenseRepro(defenseId) {
   try {
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -835,6 +846,7 @@ async function markDefenseAsOpened(defenseId) {
 
     const response = await fetch(`${apiBase}/api/gvg-data`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -944,6 +956,7 @@ async function handleBoycottStrat(strat) {
 
     const response = await fetch(`${apiBase}/api/run?action=boycott`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -1020,6 +1033,7 @@ async function handleDeleteStrat(strat) {
 
     const response = await fetch(`${apiBase}/api/run?action=delete`, {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
@@ -1779,6 +1793,7 @@ function renderDesktopSlot(slot, team) {
 
         const response = await fetch(`${apiBase}/api/gvg-repro`, {
           method: "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
           },

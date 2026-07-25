@@ -1,13 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Search, Shield, Skull, Sparkles } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
-import { filterByGuildScope } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const DEMON_RARITY_FILTERS = [
@@ -58,6 +56,25 @@ function normalizeText(value) {
 
 function getSessionRole(session) {
   return normalizeText(session?.role || "");
+}
+
+async function callPortalPlayerData(payload) {
+  const configuredBase = import.meta.env?.VITE_API_BASE_URL;
+  const isLocal =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  const apiBase = configuredBase ? configuredBase.replace(/\/$/, "") : isLocal ? "http://localhost:3000" : "";
+  const response = await fetch(`${apiBase}/api/portal-player-data`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.ok === false) {
+    throw new Error(json?.error || "Erreur API Portal.");
+  }
+  return json;
 }
 
 export default function DemonMonstersTab({ session }) {
@@ -111,136 +128,51 @@ export default function DemonMonstersTab({ session }) {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadMembers() {
-      const { data, error } = await supabase
-        .from("guild_members")
-        .select("id, watcher_name, discord_id, guild_code")
-        .order("watcher_name", { ascending: true });
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error("Erreur chargement membres monstres demoniaques:", error);
-        setErrorMessage("Impossible de charger les membres du cluster.");
-        return;
-      }
-
-      const mapped = filterByGuildScope(data || [], session, (row) => row.guild_code, {
-        leaderSeesAll: true,
-      }).map((row) => ({
-        id: row.id,
-        name: row.watcher_name || "Joueur",
-        discordId: row.discord_id || "",
-        guildCode: row.guild_code || "",
-      }));
-
-      setMembers(mapped);
-      setSelectedMemberId((current) => {
-        if (current && mapped.some((member) => String(member.id) === String(current))) {
-          return current;
-        }
-
-        const bySessionId = mapped.find((member) => String(member.id) === String(session?.memberId));
-        if (bySessionId) return bySessionId.id;
-
-        const sessionName = normalizeText(session?.watcherName || session?.name);
-        const byName = mapped.find((member) => normalizeText(member.name) === sessionName);
-        if (byName) return byName.id;
-
-        return mapped[0]?.id || "";
-      });
-    }
-
-    loadMembers();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [session]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadDemonicMonsters() {
+    async function loadSelectedMemberDemonicEntries() {
       setLoading(true);
+      setEntriesLoading(true);
       setErrorMessage("");
 
-      const { data, error } = await supabase
-        .from("demonic_monsters")
-        .select("id, name, slug, rarity, image_url, sort_order, is_active")
-        .eq("is_active", true)
-        .order("rarity", { ascending: false })
-        .order("sort_order", { ascending: true })
-        .order("name", { ascending: true });
+      try {
+        const data = await callPortalPlayerData({
+          action: "demonicMonsters",
+          memberId: selectedMemberId,
+        });
+        if (cancelled) return;
 
-      if (cancelled) return;
-
-      if (error) {
-        console.error("Erreur chargement monstres demoniaques:", error);
-        setErrorMessage("Impossible de charger la bibliotheque des monstres demoniaques.");
-        setLoading(false);
-        return;
-      }
-
-      setDemonicMonsters(data || []);
-      setLoading(false);
-    }
-
-    loadDemonicMonsters();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadSelectedMemberDemonicEntries() {
-      if (!selectedMember?.id) {
-        setMemberDemonicEntries([]);
-        return;
-      }
-
-      setEntriesLoading(true);
-
-      const { data, error } = await supabase
-        .from("member_demonic_monsters")
-        .select(`
-          id,
-          member_id,
-          monster_id,
-          level,
-          demonic_monsters (
-            id,
-            name,
-            slug,
-            rarity
-          )
-        `)
-        .eq("member_id", selectedMember.id);
-
-      if (cancelled) return;
-
-      if (error) {
-        console.error("Erreur chargement box monstres demoniaques:", error);
-        setErrorMessage("Impossible de charger les niveaux de monstres pour ce joueur.");
-        setEntriesLoading(false);
-        return;
-      }
-
-      setMemberDemonicEntries(
-        (data || []).map((row) => ({
+        const mappedMembers = (data.members || []).map((row) => ({
           id: row.id,
-          memberId: row.member_id,
-          monsterId: row.monster_id,
-          level: Number(row.level || 0),
-          monsterName: row.demonic_monsters?.name || "",
-          monsterSlug: row.demonic_monsters?.slug || "",
-          rarity: row.demonic_monsters?.rarity || "",
-        })),
-      );
-      setEntriesLoading(false);
+          name: row.name || row.watcher_name || "Joueur",
+          discordId: row.discord_id || row.discordId || "",
+          guildCode: row.guild_code || row.guildCode || "",
+        }));
+        setMembers(mappedMembers);
+        if (data.selectedMemberId && String(data.selectedMemberId) !== String(selectedMemberId)) {
+          setSelectedMemberId(data.selectedMemberId);
+        }
+        setDemonicMonsters(data.monsters || []);
+        setMemberDemonicEntries(
+          (data.entries || []).map((row) => ({
+            id: row.id,
+            memberId: row.member_id,
+            monsterId: row.monster_id,
+            level: Number(row.level || 0),
+            monsterName: row.demonic_monsters?.name || "",
+            monsterSlug: row.demonic_monsters?.slug || "",
+            rarity: row.demonic_monsters?.rarity || "",
+          })),
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Erreur chargement monstres demoniaques:", error);
+          setErrorMessage(error?.message || "Impossible de charger les monstres demoniaques.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setEntriesLoading(false);
+        }
+      }
     }
 
     loadSelectedMemberDemonicEntries();
@@ -248,7 +180,7 @@ export default function DemonMonstersTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedMember?.id]);
+  }, [selectedMemberId]);
 
   const demonicMonsterCards = useMemo(() => {
     const normalizedQuery = normalizeText(query);
@@ -308,32 +240,19 @@ export default function DemonMonstersTab({ session }) {
     try {
       setLevelSaving(true);
 
-      const payload = {
-        member_id: selectedMember.id,
-        monster_id: selectedMonster.id,
+      const data = await callPortalPlayerData({
+        action: "setDemonicMonsterLevel",
+        memberId: selectedMember.id,
+        monsterId: selectedMonster.id,
         level: parsedLevel,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { data, error } = await supabase
-        .from("member_demonic_monsters")
-        .upsert(payload, {
-          onConflict: "member_id,monster_id",
-        })
-        .select("id, member_id, monster_id, level")
-        .single();
-
-      if (error) {
-        console.error("Erreur sauvegarde niveau monstre demoniaque:", error);
-        alert(`Sauvegarde impossible : ${error.message || "erreur inconnue"}`);
-        return;
-      }
+      });
+      const savedEntry = data.entry;
 
       const nextEntry = {
-        id: data.id,
-        memberId: data.member_id,
-        monsterId: data.monster_id,
-        level: Number(data.level || 0),
+        id: savedEntry.id,
+        memberId: savedEntry.member_id,
+        monsterId: savedEntry.monster_id,
+        level: Number(savedEntry.level || 0),
         monsterName: selectedMonster.name || "",
         monsterSlug: selectedMonster.slug || "",
         rarity: selectedMonster.rarity || "",
