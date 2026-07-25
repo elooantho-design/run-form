@@ -1,86 +1,78 @@
-/* global Buffer, process */
-import crypto from "node:crypto";
+/* global Buffer, Request, Response, process */
+import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { PORTAL_SUPPORT_CONFIG, normalizeSupportType } from "../src/lib/portalSupportConfig.js";
-import { sendPortalJson } from "./_portal-auth.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_test_portal_webhook_verification");
+
+export const config = { runtime: "nodejs" };
+
+class StripeWebhookConfigError extends Error {}
+class StripeWebhookVerificationError extends Error {}
 
 function cleanText(value, maxLength = 500) {
   return String(value || "").trim().slice(0, maxLength);
 }
 
-function getHeader(req, name) {
-  const lower = name.toLowerCase();
-  return req.headers?.[lower] || req.headers?.[name] || "";
+function jsonResponse(status, payload) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }
 
-async function readRawBody(req) {
-  if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
-  if (req.rawBody) return Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(req.rawBody);
-  if (typeof req.rawBodyText === "string") return Buffer.from(req.rawBodyText, "utf8");
-  if (Buffer.isBuffer(req.body)) return req.body;
-  if (typeof req.body === "string") return Buffer.from(req.body, "utf8");
-  if (req.body && typeof req.body === "object") {
-    throw new Error("Corps brut webhook indisponible. La signature Stripe ne peut pas etre verifiee.");
-  }
+function logWebhookDiagnostic(stage, details = {}) {
+  console.log(
+    "[portal-support-webhook]",
+    JSON.stringify({
+      stage,
+      runtime: "vercel-node-web-request",
+      ...details,
+    }),
+  );
+}
 
-  const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+function getStripeWebhookSecret() {
+  const endpointSecret = cleanText(process.env.STRIPE_WEBHOOK_SECRET, 500);
+  if (!endpointSecret) {
+    throw new StripeWebhookConfigError("STRIPE_WEBHOOK_SECRET manquante cote serveur.");
   }
+  if (!endpointSecret.startsWith("whsec_")) {
+    throw new StripeWebhookConfigError("STRIPE_WEBHOOK_SECRET invalide cote serveur.");
+  }
+  return endpointSecret;
+}
 
-  const rawBody = Buffer.concat(chunks);
+async function readRawBody(request) {
+  const rawBody = Buffer.from(await request.arrayBuffer());
   if (!rawBody.length) {
-    throw new Error("Corps brut webhook indisponible. La signature Stripe ne peut pas etre verifiee.");
+    throw new StripeWebhookVerificationError("Payload Stripe vide.");
   }
-
-  req.rawBody = rawBody;
   return rawBody;
 }
 
-function parseStripeSignature(header) {
-  const result = {};
-  for (const part of String(header || "").split(",")) {
-    const [key, value] = part.split("=");
-    if (!key || !value) continue;
-    if (!result[key]) result[key] = [];
-    result[key].push(value);
+export function constructStripeWebhookEvent(rawBody, signatureHeader) {
+  const endpointSecret = getStripeWebhookSecret();
+  if (!signatureHeader) {
+    throw new StripeWebhookVerificationError("Header stripe-signature manquant.");
   }
-  return result;
+
+  try {
+    return stripe.webhooks.constructEvent(rawBody, signatureHeader, endpointSecret);
+  } catch (error) {
+    throw new StripeWebhookVerificationError(error?.message || "Signature Stripe refusee.");
+  }
 }
 
-function verifyStripeSignature(rawBody, signatureHeader) {
-  const endpointSecret = cleanText(process.env.STRIPE_WEBHOOK_SECRET);
-  if (!endpointSecret) throw new Error("STRIPE_WEBHOOK_SECRET manquante cote serveur.");
-
-  const signature = parseStripeSignature(signatureHeader);
-  const timestamp = Number(signature.t?.[0] || 0);
-  const signatures = signature.v1 || [];
-  if (!timestamp || !signatures.length) throw new Error("Signature Stripe invalide.");
-
-  const now = Math.floor(Date.now() / 1000);
-  if (Math.abs(now - timestamp) > 300) throw new Error("Signature Stripe expiree.");
-
-  const signedPayload = Buffer.concat([Buffer.from(`${timestamp}.`, "utf8"), rawBody]);
-  const expected = crypto.createHmac("sha256", endpointSecret).update(signedPayload).digest("hex");
-  const expectedBuffer = Buffer.from(expected, "hex");
-
-  const valid = signatures.some((providedSignature) => {
-    if (!/^[0-9a-f]{64}$/i.test(providedSignature)) return false;
-    const providedBuffer = Buffer.from(providedSignature, "hex");
-    return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
-  });
-
-  if (!valid) throw new Error("Signature Stripe refusee.");
+function isLocalSignatureTest(request) {
+  return process.env.NODE_ENV === "test" && request.headers.get("x-portal-webhook-test-mode") === "1";
 }
 
 function stripeTimestampToIso(value) {
@@ -369,27 +361,56 @@ async function processStripeEvent(event) {
   }
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    sendPortalJson(res, 405, { error: "Method not allowed" });
-    return;
+async function handleStripeWebhook(request) {
+  if (request.method !== "POST") {
+    return jsonResponse(405, { error: "Method not allowed" });
   }
 
   let event;
   try {
-    const rawBody = await readRawBody(req);
-    verifyStripeSignature(rawBody, getHeader(req, "stripe-signature"));
-    event = JSON.parse(rawBody.toString("utf8"));
+    const stripeSignature = request.headers.get("stripe-signature") || "";
+    const rawBody = await readRawBody(request);
+
+    logWebhookDiagnostic("raw_body_read", {
+      hasStripeSignature: Boolean(stripeSignature),
+      rawBodyType: typeof rawBody,
+      isBuffer: Buffer.isBuffer(rawBody),
+      rawBodyLength: rawBody.length,
+    });
+
+    event = constructStripeWebhookEvent(rawBody, stripeSignature);
+
+    logWebhookDiagnostic("signature_verified", {
+      eventType: event.type || "",
+      hasEventId: Boolean(event.id),
+    });
   } catch (error) {
-    sendPortalJson(res, 400, { error: error?.message || "Webhook Stripe refuse." });
-    return;
+    const isConfigError = error instanceof StripeWebhookConfigError;
+    const status = isConfigError ? 500 : 400;
+    logWebhookDiagnostic(isConfigError ? "config_error" : "signature_failed", {
+      errorType: error?.constructor?.name || "Error",
+      message: error?.message || "Webhook Stripe refuse.",
+    });
+    return jsonResponse(status, { error: error?.message || "Webhook Stripe refuse." });
+  }
+
+  if (isLocalSignatureTest(request)) {
+    return jsonResponse(200, {
+      received: true,
+      testMode: true,
+      eventId: event.id,
+      eventType: event.type,
+    });
   }
 
   try {
     const insertResult = await insertWebhookEvent(event);
     if (insertResult.duplicate) {
-      sendPortalJson(res, 200, { received: true, duplicate: true });
-      return;
+      logWebhookDiagnostic("duplicate_event", {
+        eventType: event.type || "",
+        hasEventId: Boolean(event.id),
+      });
+      return jsonResponse(200, { received: true, duplicate: true });
     }
 
     await processStripeEvent(event);
@@ -399,7 +420,11 @@ export default async function handler(req, res) {
       error: null,
     });
 
-    sendPortalJson(res, 200, { received: true });
+    logWebhookDiagnostic("processed", {
+      eventType: event.type || "",
+      hasEventId: Boolean(event.id),
+    });
+    return jsonResponse(200, { received: true });
   } catch (error) {
     if (event?.id) {
       await markWebhookEvent(event.id, {
@@ -409,6 +434,15 @@ export default async function handler(req, res) {
       });
     }
 
-    sendPortalJson(res, 500, { error: error?.message || "Erreur traitement webhook." });
+    logWebhookDiagnostic("processing_failed", {
+      eventType: event?.type || "",
+      hasEventId: Boolean(event?.id),
+      message: error?.message || "Erreur traitement webhook.",
+    });
+    return jsonResponse(500, { error: error?.message || "Erreur traitement webhook." });
   }
 }
+
+export default {
+  fetch: handleStripeWebhook,
+};
