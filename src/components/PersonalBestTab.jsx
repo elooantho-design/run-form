@@ -110,6 +110,15 @@ function hasPbSlotAwakening(value) {
   return Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 5;
 }
 
+function normalizeAwakeningLookupKey(value) {
+  return String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
 function isMissingPbAwakeningColumn(error) {
   const message = normalizeText(`${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`);
 
@@ -202,17 +211,64 @@ function getSlotAwakeningLevel(slot, member) {
     return Number(slot.pbAwakeningLevel);
   }
 
-  return slot.championName && member?.awakenings ? Number(member.awakenings[slot.championName] ?? -1) : -1;
+  const awakenings = member?.awakenings;
+  if (!awakenings) return -1;
+
+  const championId = slot.championId ?? slot.champion_id;
+  if (championId !== null && championId !== undefined && championId !== "") {
+    const byIdValue = awakenings.byChampionId?.[String(championId)];
+    if (hasPbSlotAwakening(byIdValue)) return Number(byIdValue);
+  }
+
+  const candidateNames = [
+    slot.championName,
+    slot.championEnglishName,
+    slot.champions?.name,
+    slot.champions?.portal_name,
+    slot.champions?.english_name,
+  ];
+
+  for (const name of candidateNames) {
+    if (!name) continue;
+
+    const directValue = awakenings[name];
+    if (hasPbSlotAwakening(directValue)) return Number(directValue);
+
+    const normalizedValue = awakenings.byName?.[normalizeAwakeningLookupKey(name)];
+    if (hasPbSlotAwakening(normalizedValue)) return Number(normalizedValue);
+  }
+
+  return -1;
 }
 
 function buildMemberAwakenings(memberAwakenings) {
-  const awakenings = {};
+  const awakenings = {
+    byChampionId: {},
+    byName: {},
+  };
+
+  function registerName(name, awakeningLevel) {
+    if (!name) return;
+    const rawName = String(name).trim();
+    const normalizedName = normalizeAwakeningLookupKey(rawName);
+
+    if (rawName) awakenings[rawName] = awakeningLevel;
+    if (normalizedName) awakenings.byName[normalizedName] = awakeningLevel;
+  }
 
   (memberAwakenings || []).forEach((entry) => {
-    const heroName = entry.champions?.name;
-    if (heroName) {
-      awakenings[heroName] = Number(entry.awakening_level ?? -1);
+    const awakeningLevel = Number(entry.awakening_level ?? -1);
+    const championId = entry.champion_id ?? entry.championId ?? entry.champions?.id;
+
+    if (championId !== null && championId !== undefined && championId !== "") {
+      awakenings.byChampionId[String(championId)] = awakeningLevel;
     }
+
+    registerName(entry.champions?.name, awakeningLevel);
+    registerName(entry.champions?.portal_name, awakeningLevel);
+    registerName(entry.champions?.portalName, awakeningLevel);
+    registerName(entry.champions?.english_name, awakeningLevel);
+    registerName(entry.champions?.englishName, awakeningLevel);
   });
 
   return awakenings;
