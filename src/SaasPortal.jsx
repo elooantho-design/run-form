@@ -1396,6 +1396,7 @@ function LoginPanel({ onLogin }) {
       setForgotResult({
         guildCode: payload.guildCode || "",
         admins: payload.admins || [],
+        messageKey: payload.messageKey || "",
         message: payload.message || "",
       });
     } catch (error) {
@@ -1657,7 +1658,9 @@ function LoginPanel({ onLogin }) {
                       : t("login.forgotResultTitle", "Contacte les admins de ta guilde")}
                   </div>
                   <p className="mt-1 text-emerald-100/85">
-                    {forgotResult.message ||
+                    {forgotResult.messageKey
+                      ? t(forgotResult.messageKey, forgotResult.message)
+                      : forgotResult.message ||
                       t(
                         "login.forgotResultIntro",
                         "Ton compte est lie a {guild}. Contacte un de ces admins pour recuperer ton acces.",

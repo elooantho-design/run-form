@@ -290,6 +290,9 @@ async function handleForgotAdmins(req, res, body) {
       {
         guildCode: "COMMUNITY",
         admins: leaderRows,
+        messageKey: inactiveCommunity
+          ? "login.forgotCommunityInactiveMessage"
+          : "login.forgotCommunityMessage",
         message: inactiveCommunity
           ? "Ce compte communaute est desactive. Contacte Darius ou un leader Portal pour reactiver ton acces."
           : "Ce compte appartient au Portail Communaute. Contacte Darius ou un leader Portal pour reinitialiser ton mot de passe.",
