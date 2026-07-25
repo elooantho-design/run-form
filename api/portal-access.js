@@ -1424,6 +1424,64 @@ async function handleCommunityUpdateMember(body, res) {
   sendJson(res, 200, { member: serializeCommunityMember(member) });
 }
 
+async function handleCommunityResetMemberPassword(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const leaderCheck = await requireLeaderById(res._portalReq);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Membre obligatoire." });
+    return;
+  }
+
+  const { data: target, error: targetError } = await supabase
+    .from("guild_members")
+    .select("id, watcher_name, discord_id, guild_code, role, created_at, preferred_language, community_access_type, community_status")
+    .eq("id", memberId)
+    .maybeSingle();
+
+  if (targetError) {
+    sendJson(res, 500, { error: targetError.message || "Chargement du membre impossible." });
+    return;
+  }
+
+  if (!target || target.guild_code || (target.community_access_type !== "community" && !isCommunityRole(target.role))) {
+    sendJson(res, 404, { error: "Membre communaute introuvable." });
+    return;
+  }
+
+  const temporaryPassword = generatePassword();
+  try {
+    await updatePortalMemberPassword(supabase, target.id, hashPortalPassword(temporaryPassword), {
+      passwordChangeRequired: true,
+    });
+  } catch (error) {
+    sendJson(res, 500, { error: error?.message || "Reinitialisation du mot de passe impossible." });
+    return;
+  }
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: leaderCheck.leader.id,
+    actor_name: getMemberName(leaderCheck.leader),
+    target_member_id: target.id,
+    target_name: getMemberName(target),
+    action_type: "community_member_password_reset",
+    entity_type: "guild_members",
+    entity_id: target.id,
+    summary: `${getMemberName(leaderCheck.leader)} a regenere le mot de passe provisoire de ${getMemberName(target)}`,
+    metadata: { role: target.role || "", communityStatus: normalizeCommunityStatus(target.community_status) },
+  });
+
+  sendJson(res, 200, {
+    member: serializeCommunityMember(target),
+    temporaryPassword,
+  });
+}
+
 async function handleMyDefensesLoad(body, res) {
   const sessionCheck = await requirePortalSession(res._portalReq, supabase);
   if (sessionCheck.error) {
@@ -2617,6 +2675,11 @@ export default async function handler(req, res) {
 
     if (action === "community-update-member") {
       await handleCommunityUpdateMember(body, res);
+      return;
+    }
+
+    if (action === "community-reset-member-password") {
+      await handleCommunityResetMemberPassword(body, res);
       return;
     }
 

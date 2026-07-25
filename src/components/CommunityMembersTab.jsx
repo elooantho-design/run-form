@@ -116,6 +116,7 @@ export default function CommunityMembersTab({ session, apiBase }) {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [message, setMessage] = useState("");
   const [selectedRequest, setSelectedRequest] = useState(null);
@@ -180,6 +181,7 @@ export default function CommunityMembersTab({ session, apiBase }) {
 
   function closeEditor() {
     setMemberEditor(null);
+    setTemporaryPassword("");
   }
 
   async function updateRequestStatus(request, status) {
@@ -256,6 +258,32 @@ export default function CommunityMembersTab({ session, apiBase }) {
       setErrorMessage(error?.message || t("community.saveError", "Enregistrement impossible."));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function resetMemberPassword() {
+    if (!memberEditor?.memberId) return;
+
+    setResettingPassword(true);
+    setMessage("");
+    setErrorMessage("");
+    setTemporaryPassword("");
+    try {
+      const data = await post("community-reset-member-password", {
+        memberId: memberEditor.memberId,
+      });
+      if (data.member) {
+        setMembers((previous) =>
+          previous.map((member) => (member.id === data.member.id ? data.member : member)),
+        );
+        setMemberEditor(createDraftFromMember(data.member));
+      }
+      setTemporaryPassword(data.temporaryPassword || "");
+      setMessage(t("community.passwordReset", "Mot de passe provisoire regenere."));
+    } catch (error) {
+      setErrorMessage(error?.message || t("community.saveError", "Enregistrement impossible."));
+    } finally {
+      setResettingPassword(false);
     }
   }
 
@@ -441,7 +469,10 @@ export default function CommunityMembersTab({ session, apiBase }) {
                         size="sm"
                         variant="outline"
                         className="border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
-                        onClick={() => setMemberEditor(createDraftFromMember(member))}
+                        onClick={() => {
+                          setMemberEditor(createDraftFromMember(member));
+                          setTemporaryPassword("");
+                        }}
                       >
                         <Edit3 className="mr-2 h-4 w-4" />
                         {t("common.edit", "Modifier")}
@@ -701,10 +732,27 @@ export default function CommunityMembersTab({ session, apiBase }) {
                 <div className="rounded-xl border border-cyan-400/25 bg-cyan-950/30 p-3 text-sm text-cyan-100">
                   <div className="font-semibold">{t("community.temporaryPassword", "Mot de passe provisoire")}</div>
                   <div className="mt-1 font-mono text-base">{temporaryPassword}</div>
+                  <div className="mt-2 text-xs text-cyan-100/75">
+                    {t("community.passwordOneTime", "Copie-le maintenant : il ne sera plus visible apres fermeture.")}
+                  </div>
                 </div>
               ) : null}
 
               <div className="flex justify-end gap-2">
+                {memberEditor.memberId ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mr-auto border-amber-500/35 bg-amber-950/30 text-amber-100 hover:bg-amber-900/40"
+                    onClick={resetMemberPassword}
+                    disabled={saving || resettingPassword}
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${resettingPassword ? "animate-spin" : ""}`} />
+                    {resettingPassword
+                      ? t("community.passwordResetting", "Generation...")
+                      : t("community.resetPassword", "Regenerer mot de passe")}
+                  </Button>
+                ) : null}
                 <Button type="button" variant="outline" className="border-zinc-700 bg-zinc-900 text-zinc-100" onClick={closeEditor}>
                   {t("common.cancel", "Annuler")}
                 </Button>
