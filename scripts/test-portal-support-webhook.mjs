@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Readable } from "node:stream";
 import Stripe from "stripe";
 
 process.env.NODE_ENV = "test";
@@ -45,17 +46,34 @@ function signPayload(payload, secret = process.env.STRIPE_WEBHOOK_SECRET) {
 }
 
 async function callWebhook(payload, signature) {
-  return webhook.fetch(
-    new Request("https://unit.test/api/portal-support-webhook", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "stripe-signature": signature,
-        "x-portal-webhook-test-mode": "1",
+  const req = Readable.from([Buffer.from(payload, "utf8")]);
+  req.method = "POST";
+  req.headers = {
+    "content-type": "application/json",
+    "stripe-signature": signature,
+    "x-portal-webhook-test-mode": "1",
+  };
+
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const headers = {};
+    const res = {
+      statusCode: 200,
+      setHeader(name, value) {
+        headers[name.toLowerCase()] = value;
       },
-      body: Buffer.from(payload, "utf8"),
-    }),
-  );
+      end(chunk = "") {
+        if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8"));
+        resolve({
+          status: this.statusCode,
+          headers,
+          text: async () => Buffer.concat(chunks).toString("utf8"),
+        });
+      },
+    };
+
+    Promise.resolve(webhook(req, res)).catch(reject);
+  });
 }
 
 const validPayload = buildPayload();
