@@ -115,7 +115,7 @@ const navigation = [
   { id: "defenses", label: "Mes defenses", labelKey: "nav.defenses", icon: Bot },
   { id: "gvg", label: "GVG", labelKey: "nav.gvg", icon: Shield },
   { id: "run-search", label: "Recherche de run", labelKey: "nav.runSearch", icon: Search },
-  { id: "support-project", label: "Soutenir le projet", labelKey: "nav.supportProject", icon: HeartHandshake },
+  // { id: "support-project", label: "Soutenir le projet", labelKey: "nav.supportProject", icon: HeartHandshake },
   { id: "settings", label: "Parametres", labelKey: "nav.settings", icon: Settings },
 ];
 
