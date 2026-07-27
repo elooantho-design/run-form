@@ -57,6 +57,7 @@ import RunEditTab from "@/components/RunEditTab";
 import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
 import CommunityMembersTab from "@/components/CommunityMembersTab";
+import CreatorProfileSettings from "@/components/CreatorProfileSettings";
 import PveLibraryTab from "@/components/PveLibraryTab";
 import SupportProjectTab from "@/components/SupportProjectTab";
 import { logPortalActivity } from "@/lib/portalActivity";
@@ -7202,6 +7203,8 @@ function SettingsView({ session, onLogout }) {
         <h2 className="text-xl font-semibold text-zinc-50">{t("settings.title", "Parametres")}</h2>
         <p className="mt-2 text-sm text-zinc-500">{t("settings.description", "Gestion de la session Portal.")}</p>
       </div>
+
+      <CreatorProfileSettings />
 
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">

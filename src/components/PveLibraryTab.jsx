@@ -1,5 +1,21 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BookOpen, Check, ChevronDown, Edit3, ExternalLink, RefreshCw, Search, Trash2, Youtube, X } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  ChevronDown,
+  Edit3,
+  ExternalLink,
+  Globe2,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Search,
+  Trash2,
+  Unlink,
+  UserRound,
+  Youtube,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getChampionDisplayName, normalizeChampionLookupKey } from "@/lib/championDisplay";
@@ -162,6 +178,9 @@ function normalizeCreator(row) {
     channelUrl: normalizeExternalUrl(row?.channel_url || row?.channelUrl || ""),
     avatarUrl: normalizeExternalUrl(row?.avatar_url || row?.avatarUrl || ""),
     youtubeChannelId: String(row?.youtube_channel_id || row?.youtubeChannelId || "").trim(),
+    bio: String(row?.bio || "").replace(/\r\n?/g, "\n").trim(),
+    linkedMemberId: String(row?.linked_member_id || row?.linkedMemberId || "").trim(),
+    lastYoutubeSyncAt: String(row?.last_youtube_sync_at || row?.lastYoutubeSyncAt || "").trim(),
   };
 }
 
@@ -334,6 +353,22 @@ async function callPveVideosApi(payload) {
   return result;
 }
 
+async function callPveCreatorsApi(payload) {
+  const response = await fetch("/api/pve-creators", {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload || {}),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result?.error || "Traitement createur impossible.");
+  }
+  return result;
+}
+
 function normalizeChampionOption(row, language = "fr") {
   const technicalName = String(row?.name || "").trim();
   const displayName = getChampionDisplayName(row, language) || technicalName;
@@ -431,6 +466,314 @@ function normalizeVideo(
   };
 }
 
+function normalizeCreatorProfile(profile) {
+  if (!profile?.id) return null;
+
+  return {
+    id: String(profile.id),
+    name: String(profile.name || "").trim(),
+    creatorKey: String(profile.creatorKey || profile.creator_key || "").trim(),
+    channelUrl: normalizeExternalUrl(profile.channelUrl || profile.channel_url || ""),
+    avatarUrl: normalizeExternalUrl(profile.avatarUrl || profile.avatar_url || ""),
+    youtubeChannelId: String(profile.youtubeChannelId || profile.youtube_channel_id || "").trim(),
+    bio: String(profile.bio || "").replace(/\r\n?/g, "\n").trim(),
+    linkedMemberId: String(profile.linkedMemberId || profile.linked_member_id || "").trim(),
+    lastYoutubeSyncAt: String(profile.lastYoutubeSyncAt || profile.last_youtube_sync_at || "").trim(),
+    links: Array.isArray(profile.links)
+      ? profile.links
+          .map((link) => ({
+            id: String(link?.id || ""),
+            title: String(link?.title || "").trim(),
+            url: normalizeExternalUrl(link?.url || ""),
+            platform: String(link?.platform || "link").trim() || "link",
+            sortOrder: Number(link?.sortOrder ?? link?.sort_order ?? 0),
+          }))
+          .filter((link) => link.title && link.url)
+          .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0))
+      : [],
+    linkedAccount: profile.linkedAccount || profile.linked_account || null,
+    hasLinkedAccount: Boolean(profile.hasLinkedAccount || profile.has_linked_account),
+    canEdit: Boolean(profile.canEdit || profile.can_edit),
+    canManageLink: Boolean(profile.canManageLink || profile.can_manage_link),
+    profileSchemaReady: profile.profileSchemaReady !== false && profile.profile_schema_ready !== false,
+    linksSchemaReady: profile.linksSchemaReady !== false && profile.links_schema_ready !== false,
+    linkLimit: Number(profile.linkLimit || profile.link_limit || 10),
+  };
+}
+
+function getCreatorPlatformLabel(platform) {
+  const key = String(platform || "link").toLowerCase();
+  if (key === "youtube") return "YouTube";
+  if (key === "twitch") return "Twitch";
+  if (key === "discord") return "Discord";
+  if (key === "tiktok") return "TikTok";
+  if (key === "x") return "X";
+  if (key === "instagram") return "Instagram";
+  return "Lien";
+}
+
+function CreatorPlatformIcon({ platform }) {
+  const key = String(platform || "link").toLowerCase();
+  if (key === "youtube") return <Youtube className="h-4 w-4 text-red-300" />;
+  if (key === "twitch") return <Globe2 className="h-4 w-4 text-violet-300" />;
+  if (key === "discord") return <Globe2 className="h-4 w-4 text-indigo-300" />;
+  if (key === "tiktok") return <Globe2 className="h-4 w-4 text-cyan-300" />;
+  if (key === "x") return <Globe2 className="h-4 w-4 text-zinc-200" />;
+  if (key === "instagram") return <Globe2 className="h-4 w-4 text-pink-300" />;
+  return <Link2 className="h-4 w-4 text-zinc-300" />;
+}
+
+function CreatorProfileModal({
+  open,
+  profile,
+  loading,
+  error,
+  memberSearchQuery,
+  memberSearchResults,
+  memberSearching,
+  memberActionLoading,
+  refreshing,
+  onClose,
+  onRefreshYoutube,
+  onMemberSearchQueryChange,
+  onSearchMembers,
+  onLinkMember,
+  onUnlinkMember,
+  t,
+}) {
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose, open]);
+
+  if (!open) return null;
+
+  const title = profile?.name || t("pve.creatorProfile", "Profil createur");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm">
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default"
+        aria-label={t("common.close", "Fermer")}
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="relative flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-black/70"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-800 p-4">
+          <div className="flex min-w-0 items-center gap-3">
+            {profile?.avatarUrl ? (
+              <img
+                src={profile.avatarUrl}
+                alt=""
+                className="h-16 w-16 shrink-0 rounded-full border border-zinc-700 bg-zinc-900 object-cover"
+              />
+            ) : (
+              <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-xl font-bold text-zinc-400">
+                {(profile?.name || "?").charAt(0).toUpperCase()}
+              </span>
+            )}
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">
+                {t("pve.creatorProfile", "Profil createur")}
+              </div>
+              <h3 className="truncate text-2xl font-semibold text-white">{title}</h3>
+              {profile?.youtubeChannelId ? (
+                <div className="mt-1 truncate text-xs text-zinc-500">{profile.youtubeChannelId}</div>
+              ) : null}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-zinc-800 bg-zinc-900 p-2 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+            title={t("common.close", "Fermer")}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto p-4">
+          {loading ? (
+            <div className="flex min-h-[240px] items-center justify-center gap-2 text-sm text-zinc-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {t("pve.creatorProfileLoading", "Chargement du profil createur...")}
+            </div>
+          ) : error ? (
+            <div className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+              {error}
+            </div>
+          ) : profile ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                {profile.channelUrl ? (
+                  <a
+                    href={profile.channelUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="inline-flex items-center gap-2 rounded-xl border border-red-800 bg-red-950/35 px-3 py-2 text-sm font-semibold text-red-100 hover:bg-red-900/50"
+                  >
+                    <Youtube className="h-4 w-4" />
+                    {t("pve.openCreatorChannel", "Voir la chaine")}
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : null}
+                {profile.canEdit ? (
+                  <Button
+                    type="button"
+                    onClick={onRefreshYoutube}
+                    disabled={refreshing || !profile.channelUrl}
+                    variant="outline"
+                    className="rounded-xl border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                    {refreshing
+                      ? t("pve.refreshingYoutube", "Actualisation...")
+                      : t("pve.refreshYoutube", "Actualiser depuis YouTube")}
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                  {t("pve.creatorBio", "Bio")}
+                </div>
+                {profile.bio ? (
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-200">{profile.bio}</p>
+                ) : (
+                  <p className="mt-2 text-sm text-zinc-500">{t("pve.noCreatorBio", "Aucune bio renseignee.")}</p>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                  {t("pve.creatorLinks", "Liens")}
+                </div>
+                {profile.links.length ? (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {profile.links.map((link) => (
+                      <a
+                        key={link.id || `${link.title}-${link.url}`}
+                        href={link.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="flex min-w-0 items-center gap-2 rounded-xl border border-zinc-800 bg-black/30 px-3 py-2 text-sm text-zinc-200 hover:border-emerald-700 hover:text-white"
+                      >
+                        <CreatorPlatformIcon platform={link.platform} />
+                        <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                        <span className="shrink-0 text-[0.65rem] uppercase text-zinc-500">
+                          {getCreatorPlatformLabel(link.platform)}
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-zinc-500">{t("pve.noCreatorLinks", "Aucun lien supplementaire.")}</p>
+                )}
+              </div>
+
+              {profile.canManageLink ? (
+                <div className="rounded-2xl border border-amber-800/60 bg-amber-950/20 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-300">
+                    {t("pve.adminLinking", "Liaison Dashboard")}
+                  </div>
+                  <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950 p-3">
+                    <div className="text-sm font-semibold text-white">
+                      {profile.linkedAccount
+                        ? profile.linkedAccount.watcherName || t("common.player", "Joueur")
+                        : profile.hasLinkedAccount
+                          ? t("pve.linkedAccountHidden", "Compte associe")
+                          : t("pve.noLinkedAccount", "Aucun compte associe")}
+                    </div>
+                    {profile.linkedAccount ? (
+                      <div className="mt-1 text-xs text-zinc-500">
+                        {profile.linkedAccount.discordId || t("common.unknown", "Inconnu")}
+                        {profile.linkedAccount.guildCode ? ` - ${profile.linkedAccount.guildCode}` : ""}
+                      </div>
+                    ) : null}
+                    {profile.hasLinkedAccount ? (
+                      <Button
+                        type="button"
+                        onClick={onUnlinkMember}
+                        disabled={memberActionLoading}
+                        variant="outline"
+                        className="mt-3 rounded-xl border-red-800 bg-red-950/30 text-red-100 hover:bg-red-900/50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Unlink className="h-4 w-4" />
+                        {t("pve.unlinkAccount", "Dissocier le compte")}
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <form onSubmit={onSearchMembers} className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="search"
+                      value={memberSearchQuery}
+                      onChange={(event) => onMemberSearchQueryChange?.(event.target.value)}
+                      placeholder={t("pve.searchAccountPlaceholder", "Pseudo ou ID Discord...")}
+                      className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-500"
+                    />
+                    <Button
+                      type="submit"
+                      disabled={memberSearching || memberSearchQuery.trim().length < 2}
+                      className="rounded-xl bg-amber-500 text-amber-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Search className="h-4 w-4" />
+                      {memberSearching ? t("common.loading", "Chargement...") : t("pve.searchAccount", "Rechercher")}
+                    </Button>
+                  </form>
+
+                  {memberSearchResults.length ? (
+                    <div className="mt-3 grid gap-2">
+                      {memberSearchResults.map((member) => (
+                        <div
+                          key={member.id}
+                          className="flex flex-col gap-2 rounded-xl border border-zinc-800 bg-zinc-950 p-3 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-white">
+                              {member.watcherName || t("common.player", "Joueur")}
+                            </div>
+                            <div className="mt-1 truncate text-xs text-zinc-500">
+                              {member.discordId || t("common.unknown", "Inconnu")}
+                              {member.guildCode ? ` - ${member.guildCode}` : ""}
+                              {member.communityAccessType ? ` - ${member.communityAccessType}` : ""}
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            onClick={() => onLinkMember(member)}
+                            disabled={memberActionLoading}
+                            variant="outline"
+                            className="rounded-xl border-amber-700 bg-amber-950/30 text-amber-100 hover:bg-amber-900/50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <UserRound className="h-4 w-4" />
+                            {t("pve.linkAccount", "Associer")}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PveLibraryTab({
   session,
   contents = [],
@@ -474,6 +817,15 @@ export default function PveLibraryTab({
     heroIds: [],
     heroAlternatives: {},
   });
+  const [creatorProfileOpen, setCreatorProfileOpen] = useState(false);
+  const [creatorProfile, setCreatorProfile] = useState(null);
+  const [creatorProfileLoading, setCreatorProfileLoading] = useState(false);
+  const [creatorProfileError, setCreatorProfileError] = useState("");
+  const [creatorProfileRefreshing, setCreatorProfileRefreshing] = useState(false);
+  const [creatorMemberQuery, setCreatorMemberQuery] = useState("");
+  const [creatorMemberResults, setCreatorMemberResults] = useState([]);
+  const [creatorMemberSearching, setCreatorMemberSearching] = useState(false);
+  const [creatorMemberActionLoading, setCreatorMemberActionLoading] = useState(false);
 
   useEffect(() => {
     setLocalContents(contents.map(normalizeContent));
@@ -743,6 +1095,164 @@ export default function PveLibraryTab({
       heroAlternatives: {},
     }));
     setLoading(false);
+  };
+
+  const applyCreatorProfileToState = (profilePayload) => {
+    const normalizedProfile = normalizeCreatorProfile(profilePayload);
+    if (!normalizedProfile?.id) return null;
+
+    const nextCreator = normalizeCreator({
+      id: normalizedProfile.id,
+      name: normalizedProfile.name,
+      creatorKey: normalizedProfile.creatorKey,
+      channelUrl: normalizedProfile.channelUrl,
+      avatarUrl: normalizedProfile.avatarUrl,
+      youtubeChannelId: normalizedProfile.youtubeChannelId,
+      bio: normalizedProfile.bio,
+      linkedMemberId: normalizedProfile.linkedMemberId,
+      lastYoutubeSyncAt: normalizedProfile.lastYoutubeSyncAt,
+    });
+
+    setCreators((previous) =>
+      sortCreators([...previous.filter((creator) => creator.id !== nextCreator.id), nextCreator]),
+    );
+    setVideos((previous) =>
+      previous.map((video) =>
+        String(video.creatorId || "") === nextCreator.id
+          ? {
+              ...video,
+              creator: nextCreator,
+            }
+          : video,
+      ),
+    );
+
+    return normalizedProfile;
+  };
+
+  const openCreatorProfile = async (creator) => {
+    if (!creator?.id) return;
+
+    setCreatorProfileOpen(true);
+    setCreatorProfileLoading(true);
+    setCreatorProfileError("");
+    setCreatorProfile(null);
+    setCreatorMemberQuery("");
+    setCreatorMemberResults([]);
+
+    try {
+      const payload = await callPveCreatorsApi({
+        action: "profile",
+        creatorId: creator.id,
+      });
+      const normalizedProfile = applyCreatorProfileToState(payload.profile);
+      setCreatorProfile(normalizedProfile);
+    } catch (error) {
+      setCreatorProfileError(error?.message || t("pve.creatorProfileLoadError", "Profil createur indisponible."));
+    } finally {
+      setCreatorProfileLoading(false);
+    }
+  };
+
+  const closeCreatorProfile = () => {
+    setCreatorProfileOpen(false);
+    setCreatorProfile(null);
+    setCreatorProfileError("");
+    setCreatorMemberQuery("");
+    setCreatorMemberResults([]);
+  };
+
+  const refreshCreatorYoutube = async () => {
+    if (!creatorProfile?.id || creatorProfileRefreshing) return;
+
+    setCreatorProfileRefreshing(true);
+    setCreatorProfileError("");
+    try {
+      const payload = await callPveCreatorsApi({
+        action: "refresh-youtube",
+        creatorId: creatorProfile.id,
+      });
+      const normalizedProfile = applyCreatorProfileToState(payload.profile);
+      setCreatorProfile(normalizedProfile);
+      setMessage(t("pve.creatorYoutubeRefreshed", "Profil createur actualise depuis YouTube."));
+    } catch (error) {
+      setCreatorProfileError(error?.message || t("pve.creatorYoutubeRefreshError", "Actualisation YouTube impossible."));
+    } finally {
+      setCreatorProfileRefreshing(false);
+    }
+  };
+
+  const searchCreatorMembers = async (event) => {
+    event.preventDefault();
+    const query = String(creatorMemberQuery || "").trim();
+    if (query.length < 2 || creatorMemberSearching) return;
+
+    setCreatorMemberSearching(true);
+    setCreatorProfileError("");
+    try {
+      const payload = await callPveCreatorsApi({
+        action: "search-members",
+        query,
+      });
+      setCreatorMemberResults(Array.isArray(payload.members) ? payload.members : []);
+    } catch (error) {
+      setCreatorProfileError(error?.message || t("pve.searchAccountError", "Recherche de compte impossible."));
+    } finally {
+      setCreatorMemberSearching(false);
+    }
+  };
+
+  const linkCreatorMember = async (member) => {
+    if (!creatorProfile?.id || !member?.id || creatorMemberActionLoading) return;
+    const hasLink = Boolean(creatorProfile.hasLinkedAccount);
+    const confirmed = hasLink
+      ? window.confirm(
+          t(
+            "pve.replaceLinkedAccountConfirm",
+            "Remplacer le compte actuellement associe a ce createur ?",
+          ),
+        )
+      : true;
+    if (!confirmed) return;
+
+    setCreatorMemberActionLoading(true);
+    setCreatorProfileError("");
+    try {
+      const payload = await callPveCreatorsApi({
+        action: "link-member",
+        creatorId: creatorProfile.id,
+        memberId: member.id,
+      });
+      const normalizedProfile = applyCreatorProfileToState(payload.profile);
+      setCreatorProfile(normalizedProfile);
+      setCreatorMemberResults([]);
+      setCreatorMemberQuery("");
+    } catch (error) {
+      setCreatorProfileError(error?.message || t("pve.linkAccountError", "Association du compte impossible."));
+    } finally {
+      setCreatorMemberActionLoading(false);
+    }
+  };
+
+  const unlinkCreatorMember = async () => {
+    if (!creatorProfile?.id || creatorMemberActionLoading) return;
+    const confirmed = window.confirm(t("pve.unlinkCreatorConfirm", "Dissocier ce compte du createur ?"));
+    if (!confirmed) return;
+
+    setCreatorMemberActionLoading(true);
+    setCreatorProfileError("");
+    try {
+      const payload = await callPveCreatorsApi({
+        action: "unlink-member",
+        creatorId: creatorProfile.id,
+      });
+      const normalizedProfile = applyCreatorProfileToState(payload.profile);
+      setCreatorProfile(normalizedProfile);
+    } catch (error) {
+      setCreatorProfileError(error?.message || t("pve.unlinkAccountError", "Dissociation du compte impossible."));
+    } finally {
+      setCreatorMemberActionLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -1586,6 +2096,22 @@ export default function PveLibraryTab({
                       />
                     </label>
 
+                    {videoDraft.creatorId && !videoDraft.creatorMode ? (
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() =>
+                            openCreatorProfile(creators.find((creator) => String(creator.id) === String(videoDraft.creatorId)))
+                          }
+                          className="rounded-xl border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                        >
+                          <UserRound className="h-4 w-4" />
+                          {t("pve.manageCreatorProfile", "Gerer la fiche createur")}
+                        </Button>
+                      </div>
+                    ) : null}
+
                     {videoDraft.creatorMode === CREATOR_MODE_NEW ? (
                       <div className="space-y-3">
                         <div>
@@ -1889,33 +2415,25 @@ export default function PveLibraryTab({
                       {video.creator ? (
                         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2">
                           <div className="flex min-w-0 items-center gap-2">
-                            {video.creator.avatarUrl ? (
-                              <img
-                                src={video.creator.avatarUrl}
-                                alt=""
-                                loading="lazy"
-                                className="h-9 w-9 shrink-0 rounded-full border border-zinc-700 object-cover"
-                                onError={(event) => {
-                                  event.currentTarget.style.display = "none";
-                                }}
-                              />
-                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => openCreatorProfile(video.creator)}
+                              className="rounded-full outline-none ring-offset-2 ring-offset-zinc-950 hover:ring-2 hover:ring-emerald-500 focus-visible:ring-2 focus-visible:ring-emerald-400"
+                              title={t("pve.openCreatorProfile", "Ouvrir la fiche createur")}
+                            >
+                              <CreatorAvatar creator={video.creator} />
+                            </button>
                             <div className="min-w-0">
                               <div className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-zinc-500">
                                 {t("pve.creator", "Createur")}
                               </div>
-                              {video.creator.channelUrl ? (
-                                <a
-                                  href={video.creator.channelUrl}
-                                  target="_blank"
-                                  rel="noreferrer noopener"
-                                  className="block truncate text-sm font-semibold text-emerald-200 hover:text-emerald-100 hover:underline"
-                                >
-                                  {video.creator.name}
-                                </a>
-                              ) : (
-                                <div className="truncate text-sm font-semibold text-zinc-100">{video.creator.name}</div>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => openCreatorProfile(video.creator)}
+                                className="block max-w-full truncate text-left text-sm font-semibold text-emerald-200 hover:text-emerald-100 hover:underline"
+                              >
+                                {video.creator.name}
+                              </button>
                             </div>
                           </div>
                           {video.creator.channelUrl ? (
@@ -2028,6 +2546,24 @@ export default function PveLibraryTab({
           {t("pve.noContent", "Aucun contenu PVE disponible pour le moment.")}
         </div>
       )}
+      <CreatorProfileModal
+        open={creatorProfileOpen}
+        profile={creatorProfile}
+        loading={creatorProfileLoading}
+        error={creatorProfileError}
+        memberSearchQuery={creatorMemberQuery}
+        memberSearchResults={creatorMemberResults}
+        memberSearching={creatorMemberSearching}
+        memberActionLoading={creatorMemberActionLoading}
+        refreshing={creatorProfileRefreshing}
+        onClose={closeCreatorProfile}
+        onRefreshYoutube={refreshCreatorYoutube}
+        onMemberSearchQueryChange={setCreatorMemberQuery}
+        onSearchMembers={searchCreatorMembers}
+        onLinkMember={linkCreatorMember}
+        onUnlinkMember={unlinkCreatorMember}
+        t={t}
+      />
     </section>
   );
 }
