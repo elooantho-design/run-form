@@ -304,6 +304,7 @@ export default function PersonalBestTab({ session }) {
 
   const guildCode = getSessionGuildCode(session);
   const isPaladinScope = isPaladinSession(session);
+  const sessionMemberId = session?.memberId || session?.id || "";
 
   const isAdmin = useMemo(() => {
     const role = getSessionRole(session);
@@ -398,7 +399,9 @@ export default function PersonalBestTab({ session }) {
     const grouped = new Map();
 
     members.forEach((member) => {
-      grouped.set(member.id, {
+      const memberKey = String(member.id || "");
+      if (!memberKey) return;
+      grouped.set(memberKey, {
         memberId: member.id,
         memberName: member.name || "Inconnu",
         slots: [null, null, null, null, null],
@@ -407,8 +410,10 @@ export default function PersonalBestTab({ session }) {
     });
 
     pbEntries.forEach((entry) => {
-      if (!grouped.has(entry.memberId)) {
-        grouped.set(entry.memberId, {
+      const memberKey = String(entry.memberId || "");
+      if (!memberKey) return;
+      if (!grouped.has(memberKey)) {
+        grouped.set(memberKey, {
           memberId: entry.memberId,
           memberName: entry.memberName || "Inconnu",
           slots: [null, null, null, null, null],
@@ -416,7 +421,7 @@ export default function PersonalBestTab({ session }) {
         });
       }
 
-      const row = grouped.get(entry.memberId);
+      const row = grouped.get(memberKey);
       if (entry.updatedAt && (!row.updatedAt || new Date(entry.updatedAt) > new Date(row.updatedAt))) {
         row.updatedAt = entry.updatedAt;
       }
@@ -437,7 +442,7 @@ export default function PersonalBestTab({ session }) {
 
     return Array.from(grouped.values())
       .map((row) => {
-        const member = members.find((item) => item.id === row.memberId);
+        const member = members.find((item) => String(item.id) === String(row.memberId));
         const sortedSlots = [...row.slots].sort((a, b) => {
           const pbA = getDisplayedPbValue(a, member);
           const pbB = getDisplayedPbValue(b, member);
@@ -484,10 +489,9 @@ export default function PersonalBestTab({ session }) {
   const summary = useMemo(() => {
     const rowsWithPb = pbRows.filter((row) => row.top1 > 0);
     const bestRow = rowsWithPb[0] || null;
-    const connectedMemberId = session?.memberId || session?.id || "";
     const connectedName = normalizeText(session?.watcherName || session?.memberName || session?.name);
     const connectedRow =
-      pbRows.find((row) => connectedMemberId && String(row.memberId) === String(connectedMemberId)) ||
+      pbRows.find((row) => sessionMemberId && String(row.memberId) === String(sessionMemberId)) ||
       pbRows.find((row) => connectedName && normalizeText(row.memberName) === connectedName) ||
       null;
     const averageTop3 =
@@ -501,10 +505,10 @@ export default function PersonalBestTab({ session }) {
       connectedTop1: connectedRow?.top1 || 0,
       averageTop3,
     };
-  }, [pbRows, session?.id, session?.memberId, session?.memberName, session?.name, session?.watcherName]);
+  }, [pbRows, sessionMemberId, session?.memberName, session?.name, session?.watcherName]);
 
   function canEditRow(rowMemberId) {
-    return isAdmin || String(rowMemberId) === String(session?.memberId);
+    return isAdmin || String(rowMemberId) === String(sessionMemberId);
   }
 
   function openPbEditDialog(slot, memberId) {
@@ -778,7 +782,7 @@ export default function PersonalBestTab({ session }) {
                 </div>
 
                 {pbRows.map((row, rowIndex) => {
-                  const member = members.find((item) => item.id === row.memberId);
+                  const member = members.find((item) => String(item.id) === String(row.memberId));
                   const outdated = isPbOutdated(row.updatedAt);
                   const editable = canEditRow(row.memberId);
 

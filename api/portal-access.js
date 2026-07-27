@@ -101,7 +101,7 @@ const DEFENSE_SELECT = `
   )
 `;
 const CHAMPION_SAFE_SELECT =
-  "id, name, portal_name, english_name, rarity, image_file, faction, role";
+  "id, name, portal_name, english_name, rarity, faction, role, lord";
 
 function sendJson(res, status, payload) {
   sendPortalJson(res, status, payload, res._portalReq || null);

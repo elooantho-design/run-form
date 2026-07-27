@@ -2933,7 +2933,16 @@ function HeroBoxView({ session }) {
         setMembers(nextMembers);
         setHeroCards(nextHeroCards);
         setHeroStates(createEmptyHeroStateMap(nextHeroCards));
-        setSelectedPlayerId((current) => current || connectedPlayerKey || String(nextMembers[0]?.id || ""));
+        setSelectedPlayerId((current) => {
+          const currentKey = String(current || "");
+          if (currentKey && nextMembers.some((member) => String(member.id) === currentKey)) {
+            return currentKey;
+          }
+          if (connectedPlayerKey && nextMembers.some((member) => String(member.id) === connectedPlayerKey)) {
+            return connectedPlayerKey;
+          }
+          return String(nextMembers[0]?.id || "");
+        });
       } catch (error) {
         if (!cancelled) setHeroBoxError(error?.message || "Impossible de charger les joueurs et champions.");
       } finally {

@@ -93,10 +93,16 @@ export default function DemonMonstersTab({ session }) {
   const [selectedMonster, setSelectedMonster] = useState(null);
   const [levelInput, setLevelInput] = useState("");
   const [levelSaving, setLevelSaving] = useState(false);
+  const sessionMemberId = session?.memberId || session?.id || "";
 
   const selectedMember = useMemo(() => {
-    return members.find((member) => String(member.id) === String(selectedMemberId)) || members[0] || null;
-  }, [members, selectedMemberId]);
+    return (
+      members.find((member) => String(member.id) === String(selectedMemberId)) ||
+      members.find((member) => sessionMemberId && String(member.id) === String(sessionMemberId)) ||
+      members[0] ||
+      null
+    );
+  }, [members, selectedMemberId, sessionMemberId]);
 
   const memberSuggestions = useMemo(() => {
     const normalizedQuery = normalizeText(memberQuery);
@@ -118,12 +124,12 @@ export default function DemonMonstersTab({ session }) {
       role.includes("administrateur") ||
       role.includes("leader");
     const isOwnProfile =
-      selectedMember?.id && session?.memberId
-        ? String(selectedMember.id) === String(session.memberId)
+      selectedMember?.id && sessionMemberId
+        ? String(selectedMember.id) === String(sessionMemberId)
         : true;
 
     return isAdmin || isOwnProfile;
-  }, [selectedMember, session]);
+  }, [selectedMember, session, sessionMemberId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,8 +153,20 @@ export default function DemonMonstersTab({ session }) {
           guildCode: row.guild_code || row.guildCode || "",
         }));
         setMembers(mappedMembers);
-        if (data.selectedMemberId && String(data.selectedMemberId) !== String(selectedMemberId)) {
-          setSelectedMemberId(data.selectedMemberId);
+        let nextSelectedMemberId = data.selectedMemberId || "";
+        if (!nextSelectedMemberId && selectedMemberId) {
+          const currentMember = mappedMembers.find((member) => String(member.id) === String(selectedMemberId));
+          if (currentMember) nextSelectedMemberId = currentMember.id;
+        }
+        if (!nextSelectedMemberId && sessionMemberId) {
+          const sessionMember = mappedMembers.find((member) => String(member.id) === String(sessionMemberId));
+          if (sessionMember) nextSelectedMemberId = sessionMember.id;
+        }
+        if (!nextSelectedMemberId) {
+          nextSelectedMemberId = mappedMembers[0]?.id || "";
+        }
+        if (String(nextSelectedMemberId) !== String(selectedMemberId)) {
+          setSelectedMemberId(nextSelectedMemberId);
         }
         setDemonicMonsters(data.monsters || []);
         setMemberDemonicEntries(
@@ -180,7 +198,7 @@ export default function DemonMonstersTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedMemberId]);
+  }, [selectedMemberId, sessionMemberId]);
 
   const demonicMonsterCards = useMemo(() => {
     const normalizedQuery = normalizeText(query);

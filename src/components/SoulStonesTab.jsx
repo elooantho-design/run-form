@@ -135,10 +135,16 @@ export default function SoulStonesTab({ session }) {
   const [clusterSoulStoneRows, setClusterSoulStoneRows] = useState([]);
   const [clusterSoulStonesLoading, setClusterSoulStonesLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const sessionMemberId = session?.memberId || session?.id || "";
 
   const selectedMember = useMemo(() => {
-    return members.find((member) => String(member.id) === String(selectedMemberId)) || members[0] || null;
-  }, [members, selectedMemberId]);
+    return (
+      members.find((member) => String(member.id) === String(selectedMemberId)) ||
+      members.find((member) => sessionMemberId && String(member.id) === String(sessionMemberId)) ||
+      members[0] ||
+      null
+    );
+  }, [members, selectedMemberId, sessionMemberId]);
 
   const memberSuggestions = useMemo(() => {
     const normalizedQuery = normalizeText(memberQuery);
@@ -160,12 +166,12 @@ export default function SoulStonesTab({ session }) {
       role.includes("administrateur") ||
       role.includes("leader");
     const isOwnProfile =
-      selectedMember?.id && session?.memberId
-        ? String(selectedMember.id) === String(session.memberId)
+      selectedMember?.id && sessionMemberId
+        ? String(selectedMember.id) === String(sessionMemberId)
         : true;
 
     return isAdmin || isOwnProfile;
-  }, [selectedMember, session]);
+  }, [selectedMember, session, sessionMemberId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -196,7 +202,7 @@ export default function SoulStonesTab({ session }) {
             return current;
           }
           if (data.selectedMemberId) return data.selectedMemberId;
-          const bySessionId = mappedMembers.find((member) => String(member.id) === String(session?.memberId));
+          const bySessionId = mappedMembers.find((member) => String(member.id) === String(sessionMemberId));
           if (bySessionId) return bySessionId.id;
           return mappedMembers[0]?.id || "";
         });
@@ -249,7 +255,7 @@ export default function SoulStonesTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedMemberId, session]);
+  }, [selectedMemberId, sessionMemberId]);
 
   const totalLordSoulStones = useMemo(() => {
     return soulStones.filter((stone) => stone.type === "lord").length;

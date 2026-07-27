@@ -226,6 +226,22 @@ async function getScopedMembers(supabase, actor, options = {}) {
   return filterMembersForActor(allMembers, actor, options).map(serializeMember);
 }
 
+function pickSelectedMemberForActor(members, actor, requestedId) {
+  const requestedKey = String(requestedId || "");
+  if (requestedKey) {
+    const requestedMember = members.find((member) => String(member.id) === requestedKey);
+    if (requestedMember) return requestedMember;
+  }
+
+  const actorKey = String(actor?.id || "");
+  if (actorKey) {
+    const actorMember = members.find((member) => String(member.id) === actorKey);
+    if (actorMember) return actorMember;
+  }
+
+  return members[0] || null;
+}
+
 async function handleHeroBoxBase(req, res, supabase, actor) {
   const [members, championsResult] = await Promise.all([
     getScopedMembers(supabase, actor),
@@ -425,7 +441,7 @@ async function handleUpdatePersonalBestValue(req, res, supabase, actor, body) {
 async function handleDemonicMonsters(req, res, supabase, actor, body) {
   const members = await getScopedMembers(supabase, actor);
   const requestedId = validateUuid(body.memberId || body.member_id);
-  const selectedMember = members.find((member) => String(member.id) === String(requestedId)) || members[0] || null;
+  const selectedMember = pickSelectedMemberForActor(members, actor, requestedId);
 
   const [monstersResult, entriesResult] = await Promise.all([
     supabase
@@ -509,7 +525,7 @@ async function handleSetDemonicMonsterLevel(req, res, supabase, actor, body) {
 async function handleSoulStones(req, res, supabase, actor, body) {
   const members = await getScopedMembers(supabase, actor);
   const requestedId = validateUuid(body.memberId || body.member_id);
-  const selectedMember = members.find((member) => String(member.id) === String(requestedId)) || members[0] || null;
+  const selectedMember = pickSelectedMemberForActor(members, actor, requestedId);
   const visibleMemberIds = new Set(members.map((member) => String(member.id)));
 
   const [stonesResult, rankingResult] = await Promise.all([

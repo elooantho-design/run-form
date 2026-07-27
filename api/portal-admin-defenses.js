@@ -53,7 +53,7 @@ const DEFENSE_SELECT = `
     )
   )
 `;
-const CHAMPION_SAFE_SELECT = "id, name, portal_name, english_name, rarity, image_file, faction, role";
+const CHAMPION_SAFE_SELECT = "id, name, portal_name, english_name, rarity, faction, role, lord";
 const BLOCK_SAFE_SELECT = "id, defense_id, block_type, content, sort_order";
 
 function sendJson(res, status, payload) {
