@@ -284,7 +284,6 @@ async function handleSetHeroAwakening(req, res, supabase, actor, body) {
       member_id: target.id,
       champion_id: championId,
       awakening_level: awakeningLevel,
-      updated_at: new Date().toISOString(),
     },
     { onConflict: "member_id,champion_id" },
   );
@@ -298,13 +297,11 @@ async function handleBulkHeroAwakening(req, res, supabase, actor, body) {
     return sendJson(req, res, 403, { ok: false, error: "Modification eveils refusee." });
   }
 
-  const now = new Date().toISOString();
   const rows = parseJsonArray(body.entries)
     .map((entry) => ({
       member_id: target.id,
       champion_id: Number(entry.championId || entry.champion_id),
       awakening_level: normalizeAwakeningLevel(entry.awakeningLevel ?? entry.awakening_level),
-      updated_at: now,
     }))
     .filter((entry) => Number.isFinite(entry.champion_id));
 
