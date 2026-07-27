@@ -110,6 +110,24 @@ function hasPbSlotAwakening(value) {
   return Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 5;
 }
 
+function normalizeBoxAwakeningLevel(value) {
+  const numeric = Number(value);
+
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > 5) return -1;
+
+  return numeric;
+}
+
+function chooseBestBoxAwakening(currentValue, nextValue) {
+  const current = normalizeBoxAwakeningLevel(currentValue);
+  const next = normalizeBoxAwakeningLevel(nextValue);
+
+  if (next < 0) return current;
+  if (current < 0) return next;
+
+  return Math.max(current, next);
+}
+
 function normalizeAwakeningLookupKey(value) {
   return String(value || "")
     .trim()
@@ -204,20 +222,27 @@ function getDisplayedPbValue(slot, member) {
   return raw * (multiplierMap[awakeningLevel] ?? 1);
 }
 
-function getSlotAwakeningLevel(slot, member) {
-  if (!slot) return -1;
+function resolveSlotAwakening(slot, member) {
+  if (!slot) return { level: -1, source: "missing-slot" };
 
   if (hasPbSlotAwakening(slot.pbAwakeningLevel)) {
-    return Number(slot.pbAwakeningLevel);
+    return { level: Number(slot.pbAwakeningLevel), source: "pb-forced" };
   }
 
   const awakenings = member?.awakenings;
-  if (!awakenings) return -1;
+  if (!awakenings) return { level: -1, source: "missing-member-box" };
+
+  const candidates = [];
+
+  function addCandidate(source, value) {
+    const level = normalizeBoxAwakeningLevel(value);
+    if (level >= 0) candidates.push({ level, source });
+  }
 
   const championId = slot.championId ?? slot.champion_id;
   if (championId !== null && championId !== undefined && championId !== "") {
     const byIdValue = awakenings.byChampionId?.[String(championId)];
-    if (hasPbSlotAwakening(byIdValue)) return Number(byIdValue);
+    addCandidate("box:champion_id", byIdValue);
   }
 
   const candidateNames = [
@@ -232,13 +257,19 @@ function getSlotAwakeningLevel(slot, member) {
     if (!name) continue;
 
     const directValue = awakenings[name];
-    if (hasPbSlotAwakening(directValue)) return Number(directValue);
+    addCandidate("box:name", directValue);
 
     const normalizedValue = awakenings.byName?.[normalizeAwakeningLookupKey(name)];
-    if (hasPbSlotAwakening(normalizedValue)) return Number(normalizedValue);
+    addCandidate("box:normalized-name", normalizedValue);
   }
 
-  return -1;
+  if (!candidates.length) return { level: -1, source: "not-found" };
+
+  return candidates.reduce((best, candidate) => (candidate.level > best.level ? candidate : best), candidates[0]);
+}
+
+function getSlotAwakeningLevel(slot, member) {
+  return resolveSlotAwakening(slot, member).level;
 }
 
 function buildMemberAwakenings(memberAwakenings) {
@@ -252,8 +283,10 @@ function buildMemberAwakenings(memberAwakenings) {
     const rawName = String(name).trim();
     const normalizedName = normalizeAwakeningLookupKey(rawName);
 
-    if (rawName) awakenings[rawName] = awakeningLevel;
-    if (normalizedName) awakenings.byName[normalizedName] = awakeningLevel;
+    if (rawName) awakenings[rawName] = chooseBestBoxAwakening(awakenings[rawName], awakeningLevel);
+    if (normalizedName) {
+      awakenings.byName[normalizedName] = chooseBestBoxAwakening(awakenings.byName[normalizedName], awakeningLevel);
+    }
   }
 
   (memberAwakenings || []).forEach((entry) => {
@@ -261,7 +294,10 @@ function buildMemberAwakenings(memberAwakenings) {
     const championId = entry.champion_id ?? entry.championId ?? entry.champions?.id;
 
     if (championId !== null && championId !== undefined && championId !== "") {
-      awakenings.byChampionId[String(championId)] = awakeningLevel;
+      awakenings.byChampionId[String(championId)] = chooseBestBoxAwakening(
+        awakenings.byChampionId[String(championId)],
+        awakeningLevel,
+      );
     }
 
     registerName(entry.champions?.name, awakeningLevel);
@@ -506,6 +542,14 @@ export default function PersonalBestTab({ session }) {
       averageTop3,
     };
   }, [pbRows, sessionMemberId, session?.memberName, session?.name, session?.watcherName]);
+
+  const selectedPbMember =
+    (pbSelectedMember?.id
+      ? members.find((member) => String(member.id) === String(pbSelectedMember.id))
+      : null) || pbSelectedMember;
+  const selectedPbRow = selectedPbMember
+    ? pbRows.find((row) => String(row.memberId) === String(selectedPbMember.id))
+    : null;
 
   function canEditRow(rowMemberId) {
     return isAdmin || String(rowMemberId) === String(sessionMemberId);
@@ -917,7 +961,7 @@ export default function PersonalBestTab({ session }) {
       >
         <DialogContent className="w-[95vw] !max-w-[1400px] rounded-3xl border-zinc-800 bg-zinc-950 text-zinc-100">
           <DialogHeader>
-            <DialogTitle>{t("pb.detail", "Detail PB")} - {pbSelectedMember?.name || "Membre"}</DialogTitle>
+            <DialogTitle>{t("pb.detail", "Detail PB")} - {selectedPbMember?.name || "Membre"}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-6">
@@ -925,15 +969,15 @@ export default function PersonalBestTab({ session }) {
               <div className="text-sm text-zinc-400">{t("home.profile", "Profil")}</div>
               <div className="mt-1 flex items-center gap-2 text-lg font-semibold text-zinc-50">
                 <UserRound className="h-5 w-5" />
-                {pbSelectedMember?.name || "-"}
+                {selectedPbMember?.name || "-"}
               </div>
-              <div className="text-sm text-zinc-400">{pbSelectedMember?.assignment || "-"}</div>
+              <div className="text-sm text-zinc-400">{selectedPbMember?.assignment || "-"}</div>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-5">
-              {(pbRows.find((row) => String(row.memberId) === String(pbSelectedMember?.id))?.slots || []).map(
+              {(selectedPbRow?.slots || []).map(
                 (slot, index) => {
-                  const awakeningValue = getSlotAwakeningLevel(slot, pbSelectedMember);
+                  const awakeningValue = getSlotAwakeningLevel(slot, selectedPbMember);
                   const slotDisplayName = getPbChampionDisplayName(
                     slot?.championName || "",
                     slot?.championEnglishName || "",
@@ -979,7 +1023,7 @@ export default function PersonalBestTab({ session }) {
                             <div className="text-zinc-400">
                               {t("pb.calculated", "Calcule")} :{" "}
                               <span className="font-semibold text-zinc-100">
-                                {formatPbAverage(getDisplayedPbValue(slot, pbSelectedMember))}
+                                {formatPbAverage(getDisplayedPbValue(slot, selectedPbMember))}
                               </span>
                             </div>
                           </div>
