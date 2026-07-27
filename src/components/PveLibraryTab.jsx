@@ -5,7 +5,6 @@ import {
   ChevronDown,
   Edit3,
   ExternalLink,
-  Globe2,
   Link2,
   Loader2,
   RefreshCw,
@@ -18,7 +17,9 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import CreatorLinkIcon from "@/components/CreatorLinkIcon";
 import { getChampionDisplayName, normalizeChampionLookupKey } from "@/lib/championDisplay";
+import { getCreatorLinkPlatformLabel } from "@/lib/creatorLinkPlatforms";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const CREATOR_MODE_UNLISTED = "__unlisted__";
@@ -501,28 +502,6 @@ function normalizeCreatorProfile(profile) {
   };
 }
 
-function getCreatorPlatformLabel(platform) {
-  const key = String(platform || "link").toLowerCase();
-  if (key === "youtube") return "YouTube";
-  if (key === "twitch") return "Twitch";
-  if (key === "discord") return "Discord";
-  if (key === "tiktok") return "TikTok";
-  if (key === "x") return "X";
-  if (key === "instagram") return "Instagram";
-  return "Lien";
-}
-
-function CreatorPlatformIcon({ platform }) {
-  const key = String(platform || "link").toLowerCase();
-  if (key === "youtube") return <Youtube className="h-4 w-4 text-red-300" />;
-  if (key === "twitch") return <Globe2 className="h-4 w-4 text-violet-300" />;
-  if (key === "discord") return <Globe2 className="h-4 w-4 text-indigo-300" />;
-  if (key === "tiktok") return <Globe2 className="h-4 w-4 text-cyan-300" />;
-  if (key === "x") return <Globe2 className="h-4 w-4 text-zinc-200" />;
-  if (key === "instagram") return <Globe2 className="h-4 w-4 text-pink-300" />;
-  return <Link2 className="h-4 w-4 text-zinc-300" />;
-}
-
 function CreatorProfileModal({
   open,
   profile,
@@ -862,10 +841,10 @@ function CreatorProfileModal({
                             rel="noreferrer noopener"
                             className="flex min-w-0 items-center gap-2 rounded-xl border border-zinc-800 bg-black/30 px-3 py-2 text-sm text-zinc-200 hover:border-emerald-700 hover:text-white"
                           >
-                            <CreatorPlatformIcon platform={link.platform} />
+                            <CreatorLinkIcon url={link.url} platform={link.platform} />
                             <span className="min-w-0 flex-1 truncate">{link.title}</span>
                             <span className="shrink-0 text-[0.65rem] uppercase text-zinc-500">
-                              {getCreatorPlatformLabel(link.platform)}
+                              {getCreatorLinkPlatformLabel(link.platform, link.url)}
                             </span>
                           </a>
                         ))}

@@ -12,6 +12,7 @@ import {
   Youtube,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getCreatorLinkPlatformLabel } from "@/lib/creatorLinkPlatforms";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_LINK = { id: "", title: "", url: "", platform: "link", sortOrder: 0 };
@@ -70,17 +71,6 @@ function normalizeCreatorProfile(profile) {
       : [],
     linkLimit: Number(profile.linkLimit || profile.link_limit || 10),
   };
-}
-
-function getPlatformLabel(platform) {
-  const key = String(platform || "link").toLowerCase();
-  if (key === "youtube") return "YouTube";
-  if (key === "twitch") return "Twitch";
-  if (key === "discord") return "Discord";
-  if (key === "tiktok") return "TikTok";
-  if (key === "x") return "X";
-  if (key === "instagram") return "Instagram";
-  return "Lien";
 }
 
 function createDraftLink() {
@@ -360,7 +350,7 @@ export default function CreatorProfileSettings() {
                   />
                   <div className="flex items-center gap-1">
                     <span className="hidden min-w-16 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-2 text-center text-xs text-zinc-400 md:inline-block">
-                      {getPlatformLabel(link.platform)}
+                      {getCreatorLinkPlatformLabel(link.platform, link.url)}
                     </span>
                     <button
                       type="button"

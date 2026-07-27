@@ -1,3 +1,7 @@
+import { detectCreatorLinkPlatform } from "../src/lib/creatorLinkPlatforms.js";
+
+export { detectCreatorLinkPlatform };
+
 export const CREATOR_PROFILE_BIO_MAX_LENGTH = 1000;
 export const CREATOR_PROFILE_LINK_LIMIT = 10;
 export const CREATOR_PROFILE_LINK_TITLE_MAX_LENGTH = 80;
@@ -44,27 +48,6 @@ export function normalizeCreatorProfileUrl(value) {
   return url.toString();
 }
 
-export function detectCreatorLinkPlatform(value) {
-  const raw = cleanProfileText(value);
-  if (!raw) return "link";
-
-  try {
-    const url = new URL(raw);
-    const host = url.hostname.replace(/^www\./i, "").toLowerCase();
-
-    if (host === "youtu.be" || host.endsWith("youtube.com")) return "youtube";
-    if (host === "twitch.tv" || host.endsWith(".twitch.tv")) return "twitch";
-    if (host === "discord.gg" || host === "discord.com" || host.endsWith(".discord.com")) return "discord";
-    if (host === "tiktok.com" || host.endsWith(".tiktok.com")) return "tiktok";
-    if (host === "x.com" || host === "twitter.com") return "x";
-    if (host === "instagram.com" || host.endsWith(".instagram.com")) return "instagram";
-  } catch {
-    return "link";
-  }
-
-  return "link";
-}
-
 export function normalizeCreatorProfileLinks(links) {
   if (!Array.isArray(links)) return [];
   if (links.length > CREATOR_PROFILE_LINK_LIMIT) {
@@ -91,4 +74,3 @@ export function normalizeCreatorProfileLinks(links) {
     };
   });
 }
-
