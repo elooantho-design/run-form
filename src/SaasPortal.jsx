@@ -58,6 +58,7 @@ import PortalIntersaisonTab from "@/components/PortalIntersaisonTab";
 import PortalGuildsTab from "@/components/PortalGuildsTab";
 import CommunityMembersTab from "@/components/CommunityMembersTab";
 import CreatorProfileSettings from "@/components/CreatorProfileSettings";
+import GuildBossPlacementTab from "@/components/GuildBossPlacementTab";
 import PveLibraryTab from "@/components/PveLibraryTab";
 import SupportProjectTab from "@/components/SupportProjectTab";
 import { logPortalActivity } from "@/lib/portalActivity";
@@ -106,6 +107,7 @@ import {
   isPortalCommunityRole,
   isPortalCommunitySession,
 } from "@/lib/portalPermissions";
+import { GUILD_BOSS_PLACEMENT_TOOL_ID } from "@/lib/guildBossPlacement";
 
 const navigation = [
   { id: "home", label: "Accueil", labelKey: "nav.home", icon: LayoutDashboard },
@@ -334,6 +336,17 @@ const pveContentBlueprints = [
     categorySortOrder: 20,
   },
   {
+    slug: GUILD_BOSS_PLACEMENT_TOOL_ID,
+    name: "Placement BDG",
+    description: "Outil local de placement Boss de guilde",
+    stageCount: 0,
+    sortOrder: 15,
+    categorySlug: "guild-boss",
+    categoryName: "Boss de guilde",
+    categorySortOrder: 20,
+    localTool: GUILD_BOSS_PLACEMENT_TOOL_ID,
+  },
+  {
     slug: "titan-ruins",
     name: "Ruine de titan",
     description: "Boss de guilde - Ruine de titan",
@@ -487,6 +500,7 @@ function normalizePveContentNavItem(row) {
     stageCount: row.stage_count ?? row.stageCount ?? 0,
     sortOrder: row.sort_order ?? row.sortOrder ?? 9999,
     directNav: row.directNav ?? row.direct_nav ?? false,
+    localTool: row.localTool || row.local_tool || "",
     isActive: row.is_active ?? true,
     missingInDatabase: Boolean(row.missingInDatabase),
   };
@@ -511,7 +525,8 @@ function mergePveContentNavItems(rows = []) {
       categoryName: blueprint.categoryName,
       categorySortOrder: row?.category_sort_order ?? blueprint.categorySortOrder,
       directNav: blueprint.directNav,
-      missingInDatabase: !row?.id,
+      localTool: blueprint.localTool,
+      missingInDatabase: blueprint.localTool ? false : !row?.id,
     });
   });
 }
@@ -2016,6 +2031,7 @@ function PortalShell({ session, onLogout }) {
       String(item.slug) === String(activePveContentId),
   );
   const activePveTab = active === "pve" || active.startsWith("pve:");
+  const activePveLocalTool = activePveItem?.localTool || "";
   const mobileQuickNavigation = useMemo(
     () => [
       ...visibleNavigation,
@@ -2634,7 +2650,10 @@ function PortalShell({ session, onLogout }) {
           {active === "gvg" ? <GvgView session={session} onEditRun={openRunEditor} /> : null}
           {active === "run-search" ? <RunSearchGrid session={session} /> : null}
           {active === "support-project" ? <SupportProjectTab session={session} /> : null}
-          {activePveTab ? (
+          {activePveTab && activePveLocalTool === GUILD_BOSS_PLACEMENT_TOOL_ID ? (
+            <GuildBossPlacementTab session={session} />
+          ) : null}
+          {activePveTab && activePveLocalTool !== GUILD_BOSS_PLACEMENT_TOOL_ID ? (
             <PveLibraryTab
               session={session}
               contents={visiblePveNavigation}
