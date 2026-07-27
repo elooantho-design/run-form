@@ -45,6 +45,19 @@ const PB_ENTRY_SELECT_FALLBACK = `
   updated_at,
   champions (*)
 `;
+const MEMBER_AWAKENINGS_PAGE_SIZE = 1000;
+const MEMBER_AWAKENING_SELECT = `
+  member_id,
+  champion_id,
+  awakening_level,
+  champions (
+    id,
+    name,
+    portal_name,
+    english_name,
+    lord
+  )
+`;
 
 function createSupabaseAdminClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
@@ -226,6 +239,36 @@ async function getScopedMembers(supabase, actor, options = {}) {
   return filterMembersForActor(allMembers, actor, options).map(serializeMember);
 }
 
+export async function fetchMemberAwakeningsPageByPage(supabase, memberIds, options = {}) {
+  const cleanMemberIds = Array.from(new Set((memberIds || []).map((value) => cleanText(value)).filter(Boolean)));
+  if (!cleanMemberIds.length) return [];
+
+  const pageSize = Number.isInteger(options.pageSize) && options.pageSize > 0 ? options.pageSize : MEMBER_AWAKENINGS_PAGE_SIZE;
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabase
+      .from("member_awakenings")
+      .select(MEMBER_AWAKENING_SELECT)
+      .in("member_id", cleanMemberIds)
+      .order("member_id", { ascending: true })
+      .order("champion_id", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const pageRows = data || [];
+    rows.push(...pageRows);
+
+    if (pageRows.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return rows;
+}
+
 function pickSelectedMemberForActor(members, actor, requestedId) {
   const requestedKey = String(requestedId || "");
   if (requestedKey) {
@@ -330,21 +373,9 @@ async function handlePersonalBest(req, res, supabase, actor, body) {
     });
   }
 
-  const awakeningsResult = await supabase
-    .from("member_awakenings")
-    .select(
-      `
-        member_id,
-        awakening_level,
-        champion_id,
-        champions (*)
-      `,
-    )
-    .in("member_id", memberIds);
-  if (awakeningsResult.error) throw awakeningsResult.error;
-
   const awakeningsByMember = new Map();
-  (awakeningsResult.data || []).forEach((row) => {
+  const memberAwakenings = await fetchMemberAwakeningsPageByPage(supabase, memberIds);
+  memberAwakenings.forEach((row) => {
     const key = String(row.member_id || "");
     if (!awakeningsByMember.has(key)) awakeningsByMember.set(key, []);
     awakeningsByMember.get(key).push(row);
