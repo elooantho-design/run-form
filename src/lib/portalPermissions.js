@@ -5,7 +5,6 @@ const COMMUNITY_MAIN_TABS = new Set([
   "soul-stones",
   "demon-monsters",
   "personal-best",
-  "support-project",
 ]);
 const COMMUNITY_HOME_TARGETS = new Set([
   "",
@@ -42,12 +41,11 @@ export function isPortalCommunitySession(session) {
 }
 
 export function canShowPortalNavItem(item, session, portalAccess) {
-  if (isPortalCommunitySession(session)) {
-    return COMMUNITY_MAIN_TABS.has(item.id);
-  }
+  if (item.id === "support-project") return Boolean(portalAccess?.canUseSupportProject);
+
+  if (isPortalCommunitySession(session)) return COMMUNITY_MAIN_TABS.has(item.id);
 
   if (item.id === "home" || item.id === "settings") return true;
-  if (item.id === "support-project") return true;
   if (item.id === "gvg") return Boolean(portalAccess?.canUseGvg);
   if (item.id === "run-search") return Boolean(portalAccess?.canSearchRuns);
   return Boolean(portalAccess?.canUsePortalCore);

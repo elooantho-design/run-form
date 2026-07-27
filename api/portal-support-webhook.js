@@ -104,6 +104,7 @@ async function insertWebhookEvent(event) {
     provider: "stripe",
     event_id: event.id,
     event_type: event.type,
+    livemode: Boolean(event.livemode),
     status: "processing",
     metadata: {
       api_version: event.api_version || "",
@@ -160,13 +161,15 @@ async function findSubscriptionContext(subscriptionId, customerId) {
 
 async function handleCheckoutSessionCompleted(session) {
   const supportType = normalizeSupportType(getStripeMetadata(session).support_type);
-  const status = supportType === "monthly" ? "active" : "confirmed";
-  const paidAt = supportType === "monthly" ? null : stripeTimestampToIso(session.created);
+  const oneTimePaid = session.payment_status === "paid";
+  const status = supportType === "monthly" ? "active" : oneTimePaid ? "confirmed" : "pending";
+  const paidAt = supportType === "monthly" || !oneTimePaid ? null : stripeTimestampToIso(session.created);
 
   await updatePaymentByMetadataOrSession(session, {
     status,
     amount_cents: Number(session.amount_total || session.amount_subtotal || 0),
     currency: cleanText(session.currency || PORTAL_SUPPORT_CONFIG.currency).toLowerCase(),
+    livemode: Boolean(session.livemode),
     stripe_checkout_session_id: session.id || null,
     stripe_payment_intent_id: session.payment_intent || null,
     stripe_subscription_id: session.subscription || null,
@@ -175,6 +178,7 @@ async function handleCheckoutSessionCompleted(session) {
     metadata: {
       stripe_payment_status: session.payment_status || "",
       checkout_mode: session.mode || "",
+      livemode: Boolean(session.livemode),
       completed_at: new Date().toISOString(),
     },
   });
@@ -183,11 +187,13 @@ async function handleCheckoutSessionCompleted(session) {
 async function handleCheckoutSessionAsyncFailed(session) {
   await updatePaymentByMetadataOrSession(session, {
     status: "failed",
+    livemode: Boolean(session.livemode),
     stripe_checkout_session_id: session.id || null,
     stripe_payment_intent_id: session.payment_intent || null,
     stripe_customer_id: session.customer || null,
     metadata: {
       stripe_payment_status: session.payment_status || "",
+      livemode: Boolean(session.livemode),
       failed_at: new Date().toISOString(),
     },
   });
@@ -208,6 +214,7 @@ async function handleInvoicePaid(invoice) {
     amount_cents: Number(invoice.amount_paid || 0),
     currency: cleanText(invoice.currency || PORTAL_SUPPORT_CONFIG.currency).toLowerCase(),
     status: "confirmed",
+    livemode: Boolean(invoice.livemode),
     paid_at: paidAt,
     member_id: context?.member_id || cleanText(metadata.portal_member_id, 80) || null,
     donor_public_name: context?.donor_public_name || null,
@@ -220,6 +227,7 @@ async function handleInvoicePaid(invoice) {
     metadata: {
       invoice_number: invoice.number || "",
       billing_reason: invoice.billing_reason || "",
+      livemode: Boolean(invoice.livemode),
       handled_at: new Date().toISOString(),
     },
   };
@@ -258,6 +266,7 @@ async function handleInvoicePaymentFailed(invoice) {
     amount_cents: Number(invoice.amount_due || invoice.amount_remaining || 0),
     currency: cleanText(invoice.currency || PORTAL_SUPPORT_CONFIG.currency).toLowerCase(),
     status: "failed",
+    livemode: Boolean(invoice.livemode),
     member_id: context?.member_id || null,
     stripe_invoice_id: invoiceId,
     stripe_subscription_id: cleanText(subscriptionId, 120) || null,
@@ -265,6 +274,7 @@ async function handleInvoicePaymentFailed(invoice) {
     metadata: {
       invoice_number: invoice.number || "",
       billing_reason: invoice.billing_reason || "",
+      livemode: Boolean(invoice.livemode),
       failed_at: new Date().toISOString(),
     },
   };
@@ -296,10 +306,12 @@ async function handleSubscriptionEvent(subscription, eventType) {
     .from("portal_support_payments")
     .update({
       status,
+      livemode: Boolean(subscription.livemode),
       stripe_customer_id: subscription.customer || null,
       metadata: {
         stripe_subscription_status: subscription.status || "",
         current_period_end: subscription.current_period_end || null,
+        livemode: Boolean(subscription.livemode),
         handled_event: eventType,
         handled_at: new Date().toISOString(),
       },
@@ -314,13 +326,28 @@ async function handleChargeRefunded(charge) {
   const paymentIntentId = cleanText(charge.payment_intent, 120);
   if (!paymentIntentId) return;
 
+  const amountRefundedCents = Math.max(0, Number(charge.amount_refunded || 0));
+  const existing = await supabase
+    .from("portal_support_payments")
+    .select("id, amount_cents")
+    .eq("stripe_payment_intent_id", paymentIntentId)
+    .maybeSingle();
+
+  if (existing.error) throw existing.error;
+
+  const amountCents = Number(existing.data?.amount_cents || charge.amount || 0);
+  const fullyRefunded = Boolean(charge.refunded) || (amountCents > 0 && amountRefundedCents >= amountCents);
+
   const { error } = await supabase
     .from("portal_support_payments")
     .update({
-      status: "refunded",
+      status: fullyRefunded ? "refunded" : "confirmed",
+      livemode: Boolean(charge.livemode),
+      amount_refunded_cents: amountRefundedCents,
       metadata: {
         refunded: Boolean(charge.refunded),
-        amount_refunded: charge.amount_refunded || 0,
+        amount_refunded: amountRefundedCents,
+        livemode: Boolean(charge.livemode),
         refunded_at: new Date().toISOString(),
       },
     })

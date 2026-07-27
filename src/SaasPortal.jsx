@@ -115,7 +115,7 @@ const navigation = [
   { id: "defenses", label: "Mes defenses", labelKey: "nav.defenses", icon: Bot },
   { id: "gvg", label: "GVG", labelKey: "nav.gvg", icon: Shield },
   { id: "run-search", label: "Recherche de run", labelKey: "nav.runSearch", icon: Search },
-  // { id: "support-project", label: "Soutenir le projet", labelKey: "nav.supportProject", icon: HeartHandshake },
+  { id: "support-project", label: "Soutenir le projet", labelKey: "nav.supportProject", icon: HeartHandshake },
   { id: "settings", label: "Parametres", labelKey: "nav.settings", icon: Settings },
 ];
 
@@ -1950,6 +1950,7 @@ function PortalShell({ session, onLogout }) {
   const [portalLicenseLoaded, setPortalLicenseLoaded] = useState(false);
   const [pveContents, setPveContents] = useState(() => mergePveContentNavItems([]));
   const [pveContentsLoaded, setPveContentsLoaded] = useState(false);
+  const [supportPublicEnabled, setSupportPublicEnabled] = useState(false);
   const [editRunInitialId, setEditRunInitialId] = useState("");
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
@@ -1961,12 +1962,14 @@ function PortalShell({ session, onLogout }) {
   const guildScopeDescription = getGuildScopeDescription(session);
   const portalAccess = useMemo(
     () => {
-      if (isPaladinUser) return getPaladinLicenseAccess();
-      if (isCommunityUser) return getPortalLicenseAccess({ plan: "manual", status: "active" });
-      if (!portalLicenseLoaded) return getPortalLicenseAccess({ plan: "suspended", status: "suspended" });
-      return getPortalLicenseAccess(portalLicense || { plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" });
+      const canUseSupportProject = isLeaderUser || supportPublicEnabled;
+      const withSupportAccess = (access) => ({ ...access, canUseSupportProject });
+      if (isPaladinUser) return withSupportAccess(getPaladinLicenseAccess());
+      if (isCommunityUser) return withSupportAccess(getPortalLicenseAccess({ plan: "manual", status: "active" }));
+      if (!portalLicenseLoaded) return withSupportAccess(getPortalLicenseAccess({ plan: "suspended", status: "suspended" }));
+      return withSupportAccess(getPortalLicenseAccess(portalLicense || { plan: DEFAULT_EXTERNAL_LICENSE_PLAN, status: "active" }));
     },
-    [isCommunityUser, isPaladinUser, portalLicense, portalLicenseLoaded],
+    [isCommunityUser, isLeaderUser, isPaladinUser, portalLicense, portalLicenseLoaded, supportPublicEnabled],
   );
   const visibleNavigation = useMemo(
     () =>
@@ -2054,6 +2057,30 @@ function PortalShell({ session, onLogout }) {
       setActive("home");
     }
   }, [active, canUsePve, visibleAdminNavigation, visibleNavigation]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSupportAccess() {
+      try {
+        const response = await fetch(`${getApiBase()}/api/portal-support?intent=access`, {
+          method: "GET",
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || "Support access unavailable.");
+        if (!cancelled) setSupportPublicEnabled(Boolean(payload?.config?.publicEnabled));
+      } catch {
+        if (!cancelled) setSupportPublicEnabled(false);
+      }
+    }
+
+    void loadSupportAccess();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.memberId]);
 
   useEffect(() => {
     let cancelled = false;

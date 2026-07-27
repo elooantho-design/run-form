@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   PORTAL_SUPPORT_CONFIG,
   centsToEuros,
+  isPortalSupportLiveMode,
 } from "../src/lib/portalSupportConfig.js";
 import {
   applyPortalCorsHeaders,
@@ -22,7 +23,14 @@ function cleanText(value, maxLength = 500) {
 
 function isMissingSupportTable(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
-  return error?.code === "42P01" || error?.code === "PGRST205" || message.includes("portal_support_payments");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST204" ||
+    error?.code === "PGRST205" ||
+    message.includes("portal_support_payments") ||
+    message.includes("amount_refunded_cents") ||
+    message.includes("livemode")
+  );
 }
 
 function getMonthlyTargetCents() {
@@ -32,13 +40,17 @@ function getMonthlyTargetCents() {
 }
 
 function serializePayment(row) {
+  const amountRefundedCents = Number(row.amount_refunded_cents || 0);
+  const netAmountCents = Math.max(0, Number(row.amount_cents || 0) - amountRefundedCents);
   return {
     id: row.id,
     createdAt: row.created_at || null,
     paidAt: row.paid_at || null,
     supportType: row.support_type || "",
-    amountCents: row.amount_cents || 0,
-    amountEuros: centsToEuros(row.amount_cents || 0),
+    amountCents: netAmountCents,
+    grossAmountCents: row.amount_cents || 0,
+    amountRefundedCents,
+    amountEuros: centsToEuros(netAmountCents),
     currency: row.currency || PORTAL_SUPPORT_CONFIG.currency,
     status: row.status || "",
     memberId: row.member_id || null,
@@ -46,7 +58,9 @@ function serializePayment(row) {
     donorMessage: row.donor_message || "",
     displayPublicly: Boolean(row.display_publicly),
     anonymous: Boolean(row.anonymous),
+    livemode: Boolean(row.livemode),
     stripeCheckoutSessionId: row.stripe_checkout_session_id || "",
+    stripePaymentIntentId: row.stripe_payment_intent_id || "",
     stripeSubscriptionId: row.stripe_subscription_id || "",
     stripeInvoiceId: row.stripe_invoice_id || "",
   };
@@ -65,7 +79,7 @@ async function listAdminData(req, res) {
   const { data, error } = await supabase
     .from("portal_support_payments")
     .select(
-      "id, created_at, paid_at, support_type, amount_cents, currency, status, member_id, donor_public_name, donor_message, display_publicly, anonymous, stripe_checkout_session_id, stripe_subscription_id, stripe_invoice_id",
+      "id, created_at, paid_at, support_type, amount_cents, amount_refunded_cents, currency, status, member_id, donor_public_name, donor_message, display_publicly, anonymous, livemode, stripe_checkout_session_id, stripe_payment_intent_id, stripe_subscription_id, stripe_invoice_id",
     )
     .order("created_at", { ascending: false })
     .limit(160);
@@ -92,9 +106,11 @@ async function listAdminData(req, res) {
   }
 
   const rows = data || [];
-  const confirmedRows = rows.filter((row) => row.status === "confirmed");
+  const currentLivemode = isPortalSupportLiveMode(process.env);
+  const modeRows = rows.filter((row) => Boolean(row.livemode) === currentLivemode);
+  const confirmedRows = modeRows.filter((row) => row.status === "confirmed");
   const activeMonthlySubscriptions = new Set(
-    rows
+    modeRows
       .filter((row) => row.support_type === "monthly" && ["active", "confirmed"].includes(row.status) && row.stripe_subscription_id)
       .map((row) => row.stripe_subscription_id),
   );
@@ -103,13 +119,22 @@ async function listAdminData(req, res) {
     schemaReady: true,
     payments: rows.map(serializePayment),
     summary: {
-      confirmedCents: confirmedRows.reduce((total, row) => total + Number(row.amount_cents || 0), 0),
+      confirmedCents: confirmedRows.reduce(
+        (total, row) => total + Math.max(0, Number(row.amount_cents || 0) - Number(row.amount_refunded_cents || 0)),
+        0,
+      ),
       monthlyConfirmedCents: confirmedRows
         .filter((row) => row.support_type === "monthly")
-        .reduce((total, row) => total + Number(row.amount_cents || 0), 0),
+        .reduce(
+          (total, row) => total + Math.max(0, Number(row.amount_cents || 0) - Number(row.amount_refunded_cents || 0)),
+          0,
+        ),
       oneTimeConfirmedCents: confirmedRows
         .filter((row) => row.support_type !== "monthly")
-        .reduce((total, row) => total + Number(row.amount_cents || 0), 0),
+        .reduce(
+          (total, row) => total + Math.max(0, Number(row.amount_cents || 0) - Number(row.amount_refunded_cents || 0)),
+          0,
+        ),
       activeMonthlyCount: activeMonthlySubscriptions.size,
       targetCents: getMonthlyTargetCents(),
     },
@@ -141,7 +166,7 @@ async function updateVisibility(req, res, body) {
     .update(payload)
     .eq("id", paymentId)
     .select(
-      "id, created_at, paid_at, support_type, amount_cents, currency, status, member_id, donor_public_name, donor_message, display_publicly, anonymous, stripe_checkout_session_id, stripe_subscription_id, stripe_invoice_id",
+      "id, created_at, paid_at, support_type, amount_cents, amount_refunded_cents, currency, status, member_id, donor_public_name, donor_message, display_publicly, anonymous, livemode, stripe_checkout_session_id, stripe_payment_intent_id, stripe_subscription_id, stripe_invoice_id",
     )
     .single();
 

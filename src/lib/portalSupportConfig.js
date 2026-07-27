@@ -7,6 +7,31 @@ export const PORTAL_SUPPORT_CONFIG = {
   productName: "Soutien Portal",
 };
 
+function normalizeSupportText(value) {
+  return String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+export function isPortalSupportPublicEnabled(env = {}) {
+  const value = normalizeSupportText(env.PORTAL_SUPPORT_PUBLIC_ENABLED);
+  return value === "true" || value === "1" || value === "yes" || value === "on" || value === "enabled";
+}
+
+export function isPortalSupportLiveMode(env = {}) {
+  const secretKey = String(env.STRIPE_SECRET_KEY || "").trim();
+  if (secretKey.startsWith("sk_live_")) return true;
+  if (secretKey.startsWith("sk_test_")) return false;
+  return false;
+}
+
+export function canPortalMemberUseSupport(member, env = {}) {
+  if (isPortalSupportPublicEnabled(env)) return true;
+  return normalizeSupportText(member?.role) === "leader";
+}
+
 export function normalizeSupportType(value) {
   return value === "monthly" ? "monthly" : "one_time";
 }

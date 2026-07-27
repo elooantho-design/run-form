@@ -2,9 +2,12 @@
 import { createClient } from "@supabase/supabase-js";
 import {
   PORTAL_SUPPORT_CONFIG,
+  canPortalMemberUseSupport,
   centsToEuros,
   getSupportTypeLabel,
   getSupportAmountLimitsCents,
+  isPortalSupportLiveMode,
+  isPortalSupportPublicEnabled,
   normalizeSupportType,
   validateSupportAmountCents,
 } from "../src/lib/portalSupportConfig.js";
@@ -27,7 +30,14 @@ function cleanText(value, maxLength = 500) {
 
 function isMissingSupportTable(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
-  return error?.code === "42P01" || error?.code === "PGRST205" || message.includes("portal_support_payments");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST204" ||
+    error?.code === "PGRST205" ||
+    message.includes("portal_support_payments") ||
+    message.includes("amount_refunded_cents") ||
+    message.includes("livemode")
+  );
 }
 
 function getMonthlyTargetCents() {
@@ -50,12 +60,6 @@ function getRequestOrigin(req) {
   const protocol = cleanText(req.headers?.["x-forwarded-proto"]) || "https";
   const host = cleanText(req.headers?.["x-forwarded-host"] || req.headers?.host);
   return host ? `${protocol}://${host}` : "http://localhost:5174";
-}
-
-async function getOptionalPortalSession(req) {
-  const result = await getPortalSession(req, supabase);
-  if (!result?.error) return result;
-  return { member: null, session: null };
 }
 
 function appendFormValue(form, key, value) {
@@ -100,11 +104,12 @@ async function stripeRequest(path, formValues, idempotencyKey = "") {
 }
 
 function serializePayment(row) {
+  const amountCents = Math.max(0, Number(row.amount_cents || 0) - Number(row.amount_refunded_cents || 0));
   return {
     id: row.id,
     supportType: row.support_type,
-    amountCents: row.amount_cents || 0,
-    amountEuros: centsToEuros(row.amount_cents || 0),
+    amountCents,
+    amountEuros: centsToEuros(amountCents),
     currency: row.currency || PORTAL_SUPPORT_CONFIG.currency,
     status: row.status || "",
     paidAt: row.paid_at || null,
@@ -112,24 +117,64 @@ function serializePayment(row) {
     donorMessage: row.donor_message || "",
     displayPublicly: Boolean(row.display_publicly),
     anonymous: Boolean(row.anonymous),
+    livemode: Boolean(row.livemode),
   };
 }
 
+async function requireSupportAccess(req, res) {
+  const sessionResult = await requirePortalSession(req, supabase);
+  if (sessionResult.error) {
+    sendPortalJson(res, sessionResult.status || 401, { error: sessionResult.error }, req);
+    return null;
+  }
+
+  if (!canPortalMemberUseSupport(sessionResult.member, process.env)) {
+    sendPortalJson(res, 403, { error: "Soutien Portal ferme pour le moment." }, req);
+    return null;
+  }
+
+  return sessionResult;
+}
+
+async function readSupportAccess(req, res) {
+  const sessionResult = await getPortalSession(req, supabase);
+  const member = sessionResult?.error ? null : sessionResult.member;
+  const publicEnabled = isPortalSupportPublicEnabled(process.env);
+  const canUseSupport = member ? canPortalMemberUseSupport(member, process.env) : publicEnabled;
+
+  sendPortalJson(res, 200, {
+    config: {
+      publicEnabled,
+      livemode: isPortalSupportLiveMode(process.env),
+    },
+    access: {
+      canUseSupport,
+      leaderOnly: !publicEnabled,
+    },
+  }, req);
+}
+
 async function readSupportSummary(req, res) {
+  const supportAccess = await requireSupportAccess(req, res);
+  if (!supportAccess) return;
+
   const { start, end } = getCurrentMonthRange();
   const targetCents = getMonthlyTargetCents();
+  const livemode = isPortalSupportLiveMode(process.env);
 
   const [monthlyResult, publicResult] = await Promise.all([
     supabase
       .from("portal_support_payments")
-      .select("amount_cents, support_type, paid_at")
+      .select("amount_cents, amount_refunded_cents, support_type, paid_at")
       .eq("status", "confirmed")
+      .eq("livemode", livemode)
       .gte("paid_at", start.toISOString())
       .lt("paid_at", end.toISOString()),
     supabase
       .from("portal_support_payments")
-      .select("id, support_type, amount_cents, currency, status, paid_at, donor_public_name, donor_message, display_publicly, anonymous")
+      .select("id, support_type, amount_cents, amount_refunded_cents, currency, status, paid_at, donor_public_name, donor_message, display_publicly, anonymous, livemode")
       .eq("status", "confirmed")
+      .eq("livemode", livemode)
       .eq("display_publicly", true)
       .eq("anonymous", false)
       .order("paid_at", { ascending: false })
@@ -154,10 +199,13 @@ async function readSupportSummary(req, res) {
   }
 
   const monthlyRows = monthlyResult.data || [];
-  const currentMonthCents = monthlyRows.reduce((total, row) => total + Number(row.amount_cents || 0), 0);
+  const currentMonthCents = monthlyRows.reduce(
+    (total, row) => total + Math.max(0, Number(row.amount_cents || 0) - Number(row.amount_refunded_cents || 0)),
+    0,
+  );
   const monthlyRecurringCents = monthlyRows
     .filter((row) => row.support_type === "monthly")
-    .reduce((total, row) => total + Number(row.amount_cents || 0), 0);
+    .reduce((total, row) => total + Math.max(0, Number(row.amount_cents || 0) - Number(row.amount_refunded_cents || 0)), 0);
 
   sendPortalJson(res, 200, {
     schemaReady: true,
@@ -184,6 +232,8 @@ function buildPublicConfig(targetCents) {
     minAmountEuros: centsToEuros(minCents),
     maxAmountEuros: centsToEuros(maxCents),
     monthlyTargetEuros: centsToEuros(targetCents),
+    publicEnabled: isPortalSupportPublicEnabled(process.env),
+    livemode: isPortalSupportLiveMode(process.env),
   };
 }
 
@@ -200,6 +250,9 @@ function buildEmptySummary(targetCents) {
 }
 
 async function createCheckout(req, res, body) {
+  const sessionResult = await requireSupportAccess(req, res);
+  if (!sessionResult) return;
+
   const supportType = normalizeSupportType(body.supportType || body.support_type);
   const amountCents = Number.isFinite(Number(body.amountCents))
     ? Math.round(Number(body.amountCents))
@@ -213,8 +266,8 @@ async function createCheckout(req, res, body) {
     return;
   }
 
-  const sessionResult = await getOptionalPortalSession(req);
-  const member = sessionResult.member || null;
+  const member = sessionResult.member;
+  const livemode = isPortalSupportLiveMode(process.env);
   const displayPublicly = Boolean(body.displayPublicly || body.display_publicly);
   const anonymous = displayPublicly ? Boolean(body.anonymous) : true;
   const donorPublicName = anonymous
@@ -230,6 +283,7 @@ async function createCheckout(req, res, body) {
       amount_cents: validation.amountCents,
       currency: PORTAL_SUPPORT_CONFIG.currency,
       status: "pending",
+      livemode,
       member_id: member?.id || null,
       donor_public_name: donorPublicName || null,
       donor_message: donorMessage || null,
@@ -238,6 +292,7 @@ async function createCheckout(req, res, body) {
       metadata: {
         created_from: "portal",
         member_name: member?.watcher_name || "",
+        livemode,
         created_at: nowIso,
       },
     })
@@ -271,12 +326,14 @@ async function createCheckout(req, res, body) {
     "metadata[support_type]": supportType,
     "metadata[portal_member_id]": member?.id || "",
     "metadata[portal_member_name]": member?.watcher_name || "",
+    "metadata[portal_livemode]": livemode ? "true" : "false",
   };
 
   if (supportType === "monthly") {
     form["line_items[0][price_data][recurring][interval]"] = "month";
     form["subscription_data[metadata][portal_support_payment_id]"] = paymentId;
     form["subscription_data[metadata][portal_member_id]"] = member?.id || "";
+    form["subscription_data[metadata][portal_livemode]"] = livemode ? "true" : "false";
   }
 
   try {
@@ -292,10 +349,12 @@ async function createCheckout(req, res, body) {
         stripe_checkout_session_id: checkoutSession.id || null,
         stripe_customer_id: checkoutSession.customer || null,
         stripe_subscription_id: checkoutSession.subscription || null,
+        livemode: Boolean(checkoutSession.livemode),
         metadata: {
           created_from: "portal",
           checkout_mode: mode,
           member_name: member?.watcher_name || "",
+          livemode: Boolean(checkoutSession.livemode),
           stripe_checkout_created_at: new Date().toISOString(),
         },
       })
@@ -325,11 +384,8 @@ async function createCheckout(req, res, body) {
 }
 
 async function createCustomerPortal(req, res) {
-  const sessionResult = await requirePortalSession(req, supabase);
-  if (sessionResult.error) {
-    sendPortalJson(res, sessionResult.status || 401, { error: sessionResult.error }, req);
-    return;
-  }
+  const sessionResult = await requireSupportAccess(req, res);
+  if (!sessionResult) return;
 
   const customerResult = await supabase
     .from("portal_support_payments")
@@ -392,6 +448,11 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "GET") {
+      const intent = cleanText(req.query?.intent || req.query?.action).toLowerCase();
+      if (intent === "access") {
+        await readSupportAccess(req, res);
+        return;
+      }
       await readSupportSummary(req, res);
       return;
     }

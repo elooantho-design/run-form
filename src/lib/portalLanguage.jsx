@@ -1005,6 +1005,7 @@ const PORTAL_TRANSLATIONS = {
   "support.tableDate": "Date",
   "support.tableType": "Type",
   "support.tableAmount": "Amount",
+  "support.tableMode": "Mode",
   "support.tableStatus": "Status",
   "support.tablePublic": "Public",
   "support.tableActions": "Actions",
@@ -1029,6 +1030,8 @@ const PORTAL_TRANSLATIONS = {
   "support.statusFailed": "Failed",
   "support.statusRefunded": "Refunded",
   "support.statusCanceled": "Canceled",
+  "support.modeLive": "Live",
+  "support.modeTest": "Test",
 };
 
 function translate(language, key, fallback) {

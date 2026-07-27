@@ -27,6 +27,8 @@ const DEFAULT_PUBLIC_CONFIG = {
   minAmountEuros: PORTAL_SUPPORT_CONFIG.minAmountEuros,
   maxAmountEuros: PORTAL_SUPPORT_CONFIG.maxAmountEuros,
   monthlyTargetEuros: PORTAL_SUPPORT_CONFIG.monthlyTargetEuros,
+  publicEnabled: false,
+  livemode: false,
 };
 
 function getApiBase() {
@@ -74,6 +76,10 @@ function statusLabel(status, t) {
   if (normalized === "refunded") return t("support.statusRefunded", "Rembourse");
   if (normalized === "canceled") return t("support.statusCanceled", "Annule");
   return normalized || "-";
+}
+
+function modeLabel(livemode, t) {
+  return livemode ? t("support.modeLive", "Live") : t("support.modeTest", "Test");
 }
 
 function readSupportReturnState() {
@@ -556,6 +562,7 @@ export default function SupportProjectTab({ session }) {
                   <th className="px-3 py-3">{t("support.tableDate", "Date")}</th>
                   <th className="px-3 py-3">{t("support.tableType", "Type")}</th>
                   <th className="px-3 py-3">{t("support.tableAmount", "Montant")}</th>
+                  <th className="px-3 py-3">{t("support.tableMode", "Mode")}</th>
                   <th className="px-3 py-3">{t("support.tableStatus", "Statut")}</th>
                   <th className="px-3 py-3">{t("support.tablePublic", "Public")}</th>
                   <th className="px-3 py-3 text-right">{t("support.tableActions", "Actions")}</th>
@@ -569,6 +576,15 @@ export default function SupportProjectTab({ session }) {
                       {payment.supportType === "monthly" ? t("support.monthly", "Soutien mensuel") : t("support.oneTime", "Soutien ponctuel")}
                     </td>
                     <td className="px-3 py-3 font-semibold text-zinc-100">{formatCurrency(payment.amountCents, language)}</td>
+                    <td className="px-3 py-3">
+                      <Badge className={`border ${
+                        payment.livemode
+                          ? "border-emerald-400/30 bg-emerald-950/40 text-emerald-100"
+                          : "border-amber-400/30 bg-amber-950/35 text-amber-100"
+                      }`}>
+                        {modeLabel(payment.livemode, t)}
+                      </Badge>
+                    </td>
                     <td className="px-3 py-3">{statusLabel(payment.status, t)}</td>
                     <td className="px-3 py-3">{payment.displayPublicly && !payment.anonymous ? payment.donorPublicName || "-" : t("support.anonymous", "Anonyme")}</td>
                     <td className="px-3 py-3 text-right">
