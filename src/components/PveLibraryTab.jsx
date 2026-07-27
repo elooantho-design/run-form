@@ -539,8 +539,33 @@ function CreatorProfileModal({
   onSearchMembers,
   onLinkMember,
   onUnlinkMember,
+  onSaveProfile,
   t,
 }) {
+  const [profileBioDraft, setProfileBioDraft] = useState("");
+  const [profileLinksDraft, setProfileLinksDraft] = useState([]);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileEditMessage, setProfileEditMessage] = useState("");
+  const [profileEditError, setProfileEditError] = useState("");
+
+  const profileLinkLimit = Math.max(1, Number(profile?.linkLimit || 10));
+  const canAddProfileLink = profileLinksDraft.length < profileLinkLimit;
+
+  useEffect(() => {
+    if (!open || !profile?.id) {
+      setProfileBioDraft("");
+      setProfileLinksDraft([]);
+      setProfileEditMessage("");
+      setProfileEditError("");
+      return;
+    }
+
+    setProfileBioDraft(profile.bio || "");
+    setProfileLinksDraft(Array.isArray(profile.links) ? profile.links : []);
+    setProfileEditMessage("");
+    setProfileEditError("");
+  }, [open, profile?.id]);
+
   useEffect(() => {
     if (!open) return undefined;
 
@@ -555,6 +580,69 @@ function CreatorProfileModal({
   if (!open) return null;
 
   const title = profile?.name || t("pve.creatorProfile", "Profil createur");
+
+  const addProfileLinkDraft = () => {
+    if (!canAddProfileLink) return;
+    setProfileLinksDraft((previous) => [
+      ...previous,
+      {
+        id: `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        title: "",
+        url: "",
+        platform: "link",
+        sortOrder: previous.length,
+      },
+    ]);
+  };
+
+  const updateProfileLinkDraft = (index, field, value) => {
+    setProfileLinksDraft((previous) =>
+      previous.map((link, currentIndex) =>
+        currentIndex === index
+          ? {
+              ...link,
+              [field]: value,
+            }
+          : link,
+      ),
+    );
+  };
+
+  const removeProfileLinkDraft = (index) => {
+    setProfileLinksDraft((previous) => previous.filter((_, currentIndex) => currentIndex !== index));
+  };
+
+  const saveProfileDraft = async (event) => {
+    event.preventDefault();
+    if (!profile?.canEdit || profileSaving || !onSaveProfile) return;
+
+    setProfileSaving(true);
+    setProfileEditMessage("");
+    setProfileEditError("");
+
+    try {
+      const nextProfile = await onSaveProfile({
+        bio: profileBioDraft,
+        links: profileLinksDraft
+          .map((link) => ({
+            id: link.id,
+            title: String(link.title || "").trim(),
+            url: String(link.url || "").trim(),
+          }))
+          .filter((link) => link.title || link.url),
+      });
+
+      if (nextProfile?.id) {
+        setProfileBioDraft(nextProfile.bio || "");
+        setProfileLinksDraft(Array.isArray(nextProfile.links) ? nextProfile.links : []);
+      }
+      setProfileEditMessage(t("settings.creatorProfileSaved", "Profil createur sauvegarde."));
+    } catch (saveError) {
+      setProfileEditError(saveError?.message || t("settings.creatorProfileSaveError", "Sauvegarde impossible."));
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm">
@@ -644,43 +732,152 @@ function CreatorProfileModal({
                 ) : null}
               </div>
 
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                  {t("pve.creatorBio", "Bio")}
-                </div>
-                {profile.bio ? (
-                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-200">{profile.bio}</p>
-                ) : (
-                  <p className="mt-2 text-sm text-zinc-500">{t("pve.noCreatorBio", "Aucune bio renseignee.")}</p>
-                )}
-              </div>
+              {profile.canEdit ? (
+                <form onSubmit={saveProfileDraft} className="space-y-4 rounded-2xl border border-emerald-900/60 bg-emerald-950/10 p-4">
+                  {profileEditMessage ? (
+                    <div className="rounded-xl border border-emerald-800 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-100">
+                      {profileEditMessage}
+                    </div>
+                  ) : null}
+                  {profileEditError ? (
+                    <div className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+                      {profileEditError}
+                    </div>
+                  ) : null}
 
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                  {t("pve.creatorLinks", "Liens")}
-                </div>
-                {profile.links.length ? (
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {profile.links.map((link) => (
-                      <a
-                        key={link.id || `${link.title}-${link.url}`}
-                        href={link.url}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        className="flex min-w-0 items-center gap-2 rounded-xl border border-zinc-800 bg-black/30 px-3 py-2 text-sm text-zinc-200 hover:border-emerald-700 hover:text-white"
-                      >
-                        <CreatorPlatformIcon platform={link.platform} />
-                        <span className="min-w-0 flex-1 truncate">{link.title}</span>
-                        <span className="shrink-0 text-[0.65rem] uppercase text-zinc-500">
-                          {getCreatorPlatformLabel(link.platform)}
-                        </span>
-                      </a>
-                    ))}
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label htmlFor="creator-profile-modal-bio" className="text-sm font-semibold text-zinc-300">
+                        {t("pve.creatorBio", "Bio")}
+                      </label>
+                      <span className="text-xs text-zinc-500">{profileBioDraft.length}/1000</span>
+                    </div>
+                    <textarea
+                      id="creator-profile-modal-bio"
+                      value={profileBioDraft}
+                      onChange={(event) => setProfileBioDraft(event.target.value.slice(0, 1000))}
+                      rows={5}
+                      placeholder={t("settings.creatorBioPlaceholder", "Presentation, contenu prefere, planning...")}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-600"
+                    />
                   </div>
-                ) : (
-                  <p className="mt-2 text-sm text-zinc-500">{t("pve.noCreatorLinks", "Aucun lien supplementaire.")}</p>
-                )}
-              </div>
+
+                  <div>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold text-zinc-300">{t("pve.creatorLinks", "Liens")}</div>
+                        <div className="mt-1 text-xs text-zinc-500">
+                          {t("settings.creatorLinksHelp", "Ajoute jusqu'a {count} liens publics.")
+                            .replace("{count}", String(profileLinkLimit))}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={addProfileLinkDraft}
+                        disabled={!canAddProfileLink}
+                        variant="outline"
+                        className="rounded-xl border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Link2 className="h-4 w-4" />
+                        {t("common.add", "Ajouter")}
+                      </Button>
+                    </div>
+
+                    {profileLinksDraft.length ? (
+                      <div className="space-y-2">
+                        {profileLinksDraft.map((link, index) => (
+                          <div
+                            key={link.id || `creator-profile-link-${index}`}
+                            className="grid gap-2 rounded-xl border border-zinc-800 bg-zinc-950 p-3 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_auto]"
+                          >
+                            <input
+                              type="text"
+                              value={link.title || ""}
+                              onChange={(event) => updateProfileLinkDraft(index, "title", event.target.value)}
+                              placeholder={t("settings.creatorLinkTitle", "Titre du lien")}
+                              maxLength={80}
+                              className="rounded-lg border border-zinc-800 bg-black px-3 py-2 text-sm text-white outline-none focus:border-emerald-600"
+                            />
+                            <input
+                              type="text"
+                              value={link.url || ""}
+                              onChange={(event) => updateProfileLinkDraft(index, "url", event.target.value)}
+                              placeholder="https://..."
+                              className="rounded-lg border border-zinc-800 bg-black px-3 py-2 text-sm text-white outline-none focus:border-emerald-600"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeProfileLinkDraft(index)}
+                              className="rounded-lg border border-red-800 bg-red-950/40 p-2 text-red-200 hover:bg-red-900"
+                              title={t("common.delete", "Supprimer")}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950 px-4 py-5 text-sm text-zinc-500">
+                        <Link2 className="mr-2 inline h-4 w-4" />
+                        {t("pve.noCreatorLinks", "Aucun lien supplementaire.")}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex justify-end">
+                    <Button
+                      type="submit"
+                      disabled={profileSaving}
+                      className="rounded-xl bg-emerald-600 text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {profileSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                      {profileSaving ? t("common.saving", "Sauvegarde...") : t("common.save", "Sauvegarder")}
+                    </Button>
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                      {t("pve.creatorBio", "Bio")}
+                    </div>
+                    {profile.bio ? (
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-200">{profile.bio}</p>
+                    ) : (
+                      <p className="mt-2 text-sm text-zinc-500">{t("pve.noCreatorBio", "Aucune bio renseignee.")}</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                      {t("pve.creatorLinks", "Liens")}
+                    </div>
+                    {profile.links.length ? (
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {profile.links.map((link) => (
+                          <a
+                            key={link.id || `${link.title}-${link.url}`}
+                            href={link.url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="flex min-w-0 items-center gap-2 rounded-xl border border-zinc-800 bg-black/30 px-3 py-2 text-sm text-zinc-200 hover:border-emerald-700 hover:text-white"
+                          >
+                            <CreatorPlatformIcon platform={link.platform} />
+                            <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                            <span className="shrink-0 text-[0.65rem] uppercase text-zinc-500">
+                              {getCreatorPlatformLabel(link.platform)}
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm text-zinc-500">
+                        {t("pve.noCreatorLinks", "Aucun lien supplementaire.")}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
 
               {profile.canManageLink ? (
                 <div className="rounded-2xl border border-amber-800/60 bg-amber-950/20 p-4">
@@ -1180,6 +1377,31 @@ export default function PveLibraryTab({
     } finally {
       setCreatorProfileRefreshing(false);
     }
+  };
+
+  const saveCreatorProfile = async ({ bio, links }) => {
+    if (!creatorProfile?.id) {
+      throw new Error(t("pve.creatorProfileLoadError", "Profil createur indisponible."));
+    }
+
+    const payload = await callPveCreatorsApi({
+      action: "update-profile",
+      creatorId: creatorProfile.id,
+      bio,
+      links: Array.isArray(links)
+        ? links
+            .map((link) => ({
+              id: link.id,
+              title: String(link.title || "").trim(),
+              url: String(link.url || "").trim(),
+            }))
+            .filter((link) => link.title || link.url)
+        : [],
+    });
+
+    const normalizedProfile = applyCreatorProfileToState(payload.profile);
+    setCreatorProfile(normalizedProfile);
+    return normalizedProfile;
   };
 
   const searchCreatorMembers = async (event) => {
@@ -2562,6 +2784,7 @@ export default function PveLibraryTab({
         onSearchMembers={searchCreatorMembers}
         onLinkMember={linkCreatorMember}
         onUnlinkMember={unlinkCreatorMember}
+        onSaveProfile={saveCreatorProfile}
         t={t}
       />
     </section>
