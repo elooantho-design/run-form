@@ -2004,6 +2004,7 @@ function PortalShell({ session, onLogout }) {
     () =>
       pveContents
         .filter((content) => content.isActive)
+        .filter((content) => content.localTool !== GUILD_BOSS_PLACEMENT_TOOL_ID || isLeaderUser)
         .sort((a, b) => {
           if ((a.categorySortOrder ?? 9999) !== (b.categorySortOrder ?? 9999)) {
             return (a.categorySortOrder ?? 9999) - (b.categorySortOrder ?? 9999);
@@ -2017,7 +2018,7 @@ function PortalShell({ session, onLogout }) {
             sensitivity: "base",
           });
         }),
-    [pveContents],
+    [isLeaderUser, pveContents],
   );
   const pveNavigationCategories = useMemo(
     () => buildPveNavigationCategories(visiblePveNavigation),
@@ -2032,6 +2033,9 @@ function PortalShell({ session, onLogout }) {
   );
   const activePveTab = active === "pve" || active.startsWith("pve:");
   const activePveLocalTool = activePveItem?.localTool || "";
+  const requestedPvePlacementTool =
+    active.startsWith("pve:") && String(activePveContentId).toLowerCase() === GUILD_BOSS_PLACEMENT_TOOL_ID;
+  const canRenderPvePlacementTool = activePveLocalTool === GUILD_BOSS_PLACEMENT_TOOL_ID && isLeaderUser;
   const mobileQuickNavigation = useMemo(
     () => [
       ...visibleNavigation,
@@ -2065,6 +2069,14 @@ function PortalShell({ session, onLogout }) {
     const isBaseTab = navigation.some((item) => item.id === active);
     const isVisibleBaseTab = visibleNavigation.some((item) => item.id === active);
     const isPveTab = active === "pve" || active.startsWith("pve:");
+    const forcedHiddenPveTool = requestedPvePlacementTool && !isLeaderUser;
+    const unknownPveTab = active.startsWith("pve:") && !activePveItem;
+
+    if ((forcedHiddenPveTool || unknownPveTab) && canUsePve) {
+      const fallbackPveItem = visiblePveNavigation[0];
+      setActive(fallbackPveItem ? `pve:${fallbackPveItem.navId}` : "pve");
+      return;
+    }
 
     if (
       (isAdminTab && !isVisibleAdminTab) ||
@@ -2073,7 +2085,16 @@ function PortalShell({ session, onLogout }) {
     ) {
       setActive("home");
     }
-  }, [active, canUsePve, visibleAdminNavigation, visibleNavigation]);
+  }, [
+    active,
+    activePveItem,
+    canUsePve,
+    isLeaderUser,
+    requestedPvePlacementTool,
+    visibleAdminNavigation,
+    visibleNavigation,
+    visiblePveNavigation,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2650,10 +2671,10 @@ function PortalShell({ session, onLogout }) {
           {active === "gvg" ? <GvgView session={session} onEditRun={openRunEditor} /> : null}
           {active === "run-search" ? <RunSearchGrid session={session} /> : null}
           {active === "support-project" ? <SupportProjectTab session={session} /> : null}
-          {activePveTab && activePveLocalTool === GUILD_BOSS_PLACEMENT_TOOL_ID ? (
+          {activePveTab && canRenderPvePlacementTool ? (
             <GuildBossPlacementTab session={session} />
           ) : null}
-          {activePveTab && activePveLocalTool !== GUILD_BOSS_PLACEMENT_TOOL_ID ? (
+          {activePveTab && !requestedPvePlacementTool && activePveLocalTool !== GUILD_BOSS_PLACEMENT_TOOL_ID ? (
             <PveLibraryTab
               session={session}
               contents={visiblePveNavigation}
