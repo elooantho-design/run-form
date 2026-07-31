@@ -18,24 +18,30 @@ import { fetchPortalChampions } from "@/lib/portalChampions";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
+  GUILD_BOSS_CALIBRATION_STORAGE_KEY,
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
+  GUILD_BOSS_POINT_CALIBRATION_MAP_IDS,
   GUILD_BOSS_PLACEMENT_STORAGE_KEY,
+  getGuildBossCalibrationProgress,
+  getGuildBossCellGeometry,
   getGuildBossCellLabel,
   getGuildBossMapConfig,
+  getGuildBossPointLabel,
   makeGuildBossCellKey,
   moveGuildBossHero,
+  normalizeGuildBossCellPoints,
   normalizeGuildBossDirection,
   normalizeGuildBossDrafts,
   parseGuildBossCellKey,
   placeGuildBossHero,
   removeGuildBossHero,
+  resolveGuildBossCellGeometry,
   rotateGuildBossHero,
 } from "@/lib/guildBossPlacement";
 
 const MAP_EXPORT_FILE_PREFIX = "placement-bdg";
 const HERO_LIST_LIMIT = 120;
-const CALIBRATION_STEP = 0.001;
 
 function normalizeRoleValue(role) {
   return String(role || "")
@@ -47,23 +53,6 @@ function normalizeRoleValue(role) {
 
 function isLeaderSession(session) {
   return Boolean(session?.isLeader || session?.leader || normalizeRoleValue(session?.role) === "leader");
-}
-
-function normalizeGridBounds(bounds, fallback) {
-  const base = fallback || { x: 0, y: 0, width: 1, height: 1 };
-  const next = {
-    x: Number.isFinite(Number(bounds?.x)) ? Number(bounds.x) : base.x,
-    y: Number.isFinite(Number(bounds?.y)) ? Number(bounds.y) : base.y,
-    width: Number.isFinite(Number(bounds?.width)) ? Number(bounds.width) : base.width,
-    height: Number.isFinite(Number(bounds?.height)) ? Number(bounds.height) : base.height,
-  };
-
-  next.x = Math.min(0.99, Math.max(0, next.x));
-  next.y = Math.min(0.99, Math.max(0, next.y));
-  next.width = Math.min(1 - next.x, Math.max(0.01, next.width));
-  next.height = Math.min(1 - next.y, Math.max(0.01, next.height));
-
-  return next;
 }
 
 function normalizeImageFile(value) {
@@ -120,6 +109,20 @@ function getGridRows(map) {
       cellKey: makeGuildBossCellKey(columnIndex, rowIndex),
     })),
   );
+}
+
+function getCalibrationPointKey(point) {
+  return `${Number(point?.row) || 0}:${Number(point?.col) || 0}`;
+}
+
+function parseCalibrationPointKey(pointKey) {
+  const [row, col] = String(pointKey || "")
+    .split(":")
+    .map((part) => Number(part));
+  return {
+    row: Number.isInteger(row) ? row : 0,
+    col: Number.isInteger(col) ? col : 0,
+  };
 }
 
 function getArrowRotation(direction) {
@@ -198,7 +201,7 @@ function drawDirectionArrow(ctx, { x, y, radius, direction }) {
   ctx.restore();
 }
 
-async function renderPlacementBlob({ map, placements, championById, includeGrid, language }) {
+async function renderPlacementBlob({ map, placements, championById, includeGrid, language, calibratedPoints = [] }) {
   const mapImage = await loadImage(map.imageUrl);
   const width = mapImage.naturalWidth || mapImage.width;
   const height = mapImage.naturalHeight || mapImage.height;
@@ -210,32 +213,20 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
 
   ctx.drawImage(mapImage, 0, 0, width, height);
 
-  const bounds = {
-    x: map.gridBounds.x * width,
-    y: map.gridBounds.y * height,
-    width: map.gridBounds.width * width,
-    height: map.gridBounds.height * height,
-  };
-  const cellWidth = bounds.width / map.columns;
-  const cellHeight = bounds.height / map.rows;
+  const cellGeometry = resolveGuildBossCellGeometry(map, calibratedPoints);
 
   if (includeGrid) {
     ctx.save();
     ctx.strokeStyle = "rgba(34, 211, 238, 0.72)";
     ctx.lineWidth = Math.max(2, Math.round(width * 0.0015));
-    for (let column = 0; column <= map.columns; column += 1) {
-      const x = bounds.x + column * cellWidth;
-      ctx.beginPath();
-      ctx.moveTo(x, bounds.y);
-      ctx.lineTo(x, bounds.y + bounds.height);
-      ctx.stroke();
-    }
-    for (let row = 0; row <= map.rows; row += 1) {
-      const y = bounds.y + row * cellHeight;
-      ctx.beginPath();
-      ctx.moveTo(bounds.x, y);
-      ctx.lineTo(bounds.x + bounds.width, y);
-      ctx.stroke();
+    for (let row = 1; row <= map.rows; row += 1) {
+      for (let col = 1; col <= map.columns; col += 1) {
+        const point = cellGeometry.pointsByCell.get(`${row}:${col}`);
+        if (!point) continue;
+        const cellWidth = cellGeometry.cellWidth * width;
+        const cellHeight = cellGeometry.cellHeight * height;
+        ctx.strokeRect(point.x * width - cellWidth / 2, point.y * height - cellHeight / 2, cellWidth, cellHeight);
+      }
     }
     ctx.restore();
   }
@@ -245,8 +236,11 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
     const champion = championById.get(String(placement.championId));
     if (!champion) continue;
 
-    const centerX = bounds.x + columnIndex * cellWidth + cellWidth / 2;
-    const centerY = bounds.y + rowIndex * cellHeight + cellHeight / 2;
+    const geometry = getGuildBossCellGeometry(map, calibratedPoints, columnIndex, rowIndex);
+    const centerX = geometry.centerX * width;
+    const centerY = geometry.centerY * height;
+    const cellWidth = geometry.cellWidth * width;
+    const cellHeight = geometry.cellHeight * height;
     const radius = Math.min(cellWidth, cellHeight) * 0.32;
     const imageUrl = getChampionLocalImageUrl(champion);
 
@@ -391,25 +385,53 @@ export default function GuildBossPlacementTab({ session }) {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [showCalibration, setShowCalibration] = useState(false);
-  const [calibrationBoundsByMap, setCalibrationBoundsByMap] = useState(() =>
-    Object.fromEntries(GUILD_BOSS_MAPS.map((map) => [map.id, map.gridBounds])),
-  );
+  const [selectedCalibrationPointKey, setSelectedCalibrationPointKey] = useState("");
+  const [calibrationHistory, setCalibrationHistory] = useState([]);
+  const [calibrationPointsByMap, setCalibrationPointsByMap] = useState(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(GUILD_BOSS_CALIBRATION_STORAGE_KEY) || "{}");
+      return Object.fromEntries(
+        GUILD_BOSS_MAPS.map((map) => [map.id, normalizeGuildBossCellPoints(map, parsed[map.id]?.points || parsed[map.id] || [])]),
+      );
+    } catch {
+      return {};
+    }
+  });
   const dragPayloadRef = useRef(null);
 
-  const activeGridBounds = calibrationBoundsByMap[selectedMap.id] || selectedMap.gridBounds;
-  const displayMap = useMemo(
-    () => ({
-      ...selectedMap,
-      gridBounds: normalizeGridBounds(activeGridBounds, selectedMap.gridBounds),
-    }),
-    [activeGridBounds, selectedMap],
-  );
+  const displayMap = selectedMap;
   const placements = drafts[selectedMap.id] || {};
+  const isPointCalibrationMap = GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has(selectedMap.id);
+  const isPointCalibrationActive = isLeader && showCalibration && isPointCalibrationMap;
+  const activeCalibrationPoints = useMemo(
+    () => normalizeGuildBossCellPoints(selectedMap, calibrationPointsByMap[selectedMap.id] || []),
+    [calibrationPointsByMap, selectedMap],
+  );
+  const calibrationProgress = useMemo(
+    () => getGuildBossCalibrationProgress(selectedMap, activeCalibrationPoints),
+    [activeCalibrationPoints, selectedMap],
+  );
+  const cellGeometry = useMemo(
+    () => resolveGuildBossCellGeometry(displayMap, activeCalibrationPoints),
+    [activeCalibrationPoints, displayMap],
+  );
+  const activeCalibrationPointByKey = useMemo(
+    () => new Map(activeCalibrationPoints.map((point) => [getCalibrationPointKey(point), point])),
+    [activeCalibrationPoints],
+  );
+  const calibrationCells = useMemo(() => getGridRows(displayMap).flat(), [displayMap]);
+  const canUndoCalibration = calibrationHistory.some((entry) => entry.mapId === selectedMap.id);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(GUILD_BOSS_PLACEMENT_STORAGE_KEY, JSON.stringify(drafts));
   }, [drafts]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(GUILD_BOSS_CALIBRATION_STORAGE_KEY, JSON.stringify(calibrationPointsByMap));
+  }, [calibrationPointsByMap]);
 
   useEffect(() => {
     let cancelled = false;
@@ -437,11 +459,18 @@ export default function GuildBossPlacementTab({ session }) {
 
   useEffect(() => {
     setSelectedCellKey("");
+    setSelectedCalibrationPointKey("");
   }, [selectedMapId]);
 
   useEffect(() => {
     if (!isLeader) setShowCalibration(false);
   }, [isLeader]);
+
+  useEffect(() => {
+    if (!isPointCalibrationActive) return;
+    setSelectedHeroId("");
+    setSelectedCellKey("");
+  }, [isPointCalibrationActive]);
 
   const heroOptions = useMemo(
     () =>
@@ -491,6 +520,7 @@ export default function GuildBossPlacementTab({ session }) {
   }
 
   function handleCellClick(cellKey) {
+    if (isPointCalibrationActive) return;
     const placement = placements[cellKey];
 
     if (selectedHeroId) {
@@ -511,6 +541,7 @@ export default function GuildBossPlacementTab({ session }) {
 
   function handleDrop(event, cellKey) {
     event.preventDefault();
+    if (isPointCalibrationActive) return;
     const rawPayload = event.dataTransfer.getData("application/json");
     const payload = rawPayload ? JSON.parse(rawPayload) : dragPayloadRef.current;
 
@@ -561,12 +592,14 @@ export default function GuildBossPlacementTab({ session }) {
   }
 
   function removeSelectedPlacement() {
+    if (isPointCalibrationActive) return;
     if (!selectedCellKey) return;
     commitPlacements((current) => removeGuildBossHero(current, selectedCellKey));
     setSelectedCellKey("");
   }
 
   function rotateSelectedPlacement(direction) {
+    if (isPointCalibrationActive) return;
     if (!selectedCellKey) return;
     commitPlacements((current) => rotateGuildBossHero(current, selectedCellKey, direction));
   }
@@ -578,6 +611,7 @@ export default function GuildBossPlacementTab({ session }) {
       championById,
       includeGrid: showGrid,
       language,
+      calibratedPoints: activeCalibrationPoints,
     });
   }
 
@@ -616,29 +650,138 @@ export default function GuildBossPlacementTab({ session }) {
     }
   }
 
-  function updateCalibrationBound(key, rawValue) {
-    if (!isLeader) return;
-    setCalibrationBoundsByMap((previous) => {
-      const current = normalizeGridBounds(previous[selectedMap.id] || selectedMap.gridBounds, selectedMap.gridBounds);
-      const next = normalizeGridBounds({ ...current, [key]: Number(rawValue) }, selectedMap.gridBounds);
-      return { ...previous, [selectedMap.id]: next };
+  function commitCalibrationPoints(updater) {
+    if (!isLeader || !isPointCalibrationMap) return;
+    setCalibrationPointsByMap((previous) => {
+      const current = normalizeGuildBossCellPoints(selectedMap, previous[selectedMap.id] || []);
+      const next = normalizeGuildBossCellPoints(selectedMap, typeof updater === "function" ? updater(current) : updater);
+
+      setCalibrationHistory((previousHistory) => [
+        ...previousHistory.slice(-24),
+        {
+          mapId: selectedMap.id,
+          points: current,
+        },
+      ]);
+
+      return {
+        ...previous,
+        [selectedMap.id]: next,
+      };
     });
   }
 
-  function resetCalibrationBounds() {
-    if (!isLeader) return;
-    setCalibrationBoundsByMap((previous) => ({ ...previous, [selectedMap.id]: selectedMap.gridBounds }));
+  function upsertCalibrationPoint(point) {
+    commitCalibrationPoints((current) => [
+      ...current.filter((item) => item.row !== point.row || item.col !== point.col),
+      point,
+    ]);
   }
 
-  async function copyCalibrationBounds() {
-    if (!isLeader) return;
-    const bounds = normalizeGridBounds(displayMap.gridBounds, selectedMap.gridBounds);
-    const payload = `gridBounds: { x: ${bounds.x.toFixed(4)}, y: ${bounds.y.toFixed(4)}, width: ${bounds.width.toFixed(4)}, height: ${bounds.height.toFixed(4)} }`;
+  function handleCalibrationMapClick(event) {
+    if (!isPointCalibrationActive) return;
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+
+    const replacementPoint = selectedCalibrationPointKey ? parseCalibrationPointKey(selectedCalibrationPointKey) : null;
+    const targetPoint = replacementPoint?.row && replacementPoint?.col ? replacementPoint : calibrationProgress.nextPoint;
+    if (!targetPoint) {
+      setMessage(t("pvePlacement.calibrationComplete", "Calibration Matrice complete. Selectionne un point pour le deplacer."));
+      return;
+    }
+
+    const x = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+    const y = Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height));
+    const point = {
+      row: targetPoint.row,
+      col: targetPoint.col,
+      x: Number(x.toFixed(6)),
+      y: Number(y.toFixed(6)),
+    };
+
+    upsertCalibrationPoint(point);
+    setSelectedCalibrationPointKey("");
+    setMessage(`${getGuildBossPointLabel(point)} ${t("pvePlacement.calibrationPointSaved", "enregistre.")}`);
+  }
+
+  function selectCalibrationPoint(point) {
+    if (!isLeader || !isPointCalibrationMap) return;
+    setSelectedCalibrationPointKey(getCalibrationPointKey(point));
+    setMessage(`${getGuildBossPointLabel(point)} ${t("pvePlacement.calibrationMoveHelp", "selectionne. Clique sur la carte pour le deplacer.")}`);
+  }
+
+  function undoLastCalibrationChange() {
+    if (!isLeader || !isPointCalibrationMap) return;
+    const last = [...calibrationHistory].reverse().find((entry) => entry.mapId === selectedMap.id);
+    if (!last) return;
+
+    setCalibrationPointsByMap((previous) => ({ ...previous, [selectedMap.id]: last.points }));
+    setCalibrationHistory((previousHistory) => {
+      const index = previousHistory.lastIndexOf(last);
+      return index >= 0 ? previousHistory.filter((_, itemIndex) => itemIndex !== index) : previousHistory;
+    });
+    setSelectedCalibrationPointKey("");
+    setMessage(t("pvePlacement.calibrationUndo", "Derniere action de calibration annulee."));
+  }
+
+  function resetSelectedCalibrationPoint() {
+    if (!isLeader || !isPointCalibrationMap || !selectedCalibrationPointKey) return;
+    const selectedPoint = parseCalibrationPointKey(selectedCalibrationPointKey);
+
+    commitCalibrationPoints((current) => current.filter((point) => point.row !== selectedPoint.row || point.col !== selectedPoint.col));
+    setSelectedCalibrationPointKey("");
+    setMessage(`${getGuildBossPointLabel(selectedPoint)} ${t("pvePlacement.calibrationPointReset", "a recommencer.")}`);
+  }
+
+  function removeLastCalibrationPoint() {
+    if (!isLeader || !isPointCalibrationMap || !activeCalibrationPoints.length) return;
+    const lastPoint = activeCalibrationPoints[activeCalibrationPoints.length - 1];
+
+    commitCalibrationPoints((current) => current.filter((point) => point.row !== lastPoint.row || point.col !== lastPoint.col));
+    if (selectedCalibrationPointKey === getCalibrationPointKey(lastPoint)) setSelectedCalibrationPointKey("");
+    setMessage(`${getGuildBossPointLabel(lastPoint)} ${t("pvePlacement.calibrationPointRemoved", "supprime.")}`);
+  }
+
+  function resetAllCalibrationPoints() {
+    if (!isLeader || !isPointCalibrationMap) return;
+    if (
+      activeCalibrationPoints.length &&
+      typeof window !== "undefined" &&
+      !window.confirm(t("pvePlacement.resetPointCalibrationConfirm", "Recommencer les 35 points de Matrice ?"))
+    ) {
+      return;
+    }
+
+    commitCalibrationPoints([]);
+    setSelectedCalibrationPointKey("");
+    setSelectedHeroId("");
+    setSelectedCellKey("");
+    setMessage(t("pvePlacement.pointCalibrationReset", "Calibration Matrice vide."));
+  }
+
+  async function copyCalibrationPoints() {
+    if (!isLeader || !isPointCalibrationMap) return;
+    if (!calibrationProgress.complete) {
+      setErrorMessage(t("pvePlacement.calibrationIncomplete", "Pose les 35 points avant de copier le JSON final."));
+      return;
+    }
+
+    const payload = JSON.stringify(
+      activeCalibrationPoints.map((point) => ({
+        row: point.row - 1,
+        col: point.col - 1,
+        x: point.x,
+        y: point.y,
+      })),
+      null,
+      2,
+    );
 
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(payload);
-        setMessage(t("pvePlacement.calibrationCopied", "Valeurs gridBounds copiees."));
+        setMessage(t("pvePlacement.calibrationCopied", "JSON de calibration copie."));
       } else {
         setMessage(payload);
       }
@@ -682,6 +825,7 @@ export default function GuildBossPlacementTab({ session }) {
               type="button"
               variant="outline"
               className="border-zinc-700 bg-zinc-900 text-zinc-100"
+              disabled={isPointCalibrationActive}
               onClick={() => setShowGrid((value) => !value)}
             >
               {showGrid ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
@@ -691,13 +835,19 @@ export default function GuildBossPlacementTab({ session }) {
               type="button"
               variant="outline"
               className="border-zinc-700 bg-zinc-900 text-zinc-100"
-              disabled={!history.some((entry) => entry.mapId === selectedMap.id)}
-              onClick={undoLastChange}
+              disabled={isPointCalibrationActive ? !canUndoCalibration : !history.some((entry) => entry.mapId === selectedMap.id)}
+              onClick={isPointCalibrationActive ? undoLastCalibrationChange : undoLastChange}
             >
               <Undo2 className="mr-2 h-4 w-4" />
               {t("pvePlacement.undo", "Annuler")}
             </Button>
-            <Button type="button" variant="outline" className="border-red-800/70 bg-red-950/30 text-red-100" onClick={clearMap}>
+            <Button
+              type="button"
+              variant="outline"
+              className="border-red-800/70 bg-red-950/30 text-red-100"
+              disabled={isPointCalibrationActive}
+              onClick={clearMap}
+            >
               <Trash2 className="mr-2 h-4 w-4" />
               {t("pvePlacement.clear", "Vider")}
             </Button>
@@ -746,9 +896,20 @@ export default function GuildBossPlacementTab({ session }) {
               <h3 className="text-lg font-black text-white">{t(displayMap.labelKey, displayMap.fallbackLabel)}</h3>
               <p className="text-xs text-zinc-500">
                 {displayMap.columns} {t("pvePlacement.columns", "colonnes")} x {displayMap.rows}{" "}
-                {t("pvePlacement.rows", "lignes")} - gridBounds {displayMap.gridBounds.x.toFixed(3)},{" "}
-                {displayMap.gridBounds.y.toFixed(3)}, {displayMap.gridBounds.width.toFixed(3)},{" "}
-                {displayMap.gridBounds.height.toFixed(3)}
+                {t("pvePlacement.rows", "lignes")}
+                {isPointCalibrationMap ? (
+                  <>
+                    {" "}
+                    - {activeCalibrationPoints.length}/{displayMap.columns * displayMap.rows}{" "}
+                    {t("pvePlacement.calibratedPoints", "points calibres")}
+                  </>
+                ) : (
+                  <>
+                    {" "}
+                    - gridBounds {displayMap.gridBounds.x.toFixed(3)}, {displayMap.gridBounds.y.toFixed(3)},{" "}
+                    {displayMap.gridBounds.width.toFixed(3)}, {displayMap.gridBounds.height.toFixed(3)}
+                  </>
+                )}
               </p>
             </div>
             <div className="flex gap-2">
@@ -783,88 +944,119 @@ export default function GuildBossPlacementTab({ session }) {
                     {t("pvePlacement.calibrationTitle", "Calibration leader")}
                   </div>
                   <p className="mt-1 text-xs text-yellow-100/75">
-                    {t(
-                      "pvePlacement.calibrationHelp",
-                      "Ajuste les valeurs normalisees, puis copie gridBounds pour me les transmettre.",
-                    )}
+                    {isPointCalibrationMap
+                      ? selectedCalibrationPointKey
+                        ? `${getGuildBossPointLabel(parseCalibrationPointKey(selectedCalibrationPointKey))} ${t(
+                            "pvePlacement.calibrationMoveHelp",
+                            "selectionne. Clique sur la carte pour le deplacer.",
+                          )}`
+                        : calibrationProgress.nextPoint
+                          ? `${t("pvePlacement.nextCalibrationPoint", "Prochain point")} : ${getGuildBossPointLabel(
+                              calibrationProgress.nextPoint,
+                            )} - ${calibrationProgress.count}/${calibrationProgress.total}`
+                          : `${t("pvePlacement.calibrationComplete", "Calibration Matrice complete. Selectionne un point pour le deplacer.")} ${calibrationProgress.count}/${calibrationProgress.total}`
+                      : t("pvePlacement.calibrationMatrixOnly", "Calibration par points disponible uniquement pour Matrice pour le moment.")}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" className="border-yellow-700 bg-zinc-950 text-yellow-100" onClick={copyCalibrationBounds}>
-                    <Clipboard className="mr-2 h-4 w-4" />
-                    {t("pvePlacement.copyBounds", "Copier gridBounds")}
-                  </Button>
-                  <Button type="button" variant="outline" className="border-zinc-700 bg-zinc-950 text-zinc-100" onClick={resetCalibrationBounds}>
-                    {t("pvePlacement.resetBounds", "Reset bounds")}
-                  </Button>
+                  {isPointCalibrationMap ? (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                        disabled={!canUndoCalibration}
+                        onClick={undoLastCalibrationChange}
+                      >
+                        <Undo2 className="mr-2 h-4 w-4" />
+                        {t("pvePlacement.undoCalibration", "Annuler action")}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                        disabled={!activeCalibrationPoints.length}
+                        onClick={removeLastCalibrationPoint}
+                      >
+                        {t("pvePlacement.removeLastPoint", "Supprimer dernier point")}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-yellow-700 bg-zinc-950 text-yellow-100"
+                        disabled={!calibrationProgress.complete}
+                        onClick={copyCalibrationPoints}
+                      >
+                        <Clipboard className="mr-2 h-4 w-4" />
+                        {t("pvePlacement.copyCalibrationJson", "Copier JSON")}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                        disabled={!selectedCalibrationPointKey}
+                        onClick={resetSelectedCalibrationPoint}
+                      >
+                        {t("pvePlacement.resetPoint", "Recommencer ce point")}
+                      </Button>
+                      <Button type="button" variant="outline" className="border-red-800 bg-red-950/40 text-red-100" onClick={resetAllCalibrationPoints}>
+                        {t("pvePlacement.resetAllPoints", "Reinitialiser la calibration")}
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {["x", "y", "width", "height"].map((key) => (
-                  <label key={key} className="block">
-                    <span className="text-xs font-black uppercase tracking-[0.16em] text-yellow-100">{key}</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max="1"
-                      step={CALIBRATION_STEP}
-                      value={displayMap.gridBounds[key].toFixed(4)}
-                      onChange={(event) => updateCalibrationBound(key, event.target.value)}
-                      className="mt-1 h-10 w-full rounded-lg border border-yellow-700/60 bg-black px-3 text-sm font-bold text-yellow-50 outline-none focus:border-yellow-300"
-                    />
-                  </label>
-                ))}
-              </div>
+              {isPointCalibrationMap ? (
+                <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-yellow-100/80">
+                  <Badge className="border border-yellow-500/40 bg-black/35 text-yellow-100">
+                    {calibrationProgress.count}/{calibrationProgress.total}
+                  </Badge>
+                  <Badge className="border border-zinc-700 bg-black/35 text-zinc-200">
+                    {cellGeometry.usesCalibratedPoints
+                      ? t("pvePlacement.usesPointCalibration", "Placement par points actif")
+                      : t("pvePlacement.usesGridFallback", "Fallback gridBounds tant que les 35 points ne sont pas poses")}
+                  </Badge>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
           <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-black" style={{ aspectRatio: "1672 / 941" }}>
             <img src={displayMap.imageUrl} alt={t(displayMap.labelKey, displayMap.fallbackLabel)} className="h-full w-full object-cover" />
-            <div
-              className={`absolute ${showCalibration ? "outline outline-2 outline-yellow-300" : ""}`}
-              style={{
-                left: `${displayMap.gridBounds.x * 100}%`,
-                top: `${displayMap.gridBounds.y * 100}%`,
-                width: `${displayMap.gridBounds.width * 100}%`,
-                height: `${displayMap.gridBounds.height * 100}%`,
-              }}
-            >
-              <div
-                className="grid h-full w-full"
-                style={{
-                  gridTemplateColumns: `repeat(${displayMap.columns}, minmax(0, 1fr))`,
-                  gridTemplateRows: `repeat(${displayMap.rows}, minmax(0, 1fr))`,
-                }}
-              >
+            {!isPointCalibrationActive ? (
+              <div className="absolute inset-0">
                 {getGridRows(displayMap)
                   .flat()
                   .map(({ cellKey, columnIndex, rowIndex }) => {
                     const placement = placements[cellKey];
                     const option = placement ? heroOptionById.get(String(placement.championId)) : null;
                     const selectedCell = selectedCellKey === cellKey;
+                    const geometry = getGuildBossCellGeometry(displayMap, activeCalibrationPoints, columnIndex, rowIndex);
 
                     return (
                       <button
                         key={cellKey}
                         type="button"
-                        className={`group relative min-h-0 border text-[10px] font-black transition ${
-                          showGrid || showCalibration ? "border-cyan-300/45 bg-cyan-300/5" : "border-transparent"
+                        className={`group absolute min-h-0 border text-[10px] font-black transition ${
+                          showGrid ? "border-cyan-300/45 bg-cyan-300/5" : "border-transparent"
                         } ${selectedCell ? "ring-2 ring-yellow-300" : ""} ${
                           selectedHeroId ? "cursor-copy hover:bg-emerald-400/15" : "cursor-pointer hover:bg-cyan-400/10"
                         }`}
+                        style={{
+                          left: `${geometry.centerX * 100}%`,
+                          top: `${geometry.centerY * 100}%`,
+                          width: `${geometry.cellWidth * 100}%`,
+                          height: `${geometry.cellHeight * 100}%`,
+                          transform: "translate(-50%, -50%)",
+                        }}
                         onClick={() => handleCellClick(cellKey)}
                         onDragOver={(event) => event.preventDefault()}
                         onDrop={(event) => handleDrop(event, cellKey)}
                       >
-                        {showGrid || showCalibration ? (
+                        {showGrid ? (
                           <span className="absolute left-1 top-1 rounded bg-black/55 px-1 text-[10px] text-cyan-100">
                             {getGuildBossCellLabel(cellKey)}
-                          </span>
-                        ) : null}
-                        {showCalibration ? (
-                          <span className="pointer-events-none absolute bottom-1 right-1 rounded bg-yellow-300/90 px-1 text-[9px] font-black text-zinc-950">
-                            C{columnIndex + 1} R{rowIndex + 1}
                           </span>
                         ) : null}
                         {option ? (
@@ -890,149 +1082,225 @@ export default function GuildBossPlacementTab({ session }) {
                     );
                   })}
               </div>
-            </div>
+            ) : null}
+
+            {isPointCalibrationActive ? (
+              <div className="absolute inset-0 z-40 cursor-crosshair" onClick={handleCalibrationMapClick}>
+                {activeCalibrationPoints.map((point) => {
+                  const pointKey = getCalibrationPointKey(point);
+                  const selected = selectedCalibrationPointKey === pointKey;
+                  return (
+                    <button
+                      key={pointKey}
+                      type="button"
+                      aria-label={getGuildBossPointLabel(point)}
+                      title={getGuildBossPointLabel(point)}
+                      className={`absolute h-3 w-3 rounded-full border shadow-lg transition ${
+                        selected
+                          ? "border-white bg-yellow-300 ring-4 ring-black/70"
+                          : "border-yellow-100 bg-yellow-300/80 hover:scale-125 hover:bg-yellow-200"
+                      }`}
+                      style={{
+                        left: `${point.x * 100}%`,
+                        top: `${point.y * 100}%`,
+                        transform: "translate(-50%, -50%)",
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        selectCalibrationPoint(point);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
         </div>
 
         <aside className="space-y-4">
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
-            <div className="flex items-center justify-between gap-3">
+          {isPointCalibrationActive ? (
+            <div className="rounded-2xl border border-yellow-500/35 bg-zinc-950/70 p-4">
               <div>
-                <h3 className="font-black text-white">{t("pvePlacement.heroPicker", "Heros")}</h3>
-                <p className="text-xs text-zinc-500">
-                  {selectedHero
-                    ? t("pvePlacement.selectedHeroHelp", "Clique une case pour placer le heros.")
-                    : t("pvePlacement.heroPickerHelp", "Selectionne un heros, puis clique une case.")}
+                <h3 className="font-black text-white">{t("pvePlacement.calibrationPoints", "Points Matrice")}</h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {t("pvePlacement.calibrationPointsHelp", "Selectionne un point place, puis clique la map pour le deplacer.")}
                 </p>
               </div>
-              {selectedHero ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="border-zinc-700 bg-zinc-900 text-zinc-200"
-                  onClick={() => setSelectedHeroId("")}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              ) : null}
-            </div>
 
-            <label className="mt-3 flex items-center gap-2 rounded-xl border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-300">
-              <Search className="h-4 w-4 text-zinc-500" />
-              <input
-                value={heroQuery}
-                onChange={(event) => setHeroQuery(event.target.value)}
-                placeholder={t("pvePlacement.heroSearch", "Chercher un heros...")}
-                className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-zinc-600"
-              />
-            </label>
+              <div className="mt-3 grid max-h-[620px] grid-cols-2 gap-2 overflow-y-auto pr-1">
+                {calibrationCells.map(({ columnIndex, rowIndex }) => {
+                  const pointTarget = { row: rowIndex + 1, col: columnIndex + 1 };
+                  const pointKey = getCalibrationPointKey(pointTarget);
+                  const point = activeCalibrationPointByKey.get(pointKey);
+                  const selected = selectedCalibrationPointKey === pointKey;
 
-            <div className="mt-3 max-h-[440px] space-y-2 overflow-y-auto pr-1">
-              {championsLoading ? (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-4 text-sm text-zinc-400">
-                  {t("common.loading", "Chargement...")}
-                </div>
-              ) : null}
-              {filteredHeroOptions.map((option) => {
-                const selected = selectedHeroId === option.id;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    draggable
-                    onClick={() => setSelectedHeroId(selected ? "" : option.id)}
-                    onDragStart={(event) => {
-                      const payload = { type: "hero", championId: option.id };
-                      dragPayloadRef.current = payload;
-                      event.dataTransfer.setData("application/json", JSON.stringify(payload));
-                    }}
-                    className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left transition ${
-                      selected
-                        ? "border-yellow-300/70 bg-yellow-300/10 text-yellow-50"
-                        : "border-zinc-800 bg-zinc-900/70 text-zinc-200 hover:border-zinc-600"
-                    }`}
-                  >
-                    <HeroPortrait option={option} className="h-10 w-10" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-bold">{option.displayName}</span>
-                      {option.technicalName && option.technicalName !== option.displayName ? (
-                        <span className="block truncate text-xs text-zinc-500">{option.technicalName}</span>
-                      ) : null}
-                    </span>
-                  </button>
-                );
-              })}
-              {!championsLoading && !filteredHeroOptions.length ? (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-4 text-sm text-zinc-400">
-                  {t("pvePlacement.noHero", "Aucun heros trouve.")}
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
-            <h3 className="font-black text-white">{t("pvePlacement.selection", "Selection")}</h3>
-            {selectedPlacement && selectedPlacementHero ? (
-              <div className="mt-3 space-y-3">
-                <div className="flex items-center gap-3">
-                  <HeroPortrait option={selectedPlacementHero} className="h-12 w-12" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-black text-white">{selectedPlacementHero.displayName}</div>
-                    <div className="text-xs text-zinc-500">
-                      {getGuildBossCellLabel(selectedCellKey)} - {t("pvePlacement.direction", "Direction")}{" "}
-                      {GUILD_BOSS_DIRECTIONS.find((item) => item.value === selectedPlacement.direction)?.fallback || "E"}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-4 gap-2">
-                  {GUILD_BOSS_DIRECTIONS.map((direction) => (
+                  return (
                     <button
-                      key={direction.value}
+                      key={pointKey}
                       type="button"
-                      onClick={() => rotateSelectedPlacement(direction.value)}
-                      className={`rounded-xl border px-3 py-2 text-sm font-black transition ${
-                        selectedPlacement.direction === direction.value
-                          ? "border-yellow-300 bg-yellow-300/15 text-yellow-100"
-                          : "border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-600"
+                      disabled={!point}
+                      onClick={() => point && selectCalibrationPoint(point)}
+                      className={`rounded-xl border p-2 text-left transition ${
+                        selected
+                          ? "border-yellow-300 bg-yellow-300/15 text-yellow-50"
+                          : point
+                            ? "border-zinc-700 bg-zinc-900/80 text-zinc-200 hover:border-yellow-500/70"
+                            : "cursor-default border-zinc-900 bg-black/35 text-zinc-600"
                       }`}
                     >
-                      {t(direction.labelKey, direction.fallback)}
+                      <span className="block text-sm font-black">{getGuildBossPointLabel(pointTarget)}</span>
+                      <span className="mt-0.5 block text-[11px] font-semibold">
+                        {point
+                          ? `${point.x.toFixed(4)}, ${point.y.toFixed(4)}`
+                          : t("pvePlacement.pointMissing", "A placer")}
+                      </span>
                     </button>
-                  ))}
-                </div>
-
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="flex-1 border-zinc-700 bg-zinc-900 text-zinc-100"
-                    onClick={() => rotateSelectedPlacement()}
-                  >
-                    <RotateCw className="mr-2 h-4 w-4" />
-                    {t("pvePlacement.rotate", "Tourner")}
-                  </Button>
-                  <Button type="button" variant="outline" className="border-red-800 bg-red-950/40 text-red-100" onClick={removeSelectedPlacement}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
+                  );
+                })}
               </div>
-            ) : (
-              <div className="mt-3 rounded-xl border border-zinc-800 bg-black/40 p-4 text-sm text-zinc-400">
-                {t("pvePlacement.noSelection", "Clique un heros place pour regler son sens ou le retirer.")}
-              </div>
-            )}
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Badge className="border border-cyan-500/30 bg-cyan-500/10 text-cyan-100">
-                {Object.keys(placements).length} {t("pvePlacement.placed", "places")}
-              </Badge>
-              <Badge className="border border-zinc-700 bg-zinc-900 text-zinc-300">
-                {t("pvePlacement.localDraft", "Brouillon local")}
-              </Badge>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-black text-white">{t("pvePlacement.heroPicker", "Heros")}</h3>
+                    <p className="text-xs text-zinc-500">
+                      {selectedHero
+                        ? t("pvePlacement.selectedHeroHelp", "Clique une case pour placer le heros.")
+                        : t("pvePlacement.heroPickerHelp", "Selectionne un heros, puis clique une case.")}
+                    </p>
+                  </div>
+                  {selectedHero ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="border-zinc-700 bg-zinc-900 text-zinc-200"
+                      onClick={() => setSelectedHeroId("")}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                </div>
+
+                <label className="mt-3 flex items-center gap-2 rounded-xl border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-300">
+                  <Search className="h-4 w-4 text-zinc-500" />
+                  <input
+                    value={heroQuery}
+                    onChange={(event) => setHeroQuery(event.target.value)}
+                    placeholder={t("pvePlacement.heroSearch", "Chercher un heros...")}
+                    className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-zinc-600"
+                  />
+                </label>
+
+                <div className="mt-3 max-h-[440px] space-y-2 overflow-y-auto pr-1">
+                  {championsLoading ? (
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-4 text-sm text-zinc-400">
+                      {t("common.loading", "Chargement...")}
+                    </div>
+                  ) : null}
+                  {filteredHeroOptions.map((option) => {
+                    const selected = selectedHeroId === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        draggable
+                        onClick={() => setSelectedHeroId(selected ? "" : option.id)}
+                        onDragStart={(event) => {
+                          const payload = { type: "hero", championId: option.id };
+                          dragPayloadRef.current = payload;
+                          event.dataTransfer.setData("application/json", JSON.stringify(payload));
+                        }}
+                        className={`flex w-full items-center gap-3 rounded-xl border p-2 text-left transition ${
+                          selected
+                            ? "border-yellow-300/70 bg-yellow-300/10 text-yellow-50"
+                            : "border-zinc-800 bg-zinc-900/70 text-zinc-200 hover:border-zinc-600"
+                        }`}
+                      >
+                        <HeroPortrait option={option} className="h-10 w-10" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-bold">{option.displayName}</span>
+                          {option.technicalName && option.technicalName !== option.displayName ? (
+                            <span className="block truncate text-xs text-zinc-500">{option.technicalName}</span>
+                          ) : null}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {!championsLoading && !filteredHeroOptions.length ? (
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-4 text-sm text-zinc-400">
+                      {t("pvePlacement.noHero", "Aucun heros trouve.")}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4">
+                <h3 className="font-black text-white">{t("pvePlacement.selection", "Selection")}</h3>
+                {selectedPlacement && selectedPlacementHero ? (
+                  <div className="mt-3 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <HeroPortrait option={selectedPlacementHero} className="h-12 w-12" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-black text-white">{selectedPlacementHero.displayName}</div>
+                        <div className="text-xs text-zinc-500">
+                          {getGuildBossCellLabel(selectedCellKey)} - {t("pvePlacement.direction", "Direction")}{" "}
+                          {GUILD_BOSS_DIRECTIONS.find((item) => item.value === selectedPlacement.direction)?.fallback || "E"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2">
+                      {GUILD_BOSS_DIRECTIONS.map((direction) => (
+                        <button
+                          key={direction.value}
+                          type="button"
+                          onClick={() => rotateSelectedPlacement(direction.value)}
+                          className={`rounded-xl border px-3 py-2 text-sm font-black transition ${
+                            selectedPlacement.direction === direction.value
+                              ? "border-yellow-300 bg-yellow-300/15 text-yellow-100"
+                              : "border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-600"
+                          }`}
+                        >
+                          {t(direction.labelKey, direction.fallback)}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="flex-1 border-zinc-700 bg-zinc-900 text-zinc-100"
+                        onClick={() => rotateSelectedPlacement()}
+                      >
+                        <RotateCw className="mr-2 h-4 w-4" />
+                        {t("pvePlacement.rotate", "Tourner")}
+                      </Button>
+                      <Button type="button" variant="outline" className="border-red-800 bg-red-950/40 text-red-100" onClick={removeSelectedPlacement}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-zinc-800 bg-black/40 p-4 text-sm text-zinc-400">
+                    {t("pvePlacement.noSelection", "Clique un heros place pour regler son sens ou le retirer.")}
+                  </div>
+                )}
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Badge className="border border-cyan-500/30 bg-cyan-500/10 text-cyan-100">
+                    {Object.keys(placements).length} {t("pvePlacement.placed", "places")}
+                  </Badge>
+                  <Badge className="border border-zinc-700 bg-zinc-900 text-zinc-300">
+                    {t("pvePlacement.localDraft", "Brouillon local")}
+                  </Badge>
+                </div>
+              </div>
+            </>
+          )}
         </aside>
       </div>
     </section>

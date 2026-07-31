@@ -4,15 +4,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  buildGuildBossGridCenterPoints,
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
+  getGuildBossCalibrationProgress,
   getGuildBossCellLabel,
+  getGuildBossCellGeometry,
+  getGuildBossPointLabel,
   makeGuildBossCellKey,
   moveGuildBossHero,
+  normalizeGuildBossCellPoints,
   normalizeGuildBossDirection,
   normalizeGuildBossDrafts,
   placeGuildBossHero,
   removeGuildBossHero,
+  resolveGuildBossCellGeometry,
   rotateGuildBossHero,
   validateGuildBossMapConfigs,
 } from "../src/lib/guildBossPlacement.js";
@@ -53,8 +59,39 @@ assert.deepEqual(
 
 assert.equal(getGuildBossCellLabel(makeGuildBossCellKey(0, 0)), "A1", "cell labels start at A1");
 assert.equal(getGuildBossCellLabel(makeGuildBossCellKey(6, 4)), "E7", "cell labels use rows then columns");
+assert.equal(getGuildBossPointLabel({ row: 1, col: 1 }), "L1-C1", "calibration point labels use line-column order");
 assert.equal(normalizeGuildBossDirection("O"), "W", "French west alias is normalized");
 assert.equal(normalizeGuildBossDirection("bad"), "E", "invalid directions default to east");
+
+const matrixMap = GUILD_BOSS_MAPS.find((map) => map.id === "matrice");
+const fallbackPoints = buildGuildBossGridCenterPoints(matrixMap);
+assert.equal(fallbackPoints.length, 35, "matrix fallback has one point per cell");
+assert.deepEqual(getGuildBossCalibrationProgress(matrixMap, []).nextPoint, { row: 1, col: 1 }, "calibration starts at L1-C1");
+assert.equal(getGuildBossCalibrationProgress(matrixMap, fallbackPoints.slice(0, 34)).count, 34, "partial calibration counts saved points");
+assert.deepEqual(
+  getGuildBossCalibrationProgress(matrixMap, fallbackPoints.slice(0, 34)).nextPoint,
+  { row: 5, col: 7 },
+  "calibration proceeds row by row",
+);
+assert.equal(getGuildBossCalibrationProgress(matrixMap, fallbackPoints).complete, true, "35 matrix points complete calibration");
+
+const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
+  { row: 1, col: 1, x: 0.25, y: 0.2 },
+  { row: 1, col: 1, x: 0.3, y: 0.22 },
+  { row: 9, col: 9, x: 0.5, y: 0.5 },
+  { row: 1, col: 2, x: "bad", y: 0.2 },
+]);
+assert.deepEqual(messyPoints, [{ row: 1, col: 1, x: 0.3, y: 0.22 }], "cell point normalization keeps valid latest point");
+
+const fallbackLayout = resolveGuildBossCellGeometry(matrixMap, fallbackPoints.slice(0, 34));
+assert.equal(fallbackLayout.usesCalibratedPoints, false, "matrix keeps grid fallback until all points are present");
+const calibratedLayout = resolveGuildBossCellGeometry(matrixMap, fallbackPoints);
+assert.equal(calibratedLayout.usesCalibratedPoints, true, "matrix uses calibrated points when all cells are present");
+assert.ok(
+  Math.abs(getGuildBossCellGeometry(matrixMap, fallbackPoints, 6, 4).centerX - fallbackPoints.find((point) => point.row === 5 && point.col === 7).x) <
+    0.000001,
+  "cell geometry can read calibrated matrix centers",
+);
 
 let placements = {};
 placements = placeGuildBossHero(placements, { cellKey: "0:0", championId: "hero-a", direction: "N" });

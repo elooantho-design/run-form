@@ -483,6 +483,8 @@ const pveCategoryTranslationKeys = {
   other: "pve.category.other",
 };
 
+const TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER = true;
+
 function getPveCategoryTranslationKey(categorySlug) {
   return pveCategoryTranslationKeys[categorySlug] || "";
 }
@@ -2004,7 +2006,12 @@ function PortalShell({ session, onLogout }) {
     () =>
       pveContents
         .filter((content) => content.isActive)
-        .filter((content) => content.localTool !== GUILD_BOSS_PLACEMENT_TOOL_ID || isLeaderUser)
+        .filter(
+          (content) =>
+            content.localTool !== GUILD_BOSS_PLACEMENT_TOOL_ID ||
+            !TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER ||
+            isLeaderUser,
+        )
         .sort((a, b) => {
           if ((a.categorySortOrder ?? 9999) !== (b.categorySortOrder ?? 9999)) {
             return (a.categorySortOrder ?? 9999) - (b.categorySortOrder ?? 9999);
@@ -2035,7 +2042,9 @@ function PortalShell({ session, onLogout }) {
   const activePveLocalTool = activePveItem?.localTool || "";
   const requestedPvePlacementTool =
     active.startsWith("pve:") && String(activePveContentId).toLowerCase() === GUILD_BOSS_PLACEMENT_TOOL_ID;
-  const canRenderPvePlacementTool = activePveLocalTool === GUILD_BOSS_PLACEMENT_TOOL_ID && isLeaderUser;
+  const canRenderPvePlacementTool =
+    activePveLocalTool === GUILD_BOSS_PLACEMENT_TOOL_ID &&
+    (!TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER || isLeaderUser);
   const mobileQuickNavigation = useMemo(
     () => [
       ...visibleNavigation,
@@ -2069,7 +2078,8 @@ function PortalShell({ session, onLogout }) {
     const isBaseTab = navigation.some((item) => item.id === active);
     const isVisibleBaseTab = visibleNavigation.some((item) => item.id === active);
     const isPveTab = active === "pve" || active.startsWith("pve:");
-    const forcedHiddenPveTool = requestedPvePlacementTool && !isLeaderUser;
+    const forcedHiddenPveTool =
+      TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER && requestedPvePlacementTool && !isLeaderUser;
     const unknownPveTab = active.startsWith("pve:") && !activePveItem;
 
     if ((forcedHiddenPveTool || unknownPveTab) && canUsePve) {
