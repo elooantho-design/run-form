@@ -158,8 +158,8 @@ function drawFallbackHero(ctx, { x, y, radius, label }) {
   ctx.fillText(label || "?", x, y);
 }
 
-async function drawDirectionOverlay(ctx, { x, y, radius, direction, imageCache }) {
-  const box = getHeroDirectionOverlayBox(direction, { x, y, size: radius * 2 });
+async function drawDirectionOverlay(ctx, { x, y, cellWidth, cellHeight, direction, imageCache }) {
+  const box = getHeroDirectionOverlayBox(direction, { x, y, width: cellWidth, height: cellHeight });
   if (!box) return;
 
   try {
@@ -260,7 +260,8 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
     await drawDirectionOverlay(ctx, {
       x: centerX,
       y: centerY,
-      radius,
+      cellWidth,
+      cellHeight,
       direction: placement.direction,
       imageCache: directionImageCache,
     });
@@ -1025,12 +1026,12 @@ export default function GuildBossPlacementTab({ session }) {
                               dragPayloadRef.current = payload;
                               event.dataTransfer.setData("application/json", JSON.stringify(payload));
                             }}
-                            className="absolute inset-0 flex items-center justify-center"
+                            className="absolute inset-0 flex items-center justify-center overflow-visible"
                           >
                             <span className="relative block h-[72%] max-h-20 min-h-8 aspect-square">
                               <HeroPortrait option={option} className="h-full w-full" />
-                              <HeroDirectionOverlay direction={placement.direction} />
                             </span>
+                            <HeroDirectionOverlay direction={placement.direction} />
                           </span>
                         ) : null}
                       </button>

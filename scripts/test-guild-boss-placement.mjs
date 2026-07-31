@@ -79,6 +79,14 @@ assert.equal(isGuildBossCellPlayable(matrixMap, "0:0"), false, "A1 is not playab
 assert.equal(isGuildBossCellPlayable(matrixMap, "3:1"), true, "B4 remains playable");
 assert.equal(getHeroDirectionOverlayConfig("W").src, "/ui/hero-dir-o.png", "west reuses the shared run-search overlay");
 assert.equal(getHeroDirectionOverlayBox("O", { x: 100, y: 100, size: 40 }).src, "/ui/hero-dir-o.png", "canvas export uses the shared overlay box");
+assert.deepEqual(
+  {
+    width: getHeroDirectionOverlayBox("E", { x: 100, y: 100, width: 100, height: 50 }).width,
+    height: getHeroDirectionOverlayBox("E", { x: 100, y: 100, width: 100, height: 50 }).height,
+  },
+  { width: 160, height: 80 },
+  "canvas export can match rectangular cell overlays",
+);
 const fallbackPoints = buildGuildBossGridCenterPoints(matrixMap);
 assert.equal(fallbackPoints.length, 35, "matrix fallback has one point per cell");
 assert.equal(GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS.length, 35, "matrix has one bundled point per cell");

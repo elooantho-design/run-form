@@ -70,21 +70,23 @@ function parseTranslatePercent(transform) {
   };
 }
 
-export function getHeroDirectionOverlayBox(direction, { x = 0, y = 0, size = 0 } = {}) {
+export function getHeroDirectionOverlayBox(direction, { x = 0, y = 0, size = 0, width = null, height = null } = {}) {
   const overlay = getHeroDirectionOverlayConfig(direction);
-  if (!overlay || !Number.isFinite(size) || size <= 0) return null;
+  const containerWidth = Number.isFinite(width) && width > 0 ? width : size;
+  const containerHeight = Number.isFinite(height) && height > 0 ? height : size;
+  if (!overlay || !Number.isFinite(containerWidth) || !Number.isFinite(containerHeight) || containerWidth <= 0 || containerHeight <= 0) return null;
 
-  const width = size * parsePercent(overlay.width, 1);
-  const height = size * parsePercent(overlay.height, 1);
-  const left = x - size / 2 + size * parsePercent(overlay.left, 0.5);
-  const top = y - size / 2 + size * parsePercent(overlay.top, 0.5);
+  const overlayWidth = containerWidth * parsePercent(overlay.width, 1);
+  const overlayHeight = containerHeight * parsePercent(overlay.height, 1);
+  const left = x - containerWidth / 2 + containerWidth * parsePercent(overlay.left, 0.5);
+  const top = y - containerHeight / 2 + containerHeight * parsePercent(overlay.top, 0.5);
   const translate = parseTranslatePercent(overlay.transform);
 
   return {
     src: overlay.src,
-    x: left + width * translate.x,
-    y: top + height * translate.y,
-    width,
-    height,
+    x: left + overlayWidth * translate.x,
+    y: top + overlayHeight * translate.y,
+    width: overlayWidth,
+    height: overlayHeight,
   };
 }
