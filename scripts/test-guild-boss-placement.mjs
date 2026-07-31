@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   GUILD_BOSS_CALIBRATION_STORAGE_KEY,
   buildGuildBossGridCenterPoints,
+  GUILD_BOSS_APOCALYPSE_BLOCKED_CELLS,
+  GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS,
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
   GUILD_BOSS_POINT_CALIBRATION_MAP_IDS,
@@ -107,6 +109,24 @@ assert.equal(getGuildBossCalibrationProgress(matrixMap, fallbackPoints).complete
 
 const apocalypseFallbackPoints = buildGuildBossGridCenterPoints(apocalypseMap);
 assert.equal(apocalypseFallbackPoints.length, 36, "apocalypse fallback has one point per 9x4 cell");
+assert.equal(GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS.length, 36, "apocalypse has one bundled point per cell");
+assert.deepEqual(
+  GUILD_BOSS_APOCALYPSE_BLOCKED_CELLS.map(getGuildBossCellLabel),
+  ["A4", "A5", "A6", "C1", "C9", "D1", "D2", "D8", "D9"],
+  "apocalypse blocked cells match the non-playable tiles",
+);
+assert.deepEqual(
+  GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS[0],
+  { row: 1, col: 1, x: 0.246902, y: 0.37178 },
+  "apocalypse first bundled point matches calibration",
+);
+assert.deepEqual(
+  GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS.at(-1),
+  { row: 4, col: 9, x: 0.774547, y: 0.698115 },
+  "apocalypse last bundled point matches calibration",
+);
+assert.equal(isGuildBossCellPlayable(apocalypseMap, "3:0"), false, "apocalypse L1C4 is not playable");
+assert.equal(isGuildBossCellPlayable(apocalypseMap, "4:1"), true, "apocalypse L2C5 remains playable");
 assert.deepEqual(getGuildBossCalibrationProgress(apocalypseMap, []).nextPoint, { row: 1, col: 1 }, "apocalypse calibration starts at L1-C1");
 assert.deepEqual(
   getGuildBossCalibrationProgress(apocalypseMap, apocalypseFallbackPoints.slice(0, 35)).nextPoint,
@@ -114,16 +134,18 @@ assert.deepEqual(
   "apocalypse calibration asks for 36 points row by row",
 );
 assert.equal(getGuildBossCalibrationProgress(apocalypseMap, apocalypseFallbackPoints).complete, true, "36 apocalypse points complete calibration");
+const apocalypseWithoutDefaultPoints = { ...apocalypseMap, defaultCellPoints: [] };
 assert.equal(
-  resolveGuildBossCellGeometry(apocalypseMap, apocalypseFallbackPoints.slice(0, 35)).usesCalibratedPoints,
+  resolveGuildBossCellGeometry(apocalypseWithoutDefaultPoints, apocalypseFallbackPoints.slice(0, 35)).usesCalibratedPoints,
   false,
-  "apocalypse keeps grid fallback until all custom points are present",
+  "apocalypse keeps grid fallback until all custom points are present without bundled points",
 );
 assert.equal(
   resolveGuildBossCellGeometry(apocalypseMap, apocalypseFallbackPoints).usesCalibratedPoints,
   true,
   "apocalypse uses point calibration when all 36 cells are present",
 );
+assert.equal(resolveGuildBossCellGeometry(apocalypseMap, []).usesCalibratedPoints, true, "apocalypse uses bundled calibration by default");
 
 const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
   { row: 1, col: 1, x: 0.25, y: 0.2 },

@@ -46,6 +46,47 @@ export const GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS = [
 
 export const GUILD_BOSS_MATRIX_BLOCKED_CELLS = ["0:0", "0:1", "0:2", "6:0", "6:1", "6:2"];
 
+export const GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS = [
+  { row: 1, col: 1, x: 0.246902, y: 0.37178 },
+  { row: 1, col: 2, x: 0.306959, y: 0.369871 },
+  { row: 1, col: 3, x: 0.373451, y: 0.364146 },
+  { row: 1, col: 4, x: 0.43887, y: 0.360329 },
+  { row: 1, col: 5, x: 0.5, y: 0.350787 },
+  { row: 1, col: 6, x: 0.565419, y: 0.350787 },
+  { row: 1, col: 7, x: 0.628694, y: 0.367963 },
+  { row: 1, col: 8, x: 0.690896, y: 0.37178 },
+  { row: 1, col: 9, x: 0.752026, y: 0.367963 },
+  { row: 2, col: 1, x: 0.238322, y: 0.469108 },
+  { row: 2, col: 2, x: 0.302669, y: 0.469108 },
+  { row: 2, col: 3, x: 0.367016, y: 0.467199 },
+  { row: 2, col: 4, x: 0.437798, y: 0.457657 },
+  { row: 2, col: 5, x: 0.5, y: 0.455749 },
+  { row: 2, col: 6, x: 0.562202, y: 0.459566 },
+  { row: 2, col: 7, x: 0.625477, y: 0.463383 },
+  { row: 2, col: 8, x: 0.697331, y: 0.467199 },
+  { row: 2, col: 9, x: 0.761678, y: 0.467199 },
+  { row: 3, col: 1, x: 0.229743, y: 0.575978 },
+  { row: 3, col: 2, x: 0.29409, y: 0.583612 },
+  { row: 3, col: 3, x: 0.362726, y: 0.575978 },
+  { row: 3, col: 4, x: 0.437798, y: 0.575978 },
+  { row: 3, col: 5, x: 0.497855, y: 0.57407 },
+  { row: 3, col: 6, x: 0.566492, y: 0.575978 },
+  { row: 3, col: 7, x: 0.634056, y: 0.575978 },
+  { row: 3, col: 8, x: 0.700548, y: 0.57407 },
+  { row: 3, col: 9, x: 0.765968, y: 0.579795 },
+  { row: 4, col: 1, x: 0.223308, y: 0.696207 },
+  { row: 4, col: 2, x: 0.28551, y: 0.698115 },
+  { row: 4, col: 3, x: 0.358437, y: 0.694299 },
+  { row: 4, col: 4, x: 0.431363, y: 0.701932 },
+  { row: 4, col: 5, x: 0.49571, y: 0.703841 },
+  { row: 4, col: 6, x: 0.564347, y: 0.705749 },
+  { row: 4, col: 7, x: 0.638346, y: 0.69239 },
+  { row: 4, col: 8, x: 0.702693, y: 0.700024 },
+  { row: 4, col: 9, x: 0.774547, y: 0.698115 },
+];
+
+export const GUILD_BOSS_APOCALYPSE_BLOCKED_CELLS = ["3:0", "4:0", "5:0", "0:2", "8:2", "0:3", "1:3", "7:3", "8:3"];
+
 export const GUILD_BOSS_DIRECTIONS = [
   { value: "N", labelKey: "pvePlacement.directionNorth", fallback: "N" },
   { value: "E", labelKey: "pvePlacement.directionEast", fallback: "E" },
@@ -75,6 +116,8 @@ export const GUILD_BOSS_MAPS = [
     columns: 9,
     rows: 4,
     gridBounds: { x: 0.198, y: 0.312, width: 0.58, height: 0.45 },
+    defaultCellPoints: GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS,
+    blockedCells: GUILD_BOSS_APOCALYPSE_BLOCKED_CELLS,
   },
   {
     id: "abysse",
