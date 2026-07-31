@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   GUILD_BOSS_CALIBRATION_STORAGE_KEY,
   buildGuildBossGridCenterPoints,
+  GUILD_BOSS_ABYSSE_BLOCKED_CELLS,
+  GUILD_BOSS_ABYSSE_DEFAULT_CELL_POINTS,
   GUILD_BOSS_APOCALYPSE_BLOCKED_CELLS,
   GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS,
   GUILD_BOSS_DIRECTIONS,
@@ -151,6 +153,24 @@ assert.equal(resolveGuildBossCellGeometry(apocalypseMap, []).usesCalibratedPoint
 
 const abysseFallbackPoints = buildGuildBossGridCenterPoints(abysseMap);
 assert.equal(abysseFallbackPoints.length, 36, "abysse fallback has one point per 9x4 cell");
+assert.equal(GUILD_BOSS_ABYSSE_DEFAULT_CELL_POINTS.length, 36, "abysse has one bundled point per cell");
+assert.deepEqual(
+  GUILD_BOSS_ABYSSE_BLOCKED_CELLS.map(getGuildBossCellLabel),
+  ["C1", "C9", "D1", "D2", "D4", "D6", "D8", "D9"],
+  "abysse blocked cells match the non-playable tiles",
+);
+assert.deepEqual(
+  GUILD_BOSS_ABYSSE_DEFAULT_CELL_POINTS[0],
+  { row: 1, col: 1, x: 0.262989, y: 0.325978 },
+  "abysse first bundled point matches calibration",
+);
+assert.deepEqual(
+  GUILD_BOSS_ABYSSE_DEFAULT_CELL_POINTS.at(-1),
+  { row: 4, col: 9, x: 0.81101, y: 0.679031 },
+  "abysse last bundled point matches calibration",
+);
+assert.equal(isGuildBossCellPlayable(abysseMap, "0:2"), false, "abysse L3C1 is not playable");
+assert.equal(isGuildBossCellPlayable(abysseMap, "4:1"), true, "abysse L2C5 remains playable");
 assert.deepEqual(getGuildBossCalibrationProgress(abysseMap, []).nextPoint, { row: 1, col: 1 }, "abysse calibration starts at L1-C1");
 assert.deepEqual(
   getGuildBossCalibrationProgress(abysseMap, abysseFallbackPoints.slice(0, 35)).nextPoint,
@@ -158,16 +178,18 @@ assert.deepEqual(
   "abysse calibration asks for 36 points row by row",
 );
 assert.equal(getGuildBossCalibrationProgress(abysseMap, abysseFallbackPoints).complete, true, "36 abysse points complete calibration");
+const abysseWithoutDefaultPoints = { ...abysseMap, defaultCellPoints: [] };
 assert.equal(
-  resolveGuildBossCellGeometry(abysseMap, abysseFallbackPoints.slice(0, 35)).usesCalibratedPoints,
+  resolveGuildBossCellGeometry(abysseWithoutDefaultPoints, abysseFallbackPoints.slice(0, 35)).usesCalibratedPoints,
   false,
-  "abysse keeps grid fallback until all custom points are present",
+  "abysse keeps grid fallback until all custom points are present without bundled points",
 );
 assert.equal(
   resolveGuildBossCellGeometry(abysseMap, abysseFallbackPoints).usesCalibratedPoints,
   true,
   "abysse uses point calibration when all 36 cells are present",
 );
+assert.equal(resolveGuildBossCellGeometry(abysseMap, []).usesCalibratedPoints, true, "abysse uses bundled calibration by default");
 
 const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
   { row: 1, col: 1, x: 0.25, y: 0.2 },
