@@ -8,6 +8,7 @@ import {
   buildGuildBossGridCenterPoints,
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
+  GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS,
   getGuildBossCalibrationProgress,
   getGuildBossCellLabel,
   getGuildBossCellGeometry,
@@ -68,6 +69,9 @@ assert.equal(normalizeGuildBossDirection("bad"), "E", "invalid directions defaul
 const matrixMap = GUILD_BOSS_MAPS.find((map) => map.id === "matrice");
 const fallbackPoints = buildGuildBossGridCenterPoints(matrixMap);
 assert.equal(fallbackPoints.length, 35, "matrix fallback has one point per cell");
+assert.equal(GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS.length, 35, "matrix has one bundled point per cell");
+assert.deepEqual(GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS[0], { row: 1, col: 1, x: 0.296332, y: 0.253466 }, "matrix first bundled point matches calibration");
+assert.deepEqual(GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS.at(-1), { row: 5, col: 7, x: 0.73236, y: 0.752524 }, "matrix last bundled point matches calibration");
 assert.deepEqual(getGuildBossCalibrationProgress(matrixMap, []).nextPoint, { row: 1, col: 1 }, "calibration starts at L1-C1");
 assert.equal(getGuildBossCalibrationProgress(matrixMap, fallbackPoints.slice(0, 34)).count, 34, "partial calibration counts saved points");
 assert.deepEqual(
@@ -85,8 +89,15 @@ const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
 ]);
 assert.deepEqual(messyPoints, [{ row: 1, col: 1, x: 0.3, y: 0.22 }], "cell point normalization keeps valid latest point");
 
-const fallbackLayout = resolveGuildBossCellGeometry(matrixMap, fallbackPoints.slice(0, 34));
-assert.equal(fallbackLayout.usesCalibratedPoints, false, "matrix keeps grid fallback until all points are present");
+const defaultLayout = resolveGuildBossCellGeometry(matrixMap, []);
+assert.equal(defaultLayout.usesCalibratedPoints, true, "matrix uses bundled calibration by default");
+assert.ok(
+  Math.abs(getGuildBossCellGeometry(matrixMap, [], 0, 0).centerX - GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS[0].x) < 0.000001,
+  "cell geometry can read bundled matrix centers",
+);
+const matrixWithoutDefaultPoints = { ...matrixMap, defaultCellPoints: [] };
+const fallbackLayout = resolveGuildBossCellGeometry(matrixWithoutDefaultPoints, fallbackPoints.slice(0, 34));
+assert.equal(fallbackLayout.usesCalibratedPoints, false, "matrix keeps grid fallback until all custom points are present without bundled points");
 const calibratedLayout = resolveGuildBossCellGeometry(matrixMap, fallbackPoints);
 assert.equal(calibratedLayout.usesCalibratedPoints, true, "matrix uses calibrated points when all cells are present");
 assert.ok(

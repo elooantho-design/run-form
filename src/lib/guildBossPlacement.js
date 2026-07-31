@@ -6,6 +6,44 @@ export const GUILD_BOSS_CALIBRATION_STORAGE_KEY = "portal:guild-boss-placement-c
 
 export const GUILD_BOSS_POINT_CALIBRATION_MAP_IDS = new Set(["matrice"]);
 
+export const GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS = [
+  { row: 1, col: 1, x: 0.296332, y: 0.253466 },
+  { row: 1, col: 2, x: 0.373634, y: 0.251694 },
+  { row: 1, col: 3, x: 0.441272, y: 0.253843 },
+  { row: 1, col: 4, x: 0.505287, y: 0.249545 },
+  { row: 1, col: 5, x: 0.572926, y: 0.251694 },
+  { row: 1, col: 6, x: 0.639357, y: 0.251694 },
+  { row: 1, col: 7, x: 0.706995, y: 0.253843 },
+  { row: 2, col: 1, x: 0.291501, y: 0.363467 },
+  { row: 2, col: 2, x: 0.366387, y: 0.367766 },
+  { row: 2, col: 3, x: 0.438857, y: 0.367766 },
+  { row: 2, col: 4, x: 0.505287, y: 0.363467 },
+  { row: 2, col: 5, x: 0.572926, y: 0.363467 },
+  { row: 2, col: 6, x: 0.640565, y: 0.367766 },
+  { row: 2, col: 7, x: 0.708203, y: 0.359168 },
+  { row: 3, col: 1, x: 0.284254, y: 0.496735 },
+  { row: 3, col: 2, x: 0.361555, y: 0.492436 },
+  { row: 3, col: 3, x: 0.436441, y: 0.492436 },
+  { row: 3, col: 4, x: 0.505287, y: 0.490287 },
+  { row: 3, col: 5, x: 0.574134, y: 0.490287 },
+  { row: 3, col: 6, x: 0.645396, y: 0.490287 },
+  { row: 3, col: 7, x: 0.71545, y: 0.483838 },
+  { row: 4, col: 1, x: 0.280631, y: 0.627854 },
+  { row: 4, col: 2, x: 0.35914, y: 0.619256 },
+  { row: 4, col: 3, x: 0.430402, y: 0.621405 },
+  { row: 4, col: 4, x: 0.506495, y: 0.619256 },
+  { row: 4, col: 5, x: 0.57655, y: 0.621405 },
+  { row: 4, col: 6, x: 0.651435, y: 0.614957 },
+  { row: 4, col: 7, x: 0.723905, y: 0.614957 },
+  { row: 5, col: 1, x: 0.277007, y: 0.752524 },
+  { row: 5, col: 2, x: 0.354308, y: 0.758972 },
+  { row: 5, col: 3, x: 0.429194, y: 0.754673 },
+  { row: 5, col: 4, x: 0.50408, y: 0.754673 },
+  { row: 5, col: 5, x: 0.581381, y: 0.754673 },
+  { row: 5, col: 6, x: 0.655059, y: 0.754673 },
+  { row: 5, col: 7, x: 0.73236, y: 0.752524 },
+];
+
 export const GUILD_BOSS_DIRECTIONS = [
   { value: "N", labelKey: "pvePlacement.directionNorth", fallback: "N" },
   { value: "E", labelKey: "pvePlacement.directionEast", fallback: "E" },
@@ -23,6 +61,7 @@ export const GUILD_BOSS_MAPS = [
     columns: 7,
     rows: 5,
     gridBounds: { x: 0.168, y: 0.193, width: 0.67, height: 0.642 },
+    defaultCellPoints: GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS,
   },
   {
     id: "apocalypse",
@@ -176,9 +215,13 @@ export function getGuildBossCalibrationProgress(map, points) {
 
 export function resolveGuildBossCellGeometry(map, calibratedPoints = []) {
   const normalizedPoints = normalizeGuildBossCellPoints(map, calibratedPoints);
+  const defaultPoints = normalizeGuildBossCellPoints(map, map?.defaultCellPoints || []);
   const total = (map?.rows || 0) * (map?.columns || 0);
-  const usesCalibratedPoints = GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has(map?.id) && normalizedPoints.length === total;
-  const points = usesCalibratedPoints ? normalizedPoints : buildGuildBossGridCenterPoints(map);
+  const supportsPointCalibration = GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has(map?.id);
+  const hasCustomPoints = supportsPointCalibration && normalizedPoints.length === total;
+  const hasDefaultPoints = supportsPointCalibration && defaultPoints.length === total;
+  const usesCalibratedPoints = hasCustomPoints || hasDefaultPoints;
+  const points = hasCustomPoints ? normalizedPoints : hasDefaultPoints ? defaultPoints : buildGuildBossGridCenterPoints(map);
   const pointsByCell = new Map(points.map((point) => [getPointKey(point.row, point.col), point]));
   const horizontalSteps = [];
   const verticalSteps = [];
