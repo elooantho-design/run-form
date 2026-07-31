@@ -6,6 +6,9 @@ export const GUILD_BOSS_CALIBRATION_STORAGE_KEY = "portal:guild-boss-placement-c
 
 export const GUILD_BOSS_POINT_CALIBRATION_MAP_IDS = new Set(["matrice", "apocalypse", "abysse", "cauchemar"]);
 
+export const GUILD_BOSS_DEFAULT_HERO_FRAME_SCALE = 0.72;
+export const GUILD_BOSS_DEFAULT_HERO_EXPORT_RADIUS_SCALE = 0.32;
+
 export const GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS = [
   { row: 1, col: 1, x: 0.296332, y: 0.253466 },
   { row: 1, col: 2, x: 0.373634, y: 0.251694 },
@@ -216,6 +219,8 @@ export const GUILD_BOSS_MAPS = [
     gridBounds: { x: 0.224, y: 0.306, width: 0.54, height: 0.474 },
     defaultCellPoints: GUILD_BOSS_CAUCHEMAR_DEFAULT_CELL_POINTS,
     blockedCells: GUILD_BOSS_CAUCHEMAR_BLOCKED_CELLS,
+    heroFrameScale: 0.88,
+    heroExportRadiusScale: 0.39,
   },
 ];
 
@@ -245,6 +250,19 @@ export function getGuildBossCellLabel(cellKey) {
 
 function getGuildBossBlockedCellSet(map) {
   return new Set((map?.blockedCells || []).map((cellKey) => String(cellKey)));
+}
+
+function getNormalizedPositiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+export function getGuildBossHeroFrameScale(map) {
+  return getNormalizedPositiveNumber(map?.heroFrameScale, GUILD_BOSS_DEFAULT_HERO_FRAME_SCALE);
+}
+
+export function getGuildBossHeroExportRadiusScale(map) {
+  return getNormalizedPositiveNumber(map?.heroExportRadiusScale, GUILD_BOSS_DEFAULT_HERO_EXPORT_RADIUS_SCALE);
 }
 
 export function isGuildBossCellPlayable(map, cellKey) {
@@ -527,6 +545,15 @@ export function validateGuildBossMapConfigs(maps = GUILD_BOSS_MAPS) {
     }
     if (bounds.x + bounds.width > 1 || bounds.y + bounds.height > 1) {
       errors.push("gridBounds exceed image");
+    }
+    if (map.heroFrameScale !== undefined && (!Number.isFinite(map.heroFrameScale) || map.heroFrameScale <= 0 || map.heroFrameScale > 1.5)) {
+      errors.push("invalid heroFrameScale");
+    }
+    if (
+      map.heroExportRadiusScale !== undefined &&
+      (!Number.isFinite(map.heroExportRadiusScale) || map.heroExportRadiusScale <= 0 || map.heroExportRadiusScale > 1)
+    ) {
+      errors.push("invalid heroExportRadiusScale");
     }
     for (const cellKey of map.blockedCells || []) {
       const { columnIndex, rowIndex } = parseGuildBossCellKey(cellKey);

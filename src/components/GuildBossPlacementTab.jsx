@@ -26,6 +26,8 @@ import {
   getGuildBossCalibrationProgress,
   getGuildBossCellGeometry,
   getGuildBossCellLabel,
+  getGuildBossHeroExportRadiusScale,
+  getGuildBossHeroFrameScale,
   getGuildBossMapConfig,
   getGuildBossPointLabel,
   isGuildBossCellPlayable,
@@ -218,7 +220,7 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
     const centerY = geometry.centerY * height;
     const cellWidth = geometry.cellWidth * width;
     const cellHeight = geometry.cellHeight * height;
-    const radius = Math.min(cellWidth, cellHeight) * 0.32;
+    const radius = Math.min(cellWidth, cellHeight) * getGuildBossHeroExportRadiusScale(map);
     const imageUrl = getChampionLocalImageUrl(champion);
 
     try {
@@ -1004,6 +1006,7 @@ export default function GuildBossPlacementTab({ session }) {
                     const option = placement ? heroOptionById.get(String(placement.championId)) : null;
                     const selectedCell = selectedCellKey === cellKey;
                     const geometry = getGuildBossCellGeometry(displayMap, activeCalibrationPoints, columnIndex, rowIndex);
+                    const heroFrameScale = getGuildBossHeroFrameScale(displayMap);
 
                     return (
                       <button
@@ -1034,7 +1037,7 @@ export default function GuildBossPlacementTab({ session }) {
                             }}
                             className="absolute inset-0 flex items-center justify-center overflow-visible"
                           >
-                            <span className="relative block h-[72%] max-h-20 min-h-8 aspect-square">
+                            <span className="relative block min-h-8 aspect-square" style={{ height: `${heroFrameScale * 100}%` }}>
                               <HeroPortrait option={option} className="h-full w-full" />
                             </span>
                             <HeroDirectionOverlay direction={placement.direction} />

@@ -20,6 +20,8 @@ import {
   getGuildBossCalibrationProgress,
   getGuildBossCellLabel,
   getGuildBossCellGeometry,
+  getGuildBossHeroExportRadiusScale,
+  getGuildBossHeroFrameScale,
   getGuildBossPointLabel,
   isGuildBossCellPlayable,
   makeGuildBossCellKey,
@@ -235,6 +237,10 @@ assert.equal(isGuildBossCellPlayable(cauchemarMap, "0:3"), false, "cauchemar L4C
 assert.equal(isGuildBossCellPlayable(cauchemarMap, "6:3"), false, "cauchemar L4C7 is not playable");
 assert.equal(isGuildBossCellPlayable(cauchemarMap, "3:3"), true, "cauchemar L4C4 remains playable");
 assert.equal(resolveGuildBossCellGeometry(cauchemarMap, []).usesCalibratedPoints, true, "cauchemar uses bundled calibration by default");
+assert.equal(getGuildBossHeroFrameScale(cauchemarMap), 0.88, "cauchemar uses a larger visible hero frame");
+assert.equal(getGuildBossHeroExportRadiusScale(cauchemarMap), 0.39, "cauchemar uses a larger exported hero radius");
+assert.equal(getGuildBossHeroFrameScale(matrixMap), 0.72, "matrix keeps the default visible hero frame");
+assert.equal(getGuildBossHeroExportRadiusScale(matrixMap), 0.32, "matrix keeps the default exported hero radius");
 
 const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
   { row: 1, col: 1, x: 0.25, y: 0.2 },
