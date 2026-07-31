@@ -4,9 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import HeroDirectionOverlay from "@/components/HeroDirectionOverlay";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
 import { getGvgGuildLabel, isExternalRunGuildCode, isPaladinAdminSession } from "@/lib/guildScope";
+import { HERO_DIRECTION_OPTIONS } from "@/lib/heroDirectionOverlay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 
@@ -22,13 +24,6 @@ const MAX_SLOTS = 5;
 
 const HEROES_FALLBACK = ["laya"];
 const SPECIAL_EXTERNAL_DISCORD_ID = "266913883170668545";
-
-const DIRS = [
-  { v: "N", label: "N" },
-  { v: "S", label: "S" },
-  { v: "E", label: "E" },
-  { v: "O", label: "O" },
-];
 
 const RUN_GRID_MODES = {
   tour: {
@@ -181,51 +176,6 @@ function getYoutubeThumbnail(url) {
   }
 
   return "";
-}
-
-function getDirectionOverlayConfig(dir) {
-  const d = String(dir || "").trim().toUpperCase();
-
-  switch (d) {
-    case "E":
-      return {
-        src: "/ui/hero-dir-e.png",
-        width: "160%",
-        height: "160%",
-        left: "50%",
-        top: "50%",
-        transform: "translate(-43%, -49%)",
-      };
-    case "O":
-      return {
-        src: "/ui/hero-dir-o.png",
-        width: "160%",
-        height: "160%",
-        left: "50%",
-        top: "50%",
-        transform: "translate(-57%, -51%)",
-      };
-    case "N":
-      return {
-        src: "/ui/hero-dir-n.png",
-        width: "140%",
-        height: "140%",
-        left: "50%",
-        top: "50%",
-        transform: "translate(-49%, -55%)",
-      };
-    case "S":
-      return {
-        src: "/ui/hero-dir-s.png",
-        width: "160%",
-        height: "160%",
-        left: "50%",
-        top: "50%",
-        transform: "translate(-51%, -46%)",
-      };
-    default:
-      return null;
-  }
 }
 
 export default function RunSearchGrid({ session: portalSession } = {}) {
@@ -800,28 +750,7 @@ async function toggleResultBoycott(result, nextBoycott) {
                                           }}
                                         />
 
-                                        {slot.dir ? (() => {
-                                          const overlay = getDirectionOverlayConfig(slot.dir);
-                                          if (!overlay) return null;
-
-                                          return (
-                                            <img
-                                              src={overlay.src}
-                                              alt=""
-                                              aria-hidden="true"
-                                              className="pointer-events-none absolute select-none"
-                                              style={{
-                                                width: overlay.width,
-                                                height: overlay.height,
-                                                objectFit: "contain",
-                                                left: overlay.left,
-                                                top: overlay.top,
-                                                transform: overlay.transform,
-                                              }}
-                                              draggable={false}
-                                            />
-                                          );
-                                        })() : null}
+                                        <HeroDirectionOverlay direction={slot.dir} />
                                       </div>
                                     ) : (
                                       <div className="max-w-[90%] truncate text-[11px] font-medium text-zinc-200">
@@ -916,12 +845,12 @@ async function toggleResultBoycott(result, nextBoycott) {
                         <label className="text-sm text-zinc-300">{t("common.direction", "Direction")}</label>
 
                         <div className="grid grid-cols-4 gap-2">
-                          {DIRS.map((d) => (
+                          {HERO_DIRECTION_OPTIONS.map((d) => (
                             <Button
-                              key={d.v}
+                              key={d.value}
                               type="button"
-                              variant={activeSlot.dir === d.v ? "default" : "outline"}
-                              onClick={() => updateActiveSlot({ dir: d.v })}
+                              variant={activeSlot.dir === d.value ? "default" : "outline"}
+                              onClick={() => updateActiveSlot({ dir: d.value })}
                               className="rounded-2xl"
                             >
                               {d.label}

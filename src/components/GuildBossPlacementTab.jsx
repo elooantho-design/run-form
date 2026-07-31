@@ -2,8 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Clipboard,
   Download,
-  Eye,
-  EyeOff,
   RotateCw,
   Search,
   SlidersHorizontal,
@@ -13,8 +11,10 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import HeroDirectionOverlay from "@/components/HeroDirectionOverlay";
 import { getChampionDisplayName, getChampionFieldValue, normalizeChampionLookupKey } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
+import { getHeroDirectionOverlayBox } from "@/lib/heroDirectionOverlay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
@@ -28,10 +28,10 @@ import {
   getGuildBossCellLabel,
   getGuildBossMapConfig,
   getGuildBossPointLabel,
+  isGuildBossCellPlayable,
   makeGuildBossCellKey,
   moveGuildBossHero,
   normalizeGuildBossCellPoints,
-  normalizeGuildBossDirection,
   normalizeGuildBossDrafts,
   parseGuildBossCellKey,
   placeGuildBossHero,
@@ -125,20 +125,6 @@ function parseCalibrationPointKey(pointKey) {
   };
 }
 
-function getArrowRotation(direction) {
-  switch (normalizeGuildBossDirection(direction)) {
-    case "N":
-      return "rotate(270deg)";
-    case "S":
-      return "rotate(90deg)";
-    case "W":
-      return "rotate(180deg)";
-    case "E":
-    default:
-      return "rotate(0deg)";
-  }
-}
-
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     if (!src) {
@@ -172,33 +158,21 @@ function drawFallbackHero(ctx, { x, y, radius, label }) {
   ctx.fillText(label || "?", x, y);
 }
 
-function drawDirectionArrow(ctx, { x, y, radius, direction }) {
-  const normalized = normalizeGuildBossDirection(direction);
-  const tipDistance = radius * 1.05;
-  const baseDistance = radius * 0.62;
-  const halfWidth = radius * 0.24;
-  const vector = {
-    N: { x: 0, y: -1 },
-    E: { x: 1, y: 0 },
-    S: { x: 0, y: 1 },
-    W: { x: -1, y: 0 },
-  }[normalized];
-  const perp = { x: -vector.y, y: vector.x };
-  const tip = { x: x + vector.x * tipDistance, y: y + vector.y * tipDistance };
-  const base = { x: x + vector.x * baseDistance, y: y + vector.y * baseDistance };
+async function drawDirectionOverlay(ctx, { x, y, radius, direction, imageCache }) {
+  const box = getHeroDirectionOverlayBox(direction, { x, y, size: radius * 2 });
+  if (!box) return;
 
-  ctx.save();
-  ctx.fillStyle = "#facc15";
-  ctx.strokeStyle = "rgba(15, 23, 42, 0.9)";
-  ctx.lineWidth = Math.max(2, radius * 0.055);
-  ctx.beginPath();
-  ctx.moveTo(tip.x, tip.y);
-  ctx.lineTo(base.x + perp.x * halfWidth, base.y + perp.y * halfWidth);
-  ctx.lineTo(base.x - perp.x * halfWidth, base.y - perp.y * halfWidth);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
+  try {
+    let directionImage = imageCache.get(box.src);
+    if (!directionImage) {
+      directionImage = await loadImage(box.src);
+      imageCache.set(box.src, directionImage);
+    }
+
+    ctx.drawImage(directionImage, box.x, box.y, box.width, box.height);
+  } catch {
+    // Keep the export usable even if an orientation asset fails to load.
+  }
 }
 
 async function renderPlacementBlob({ map, placements, championById, includeGrid, language, calibratedPoints = [] }) {
@@ -214,6 +188,7 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
   ctx.drawImage(mapImage, 0, 0, width, height);
 
   const cellGeometry = resolveGuildBossCellGeometry(map, calibratedPoints);
+  const directionImageCache = new Map();
 
   if (includeGrid) {
     ctx.save();
@@ -232,6 +207,8 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
   }
 
   for (const [cellKey, placement] of Object.entries(placements || {})) {
+    if (!isGuildBossCellPlayable(map, cellKey)) continue;
+
     const { columnIndex, rowIndex } = parseGuildBossCellKey(cellKey);
     const champion = championById.get(String(placement.championId));
     if (!champion) continue;
@@ -280,11 +257,12 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
       });
     }
 
-    drawDirectionArrow(ctx, {
+    await drawDirectionOverlay(ctx, {
       x: centerX,
       y: centerY,
       radius,
       direction: placement.direction,
+      imageCache: directionImageCache,
     });
   }
 
@@ -380,7 +358,6 @@ export default function GuildBossPlacementTab({ session }) {
   const [heroQuery, setHeroQuery] = useState("");
   const [selectedHeroId, setSelectedHeroId] = useState("");
   const [selectedCellKey, setSelectedCellKey] = useState("");
-  const [showGrid, setShowGrid] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -521,6 +498,7 @@ export default function GuildBossPlacementTab({ session }) {
 
   function handleCellClick(cellKey) {
     if (isPointCalibrationActive) return;
+    if (!isGuildBossCellPlayable(displayMap, cellKey)) return;
     const placement = placements[cellKey];
 
     if (selectedHeroId) {
@@ -529,6 +507,7 @@ export default function GuildBossPlacementTab({ session }) {
           cellKey,
           championId: selectedHeroId,
           direction: placement?.direction || "E",
+          map: displayMap,
         }),
       );
       setSelectedCellKey(cellKey);
@@ -542,6 +521,7 @@ export default function GuildBossPlacementTab({ session }) {
   function handleDrop(event, cellKey) {
     event.preventDefault();
     if (isPointCalibrationActive) return;
+    if (!isGuildBossCellPlayable(displayMap, cellKey)) return;
     const rawPayload = event.dataTransfer.getData("application/json");
     const payload = rawPayload ? JSON.parse(rawPayload) : dragPayloadRef.current;
 
@@ -553,6 +533,7 @@ export default function GuildBossPlacementTab({ session }) {
           cellKey,
           championId: payload.championId,
           direction: "E",
+          map: displayMap,
         }),
       );
       setSelectedCellKey(cellKey);
@@ -561,7 +542,7 @@ export default function GuildBossPlacementTab({ session }) {
     }
 
     if (payload.type === "placement") {
-      commitPlacements((current) => moveGuildBossHero(current, { fromCellKey: payload.cellKey, toCellKey: cellKey }));
+      commitPlacements((current) => moveGuildBossHero(current, { fromCellKey: payload.cellKey, toCellKey: cellKey, map: displayMap }));
       setSelectedCellKey(cellKey);
     }
   }
@@ -609,7 +590,7 @@ export default function GuildBossPlacementTab({ session }) {
       map: displayMap,
       placements,
       championById,
-      includeGrid: showGrid,
+      includeGrid: false,
       language,
       calibratedPoints: activeCalibrationPoints,
     });
@@ -825,16 +806,6 @@ export default function GuildBossPlacementTab({ session }) {
               type="button"
               variant="outline"
               className="border-zinc-700 bg-zinc-900 text-zinc-100"
-              disabled={isPointCalibrationActive}
-              onClick={() => setShowGrid((value) => !value)}
-            >
-              {showGrid ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
-              {showGrid ? t("pvePlacement.hideGrid", "Masquer grille") : t("pvePlacement.showGrid", "Afficher grille")}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="border-zinc-700 bg-zinc-900 text-zinc-100"
               disabled={isPointCalibrationActive ? !canUndoCalibration : !history.some((entry) => entry.mapId === selectedMap.id)}
               onClick={isPointCalibrationActive ? undoLastCalibrationChange : undoLastChange}
             >
@@ -869,9 +840,7 @@ export default function GuildBossPlacementTab({ session }) {
                 }`}
               >
                 <div className="font-black">{t(map.labelKey, map.fallbackLabel)}</div>
-                <div className="mt-1 text-xs text-zinc-500">
-                  {map.columns} x {map.rows} - {map.sourceFile}
-                </div>
+                <div className="mt-1 text-xs text-zinc-500">{Object.keys(drafts[map.id] || {}).length} {t("pvePlacement.placed", "places")}</div>
               </button>
             );
           })}
@@ -895,20 +864,14 @@ export default function GuildBossPlacementTab({ session }) {
             <div>
               <h3 className="text-lg font-black text-white">{t(displayMap.labelKey, displayMap.fallbackLabel)}</h3>
               <p className="text-xs text-zinc-500">
-                {displayMap.columns} {t("pvePlacement.columns", "colonnes")} x {displayMap.rows}{" "}
-                {t("pvePlacement.rows", "lignes")}
-                {isPointCalibrationMap ? (
+                {isPointCalibrationActive ? (
                   <>
-                    {" "}
-                    - {activeCalibrationPoints.length}/{displayMap.columns * displayMap.rows}{" "}
+                    {displayMap.columns} {t("pvePlacement.columns", "colonnes")} x {displayMap.rows}{" "}
+                    {t("pvePlacement.rows", "lignes")} - {activeCalibrationPoints.length}/{displayMap.columns * displayMap.rows}{" "}
                     {t("pvePlacement.calibratedPoints", "points calibres")}
                   </>
                 ) : (
-                  <>
-                    {" "}
-                    - gridBounds {displayMap.gridBounds.x.toFixed(3)}, {displayMap.gridBounds.y.toFixed(3)},{" "}
-                    {displayMap.gridBounds.width.toFixed(3)}, {displayMap.gridBounds.height.toFixed(3)}
-                  </>
+                  <>{Object.keys(placements).length} {t("pvePlacement.placed", "places")}</>
                 )}
               </p>
             </div>
@@ -1028,6 +991,7 @@ export default function GuildBossPlacementTab({ session }) {
               <div className="absolute inset-0">
                 {getGridRows(displayMap)
                   .flat()
+                  .filter(({ cellKey }) => isGuildBossCellPlayable(displayMap, cellKey))
                   .map(({ cellKey, columnIndex, rowIndex }) => {
                     const placement = placements[cellKey];
                     const option = placement ? heroOptionById.get(String(placement.championId)) : null;
@@ -1038,10 +1002,9 @@ export default function GuildBossPlacementTab({ session }) {
                       <button
                         key={cellKey}
                         type="button"
-                        className={`group absolute min-h-0 border text-[10px] font-black transition ${
-                          showGrid ? "border-cyan-300/45 bg-cyan-300/5" : "border-transparent"
-                        } ${selectedCell ? "ring-2 ring-yellow-300" : ""} ${
-                          selectedHeroId ? "cursor-copy hover:bg-emerald-400/15" : "cursor-pointer hover:bg-cyan-400/10"
+                        aria-pressed={selectedCell}
+                        className={`group absolute min-h-0 border border-transparent bg-transparent text-[10px] font-black ${
+                          selectedHeroId ? "cursor-copy" : "cursor-pointer"
                         }`}
                         style={{
                           left: `${geometry.centerX * 100}%`,
@@ -1054,11 +1017,6 @@ export default function GuildBossPlacementTab({ session }) {
                         onDragOver={(event) => event.preventDefault()}
                         onDrop={(event) => handleDrop(event, cellKey)}
                       >
-                        {showGrid ? (
-                          <span className="absolute left-1 top-1 rounded bg-black/55 px-1 text-[10px] text-cyan-100">
-                            {getGuildBossCellLabel(cellKey)}
-                          </span>
-                        ) : null}
                         {option ? (
                           <span
                             draggable
@@ -1071,10 +1029,7 @@ export default function GuildBossPlacementTab({ session }) {
                           >
                             <span className="relative block h-[72%] max-h-20 min-h-8 aspect-square">
                               <HeroPortrait option={option} className="h-full w-full" />
-                              <span
-                                className="absolute -right-1 top-1/2 h-0 w-0 -translate-y-1/2 border-y-[7px] border-l-[12px] border-y-transparent border-l-yellow-300 drop-shadow"
-                                style={{ transform: `translateY(-50%) ${getArrowRotation(placement.direction)}` }}
-                              />
+                              <HeroDirectionOverlay direction={placement.direction} />
                             </span>
                           </span>
                         ) : null}

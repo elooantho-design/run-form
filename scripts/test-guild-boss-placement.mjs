@@ -8,11 +8,13 @@ import {
   buildGuildBossGridCenterPoints,
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
+  GUILD_BOSS_MATRIX_BLOCKED_CELLS,
   GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS,
   getGuildBossCalibrationProgress,
   getGuildBossCellLabel,
   getGuildBossCellGeometry,
   getGuildBossPointLabel,
+  isGuildBossCellPlayable,
   makeGuildBossCellKey,
   moveGuildBossHero,
   normalizeGuildBossCellPoints,
@@ -24,6 +26,7 @@ import {
   rotateGuildBossHero,
   validateGuildBossMapConfigs,
 } from "../src/lib/guildBossPlacement.js";
+import { getHeroDirectionOverlayBox, getHeroDirectionOverlayConfig } from "../src/lib/heroDirectionOverlay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -67,6 +70,15 @@ assert.equal(normalizeGuildBossDirection("O"), "W", "French west alias is normal
 assert.equal(normalizeGuildBossDirection("bad"), "E", "invalid directions default to east");
 
 const matrixMap = GUILD_BOSS_MAPS.find((map) => map.id === "matrice");
+assert.deepEqual(
+  GUILD_BOSS_MATRIX_BLOCKED_CELLS.map(getGuildBossCellLabel),
+  ["A1", "B1", "C1", "A7", "B7", "C7"],
+  "matrix blocked cells match the non-playable portals",
+);
+assert.equal(isGuildBossCellPlayable(matrixMap, "0:0"), false, "A1 is not playable");
+assert.equal(isGuildBossCellPlayable(matrixMap, "3:1"), true, "B4 remains playable");
+assert.equal(getHeroDirectionOverlayConfig("W").src, "/ui/hero-dir-o.png", "west reuses the shared run-search overlay");
+assert.equal(getHeroDirectionOverlayBox("O", { x: 100, y: 100, size: 40 }).src, "/ui/hero-dir-o.png", "canvas export uses the shared overlay box");
 const fallbackPoints = buildGuildBossGridCenterPoints(matrixMap);
 assert.equal(fallbackPoints.length, 35, "matrix fallback has one point per cell");
 assert.equal(GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS.length, 35, "matrix has one bundled point per cell");
@@ -107,34 +119,44 @@ assert.ok(
 );
 
 let placements = {};
-placements = placeGuildBossHero(placements, { cellKey: "0:0", championId: "hero-a", direction: "N" });
-assert.deepEqual(placements["0:0"], { championId: "hero-a", direction: "N" }, "hero is placed");
+placements = placeGuildBossHero(placements, { cellKey: "0:0", championId: "hero-blocked", direction: "N", map: matrixMap });
+assert.deepEqual(placements, {}, "blocked cells reject placements");
 
-placements = placeGuildBossHero(placements, { cellKey: "1:0", championId: "hero-b", direction: "S" });
-placements = placeGuildBossHero(placements, { cellKey: "2:0", championId: "hero-a", direction: "E" });
-assert.equal(placements["0:0"], undefined, "placing the same hero removes its previous cell");
-assert.deepEqual(placements["2:0"], { championId: "hero-a", direction: "E" }, "same hero moved to new cell");
-assert.deepEqual(placements["1:0"], { championId: "hero-b", direction: "S" }, "other heroes are preserved");
+placements = placeGuildBossHero(placements, { cellKey: "1:1", championId: "hero-a", direction: "N", map: matrixMap });
+assert.deepEqual(placements["1:1"], { championId: "hero-a", direction: "N" }, "hero is placed");
 
-placements = moveGuildBossHero(placements, { fromCellKey: "2:0", toCellKey: "3:1" });
-assert.equal(placements["2:0"], undefined, "move clears previous cell");
-assert.deepEqual(placements["3:1"], { championId: "hero-a", direction: "E" }, "move keeps hero direction");
+placements = placeGuildBossHero(placements, { cellKey: "2:1", championId: "hero-b", direction: "S", map: matrixMap });
+placements = placeGuildBossHero(placements, { cellKey: "3:1", championId: "hero-a", direction: "E", map: matrixMap });
+assert.equal(placements["1:1"], undefined, "placing the same hero removes its previous cell");
+assert.deepEqual(placements["3:1"], { championId: "hero-a", direction: "E" }, "same hero moved to new cell");
+assert.deepEqual(placements["2:1"], { championId: "hero-b", direction: "S" }, "other heroes are preserved");
 
-placements = rotateGuildBossHero(placements, "3:1");
-assert.equal(placements["3:1"].direction, "S", "rotation advances direction");
-placements = rotateGuildBossHero(placements, "3:1", "W");
-assert.equal(placements["3:1"].direction, "W", "explicit direction is applied");
+placements = placeGuildBossHero(placements, { cellKey: "6:0", championId: "hero-c", direction: "N", map: matrixMap });
+assert.equal(placements["6:0"], undefined, "blocked destination remains empty");
 
-placements = removeGuildBossHero(placements, "3:1");
-assert.equal(placements["3:1"], undefined, "hero is removed");
-assert.ok(placements["1:0"], "removing one hero preserves other cells");
+placements = moveGuildBossHero(placements, { fromCellKey: "3:1", toCellKey: "0:1", map: matrixMap });
+assert.deepEqual(placements["3:1"], { championId: "hero-a", direction: "E" }, "move to blocked cell is ignored");
+
+placements = moveGuildBossHero(placements, { fromCellKey: "3:1", toCellKey: "4:1", map: matrixMap });
+assert.equal(placements["3:1"], undefined, "move clears previous cell");
+assert.deepEqual(placements["4:1"], { championId: "hero-a", direction: "E" }, "move keeps hero direction");
+
+placements = rotateGuildBossHero(placements, "4:1");
+assert.equal(placements["4:1"].direction, "S", "rotation advances direction");
+placements = rotateGuildBossHero(placements, "4:1", "W");
+assert.equal(placements["4:1"].direction, "W", "explicit direction is applied");
+
+placements = removeGuildBossHero(placements, "4:1");
+assert.equal(placements["4:1"], undefined, "hero is removed");
+assert.ok(placements["2:1"], "removing one hero preserves other cells");
 
 const drafts = normalizeGuildBossDrafts({
-  matrice: { placements },
+  matrice: { placements: { ...placements, "0:0": { championId: "hero-blocked", direction: "N" } } },
   apocalypse: { "1:1": { champion_id: "hero-c", direction: "O" } },
 });
 assert.ok(drafts.matrice, "drafts include matrix");
 assert.ok(drafts.abysse, "drafts include empty maps");
+assert.equal(drafts.matrice["0:0"], undefined, "draft normalization removes blocked matrix cells");
 assert.equal(drafts.apocalypse["1:1"].direction, "W", "draft normalization handles legacy keys");
 
 console.log("Guild boss placement tests passed.");

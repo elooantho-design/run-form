@@ -44,6 +44,8 @@ export const GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS = [
   { row: 5, col: 7, x: 0.73236, y: 0.752524 },
 ];
 
+export const GUILD_BOSS_MATRIX_BLOCKED_CELLS = ["0:0", "0:1", "0:2", "6:0", "6:1", "6:2"];
+
 export const GUILD_BOSS_DIRECTIONS = [
   { value: "N", labelKey: "pvePlacement.directionNorth", fallback: "N" },
   { value: "E", labelKey: "pvePlacement.directionEast", fallback: "E" },
@@ -62,6 +64,7 @@ export const GUILD_BOSS_MAPS = [
     rows: 5,
     gridBounds: { x: 0.168, y: 0.193, width: 0.67, height: 0.642 },
     defaultCellPoints: GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS,
+    blockedCells: GUILD_BOSS_MATRIX_BLOCKED_CELLS,
   },
   {
     id: "apocalypse",
@@ -117,6 +120,19 @@ export function parseGuildBossCellKey(cellKey) {
 export function getGuildBossCellLabel(cellKey) {
   const { columnIndex, rowIndex } = parseGuildBossCellKey(cellKey);
   return `${String.fromCharCode(65 + rowIndex)}${columnIndex + 1}`;
+}
+
+function getGuildBossBlockedCellSet(map) {
+  return new Set((map?.blockedCells || []).map((cellKey) => String(cellKey)));
+}
+
+export function isGuildBossCellPlayable(map, cellKey) {
+  if (!map || !cellKey) return false;
+
+  const { columnIndex, rowIndex } = parseGuildBossCellKey(cellKey);
+  if (columnIndex < 0 || rowIndex < 0 || columnIndex >= map.columns || rowIndex >= map.rows) return false;
+
+  return !getGuildBossBlockedCellSet(map).has(String(cellKey));
 }
 
 export function getGuildBossPointLabel(point) {
@@ -290,7 +306,7 @@ export function getNextGuildBossDirection(direction) {
   return GUILD_BOSS_DIRECTIONS[(currentIndex + 1) % GUILD_BOSS_DIRECTIONS.length].value;
 }
 
-export function normalizeGuildBossPlacements(value) {
+export function normalizeGuildBossPlacements(value, map = null) {
   if (!value || typeof value !== "object") return {};
 
   return Object.fromEntries(
@@ -298,6 +314,7 @@ export function normalizeGuildBossPlacements(value) {
       .map(([cellKey, placement]) => {
         const championId = String(placement?.championId || placement?.champion_id || "").trim();
         if (!championId) return null;
+        if (map && !isGuildBossCellPlayable(map, cellKey)) return null;
 
         return [
           String(cellKey),
@@ -317,15 +334,16 @@ export function normalizeGuildBossDrafts(value) {
   return Object.fromEntries(
     GUILD_BOSS_MAPS.map((map) => [
       map.id,
-      normalizeGuildBossPlacements(value[map.id]?.placements || value[map.id] || {}),
+      normalizeGuildBossPlacements(value[map.id]?.placements || value[map.id] || {}, map),
     ]),
   );
 }
 
-export function placeGuildBossHero(placements, { cellKey, championId, direction = "E" }) {
-  const next = { ...normalizeGuildBossPlacements(placements) };
+export function placeGuildBossHero(placements, { cellKey, championId, direction = "E", map = null }) {
+  const next = { ...normalizeGuildBossPlacements(placements, map) };
   const normalizedChampionId = String(championId || "").trim();
   if (!cellKey || !normalizedChampionId) return next;
+  if (map && !isGuildBossCellPlayable(map, cellKey)) return next;
 
   for (const [existingCellKey, placement] of Object.entries(next)) {
     if (String(placement.championId) === normalizedChampionId && existingCellKey !== cellKey) {
@@ -341,9 +359,10 @@ export function placeGuildBossHero(placements, { cellKey, championId, direction 
   return next;
 }
 
-export function moveGuildBossHero(placements, { fromCellKey, toCellKey }) {
-  const next = { ...normalizeGuildBossPlacements(placements) };
+export function moveGuildBossHero(placements, { fromCellKey, toCellKey, map = null }) {
+  const next = { ...normalizeGuildBossPlacements(placements, map) };
   if (!fromCellKey || !toCellKey || !next[fromCellKey]) return next;
+  if (map && !isGuildBossCellPlayable(map, toCellKey)) return next;
 
   const placement = next[fromCellKey];
   delete next[fromCellKey];
@@ -387,6 +406,12 @@ export function validateGuildBossMapConfigs(maps = GUILD_BOSS_MAPS) {
     }
     if (bounds.x + bounds.width > 1 || bounds.y + bounds.height > 1) {
       errors.push("gridBounds exceed image");
+    }
+    for (const cellKey of map.blockedCells || []) {
+      const { columnIndex, rowIndex } = parseGuildBossCellKey(cellKey);
+      if (columnIndex < 0 || rowIndex < 0 || columnIndex >= map.columns || rowIndex >= map.rows) {
+        errors.push(`invalid blocked cell ${cellKey}`);
+      }
     }
 
     return { id: map.id, ok: errors.length === 0, errors };

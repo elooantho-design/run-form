@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RotateCcw, Trash2, Info } from "lucide-react";
+import HeroDirectionOverlay from "@/components/HeroDirectionOverlay";
 import { supabase } from "@/lib/supabase";
+import { HERO_DIRECTION_OPTIONS } from "@/lib/heroDirectionOverlay";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 // --- Composants UI simples (remplacent ceux du canvas ChatGPT) ---
 const Card = ({children,className=""}) => <div className={`border rounded-xl bg-white/5 ${className}`}>{children}</div>;
@@ -53,13 +55,6 @@ const HEROES_FALLBACK = [
 
 ];
 
-const DIRS = [
-  { v: "N", label: "N" },
-  { v: "S", label: "S" },
-  { v: "E", label: "E" },
-  { v: "O", label: "O" },
-];
-
 const BASTION_BG_URL = "/maps-actuelles/bastion.png";
 const TOUR_BG_URL = "/maps-actuelles/tour.png";
 
@@ -106,55 +101,6 @@ function normalizeApiDirToForm(dir) {
   if (d === "o" || d === "ouest" || d === "w") return "O";
 
   return "";
-}
-
-function getDirectionOverlayConfig(dir) {
-  const d = String(dir || "").trim().toUpperCase();
-
-  switch (d) {
-    case "E":
-      return {
-        src: "/ui/hero-dir-e.png",
-        width: "160%",
-        height: "160%",
-        left: "50%",
-        top: "50%",
-        transform: "translate(-43%, -49%)",
-      };
-
-    case "O":
-      return {
-        src: "/ui/hero-dir-o.png",
-        width: "160%",
-        height: "160%",
-        left: "50%",
-        top: "50%",
-        transform: "translate(-57%, -51%)",
-      };
-
-    case "N":
-      return {
-        src: "/ui/hero-dir-n.png",
-        width: "140%",
-        height: "140%",
-        left: "50%",
-        top: "50%",
-        transform: "translate(-49%, -55%)",
-      };
-
-      case "S":
-        return {
-          src: "/ui/hero-dir-s.png",
-          width: "160%",
-          height: "160%",
-          left: "50%",
-          top: "50%",
-          transform: "translate(-51%, -46%)",
-        };
-
-    default:
-      return null;
-  }
 }
 
 function getApiBase() {
@@ -812,28 +758,7 @@ useEffect(() => {
           }}
         />
 
-        {slot.dir ? (() => {
-          const overlay = getDirectionOverlayConfig(slot.dir);
-          if (!overlay) return null;
-
-          return (
-            <img
-              src={overlay.src}
-              alt=""
-              aria-hidden="true"
-              className="absolute pointer-events-none select-none"
-              style={{
-                width: overlay.width,
-                height: overlay.height,
-                objectFit: "contain",
-                left: overlay.left,
-                top: overlay.top,
-                transform: overlay.transform,
-              }}
-              draggable={false}
-            />
-          );
-        })() : null}
+        <HeroDirectionOverlay direction={slot.dir} />
       </div>
     ) : (
       <div className="text-[11px] font-medium truncate max-w-[90%]">
@@ -934,8 +859,8 @@ useEffect(() => {
                   <div className="space-y-2">
                     <Label>Direction</Label>
                     <div className="grid grid-cols-4 gap-2">
-                      {DIRS.map((d) => (
-                        <Button key={d.v} type="button" variant={activeSlot.dir === d.v ? "default" : "outline"} onClick={() => updateActiveSlot({ dir: d.v })}>
+                      {HERO_DIRECTION_OPTIONS.map((d) => (
+                        <Button key={d.value} type="button" variant={activeSlot.dir === d.value ? "default" : "outline"} onClick={() => updateActiveSlot({ dir: d.value })}>
                           {d.label}
                         </Button>
                       ))}
