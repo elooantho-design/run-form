@@ -22,7 +22,6 @@ import {
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
   GUILD_BOSS_POINT_CALIBRATION_MAP_IDS,
-  GUILD_BOSS_PLACEMENT_STORAGE_KEY,
   getGuildBossCalibrationProgress,
   getGuildBossCellGeometry,
   getGuildBossCellLabel,
@@ -34,7 +33,6 @@ import {
   makeGuildBossCellKey,
   moveGuildBossHero,
   normalizeGuildBossCellPoints,
-  normalizeGuildBossDrafts,
   parseGuildBossCellKey,
   placeGuildBossHero,
   removeGuildBossHero,
@@ -347,14 +345,7 @@ export default function GuildBossPlacementTab({ session }) {
   const [selectedMapId, setSelectedMapId] = useState(GUILD_BOSS_MAPS[0].id);
   const selectedMap = getGuildBossMapConfig(selectedMapId);
   const isLeader = isLeaderSession(session);
-  const [drafts, setDrafts] = useState(() => {
-    if (typeof window === "undefined") return normalizeGuildBossDrafts({});
-    try {
-      return normalizeGuildBossDrafts(JSON.parse(window.localStorage.getItem(GUILD_BOSS_PLACEMENT_STORAGE_KEY) || "{}"));
-    } catch {
-      return normalizeGuildBossDrafts({});
-    }
-  });
+  const [drafts, setDrafts] = useState({});
   const [history, setHistory] = useState([]);
   const [champions, setChampions] = useState([]);
   const [championsLoading, setChampionsLoading] = useState(false);
@@ -403,11 +394,6 @@ export default function GuildBossPlacementTab({ session }) {
   );
   const calibrationCells = useMemo(() => getGridRows(displayMap).flat(), [displayMap]);
   const canUndoCalibration = calibrationHistory.some((entry) => entry.mapId === selectedMap.id);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(GUILD_BOSS_PLACEMENT_STORAGE_KEY, JSON.stringify(drafts));
-  }, [drafts]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
