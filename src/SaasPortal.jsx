@@ -483,7 +483,7 @@ const pveCategoryTranslationKeys = {
   other: "pve.category.other",
 };
 
-const TEMPORARILY_HIDE_GUILD_BOSS_PLACEMENT_TOOL = true;
+const TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER = true;
 
 function getPveCategoryTranslationKey(categorySlug) {
   return pveCategoryTranslationKeys[categorySlug] || "";
@@ -2008,8 +2008,9 @@ function PortalShell({ session, onLogout }) {
         .filter((content) => content.isActive)
         .filter(
           (content) =>
-            !TEMPORARILY_HIDE_GUILD_BOSS_PLACEMENT_TOOL ||
-            content.localTool !== GUILD_BOSS_PLACEMENT_TOOL_ID,
+            content.localTool !== GUILD_BOSS_PLACEMENT_TOOL_ID ||
+            !TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER ||
+            isLeaderUser,
         )
         .sort((a, b) => {
           if ((a.categorySortOrder ?? 9999) !== (b.categorySortOrder ?? 9999)) {
@@ -2024,7 +2025,7 @@ function PortalShell({ session, onLogout }) {
             sensitivity: "base",
           });
         }),
-    [pveContents],
+    [isLeaderUser, pveContents],
   );
   const pveNavigationCategories = useMemo(
     () => buildPveNavigationCategories(visiblePveNavigation),
@@ -2042,7 +2043,8 @@ function PortalShell({ session, onLogout }) {
   const requestedPvePlacementTool =
     active.startsWith("pve:") && String(activePveContentId).toLowerCase() === GUILD_BOSS_PLACEMENT_TOOL_ID;
   const canRenderPvePlacementTool =
-    !TEMPORARILY_HIDE_GUILD_BOSS_PLACEMENT_TOOL && activePveLocalTool === GUILD_BOSS_PLACEMENT_TOOL_ID;
+    activePveLocalTool === GUILD_BOSS_PLACEMENT_TOOL_ID &&
+    (!TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER || isLeaderUser);
   const mobileQuickNavigation = useMemo(
     () => [
       ...visibleNavigation,
@@ -2076,7 +2078,8 @@ function PortalShell({ session, onLogout }) {
     const isBaseTab = navigation.some((item) => item.id === active);
     const isVisibleBaseTab = visibleNavigation.some((item) => item.id === active);
     const isPveTab = active === "pve" || active.startsWith("pve:");
-    const forcedHiddenPveTool = TEMPORARILY_HIDE_GUILD_BOSS_PLACEMENT_TOOL && requestedPvePlacementTool;
+    const forcedHiddenPveTool =
+      TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER && requestedPvePlacementTool && !isLeaderUser;
     const unknownPveTab = active.startsWith("pve:") && !activePveItem;
 
     if ((forcedHiddenPveTool || unknownPveTab) && canUsePve) {
@@ -2096,6 +2099,7 @@ function PortalShell({ session, onLogout }) {
     active,
     activePveItem,
     canUsePve,
+    isLeaderUser,
     requestedPvePlacementTool,
     visibleAdminNavigation,
     visibleNavigation,
