@@ -4,7 +4,7 @@ export const GUILD_BOSS_PLACEMENT_STORAGE_KEY = "portal:guild-boss-placement:v1"
 
 export const GUILD_BOSS_CALIBRATION_STORAGE_KEY = "portal:guild-boss-placement-calibration:v2";
 
-export const GUILD_BOSS_POINT_CALIBRATION_MAP_IDS = new Set(["matrice"]);
+export const GUILD_BOSS_POINT_CALIBRATION_MAP_IDS = new Set(["matrice", "apocalypse"]);
 
 export const GUILD_BOSS_MATRIX_DEFAULT_CELL_POINTS = [
   { row: 1, col: 1, x: 0.296332, y: 0.253466 },

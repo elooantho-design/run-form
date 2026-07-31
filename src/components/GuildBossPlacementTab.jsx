@@ -379,6 +379,7 @@ export default function GuildBossPlacementTab({ session }) {
   const dragPayloadRef = useRef(null);
 
   const displayMap = selectedMap;
+  const selectedMapLabel = t(selectedMap.labelKey, selectedMap.fallbackLabel);
   const placements = drafts[selectedMap.id] || {};
   const isPointCalibrationMap = GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has(selectedMap.id);
   const isPointCalibrationActive = isLeader && showCalibration && isPointCalibrationMap;
@@ -669,7 +670,7 @@ export default function GuildBossPlacementTab({ session }) {
     const replacementPoint = selectedCalibrationPointKey ? parseCalibrationPointKey(selectedCalibrationPointKey) : null;
     const targetPoint = replacementPoint?.row && replacementPoint?.col ? replacementPoint : calibrationProgress.nextPoint;
     if (!targetPoint) {
-      setMessage(t("pvePlacement.calibrationComplete", "Calibration Matrice complete. Selectionne un point pour le deplacer."));
+      setMessage(`${selectedMapLabel} : ${t("pvePlacement.calibrationComplete", "calibration complete. Selectionne un point pour le deplacer.")}`);
       return;
     }
 
@@ -730,7 +731,9 @@ export default function GuildBossPlacementTab({ session }) {
     if (
       activeCalibrationPoints.length &&
       typeof window !== "undefined" &&
-      !window.confirm(t("pvePlacement.resetPointCalibrationConfirm", "Recommencer les 35 points de Matrice ?"))
+      !window.confirm(
+        `${t("pvePlacement.resetPointCalibrationConfirm", "Recommencer la calibration de")} ${selectedMapLabel} (${calibrationProgress.total} points) ?`,
+      )
     ) {
       return;
     }
@@ -739,13 +742,13 @@ export default function GuildBossPlacementTab({ session }) {
     setSelectedCalibrationPointKey("");
     setSelectedHeroId("");
     setSelectedCellKey("");
-    setMessage(t("pvePlacement.pointCalibrationReset", "Calibration Matrice vide."));
+    setMessage(`${selectedMapLabel} : ${t("pvePlacement.pointCalibrationReset", "calibration vide.")}`);
   }
 
   async function copyCalibrationPoints() {
     if (!isLeader || !isPointCalibrationMap) return;
     if (!calibrationProgress.complete) {
-      setErrorMessage(t("pvePlacement.calibrationIncomplete", "Pose les 35 points avant de copier le JSON final."));
+      setErrorMessage(`${t("pvePlacement.calibrationIncomplete", "Pose tous les points avant de copier le JSON final.")} (${calibrationProgress.count}/${calibrationProgress.total})`);
       return;
     }
 
@@ -918,8 +921,11 @@ export default function GuildBossPlacementTab({ session }) {
                           ? `${t("pvePlacement.nextCalibrationPoint", "Prochain point")} : ${getGuildBossPointLabel(
                               calibrationProgress.nextPoint,
                             )} - ${calibrationProgress.count}/${calibrationProgress.total}`
-                          : `${t("pvePlacement.calibrationComplete", "Calibration Matrice complete. Selectionne un point pour le deplacer.")} ${calibrationProgress.count}/${calibrationProgress.total}`
-                      : t("pvePlacement.calibrationMatrixOnly", "Calibration par points disponible uniquement pour Matrice pour le moment.")}
+                          : `${selectedMapLabel} : ${t(
+                              "pvePlacement.calibrationComplete",
+                              "calibration complete. Selectionne un point pour le deplacer.",
+                            )} ${calibrationProgress.count}/${calibrationProgress.total}`
+                      : t("pvePlacement.calibrationUnavailable", "Calibration par points indisponible pour cette carte pour le moment.")}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -979,7 +985,7 @@ export default function GuildBossPlacementTab({ session }) {
                   <Badge className="border border-zinc-700 bg-black/35 text-zinc-200">
                     {cellGeometry.usesCalibratedPoints
                       ? t("pvePlacement.usesPointCalibration", "Placement par points actif")
-                      : t("pvePlacement.usesGridFallback", "Fallback gridBounds tant que les 35 points ne sont pas poses")}
+                      : `${t("pvePlacement.usesGridFallback", "Fallback gridBounds tant que tous les points ne sont pas poses")} (${calibrationProgress.count}/${calibrationProgress.total})`}
                   </Badge>
                 </div>
               ) : null}
@@ -1077,7 +1083,9 @@ export default function GuildBossPlacementTab({ session }) {
           {isPointCalibrationActive ? (
             <div className="rounded-2xl border border-yellow-500/35 bg-zinc-950/70 p-4">
               <div>
-                <h3 className="font-black text-white">{t("pvePlacement.calibrationPoints", "Points Matrice")}</h3>
+                <h3 className="font-black text-white">
+                  {t("pvePlacement.calibrationPoints", "Points")} {selectedMapLabel}
+                </h3>
                 <p className="mt-1 text-xs text-zinc-500">
                   {t("pvePlacement.calibrationPointsHelp", "Selectionne un point place, puis clique la map pour le deplacer.")}
                 </p>
