@@ -2,6 +2,10 @@ export const GUILD_BOSS_PLACEMENT_TOOL_ID = "placement-bdg";
 
 export const GUILD_BOSS_PLACEMENT_STORAGE_KEY = "portal:guild-boss-placement:v1";
 
+export const GUILD_BOSS_CALIBRATION_STORAGE_KEY = "portal:guild-boss-placement-calibration:v1";
+
+export const GUILD_BOSS_POINT_CALIBRATION_MAP_IDS = new Set(["matrice"]);
+
 export const GUILD_BOSS_DIRECTIONS = [
   { value: "N", labelKey: "pvePlacement.directionNorth", fallback: "N" },
   { value: "E", labelKey: "pvePlacement.directionEast", fallback: "E" },
@@ -74,6 +78,161 @@ export function parseGuildBossCellKey(cellKey) {
 export function getGuildBossCellLabel(cellKey) {
   const { columnIndex, rowIndex } = parseGuildBossCellKey(cellKey);
   return `${String.fromCharCode(65 + rowIndex)}${columnIndex + 1}`;
+}
+
+export function getGuildBossPointLabel(point) {
+  return `R${Number(point?.row) || 0}C${Number(point?.col) || 0}`;
+}
+
+function clampNormalizedCoordinate(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.min(1, Math.max(0, number));
+}
+
+function getPointKey(row, col) {
+  return `${Number(row) || 0}:${Number(col) || 0}`;
+}
+
+function median(values) {
+  const sorted = values.filter((value) => Number.isFinite(value) && value > 0).sort((left, right) => left - right);
+  if (!sorted.length) return null;
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+export function buildGuildBossGridCenterPoints(map) {
+  if (!map || !Number.isInteger(map.rows) || !Number.isInteger(map.columns)) return [];
+
+  const bounds = map.gridBounds || { x: 0, y: 0, width: 1, height: 1 };
+  const cellWidth = bounds.width / map.columns;
+  const cellHeight = bounds.height / map.rows;
+  const points = [];
+
+  for (let row = 1; row <= map.rows; row += 1) {
+    for (let col = 1; col <= map.columns; col += 1) {
+      points.push({
+        row,
+        col,
+        x: bounds.x + (col - 0.5) * cellWidth,
+        y: bounds.y + (row - 0.5) * cellHeight,
+      });
+    }
+  }
+
+  return points;
+}
+
+export function normalizeGuildBossCellPoints(map, value) {
+  if (!map || !Array.isArray(value)) return [];
+
+  const byCell = new Map();
+
+  for (const item of value) {
+    const row = Number(item?.row);
+    const col = Number(item?.col);
+    const x = clampNormalizedCoordinate(item?.x);
+    const y = clampNormalizedCoordinate(item?.y);
+    if (!Number.isInteger(row) || !Number.isInteger(col) || x === null || y === null) continue;
+    if (row < 1 || row > map.rows || col < 1 || col > map.columns) continue;
+
+    byCell.set(getPointKey(row, col), {
+      row,
+      col,
+      x: Number(x.toFixed(6)),
+      y: Number(y.toFixed(6)),
+    });
+  }
+
+  return [...byCell.values()].sort((left, right) => left.row - right.row || left.col - right.col);
+}
+
+export function getGuildBossCalibrationProgress(map, points) {
+  const normalizedPoints = normalizeGuildBossCellPoints(map, points);
+  const total = (map?.rows || 0) * (map?.columns || 0);
+  const pointKeys = new Set(normalizedPoints.map((point) => getPointKey(point.row, point.col)));
+  let nextPoint = null;
+
+  for (let row = 1; row <= (map?.rows || 0); row += 1) {
+    for (let col = 1; col <= (map?.columns || 0); col += 1) {
+      if (!pointKeys.has(getPointKey(row, col))) {
+        nextPoint = { row, col };
+        return {
+          count: normalizedPoints.length,
+          total,
+          complete: normalizedPoints.length === total,
+          nextPoint,
+        };
+      }
+    }
+  }
+
+  return {
+    count: normalizedPoints.length,
+    total,
+    complete: normalizedPoints.length === total,
+    nextPoint,
+  };
+}
+
+export function resolveGuildBossCellGeometry(map, calibratedPoints = []) {
+  const normalizedPoints = normalizeGuildBossCellPoints(map, calibratedPoints);
+  const total = (map?.rows || 0) * (map?.columns || 0);
+  const usesCalibratedPoints = GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has(map?.id) && normalizedPoints.length === total;
+  const points = usesCalibratedPoints ? normalizedPoints : buildGuildBossGridCenterPoints(map);
+  const pointsByCell = new Map(points.map((point) => [getPointKey(point.row, point.col), point]));
+  const horizontalSteps = [];
+  const verticalSteps = [];
+
+  for (let row = 1; row <= (map?.rows || 0); row += 1) {
+    for (let col = 1; col < (map?.columns || 0); col += 1) {
+      const left = pointsByCell.get(getPointKey(row, col));
+      const right = pointsByCell.get(getPointKey(row, col + 1));
+      if (left && right) horizontalSteps.push(Math.abs(right.x - left.x));
+    }
+  }
+
+  for (let col = 1; col <= (map?.columns || 0); col += 1) {
+    for (let row = 1; row < (map?.rows || 0); row += 1) {
+      const top = pointsByCell.get(getPointKey(row, col));
+      const bottom = pointsByCell.get(getPointKey(row + 1, col));
+      if (top && bottom) verticalSteps.push(Math.abs(bottom.y - top.y));
+    }
+  }
+
+  const fallbackBounds = map?.gridBounds || { width: 1, height: 1 };
+  const cellWidth = median(horizontalSteps) || fallbackBounds.width / (map?.columns || 1);
+  const cellHeight = median(verticalSteps) || fallbackBounds.height / (map?.rows || 1);
+
+  return {
+    usesCalibratedPoints,
+    points,
+    pointsByCell,
+    cellWidth,
+    cellHeight,
+  };
+}
+
+export function getGuildBossCellGeometry(map, calibratedPoints, columnIndex, rowIndex) {
+  const layout = resolveGuildBossCellGeometry(map, calibratedPoints);
+  const point = layout.pointsByCell.get(getPointKey(rowIndex + 1, columnIndex + 1));
+
+  if (!point) {
+    return {
+      centerX: 0,
+      centerY: 0,
+      cellWidth: layout.cellWidth,
+      cellHeight: layout.cellHeight,
+      usesCalibratedPoints: layout.usesCalibratedPoints,
+    };
+  }
+
+  return {
+    centerX: point.x,
+    centerY: point.y,
+    cellWidth: layout.cellWidth,
+    cellHeight: layout.cellHeight,
+    usesCalibratedPoints: layout.usesCalibratedPoints,
+  };
 }
 
 export function normalizeGuildBossDirection(value) {
