@@ -2,7 +2,7 @@ export const GUILD_BOSS_PLACEMENT_TOOL_ID = "placement-bdg";
 
 export const GUILD_BOSS_PLACEMENT_STORAGE_KEY = "portal:guild-boss-placement:v1";
 
-export const GUILD_BOSS_CALIBRATION_STORAGE_KEY = "portal:guild-boss-placement-calibration:v1";
+export const GUILD_BOSS_CALIBRATION_STORAGE_KEY = "portal:guild-boss-placement-calibration:v2";
 
 export const GUILD_BOSS_POINT_CALIBRATION_MAP_IDS = new Set(["matrice"]);
 

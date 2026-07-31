@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  GUILD_BOSS_CALIBRATION_STORAGE_KEY,
   buildGuildBossGridCenterPoints,
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
@@ -60,6 +61,7 @@ assert.deepEqual(
 assert.equal(getGuildBossCellLabel(makeGuildBossCellKey(0, 0)), "A1", "cell labels start at A1");
 assert.equal(getGuildBossCellLabel(makeGuildBossCellKey(6, 4)), "E7", "cell labels use rows then columns");
 assert.equal(getGuildBossPointLabel({ row: 1, col: 1 }), "L1-C1", "calibration point labels use line-column order");
+assert.equal(GUILD_BOSS_CALIBRATION_STORAGE_KEY.endsWith(":v2"), true, "calibration storage starts from the reset v2 namespace");
 assert.equal(normalizeGuildBossDirection("O"), "W", "French west alias is normalized");
 assert.equal(normalizeGuildBossDirection("bad"), "E", "invalid directions default to east");
 
