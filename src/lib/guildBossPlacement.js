@@ -128,6 +128,39 @@ export const GUILD_BOSS_ABYSSE_DEFAULT_CELL_POINTS = [
 
 export const GUILD_BOSS_ABYSSE_BLOCKED_CELLS = ["0:2", "8:2", "0:3", "1:3", "3:3", "5:3", "7:3", "8:3"];
 
+export const GUILD_BOSS_CAUCHEMAR_DEFAULT_CELL_POINTS = [
+  { row: 1, col: 1, x: 0.290872, y: 0.339337 },
+  { row: 1, col: 2, x: 0.364871, y: 0.339337 },
+  { row: 1, col: 3, x: 0.430291, y: 0.339337 },
+  { row: 1, col: 4, x: 0.49571, y: 0.333612 },
+  { row: 1, col: 5, x: 0.562202, y: 0.339337 },
+  { row: 1, col: 6, x: 0.637274, y: 0.333612 },
+  { row: 1, col: 7, x: 0.706983, y: 0.333612 },
+  { row: 2, col: 1, x: 0.283365, y: 0.438573 },
+  { row: 2, col: 2, x: 0.354147, y: 0.444299 },
+  { row: 2, col: 3, x: 0.428146, y: 0.451932 },
+  { row: 2, col: 4, x: 0.49571, y: 0.444299 },
+  { row: 2, col: 5, x: 0.566492, y: 0.444299 },
+  { row: 2, col: 6, x: 0.644781, y: 0.436665 },
+  { row: 2, col: 7, x: 0.715562, y: 0.440482 },
+  { row: 3, col: 1, x: 0.274786, y: 0.556894 },
+  { row: 3, col: 2, x: 0.347712, y: 0.553077 },
+  { row: 3, col: 3, x: 0.421711, y: 0.551169 },
+  { row: 3, col: 4, x: 0.49571, y: 0.545444 },
+  { row: 3, col: 5, x: 0.572927, y: 0.547352 },
+  { row: 3, col: 6, x: 0.647998, y: 0.558802 },
+  { row: 3, col: 7, x: 0.720925, y: 0.551169 },
+  { row: 4, col: 1, x: 0.261916, y: 0.686665 },
+  { row: 4, col: 2, x: 0.340205, y: 0.68094 },
+  { row: 4, col: 3, x: 0.419566, y: 0.677123 },
+  { row: 4, col: 4, x: 0.5, y: 0.675215 },
+  { row: 4, col: 5, x: 0.579361, y: 0.677123 },
+  { row: 4, col: 6, x: 0.65765, y: 0.68094 },
+  { row: 4, col: 7, x: 0.732722, y: 0.690482 },
+];
+
+export const GUILD_BOSS_CAUCHEMAR_BLOCKED_CELLS = ["0:3", "6:3"];
+
 export const GUILD_BOSS_DIRECTIONS = [
   { value: "N", labelKey: "pvePlacement.directionNorth", fallback: "N" },
   { value: "E", labelKey: "pvePlacement.directionEast", fallback: "E" },
@@ -181,6 +214,8 @@ export const GUILD_BOSS_MAPS = [
     columns: 7,
     rows: 4,
     gridBounds: { x: 0.224, y: 0.306, width: 0.54, height: 0.474 },
+    defaultCellPoints: GUILD_BOSS_CAUCHEMAR_DEFAULT_CELL_POINTS,
+    blockedCells: GUILD_BOSS_CAUCHEMAR_BLOCKED_CELLS,
   },
 ];
 

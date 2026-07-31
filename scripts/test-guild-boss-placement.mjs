@@ -10,6 +10,8 @@ import {
   GUILD_BOSS_ABYSSE_DEFAULT_CELL_POINTS,
   GUILD_BOSS_APOCALYPSE_BLOCKED_CELLS,
   GUILD_BOSS_APOCALYPSE_DEFAULT_CELL_POINTS,
+  GUILD_BOSS_CAUCHEMAR_BLOCKED_CELLS,
+  GUILD_BOSS_CAUCHEMAR_DEFAULT_CELL_POINTS,
   GUILD_BOSS_DIRECTIONS,
   GUILD_BOSS_MAPS,
   GUILD_BOSS_POINT_CALIBRATION_MAP_IDS,
@@ -202,16 +204,37 @@ assert.deepEqual(
   "cauchemar calibration asks for 28 points row by row",
 );
 assert.equal(getGuildBossCalibrationProgress(cauchemarMap, cauchemarFallbackPoints).complete, true, "28 cauchemar points complete calibration");
+const cauchemarWithoutDefaultPoints = { ...cauchemarMap, defaultCellPoints: [] };
 assert.equal(
-  resolveGuildBossCellGeometry(cauchemarMap, cauchemarFallbackPoints.slice(0, 27)).usesCalibratedPoints,
+  resolveGuildBossCellGeometry(cauchemarWithoutDefaultPoints, cauchemarFallbackPoints.slice(0, 27)).usesCalibratedPoints,
   false,
-  "cauchemar keeps grid fallback until all custom points are present",
+  "cauchemar keeps grid fallback until all custom points are present without bundled points",
 );
 assert.equal(
   resolveGuildBossCellGeometry(cauchemarMap, cauchemarFallbackPoints).usesCalibratedPoints,
   true,
   "cauchemar uses point calibration when all 28 cells are present",
 );
+assert.equal(GUILD_BOSS_CAUCHEMAR_DEFAULT_CELL_POINTS.length, 28, "cauchemar has one bundled point per cell");
+assert.deepEqual(
+  GUILD_BOSS_CAUCHEMAR_BLOCKED_CELLS.map(getGuildBossCellLabel),
+  ["D1", "D7"],
+  "cauchemar blocked cells match the non-playable bottom corners",
+);
+assert.deepEqual(
+  GUILD_BOSS_CAUCHEMAR_DEFAULT_CELL_POINTS[0],
+  { row: 1, col: 1, x: 0.290872, y: 0.339337 },
+  "cauchemar first bundled point matches calibration",
+);
+assert.deepEqual(
+  GUILD_BOSS_CAUCHEMAR_DEFAULT_CELL_POINTS.at(-1),
+  { row: 4, col: 7, x: 0.732722, y: 0.690482 },
+  "cauchemar last bundled point matches calibration",
+);
+assert.equal(isGuildBossCellPlayable(cauchemarMap, "0:3"), false, "cauchemar L4C1 is not playable");
+assert.equal(isGuildBossCellPlayable(cauchemarMap, "6:3"), false, "cauchemar L4C7 is not playable");
+assert.equal(isGuildBossCellPlayable(cauchemarMap, "3:3"), true, "cauchemar L4C4 remains playable");
+assert.equal(resolveGuildBossCellGeometry(cauchemarMap, []).usesCalibratedPoints, true, "cauchemar uses bundled calibration by default");
 
 const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
   { row: 1, col: 1, x: 0.25, y: 0.2 },
