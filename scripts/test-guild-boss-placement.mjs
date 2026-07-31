@@ -74,8 +74,10 @@ assert.equal(normalizeGuildBossDirection("bad"), "E", "invalid directions defaul
 
 const matrixMap = GUILD_BOSS_MAPS.find((map) => map.id === "matrice");
 const apocalypseMap = GUILD_BOSS_MAPS.find((map) => map.id === "apocalypse");
+const abysseMap = GUILD_BOSS_MAPS.find((map) => map.id === "abysse");
 assert.equal(GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has("matrice"), true, "matrix can be calibrated by points");
 assert.equal(GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has("apocalypse"), true, "apocalypse can be calibrated by points");
+assert.equal(GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has("abysse"), true, "abysse can be calibrated by points");
 assert.deepEqual(
   GUILD_BOSS_MATRIX_BLOCKED_CELLS.map(getGuildBossCellLabel),
   ["A1", "B1", "C1", "A7", "B7", "C7"],
@@ -146,6 +148,26 @@ assert.equal(
   "apocalypse uses point calibration when all 36 cells are present",
 );
 assert.equal(resolveGuildBossCellGeometry(apocalypseMap, []).usesCalibratedPoints, true, "apocalypse uses bundled calibration by default");
+
+const abysseFallbackPoints = buildGuildBossGridCenterPoints(abysseMap);
+assert.equal(abysseFallbackPoints.length, 36, "abysse fallback has one point per 9x4 cell");
+assert.deepEqual(getGuildBossCalibrationProgress(abysseMap, []).nextPoint, { row: 1, col: 1 }, "abysse calibration starts at L1-C1");
+assert.deepEqual(
+  getGuildBossCalibrationProgress(abysseMap, abysseFallbackPoints.slice(0, 35)).nextPoint,
+  { row: 4, col: 9 },
+  "abysse calibration asks for 36 points row by row",
+);
+assert.equal(getGuildBossCalibrationProgress(abysseMap, abysseFallbackPoints).complete, true, "36 abysse points complete calibration");
+assert.equal(
+  resolveGuildBossCellGeometry(abysseMap, abysseFallbackPoints.slice(0, 35)).usesCalibratedPoints,
+  false,
+  "abysse keeps grid fallback until all custom points are present",
+);
+assert.equal(
+  resolveGuildBossCellGeometry(abysseMap, abysseFallbackPoints).usesCalibratedPoints,
+  true,
+  "abysse uses point calibration when all 36 cells are present",
+);
 
 const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
   { row: 1, col: 1, x: 0.25, y: 0.2 },
