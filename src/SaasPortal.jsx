@@ -483,7 +483,7 @@ const pveCategoryTranslationKeys = {
   other: "pve.category.other",
 };
 
-const TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER = true;
+const TEMPORARILY_LIMIT_GUILD_BOSS_PLACEMENT_TOOL_TO_LEADER = false;
 
 function getPveCategoryTranslationKey(categorySlug) {
   return pveCategoryTranslationKeys[categorySlug] || "";
