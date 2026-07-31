@@ -77,9 +77,11 @@ assert.equal(normalizeGuildBossDirection("bad"), "E", "invalid directions defaul
 const matrixMap = GUILD_BOSS_MAPS.find((map) => map.id === "matrice");
 const apocalypseMap = GUILD_BOSS_MAPS.find((map) => map.id === "apocalypse");
 const abysseMap = GUILD_BOSS_MAPS.find((map) => map.id === "abysse");
+const cauchemarMap = GUILD_BOSS_MAPS.find((map) => map.id === "cauchemar");
 assert.equal(GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has("matrice"), true, "matrix can be calibrated by points");
 assert.equal(GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has("apocalypse"), true, "apocalypse can be calibrated by points");
 assert.equal(GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has("abysse"), true, "abysse can be calibrated by points");
+assert.equal(GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has("cauchemar"), true, "cauchemar can be calibrated by points");
 assert.deepEqual(
   GUILD_BOSS_MATRIX_BLOCKED_CELLS.map(getGuildBossCellLabel),
   ["A1", "B1", "C1", "A7", "B7", "C7"],
@@ -190,6 +192,26 @@ assert.equal(
   "abysse uses point calibration when all 36 cells are present",
 );
 assert.equal(resolveGuildBossCellGeometry(abysseMap, []).usesCalibratedPoints, true, "abysse uses bundled calibration by default");
+
+const cauchemarFallbackPoints = buildGuildBossGridCenterPoints(cauchemarMap);
+assert.equal(cauchemarFallbackPoints.length, 28, "cauchemar fallback has one point per 7x4 cell");
+assert.deepEqual(getGuildBossCalibrationProgress(cauchemarMap, []).nextPoint, { row: 1, col: 1 }, "cauchemar calibration starts at L1-C1");
+assert.deepEqual(
+  getGuildBossCalibrationProgress(cauchemarMap, cauchemarFallbackPoints.slice(0, 27)).nextPoint,
+  { row: 4, col: 7 },
+  "cauchemar calibration asks for 28 points row by row",
+);
+assert.equal(getGuildBossCalibrationProgress(cauchemarMap, cauchemarFallbackPoints).complete, true, "28 cauchemar points complete calibration");
+assert.equal(
+  resolveGuildBossCellGeometry(cauchemarMap, cauchemarFallbackPoints.slice(0, 27)).usesCalibratedPoints,
+  false,
+  "cauchemar keeps grid fallback until all custom points are present",
+);
+assert.equal(
+  resolveGuildBossCellGeometry(cauchemarMap, cauchemarFallbackPoints).usesCalibratedPoints,
+  true,
+  "cauchemar uses point calibration when all 28 cells are present",
+);
 
 const messyPoints = normalizeGuildBossCellPoints(matrixMap, [
   { row: 1, col: 1, x: 0.25, y: 0.2 },
