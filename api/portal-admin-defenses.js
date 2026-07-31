@@ -651,16 +651,33 @@ async function handleConditionAdd(body, req, res) {
 
   const guildCode = normalizeGuildCode(validatePortalInput(body.guildCode, 40) || actor.guild_code);
   const defense = await ensureEditableDefense(actor, validatePortalInput(body.defenseId, 80), guildCode);
-  const heroName = validatePortalInput(body.heroName, 120);
+  const heroNameInput = validatePortalInput(body.heroName, 120);
+  const championIdInput = validatePortalInput(body.championId, 80);
   const minAwakening = Number(body.minAwakening);
 
-  if (!heroName || Number.isNaN(minAwakening)) throw new Error("Condition invalide.");
-  if (!(defense.slots || []).some((slot) => normalizeText(slot) === normalizeText(heroName))) {
+  if ((!heroNameInput && !championIdInput) || Number.isNaN(minAwakening)) throw new Error("Condition invalide.");
+
+  const champions = await loadChampions();
+  const championByName = buildChampionByName(champions);
+  const championById = new Map(champions.map((champion) => [String(champion.id), champion]));
+  const champion = championIdInput
+    ? championById.get(String(championIdInput))
+    : championByName.get(normalizeText(heroNameInput));
+
+  if (!champion) throw new Error("Hero introuvable.");
+
+  const validConditionHeroNames = [
+    heroNameInput,
+    champion.name,
+    champion.portal_name,
+    champion.english_name,
+  ]
+    .filter(Boolean)
+    .map(normalizeText);
+
+  if (!(defense.slots || []).some((slot) => validConditionHeroNames.includes(normalizeText(slot)))) {
     throw new Error("La condition doit viser un heros present dans cette defense.");
   }
-
-  const champion = buildChampionByName(await loadChampions()).get(normalizeText(heroName));
-  if (!champion) throw new Error("Hero introuvable.");
 
   const { error } = await supabase.from("guild_defense_conditions").insert({
     defense_id: defense.id,
