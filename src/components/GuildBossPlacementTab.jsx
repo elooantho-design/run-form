@@ -381,7 +381,7 @@ export default function GuildBossPlacementTab({ session }) {
   const displayMap = selectedMap;
   const selectedMapLabel = t(selectedMap.labelKey, selectedMap.fallbackLabel);
   const placements = drafts[selectedMap.id] || {};
-  const isPointCalibrationMap = GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has(selectedMap.id);
+  const isPointCalibrationMap = GUILD_BOSS_POINT_CALIBRATION_MAP_IDS.has(selectedMap.id) || selectedMap.id === "cauchemar";
   const isPointCalibrationActive = isLeader && showCalibration && isPointCalibrationMap;
   const activeCalibrationPoints = useMemo(
     () => normalizeGuildBossCellPoints(selectedMap, calibrationPointsByMap[selectedMap.id] || []),
