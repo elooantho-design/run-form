@@ -1149,6 +1149,7 @@ const PORTAL_TRANSLATIONS = {
   "chat.showOriginal": "Show original",
   "chat.showTranslation": "Show translation",
   "chat.translationDisabled": "Automatic translation is not configured yet.",
+  "chat.translationPending": "Translation is being prepared.",
   "chat.translationFailed": "Translation unavailable.",
   "chat.placeholder": "Write a message...",
   "chat.send": "Send",

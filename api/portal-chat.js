@@ -23,8 +23,11 @@ import {
 } from "./_portal-chat-core.js";
 import {
   getPortalChatTranslationConfig,
-  translatePortalChatMessage,
 } from "./_portal-chat-translation.js";
+import {
+  enqueuePortalChatTranslationJob,
+  isReadyTranslationForConfig,
+} from "./_portal-chat-queue.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -180,7 +183,9 @@ async function loadTranslations(rows, targetLanguage) {
 }
 
 async function ensureTranslation(row, targetLanguage, existingTranslation) {
-  if (existingTranslation?.status === "ready" && existingTranslation?.translated_body) {
+  const translationConfig = getPortalChatTranslationConfig();
+
+  if (isReadyTranslationForConfig(existingTranslation, translationConfig)) {
     return existingTranslation;
   }
 
@@ -199,50 +204,33 @@ async function ensureTranslation(row, targetLanguage, existingTranslation) {
     };
   }
 
-  const result = await translatePortalChatMessage({
-    text: row.body_original,
-    targetLanguage,
-    sourceLanguageHint: row.source_language,
-  });
-
-  if (result.status !== "ready" || !result.translatedText) {
+  if (!translationConfig.enabled) {
     return {
-      status: result.status,
+      status: "disabled",
       translated_body: "",
-      provider: result.provider || "disabled",
-      model: result.model || "none",
-      error: result.error || "",
+      provider: "disabled",
+      model: "none",
     };
   }
 
-  const payload = {
-    message_id: row.id,
-    target_language: targetLanguage,
-    source_hash: row.body_hash,
-    translated_body: result.translatedText,
-    provider: result.provider || "unknown",
-    model: result.model || "none",
-    status: "ready",
-    char_count: cleanChatText(row.body_original).length,
-  };
-
-  const { data, error } = await supabase
-    .from("portal_chat_message_translations")
-    .upsert(payload, { onConflict: "message_id,target_language,source_hash" })
-    .select(TRANSLATION_SELECT)
-    .maybeSingle();
-
-  if (error) {
+  try {
+    await enqueuePortalChatTranslationJob(supabase, row, targetLanguage, translationConfig);
+  } catch (error) {
     return {
       status: "failed",
       translated_body: "",
-      provider: result.provider || "unknown",
-      model: result.model || "none",
-      error: error.message || "Cache traduction impossible.",
+      provider: translationConfig.provider,
+      model: translationConfig.model,
+      error: error?.message || "Mise en file de traduction impossible.",
     };
   }
 
-  return data || payload;
+  return {
+    status: "pending",
+    translated_body: "",
+    provider: translationConfig.provider,
+    model: translationConfig.model,
+  };
 }
 
 async function serializeMessages(rows, { targetLanguage, actorMember }) {
@@ -436,6 +424,7 @@ async function sendMessage(req, res, member, body) {
     targetLanguage,
     deleted: false,
   });
+  const translationConfig = getPortalChatTranslationConfig();
   const insertPayload = {
     channel_key: PORTAL_CHAT_CHANNEL_KEY,
     client_message_id: clientMessageId,
@@ -445,7 +434,7 @@ async function sendMessage(req, res, member, body) {
     source_language: sourceLanguage,
     language_hint: targetLanguage,
     reply_to_message_id: replyToMessageId,
-    translation_status: translationNeeded ? "pending" : "ready",
+    translation_status: translationNeeded ? (translationConfig.enabled ? "pending" : "disabled") : "ready",
   };
 
   let row;

@@ -91,6 +91,8 @@ function ChatMessage({ message, language, onReply, onDelete, showOriginal, onTog
   const translationNotice =
     !message.deleted && !message.isTranslated && message.translationStatus === "disabled"
       ? t("chat.translationDisabled", "Traduction automatique non configuree.")
+      : !message.deleted && !message.isTranslated && message.translationStatus === "pending"
+        ? t("chat.translationPending", "Traduction en preparation.")
       : !message.deleted && message.translationStatus === "failed"
         ? t("chat.translationFailed", "Traduction indisponible.")
         : "";

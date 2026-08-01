@@ -1,0 +1,16 @@
+*
+!api/
+!api/_portal-translator-auth.js
+!api/_portal-chat-core.js
+!api/_portal-chat-queue.js
+!api/_portal-chat-translation.js
+!ops/
+!ops/portal-translator/
+!ops/portal-translator/server.mjs
+!scripts/
+!scripts/portal-chat-translation-worker.mjs
+!src/
+!src/lib/
+!src/lib/portalSupportedLanguages.js
+!package.json
+!package-lock.json

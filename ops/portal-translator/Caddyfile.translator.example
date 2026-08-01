@@ -1,0 +1,21 @@
+# Exemple a integrer manuellement dans le Caddyfile du VPS apres validation du pilote.
+# Ne pas appliquer tant que LibreTranslate et translator-gateway ne sont pas testes.
+
+handle /portal-translator/translate {
+  request_body {
+    max_size 4KB
+  }
+  uri strip_prefix /portal-translator
+  reverse_proxy 127.0.0.1:8091 {
+    transport http {
+      read_timeout 10s
+      write_timeout 10s
+      dial_timeout 3s
+    }
+  }
+}
+
+handle /portal-translator/health {
+  uri strip_prefix /portal-translator
+  reverse_proxy 127.0.0.1:8091
+}

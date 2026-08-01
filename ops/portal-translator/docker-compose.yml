@@ -1,0 +1,113 @@
+name: portal-translator
+
+services:
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6
+    container_name: portal-libretranslate
+    restart: unless-stopped
+    cpus: "2.0"
+    mem_limit: 4g
+    mem_reservation: 2g
+    pids_limit: 256
+    environment:
+      LT_LOAD_ONLY: "fr,en"
+    volumes:
+      - libretranslate-models:/home/libretranslate/.local/share
+    networks:
+      - portal-translator
+    expose:
+      - "5000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/languages >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  translator-gateway:
+    build:
+      context: ../..
+      dockerfile: ops/portal-translator/Dockerfile.gateway
+    container_name: portal-translator-gateway
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 256m
+    mem_reservation: 128m
+    pids_limit: 128
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LIBRETRANSLATE_URL: "http://libretranslate:5000"
+      PORTAL_TRANSLATOR_GATEWAY_PORT: "8088"
+      PORTAL_TRANSLATOR_ALLOWED_LANGUAGES: "fr,en"
+      PORTAL_TRANSLATOR_MAX_CHARS: "1000"
+      PORTAL_TRANSLATOR_MAX_BODY_BYTES: "4096"
+      PORTAL_TRANSLATOR_TIMEOUT_MS: "5000"
+      PORTAL_TRANSLATOR_RATE_LIMIT_PER_MINUTE: "60"
+      PORTAL_TRANSLATOR_MODEL: "argos-fr-en"
+    ports:
+      - "127.0.0.1:8091:8088"
+    networks:
+      - portal-translator
+    depends_on:
+      libretranslate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8088/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  translation-worker:
+    build:
+      context: ../..
+      dockerfile: ops/portal-translator/Dockerfile.worker
+    container_name: portal-chat-translation-worker
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 256m
+    mem_reservation: 128m
+    pids_limit: 128
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORTAL_CHAT_TRANSLATION_ENABLED: "true"
+      PORTAL_CHAT_TRANSLATION_PROVIDER: "libretranslate"
+      PORTAL_CHAT_TRANSLATION_MODEL: "argos-fr-en"
+      PORTAL_CHAT_TRANSLATOR_URL: "http://translator-gateway:8088/translate"
+      PORTAL_CHAT_TRANSLATOR_SECRET: "${PORTAL_TRANSLATOR_SECRET:-}"
+      PORTAL_CHAT_TRANSLATION_TIMEOUT_MS: "5000"
+      PORTAL_CHAT_TRANSLATION_MAX_CHARS: "1000"
+      PORTAL_CHAT_TRANSLATION_WORKER_ID: "vps-aad12be0-worker-1"
+      PORTAL_CHAT_TRANSLATION_WORKER_POLL_MS: "5000"
+      PORTAL_CHAT_TRANSLATION_JOB_LOCK_SECONDS: "90"
+    networks:
+      - portal-translator
+    depends_on:
+      translator-gateway:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  portal-translator:
+    name: portal-translator
+
+volumes:
+  libretranslate-models:

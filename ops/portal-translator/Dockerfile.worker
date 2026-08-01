@@ -1,0 +1,19 @@
+FROM node:22.14.0-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+
+COPY api/_portal-chat-core.js ./api/_portal-chat-core.js
+COPY api/_portal-chat-queue.js ./api/_portal-chat-queue.js
+COPY api/_portal-chat-translation.js ./api/_portal-chat-translation.js
+COPY api/_portal-translator-auth.js ./api/_portal-translator-auth.js
+COPY src/lib/portalSupportedLanguages.js ./src/lib/portalSupportedLanguages.js
+COPY scripts/portal-chat-translation-worker.mjs ./scripts/portal-chat-translation-worker.mjs
+
+ENV NODE_ENV=production
+
+USER node
+
+CMD ["node", "scripts/portal-chat-translation-worker.mjs"]
