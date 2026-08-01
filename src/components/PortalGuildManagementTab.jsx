@@ -23,7 +23,7 @@ const GUILD_STATUS_VERIFY = "\u00c0 v\u00e9rifier";
 const GUILD_STATUS_VALID = "Valid\u00e9";
 
 function getEmptyHeroSearchCriteria() {
-  return [{ championId: "", minAwakening: 0 }];
+  return [{ championId: "", heroQuery: "", minAwakening: 0 }];
 }
 
 function formatText(template, values) {
@@ -76,6 +76,14 @@ function normalizeAssignment(value) {
 
 function normalizeRoleValue(role) {
   return String(role || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function normalizeHeroSearchText(value) {
+  return String(value || "")
     .trim()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -146,6 +154,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [heroSearchResults, setHeroSearchResults] = useState(null);
   const [heroSearchLoading, setHeroSearchLoading] = useState(false);
   const [heroSearchError, setHeroSearchError] = useState("");
+  const [activeHeroSearchIndex, setActiveHeroSearchIndex] = useState(null);
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -767,6 +776,7 @@ export default function PortalGuildManagementTab({ session }) {
     setHeroSearchCriteria(getEmptyHeroSearchCriteria());
     setHeroSearchResults(null);
     setHeroSearchError("");
+    setActiveHeroSearchIndex(null);
   }
 
   function closeHeroSearchModal() {
@@ -786,7 +796,7 @@ export default function PortalGuildManagementTab({ session }) {
   }
 
   function addHeroSearchCriterion() {
-    setHeroSearchCriteria((previous) => [...previous, { championId: "", minAwakening: 0 }]);
+    setHeroSearchCriteria((previous) => [...previous, { championId: "", heroQuery: "", minAwakening: 0 }]);
     setHeroSearchResults(null);
     setHeroSearchError("");
   }
@@ -1233,36 +1243,83 @@ export default function PortalGuildManagementTab({ session }) {
                 const selectedChampion = criterion.championId
                   ? championOptionById.get(String(criterion.championId))
                   : null;
+                const heroInputValue = criterion.heroQuery ?? selectedChampion?.label ?? "";
+                const normalizedHeroQuery = normalizeHeroSearchText(heroInputValue);
+                const filteredChampionOptions = championOptions
+                  .filter((champion) => {
+                    if (!normalizedHeroQuery) return true;
+                    return [
+                      champion.label,
+                      champion.name,
+                      champion.portal_name,
+                      champion.english_name,
+                    ].some((value) => normalizeHeroSearchText(value).includes(normalizedHeroQuery));
+                  })
+                  .slice(0, 40);
 
                 return (
                   <div
                     key={`hero-search-${index}`}
-                    className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 md:grid-cols-[minmax(0,1fr)_160px_auto]"
+                    className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 md:grid-cols-[minmax(0,1fr)_240px_auto]"
                   >
-                    <label className="block">
-                      <span className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                    <label className="relative block">
+                      <span className="whitespace-nowrap text-xs uppercase tracking-[0.18em] text-zinc-500">
                         {t("guildManagement.heroSearchHero", "Heros")}
                       </span>
-                      <select
-                        value={criterion.championId}
-                        onChange={(event) =>
-                          updateHeroSearchCriterion(index, { championId: event.target.value })
-                        }
-                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20 [&>option]:bg-zinc-950 [&>option]:text-zinc-100"
-                      >
-                        <option value="" className="bg-zinc-950 text-zinc-100">
-                          {t("guildManagement.heroSearchChooseHero", "Selectionner un heros")}
-                        </option>
-                        {championOptions.map((champion) => (
-                          <option key={champion.id} value={champion.id} className="bg-zinc-950 text-zinc-100">
-                            {champion.label}
-                          </option>
-                        ))}
-                      </select>
+                      <input
+                        type="text"
+                        value={heroInputValue}
+                        onFocus={() => setActiveHeroSearchIndex(index)}
+                        onBlur={() => {
+                          window.setTimeout(() => {
+                            setActiveHeroSearchIndex((current) => (current === index ? null : current));
+                          }, 120);
+                        }}
+                        onChange={(event) => {
+                          updateHeroSearchCriterion(index, {
+                            championId: "",
+                            heroQuery: event.target.value,
+                          });
+                          setActiveHeroSearchIndex(index);
+                        }}
+                        placeholder={t("guildManagement.heroSearchChooseHero", "Selectionner un heros")}
+                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
+                      />
+                      {activeHeroSearchIndex === index ? (
+                        <div className="absolute left-0 right-0 top-full z-20 mt-2 max-h-72 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-2xl">
+                          {filteredChampionOptions.length ? (
+                            filteredChampionOptions.map((champion) => (
+                              <button
+                                key={champion.id}
+                                type="button"
+                                className={`block w-full rounded-md px-3 py-2 text-left text-sm transition ${
+                                  String(criterion.championId) === String(champion.id)
+                                    ? "bg-cyan-500/20 text-cyan-100"
+                                    : "text-zinc-100 hover:bg-zinc-800"
+                                }`}
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  updateHeroSearchCriterion(index, {
+                                    championId: String(champion.id),
+                                    heroQuery: champion.label,
+                                  });
+                                  setActiveHeroSearchIndex(null);
+                                }}
+                              >
+                                {champion.label}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-3 py-3 text-sm text-zinc-500">
+                              {t("guildManagement.heroSearchNoHeroMatch", "Aucun heros trouve.")}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                     </label>
 
                     <label className="block">
-                      <span className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                      <span className="whitespace-nowrap text-xs uppercase tracking-[0.18em] text-zinc-500">
                         {t("guildManagement.heroSearchAwakening", "Eveil minimum")}
                       </span>
                       <select
@@ -1280,12 +1337,7 @@ export default function PortalGuildManagementTab({ session }) {
                       </select>
                     </label>
 
-                    <div className="flex items-end justify-between gap-2">
-                      <div className="min-h-11 text-xs leading-5 text-zinc-500">
-                        {selectedChampion
-                          ? `${selectedChampion.label} A${criterion.minAwakening}+`
-                          : t("guildManagement.heroSearchEmptyLine", "Condition vide")}
-                      </div>
+                    <div className="flex items-end justify-end">
                       <Button
                         type="button"
                         variant="outline"
