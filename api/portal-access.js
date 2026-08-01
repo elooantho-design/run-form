@@ -40,8 +40,12 @@ const COMMUNITY_STATUSES = new Set(["active", "inactive"]);
 const COMMUNITY_REQUEST_STATUSES = new Set(["pending", "accepted", "refused"]);
 const EMPTY_DEFENSE_SLOT = "--";
 const DEFAULT_MEMBER_PASSWORD = "motdepassemembre";
+const HERO_SEARCH_PAGE_SIZE = 1000;
+const HERO_SEARCH_MAX_REQUIREMENTS = 10;
 const SAFE_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required";
+const HERO_SEARCH_MEMBER_SELECT =
+  "id, watcher_name, discord_id, guild_code, role, community_access_type, community_status";
 const SAFE_MEMBER_SELECT_WITH_AWAKENINGS = `
   id,
   watcher_name,
@@ -1738,6 +1742,195 @@ async function handleDefenseVote(body, res) {
   sendJson(res, 200, { defenseVotes });
 }
 
+function normalizeHeroSearchRequirements(requirements) {
+  const byChampionId = new Map();
+
+  (Array.isArray(requirements) ? requirements : []).forEach((requirement) => {
+    const championId = cleanText(requirement?.championId || requirement?.champion_id);
+    if (!championId) return;
+
+    const rawAwakening = Number(requirement?.minAwakening ?? requirement?.min_awakening ?? 0);
+    const minAwakening = Number.isFinite(rawAwakening)
+      ? Math.max(0, Math.min(5, Math.trunc(rawAwakening)))
+      : 0;
+    const existing = byChampionId.get(championId);
+    if (!existing || minAwakening > existing.minAwakening) {
+      byChampionId.set(championId, { championId, minAwakening });
+    }
+  });
+
+  return [...byChampionId.values()].slice(0, HERO_SEARCH_MAX_REQUIREMENTS);
+}
+
+async function loadHeroSearchMembers(actor, { scope, guildCode }) {
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("guild_members")
+      .select(HERO_SEARCH_MEMBER_SELECT)
+      .order("guild_code", { ascending: true })
+      .order("watcher_name", { ascending: true })
+      .range(from, from + HERO_SEARCH_PAGE_SIZE - 1);
+
+    if (error) {
+      throw new Error(error.message || "Chargement joueurs impossible.");
+    }
+
+    rows.push(...(data || []));
+    if (!data || data.length < HERO_SEARCH_PAGE_SIZE) break;
+    from += HERO_SEARCH_PAGE_SIZE;
+  }
+
+  return rows
+    .filter((member) => canViewGuildCode(actor, member.guild_code, { leaderSeesAll: true }))
+    .filter((member) => !isCommunityAccount(member))
+    .filter((member) => {
+      if (scope !== "guild") return true;
+      return normalizeGuildCode(member.guild_code) === guildCode;
+    });
+}
+
+async function loadHeroSearchAwakenings(championIds) {
+  if (!championIds.length) return [];
+
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("member_awakenings")
+      .select("member_id, champion_id, awakening_level")
+      .in("champion_id", championIds)
+      .order("champion_id", { ascending: true })
+      .order("member_id", { ascending: true })
+      .range(from, from + HERO_SEARCH_PAGE_SIZE - 1);
+
+    if (error) {
+      throw new Error(error.message || "Chargement eveils impossible.");
+    }
+
+    rows.push(...(data || []));
+    if (!data || data.length < HERO_SEARCH_PAGE_SIZE) break;
+    from += HERO_SEARCH_PAGE_SIZE;
+  }
+
+  return rows;
+}
+
+async function handleHeroAvailabilitySearch(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  const actor = adminCheck.admin;
+  const scope = normalizeText(body.scope) === "all" ? "all" : "guild";
+  const guildCode = normalizeGuildCode(body.guildCode || body.guild_code || actor.guild_code);
+  const requirements = normalizeHeroSearchRequirements(body.requirements);
+
+  if (!requirements.length) {
+    sendJson(res, 400, { error: "Selectionne au moins un heros." });
+    return;
+  }
+
+  if (scope === "guild" && (!guildCode || !canViewGuildCode(actor, guildCode, { leaderSeesAll: true }))) {
+    sendJson(res, 403, { error: "Guilde hors perimetre." });
+    return;
+  }
+
+  const championIds = requirements.map((requirement) => requirement.championId);
+  const { data: champions, error: championsError } = await supabase
+    .from("champions")
+    .select(CHAMPION_SAFE_SELECT)
+    .in("id", championIds);
+
+  if (championsError) {
+    sendJson(res, 500, { error: championsError.message || "Chargement heros impossible." });
+    return;
+  }
+
+  const championById = new Map((champions || []).map((champion) => [String(champion.id), champion]));
+  const missingChampion = requirements.find((requirement) => !championById.has(String(requirement.championId)));
+  if (missingChampion) {
+    sendJson(res, 400, { error: "Un heros selectionne est introuvable dans Portal." });
+    return;
+  }
+
+  let searchMembers = [];
+  let awakeningRows = [];
+  try {
+    searchMembers = await loadHeroSearchMembers(actor, { scope, guildCode });
+    awakeningRows = await loadHeroSearchAwakenings(championIds);
+  } catch (error) {
+    sendJson(res, 500, { error: error?.message || "Recherche impossible." });
+    return;
+  }
+
+  const visibleMemberIds = new Set(searchMembers.map((member) => String(member.id)));
+  const awakeningByMemberAndChampion = new Map();
+
+  awakeningRows.forEach((entry) => {
+    const memberId = String(entry?.member_id || "");
+    const championId = String(entry?.champion_id || "");
+    if (!visibleMemberIds.has(memberId) || !championId) return;
+
+    const level = Number(entry?.awakening_level ?? -1);
+    const safeLevel = Number.isFinite(level) ? level : -1;
+    const key = `${memberId}:${championId}`;
+    awakeningByMemberAndChampion.set(key, Math.max(awakeningByMemberAndChampion.get(key) ?? -1, safeLevel));
+  });
+
+  const mappedRequirements = requirements.map((requirement) => {
+    const champion = championById.get(String(requirement.championId));
+    return {
+      championId: requirement.championId,
+      heroName: champion?.portal_name || champion?.name || "Hero",
+      technicalName: champion?.name || "",
+      minAwakening: requirement.minAwakening,
+    };
+  });
+
+  const results = searchMembers
+    .map((member) => {
+      const matches = mappedRequirements.map((requirement) => {
+        const key = `${member.id}:${requirement.championId}`;
+        return {
+          ...requirement,
+          awakening: awakeningByMemberAndChampion.get(key) ?? -1,
+        };
+      });
+
+      const hasAllHeroes = matches.every((match) => Number(match.awakening) >= Number(match.minAwakening));
+      if (!hasAllHeroes) return null;
+
+      return {
+        memberId: member.id,
+        name: getMemberName(member),
+        guildCode: member.guild_code || "",
+        matches,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const guildCompare = String(left.guildCode || "").localeCompare(String(right.guildCode || ""), "fr", {
+        sensitivity: "base",
+      });
+      if (scope === "all" && guildCompare !== 0) return guildCompare;
+      return String(left.name || "").localeCompare(String(right.name || ""), "fr", { sensitivity: "base" });
+    });
+
+  sendJson(res, 200, {
+    ok: true,
+    scope,
+    guildCode,
+    requirements: mappedRequirements,
+    results,
+  });
+}
+
 async function handleGuildManagementLoad(body, res) {
   const activeGuildCode = normalizeGuildCode(body.guildCode || body.guild_code);
   const adminCheck = await requireAdminById(res._portalReq);
@@ -1752,17 +1945,23 @@ async function handleGuildManagementLoad(body, res) {
     return;
   }
 
-  const [membersResult, defenses] = await Promise.all([
+  const [membersResult, defenses, championsResult] = await Promise.all([
     supabase
       .from("guild_members")
       .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
       .order("watcher_name", { ascending: true })
       .limit(MAX_MEMBER_ROWS),
     loadVisibleDefenses(adminCheck.admin, { guildCode: activeGuildCode, leaderSeesAll: true }),
+    supabase.from("champions").select(CHAMPION_SAFE_SELECT),
   ]);
 
   if (membersResult.error) {
     sendJson(res, 500, { error: membersResult.error.message || "Chargement joueurs impossible." });
+    return;
+  }
+
+  if (championsResult.error) {
+    sendJson(res, 500, { error: championsResult.error.message || "Chargement heros impossible." });
     return;
   }
 
@@ -1772,7 +1971,7 @@ async function handleGuildManagementLoad(body, res) {
     .map(serializeManagedMember);
   const defenseVotes = await loadDefenseVotes(defenses);
 
-  sendJson(res, 200, { members, defenses, defenseVotes });
+  sendJson(res, 200, { members, defenses, defenseVotes, champions: championsResult.data || [] });
 }
 
 async function handleGuildMemberUpdate(body, res) {
@@ -2705,6 +2904,11 @@ export default async function handler(req, res) {
 
     if (action === "guild-management-load") {
       await handleGuildManagementLoad(body, res);
+      return;
+    }
+
+    if (action === "hero-availability-search") {
+      await handleHeroAvailabilitySearch(body, res);
       return;
     }
 

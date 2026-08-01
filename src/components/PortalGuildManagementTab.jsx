@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, ExternalLink, MessageSquare, Plus, RefreshCw, Save, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
+import { ArrowRightLeft, ExternalLink, MessageSquare, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, UserPlus, Users, X } from "lucide-react";
 import GestionDefenseTab from "@/components/GestionDefenseTab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
+import { getChampionDisplayName } from "@/lib/championDisplay";
 import { resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -104,11 +105,12 @@ async function postPortalAccess(action, payload = {}) {
 }
 
 export default function PortalGuildManagementTab({ session }) {
-  const { t } = usePortalLanguage();
+  const { t, language } = usePortalLanguage();
   const [activeGuildCode, setActiveGuildCode] = useState(getSessionGuildCode(session));
   const [members, setMembers] = useState([]);
   const [defenses, setDefenses] = useState([]);
   const [defenseVotes, setDefenseVotes] = useState([]);
+  const [champions, setChampions] = useState([]);
   const [selectedMemberId, setSelectedMemberId] = useState(null);
   const [trackedMetaDefenseId, setTrackedMetaDefenseId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -135,6 +137,11 @@ export default function PortalGuildManagementTab({ session }) {
   const [memberPanelError, setMemberPanelError] = useState("");
   const [memberPanelCustomMessage, setMemberPanelCustomMessage] = useState("");
   const [resettingStatuses, setResettingStatuses] = useState(false);
+  const [heroSearchOpen, setHeroSearchOpen] = useState(false);
+  const [heroSearchCriteria, setHeroSearchCriteria] = useState([{ championId: "", minAwakening: 0 }]);
+  const [heroSearchResults, setHeroSearchResults] = useState(null);
+  const [heroSearchLoading, setHeroSearchLoading] = useState(false);
+  const [heroSearchError, setHeroSearchError] = useState("");
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -148,6 +155,30 @@ export default function PortalGuildManagementTab({ session }) {
   const removeMemberLabel = isPaladinSession(session)
     ? t("guildManagement.leaveCluster", "Quitte le cluster")
     : t("guildManagement.leaveGuild", "Quitte la guilde");
+  const championOptions = useMemo(
+    () =>
+      [...(champions || [])]
+        .map((champion) => ({
+          ...champion,
+          label: getChampionDisplayName(champion, language) || champion.portal_name || champion.name || `Hero ${champion.id}`,
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label, "fr", { sensitivity: "base" })),
+    [champions, language],
+  );
+  const championOptionById = useMemo(
+    () => new Map(championOptions.map((champion) => [String(champion.id), champion])),
+    [championOptions],
+  );
+  const validHeroSearchCriteria = useMemo(
+    () =>
+      heroSearchCriteria
+        .filter((criterion) => criterion.championId)
+        .map((criterion) => ({
+          championId: String(criterion.championId),
+          minAwakening: Math.max(0, Math.min(5, Number(criterion.minAwakening) || 0)),
+        })),
+    [heroSearchCriteria],
+  );
 
   const activeMembers = useMemo(
     () => members.filter((member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode)),
@@ -239,6 +270,7 @@ export default function PortalGuildManagementTab({ session }) {
         setMembers(mappedMembers);
         setDefenses(payload.defenses || []);
         setDefenseVotes(payload.defenseVotes || []);
+        setChampions(payload.champions || []);
         setSelectedMemberId((current) => {
           if (current && mappedMembers.some((member) => String(member.id) === String(current))) return current;
           const connectedMember = mappedMembers.find((member) => String(member.id) === String(connectedMemberId));
@@ -258,6 +290,7 @@ export default function PortalGuildManagementTab({ session }) {
         setMembers([]);
         setDefenses([]);
         setDefenseVotes([]);
+        setChampions([]);
         setLoading(false);
       }
     }
@@ -719,6 +752,62 @@ export default function PortalGuildManagementTab({ session }) {
     }
   }
 
+  function openHeroSearchModal() {
+    setHeroSearchOpen(true);
+    setHeroSearchError("");
+    setHeroSearchResults(null);
+    setHeroSearchCriteria((current) => (current.length ? current : [{ championId: "", minAwakening: 0 }]));
+  }
+
+  function updateHeroSearchCriterion(index, patch) {
+    setHeroSearchCriteria((previous) =>
+      previous.map((criterion, currentIndex) =>
+        currentIndex === index ? { ...criterion, ...patch } : criterion,
+      ),
+    );
+    setHeroSearchResults(null);
+    setHeroSearchError("");
+  }
+
+  function addHeroSearchCriterion() {
+    setHeroSearchCriteria((previous) => [...previous, { championId: "", minAwakening: 0 }]);
+    setHeroSearchResults(null);
+    setHeroSearchError("");
+  }
+
+  function removeHeroSearchCriterion(index) {
+    setHeroSearchCriteria((previous) => {
+      const next = previous.filter((_, currentIndex) => currentIndex !== index);
+      return next.length ? next : [{ championId: "", minAwakening: 0 }];
+    });
+    setHeroSearchResults(null);
+    setHeroSearchError("");
+  }
+
+  async function runHeroAvailabilitySearch(scope) {
+    if (!validHeroSearchCriteria.length) {
+      setHeroSearchError(t("guildManagement.heroSearchMissingHero", "Selectionne au moins un heros."));
+      return;
+    }
+
+    setHeroSearchLoading(true);
+    setHeroSearchError("");
+
+    try {
+      const payload = await postPortalAccess("hero-availability-search", {
+        guildCode: activeGuildCode,
+        scope,
+        requirements: validHeroSearchCriteria,
+      });
+      setHeroSearchResults(payload);
+    } catch (error) {
+      console.error("Erreur recherche disponibilite heros Portal:", error);
+      setHeroSearchError(error?.message || t("guildManagement.heroSearchFailed", "Recherche impossible."));
+    } finally {
+      setHeroSearchLoading(false);
+    }
+  }
+
   async function setDefenseVote(defense, value) {
     if (!connectedMemberId || !defense) return;
 
@@ -882,6 +971,16 @@ export default function PortalGuildManagementTab({ session }) {
             <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-300">
               {activeDefenses.length} {t("guildManagement.defenses", "defenses")}
             </Badge>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-lg border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20"
+              disabled={!isAdmin || loading}
+              onClick={openHeroSearchModal}
+            >
+              <Search className="mr-2 h-4 w-4" />
+              {t("guildManagement.heroSearchButton", "Qui a ces heros ?")}
+            </Button>
             <Button
               type="button"
               className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
@@ -1077,6 +1176,218 @@ export default function PortalGuildManagementTab({ session }) {
                 {addingMember ? t("guildManagement.adding", "Ajout...") : t("common.confirm", "Confirmer")}
               </Button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {heroSearchOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-cyan-500/30 bg-cyan-500/10">
+                  <Search className="h-5 w-5 text-cyan-200" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-zinc-50">
+                    {t("guildManagement.heroSearchTitle", "Qui possede ces heros ?")}
+                  </h3>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    {t(
+                      "guildManagement.heroSearchHelp",
+                      "Selectionne un ou plusieurs heros, ajoute un eveil minimum, puis lance la recherche.",
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+                disabled={heroSearchLoading}
+                onClick={() => {
+                  if (heroSearchLoading) return;
+                  setHeroSearchOpen(false);
+                }}
+                title={t("common.close", "Fermer")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {heroSearchCriteria.map((criterion, index) => {
+                const selectedChampion = criterion.championId
+                  ? championOptionById.get(String(criterion.championId))
+                  : null;
+
+                return (
+                  <div
+                    key={`hero-search-${index}`}
+                    className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 md:grid-cols-[minmax(0,1fr)_160px_auto]"
+                  >
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                        {t("guildManagement.heroSearchHero", "Heros")}
+                      </span>
+                      <select
+                        value={criterion.championId}
+                        onChange={(event) =>
+                          updateHeroSearchCriterion(index, { championId: event.target.value })
+                        }
+                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-black/30 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
+                      >
+                        <option value="">
+                          {t("guildManagement.heroSearchChooseHero", "Selectionner un heros")}
+                        </option>
+                        {championOptions.map((champion) => (
+                          <option key={champion.id} value={champion.id}>
+                            {champion.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                        {t("guildManagement.heroSearchAwakening", "Eveil minimum")}
+                      </span>
+                      <select
+                        value={criterion.minAwakening}
+                        onChange={(event) =>
+                          updateHeroSearchCriterion(index, { minAwakening: Number(event.target.value) })
+                        }
+                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-black/30 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
+                      >
+                        {[0, 1, 2, 3, 4, 5].map((awakening) => (
+                          <option key={awakening} value={awakening}>
+                            A{awakening}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="flex items-end justify-between gap-2">
+                      <div className="min-h-11 text-xs leading-5 text-zinc-500">
+                        {selectedChampion
+                          ? `${selectedChampion.label} A${criterion.minAwakening}+`
+                          : t("guildManagement.heroSearchEmptyLine", "Condition vide")}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 rounded-lg border-red-500/40 px-3 text-red-200 hover:bg-red-500/10"
+                        disabled={heroSearchCriteria.length === 1}
+                        onClick={() => removeHeroSearchCriterion(index)}
+                        title={t("common.delete", "Supprimer")}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                onClick={addHeroSearchCriterion}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                {t("guildManagement.heroSearchAddCondition", "Ajouter une condition")}
+              </Button>
+            </div>
+
+            {heroSearchError ? (
+              <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                {heroSearchError}
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20"
+                disabled={heroSearchLoading || validHeroSearchCriteria.length === 0}
+                onClick={() => runHeroAvailabilitySearch("guild")}
+              >
+                <Search className="mr-2 h-4 w-4" />
+                {heroSearchLoading
+                  ? t("guildManagement.heroSearchRunning", "Recherche...")
+                  : formatText(t("guildManagement.heroSearchGuild", "Chercher dans {guild}"), {
+                      guild: activeGuildCode,
+                    })}
+              </Button>
+              <Button
+                type="button"
+                className="rounded-lg bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
+                disabled={heroSearchLoading || validHeroSearchCriteria.length === 0}
+                onClick={() => runHeroAvailabilitySearch("all")}
+              >
+                <Search className="mr-2 h-4 w-4" />
+                {heroSearchLoading
+                  ? t("guildManagement.heroSearchRunning", "Recherche...")
+                  : t("guildManagement.heroSearchCluster", "Chercher dans tout le dashboard")}
+              </Button>
+            </div>
+
+            {heroSearchResults ? (
+              <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                      {t("guildManagement.heroSearchResults", "Resultats")}
+                    </div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-50">
+                      {heroSearchResults.results?.length || 0}{" "}
+                      {t("guildManagement.heroSearchPlayersFound", "joueur(s) trouve(s)")}
+                    </div>
+                  </div>
+                  <Badge className="rounded-lg border-cyan-500/30 bg-cyan-500/10 text-cyan-200">
+                    {heroSearchResults.scope === "all"
+                      ? t("guildManagement.heroSearchScopeAll", "Dashboard entier")
+                      : heroSearchResults.guildCode || activeGuildCode}
+                  </Badge>
+                </div>
+
+                {heroSearchResults.results?.length ? (
+                  <div className="mt-4 grid gap-2">
+                    {heroSearchResults.results.map((result) => (
+                      <div
+                        key={result.memberId}
+                        className="rounded-lg border border-zinc-800 bg-black/25 px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-zinc-100">{result.name}</span>
+                          {heroSearchResults.scope === "all" ? (
+                            <Badge className="rounded-md border-zinc-700 bg-zinc-900 text-zinc-300">
+                              {result.guildCode || "-"}
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-zinc-400">
+                          {(result.matches || []).map((match) => (
+                            <span
+                              key={`${result.memberId}-${match.championId}`}
+                              className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-emerald-200"
+                            >
+                              {match.heroName} A{match.awakening}
+                              {Number(match.minAwakening) > 0 ? ` / min A${match.minAwakening}` : ""}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-lg border border-zinc-800 bg-black/25 px-4 py-6 text-center text-sm text-zinc-400">
+                    {t("guildManagement.heroSearchNoResult", "Aucun joueur ne correspond a ces conditions.")}
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
