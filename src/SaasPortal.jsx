@@ -934,7 +934,18 @@ const heroFactionMeta = {
 };
 
 const heroRoleOrder = Object.keys(heroRoleMeta);
-const heroFactionOrder = Object.keys(heroFactionMeta);
+const heroFactionOrder = [
+  "sentinelle",
+  "nordiste",
+  "cauchemar",
+  "cultiste",
+  "infernal",
+  "perceur",
+  "esoterique",
+  "chaotique",
+  "arbitre",
+  "innommable",
+];
 const bulkAwakeningRarities = new Set(["epic", "rare", "ordinary", "basic"]);
 
 function decodeLegacyMojibake(value) {
