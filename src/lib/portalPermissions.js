@@ -40,8 +40,13 @@ export function isPortalCommunitySession(session) {
   return accessType === "community" || isPortalCommunityRole(session?.role);
 }
 
+function isPortalLeaderSession(session) {
+  return Boolean(session?.isLeader || session?.leader || normalizePortalRole(session?.role) === "leader");
+}
+
 export function canShowPortalNavItem(item, session, portalAccess) {
   if (item.id === "support-project") return Boolean(portalAccess?.canUseSupportProject);
+  if (item.leaderOnly) return isPortalLeaderSession(session);
 
   if (isPortalCommunitySession(session)) return COMMUNITY_MAIN_TABS.has(item.id);
 

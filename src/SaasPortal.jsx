@@ -20,6 +20,7 @@ import {
   Lock,
   LogOut,
   Menu,
+  MessagesSquare,
   Monitor,
   Play,
   PlusCircle,
@@ -61,6 +62,7 @@ import CreatorProfileSettings from "@/components/CreatorProfileSettings";
 import GuildBossPlacementTab from "@/components/GuildBossPlacementTab";
 import PveLibraryTab from "@/components/PveLibraryTab";
 import SupportProjectTab from "@/components/SupportProjectTab";
+import GlobalChatTab from "@/components/GlobalChatTab";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
@@ -119,6 +121,7 @@ const navigation = [
   { id: "gvg", label: "GVG", labelKey: "nav.gvg", icon: Shield },
   { id: "run-search", label: "Recherche de run", labelKey: "nav.runSearch", icon: Search },
   { id: "support-project", label: "Soutenir le projet", labelKey: "nav.supportProject", icon: HeartHandshake },
+  { id: "global-chat", label: "Chat general", labelKey: "nav.globalChat", icon: MessagesSquare, leaderOnly: true },
   { id: "settings", label: "Parametres", labelKey: "nav.settings", icon: Settings },
 ];
 
@@ -2692,6 +2695,7 @@ function PortalShell({ session, onLogout }) {
           {active === "gvg" ? <GvgView session={session} onEditRun={openRunEditor} /> : null}
           {active === "run-search" ? <RunSearchGrid session={session} /> : null}
           {active === "support-project" ? <SupportProjectTab session={session} /> : null}
+          {active === "global-chat" && isLeaderUser ? <GlobalChatTab session={session} /> : null}
           {activePveTab && canRenderPvePlacementTool ? (
             <GuildBossPlacementTab session={session} />
           ) : null}

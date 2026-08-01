@@ -1,11 +1,9 @@
 import React, { createContext, useContext, useMemo, useState } from "react";
+import { PORTAL_LANGUAGES } from "./portalSupportedLanguages.js";
 
 const PORTAL_LANGUAGE_STORAGE_KEY = "portal_language";
 
-export const PORTAL_LANGUAGES = [
-  { code: "fr", label: "Francais", shortLabel: "FR", flagLabel: "France" },
-  { code: "en", label: "English", shortLabel: "EN", flagLabel: "United Kingdom" },
-];
+export { PORTAL_LANGUAGES };
 
 const PortalLanguageContext = createContext({
   language: "fr",
@@ -24,6 +22,7 @@ const PORTAL_TRANSLATIONS = {
   "nav.gvg": "GVG",
   "nav.runSearch": "Run search",
   "nav.supportProject": "Support the project",
+  "nav.globalChat": "Global chat",
   "nav.pve": "PVE",
   "nav.settings": "Settings",
   "nav.guildManagement": "Guild management",
@@ -1133,6 +1132,32 @@ const PORTAL_TRANSLATIONS = {
   "support.statusCanceled": "Canceled",
   "support.modeLive": "Live",
   "support.modeTest": "Test",
+  "chat.title": "Global chat",
+  "chat.description": "Leader-only shared discussion, with translation cache prepared for later languages.",
+  "chat.leaderOnly": "This chat is reserved for the leader.",
+  "chat.loading": "Loading messages...",
+  "chat.empty": "No message yet.",
+  "chat.loadOlder": "Load older messages",
+  "chat.refresh": "Refresh",
+  "chat.reply": "Reply",
+  "chat.replyingTo": "Replying to",
+  "chat.cancelReply": "Cancel reply",
+  "chat.delete": "Delete",
+  "chat.deleted": "Message deleted.",
+  "chat.original": "Original",
+  "chat.translation": "Translation",
+  "chat.showOriginal": "Show original",
+  "chat.showTranslation": "Show translation",
+  "chat.translationDisabled": "Automatic translation is not configured yet.",
+  "chat.translationFailed": "Translation unavailable.",
+  "chat.placeholder": "Write a message...",
+  "chat.send": "Send",
+  "chat.sending": "Sending...",
+  "chat.errorLoad": "Unable to load the chat.",
+  "chat.errorSend": "Unable to send the message.",
+  "chat.errorDelete": "Unable to delete the message.",
+  "chat.tooLong": "Message too long.",
+  "chat.polling": "Live refresh by polling",
 };
 
 function translate(language, key, fallback) {
