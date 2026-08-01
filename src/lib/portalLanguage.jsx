@@ -677,7 +677,7 @@ const PORTAL_TRANSLATIONS = {
   "guildManagement.heroSearchChooseHero": "Select a hero",
   "guildManagement.heroSearchAwakening": "Minimum awakening",
   "guildManagement.heroSearchEmptyLine": "Empty condition",
-  "guildManagement.heroSearchAddCondition": "Add a condition",
+  "guildManagement.heroSearchAddHero": "Add a hero",
   "guildManagement.heroSearchMissingHero": "Select at least one hero.",
   "guildManagement.heroSearchFailed": "Unable to search.",
   "guildManagement.heroSearchRunning": "Searching...",

@@ -22,6 +22,10 @@ const GUILD_STATUS_TODO = "\u00c0 faire";
 const GUILD_STATUS_VERIFY = "\u00c0 v\u00e9rifier";
 const GUILD_STATUS_VALID = "Valid\u00e9";
 
+function getEmptyHeroSearchCriteria() {
+  return [{ championId: "", minAwakening: 0 }];
+}
+
 function formatText(template, values) {
   return Object.entries(values).reduce(
     (text, [key, value]) => text.replace(new RegExp(`\\{${key}\\}`, "g"), value ?? ""),
@@ -138,7 +142,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [memberPanelCustomMessage, setMemberPanelCustomMessage] = useState("");
   const [resettingStatuses, setResettingStatuses] = useState(false);
   const [heroSearchOpen, setHeroSearchOpen] = useState(false);
-  const [heroSearchCriteria, setHeroSearchCriteria] = useState([{ championId: "", minAwakening: 0 }]);
+  const [heroSearchCriteria, setHeroSearchCriteria] = useState(getEmptyHeroSearchCriteria);
   const [heroSearchResults, setHeroSearchResults] = useState(null);
   const [heroSearchLoading, setHeroSearchLoading] = useState(false);
   const [heroSearchError, setHeroSearchError] = useState("");
@@ -753,10 +757,22 @@ export default function PortalGuildManagementTab({ session }) {
   }
 
   function openHeroSearchModal() {
+    setHeroSearchCriteria(getEmptyHeroSearchCriteria());
     setHeroSearchOpen(true);
     setHeroSearchError("");
     setHeroSearchResults(null);
-    setHeroSearchCriteria((current) => (current.length ? current : [{ championId: "", minAwakening: 0 }]));
+  }
+
+  function resetHeroSearchModal() {
+    setHeroSearchCriteria(getEmptyHeroSearchCriteria());
+    setHeroSearchResults(null);
+    setHeroSearchError("");
+  }
+
+  function closeHeroSearchModal() {
+    if (heroSearchLoading) return;
+    setHeroSearchOpen(false);
+    resetHeroSearchModal();
   }
 
   function updateHeroSearchCriterion(index, patch) {
@@ -778,7 +794,7 @@ export default function PortalGuildManagementTab({ session }) {
   function removeHeroSearchCriterion(index) {
     setHeroSearchCriteria((previous) => {
       const next = previous.filter((_, currentIndex) => currentIndex !== index);
-      return next.length ? next : [{ championId: "", minAwakening: 0 }];
+      return next.length ? next : getEmptyHeroSearchCriteria();
     });
     setHeroSearchResults(null);
     setHeroSearchError("");
@@ -1205,10 +1221,7 @@ export default function PortalGuildManagementTab({ session }) {
                 type="button"
                 className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
                 disabled={heroSearchLoading}
-                onClick={() => {
-                  if (heroSearchLoading) return;
-                  setHeroSearchOpen(false);
-                }}
+                onClick={closeHeroSearchModal}
                 title={t("common.close", "Fermer")}
               >
                 <X className="h-4 w-4" />
@@ -1235,13 +1248,13 @@ export default function PortalGuildManagementTab({ session }) {
                         onChange={(event) =>
                           updateHeroSearchCriterion(index, { championId: event.target.value })
                         }
-                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-black/30 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
+                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20 [&>option]:bg-zinc-950 [&>option]:text-zinc-100"
                       >
-                        <option value="">
+                        <option value="" className="bg-zinc-950 text-zinc-100">
                           {t("guildManagement.heroSearchChooseHero", "Selectionner un heros")}
                         </option>
                         {championOptions.map((champion) => (
-                          <option key={champion.id} value={champion.id}>
+                          <option key={champion.id} value={champion.id} className="bg-zinc-950 text-zinc-100">
                             {champion.label}
                           </option>
                         ))}
@@ -1257,10 +1270,10 @@ export default function PortalGuildManagementTab({ session }) {
                         onChange={(event) =>
                           updateHeroSearchCriterion(index, { minAwakening: Number(event.target.value) })
                         }
-                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-black/30 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
+                        className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20 [&>option]:bg-zinc-950 [&>option]:text-zinc-100"
                       >
                         {[0, 1, 2, 3, 4, 5].map((awakening) => (
-                          <option key={awakening} value={awakening}>
+                          <option key={awakening} value={awakening} className="bg-zinc-950 text-zinc-100">
                             A{awakening}
                           </option>
                         ))}
@@ -1295,7 +1308,17 @@ export default function PortalGuildManagementTab({ session }) {
                 onClick={addHeroSearchCriterion}
               >
                 <Plus className="mr-2 h-4 w-4" />
-                {t("guildManagement.heroSearchAddCondition", "Ajouter une condition")}
+                {t("guildManagement.heroSearchAddHero", "Ajouter un heros")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                disabled={heroSearchLoading}
+                onClick={resetHeroSearchModal}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                {t("common.reset", "Reset")}
               </Button>
             </div>
 
