@@ -6510,7 +6510,7 @@ function PlayerAccessView({ session }) {
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [copiedField, setCopiedField] = useState("");
-  const selectedMemberIsProtected = isAdminRole(selectedMember?.role);
+  const selectedMemberIsProtected = isAdminRole(selectedMember?.role) && !isLeaderSession(session);
 
   useEffect(() => {
     if (!isAdminUser) return;
@@ -6762,7 +6762,7 @@ function PlayerAccessView({ session }) {
                   </div>
                 </div>
                 {selectedMemberIsProtected ? (
-                  <div className="text-sm text-amber-300">{t("playerAccess.protectedAdmin", "Compte admin protege.")}</div>
+                  <div className="text-sm text-amber-300">{t("playerAccess.protectedAdmin", "Compte admin protege. Seul le leader peut le reinitialiser.")}</div>
                 ) : null}
               </div>
             )}

@@ -855,7 +855,7 @@ const PORTAL_TRANSLATIONS = {
   "playerAccess.yourPassword": "Your password",
   "playerAccess.generating": "Generating...",
   "playerAccess.generate": "Generate",
-  "playerAccess.protectedAdmin": "Protected admin account.",
+  "playerAccess.protectedAdmin": "Protected admin account. Only the leader can reset it.",
   "logs.eyebrow": "Activity log",
   "logs.title": "Player logs",
   "logs.description": "Search a player to view their latest Portal actions: box, BP, monsters, stones, defenses and GVG.",

@@ -920,8 +920,8 @@ async function handleReset(body, res) {
     return;
   }
 
-  if (isAdminRole(target.role)) {
-    sendJson(res, 403, { error: "Les comptes admin ne peuvent pas etre reinitalises ici." });
+  if (isAdminRole(target.role) && !isLeaderRole(adminCheck.admin?.role)) {
+    sendJson(res, 403, { error: "Les comptes admin ne peuvent etre reinitialises que par le leader." });
     return;
   }
 
