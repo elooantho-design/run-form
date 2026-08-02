@@ -1149,6 +1149,9 @@ const PORTAL_TRANSLATIONS = {
   "chat.replyingTo": "Replying to",
   "chat.cancelReply": "Cancel reply",
   "chat.delete": "Delete",
+  "chat.addReaction": "Add a reaction",
+  "chat.messageActions": "Message actions",
+  "chat.reactWith": "React with {emoji}",
   "chat.deleted": "Message deleted.",
   "chat.replyDeleted": "The message was deleted.",
   "chat.replyDeletedOriginalFrom": "The original message from {name} was deleted.",
@@ -1172,6 +1175,13 @@ const PORTAL_TRANSLATIONS = {
 };
 
 const PORTAL_FRENCH_TRANSLATIONS = {
+  "chat.reply": "Répondre",
+  "chat.delete": "Supprimer",
+  "chat.addReaction": "Ajouter une réaction",
+  "chat.messageActions": "Actions du message",
+  "chat.reactWith": "Réagir avec {emoji}",
+  "chat.showOriginal": "Voir l'original",
+  "chat.showTranslation": "Voir la traduction",
   "chat.replyDeleted": "Le message a été supprimé.",
   "chat.replyDeletedOriginalFrom": "Le message original de {name} a été supprimé.",
   "chat.replyDeletedOriginal": "Le message original a été supprimé.",

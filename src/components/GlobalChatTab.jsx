@@ -5,7 +5,6 @@ import {
   Languages,
   Loader2,
   MessageCircle,
-  Plus,
   RefreshCw,
   Reply,
   Search,
@@ -95,6 +94,41 @@ const EMOJI_CATEGORIES = [
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🔥"];
 const RECENT_EMOJI_KEY = "portal-chat-recent-emojis";
+const CONTEXT_MENU_WIDTH = 280;
+const CONTEXT_MENU_HEIGHT = 320;
+const CONTEXT_MENU_MARGIN = 12;
+const LONG_PRESS_DELAY_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE = 12;
+
+function clampMessageMenuPosition(x, y) {
+  if (typeof window === "undefined") return { x, y };
+  const maxX = Math.max(CONTEXT_MENU_MARGIN, window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_MARGIN);
+  const maxY = Math.max(CONTEXT_MENU_MARGIN, window.innerHeight - CONTEXT_MENU_HEIGHT - CONTEXT_MENU_MARGIN);
+  return {
+    x: Math.min(Math.max(CONTEXT_MENU_MARGIN, x), maxX),
+    y: Math.min(Math.max(CONTEXT_MENU_MARGIN, y), maxY),
+  };
+}
+
+function isMessageContextExcludedTarget(target) {
+  return Boolean(
+    target?.closest?.(
+      [
+        "a",
+        "button",
+        "input",
+        "textarea",
+        "select",
+        "option",
+        "img",
+        "video",
+        "iframe",
+        "[role='button']",
+        "[data-chat-context-exclude='true']",
+      ].join(","),
+    ),
+  );
+}
 
 function readRecentEmojis() {
   if (typeof window === "undefined") return [];
@@ -227,9 +261,9 @@ function updateMessageReactions(message, serverReactions) {
   return { ...message, reactions: Array.isArray(serverReactions) ? serverReactions : [] };
 }
 
-function MessageReactions({ message, onToggleReaction, pendingReactionKey, t }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
+function MessageReactions({ message, onToggleReaction, pendingReactionKey }) {
   const reactions = Array.isArray(message.reactions) ? message.reactions : [];
+  if (!reactions.length) return null;
 
   return (
     <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -252,31 +286,202 @@ function MessageReactions({ message, onToggleReaction, pendingReactionKey, t }) 
           </button>
         );
       })}
-      {message.permissions?.canReact ? (
-        <div className="relative">
-          <button
-            type="button"
-            className="flex h-8 items-center gap-1 rounded-full border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-300 hover:bg-zinc-800"
-            onClick={() => setPickerOpen((open) => !open)}
-            aria-label={t("chat.addReaction", "Ajouter une reaction")}
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-          {pickerOpen ? (
-            <div className="absolute bottom-full left-0 z-30 mb-2">
-              <EmojiPicker
-                compact
-                t={t}
-                onClose={() => setPickerOpen(false)}
-                onPick={(emoji) => {
-                  setPickerOpen(false);
-                  onToggleReaction(message, emoji);
-                }}
-              />
-            </div>
-          ) : null}
+    </div>
+  );
+}
+
+function MessageContextMenu({
+  menu,
+  showOriginal,
+  pendingReactionKey,
+  onClose,
+  onReply,
+  onDelete,
+  onToggleOriginal,
+  onToggleReaction,
+  t,
+}) {
+  const menuRef = useRef(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  useEffect(() => {
+    setPickerOpen(false);
+  }, [menu?.message?.id]);
+
+  useEffect(() => {
+    if (!menu) return undefined;
+
+    function focusFirstItem() {
+      const firstItem = menuRef.current?.querySelector("[role='menuitem']:not(:disabled)");
+      firstItem?.focus?.();
+    }
+
+    const frame = window.requestAnimationFrame(focusFirstItem);
+    return () => window.cancelAnimationFrame(frame);
+  }, [menu]);
+
+  useEffect(() => {
+    if (!menu) return undefined;
+
+    function handlePointerDown(event) {
+      if (menuRef.current?.contains(event.target)) return;
+      onClose?.({ restoreFocus: false });
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose?.({ restoreFocus: true });
+        return;
+      }
+
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const items = [...(menuRef.current?.querySelectorAll("[role='menuitem']:not(:disabled)") || [])];
+      if (!items.length) return;
+      event.preventDefault();
+      const currentIndex = Math.max(0, items.indexOf(document.activeElement));
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex = (currentIndex + delta + items.length) % items.length;
+      items[nextIndex]?.focus?.();
+    }
+
+    function handleWindowClose() {
+      onClose?.({ restoreFocus: false });
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleWindowClose);
+    window.addEventListener("scroll", handleWindowClose, true);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleWindowClose);
+      window.removeEventListener("scroll", handleWindowClose, true);
+    };
+  }, [menu, onClose]);
+
+  if (!menu?.message || menu.message.deleted || menu.message.deletedAt) return null;
+
+  const { message } = menu;
+  const canReact = Boolean(message.permissions?.canReact);
+  const canDelete = Boolean(message.permissions?.canDelete);
+  const hasTranslation = Boolean(message.canShowOriginal);
+  const isTouchMenu = menu.source === "touch";
+
+  function runAction(action) {
+    onClose?.({ restoreFocus: true });
+    action?.();
+  }
+
+  const content = (
+    <>
+      <div className="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">
+        {t("chat.messageActions")}
+      </div>
+      {canReact ? (
+        <div className="mb-2 grid grid-cols-4 gap-2 border-b border-zinc-800 pb-2">
+          {QUICK_REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              role="menuitem"
+              className="flex h-10 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 text-xl transition hover:bg-zinc-800 focus:bg-cyan-400/15 focus:outline-none focus:ring-2 focus:ring-cyan-400/40 disabled:opacity-50"
+              disabled={pendingReactionKey === `${message.id}:${emoji}`}
+              aria-label={t("chat.reactWith").replace("{emoji}", emoji)}
+              onClick={() => runAction(() => onToggleReaction(message, emoji))}
+            >
+              {emoji}
+            </button>
+          ))}
         </div>
       ) : null}
+
+      <div className="space-y-1">
+        {canReact ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 transition hover:bg-zinc-900 focus:bg-cyan-400/15 focus:outline-none"
+            onClick={() => setPickerOpen((open) => !open)}
+          >
+            <Smile className="h-4 w-4 text-zinc-400" />
+            {t("chat.addReaction")}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          role="menuitem"
+          className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 transition hover:bg-zinc-900 focus:bg-cyan-400/15 focus:outline-none"
+          onClick={() => runAction(() => onReply(message))}
+        >
+          <Reply className="h-4 w-4 text-zinc-400" />
+          {t("chat.reply")}
+        </button>
+        {hasTranslation ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 transition hover:bg-zinc-900 focus:bg-cyan-400/15 focus:outline-none"
+            onClick={() => runAction(() => onToggleOriginal(message.id))}
+          >
+            <Languages className="h-4 w-4 text-zinc-400" />
+            {showOriginal ? t("chat.showTranslation") : t("chat.showOriginal")}
+          </button>
+        ) : null}
+        {canDelete ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-red-200 transition hover:bg-red-500/10 focus:bg-red-500/15 focus:outline-none"
+            onClick={() => runAction(() => onDelete(message))}
+          >
+            <Trash2 className="h-4 w-4 text-red-300" />
+            {t("chat.delete")}
+          </button>
+        ) : null}
+      </div>
+
+      {pickerOpen ? (
+        <div className={`${isTouchMenu ? "mt-3" : "absolute left-full top-0 ml-2"} z-50`} data-chat-context-exclude="true">
+          <EmojiPicker
+            compact
+            t={t}
+            onClose={() => setPickerOpen(false)}
+            onPick={(emoji) => {
+              onToggleReaction(message, emoji);
+              onClose?.({ restoreFocus: true });
+            }}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (isTouchMenu) {
+    return (
+      <div
+        ref={menuRef}
+        className="fixed inset-x-3 bottom-3 z-50 rounded-2xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/70"
+        role="menu"
+        aria-label={t("chat.messageActions")}
+        data-chat-context-exclude="true"
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-50 w-[280px] rounded-2xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/70"
+      style={{ left: `${menu.x}px`, top: `${menu.y}px` }}
+      role="menu"
+      aria-label={t("chat.messageActions")}
+      data-chat-context-exclude="true"
+    >
+      {content}
     </div>
   );
 }
@@ -443,24 +648,93 @@ function ChatAvatar({ author }) {
 function ChatMessage({
   message,
   language,
-  onReply,
-  onDelete,
   onJumpToMessage,
+  onOpenMenu,
   onToggleReaction,
   pendingReactionKey,
   showOriginal,
-  onToggleOriginal,
   highlighted,
   registerMessageRef,
   t,
 }) {
+  const articleRef = useRef(null);
+  const longPressRef = useRef(null);
+  const suppressContextMenuUntilRef = useRef(0);
+
+  function clearLongPress() {
+    if (longPressRef.current?.timer) {
+      window.clearTimeout(longPressRef.current.timer);
+    }
+    longPressRef.current = null;
+  }
+
+  function openMenuAt(point) {
+    if (!message.permissions || message.deleted || message.deletedAt) return;
+    onOpenMenu?.(message, {
+      x: point.x,
+      y: point.y,
+      source: point.source,
+      triggerElement: articleRef.current,
+    });
+  }
+
+  function handleContextMenu(event) {
+    if (Date.now() < suppressContextMenuUntilRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (isMessageContextExcludedTarget(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearLongPress();
+    openMenuAt({ x: event.clientX, y: event.clientY, source: "mouse" });
+  }
+
+  function handlePointerDown(event) {
+    if (event.pointerType !== "touch" || event.isPrimary === false || isMessageContextExcludedTarget(event.target)) return;
+    clearLongPress();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    longPressRef.current = {
+      startX,
+      startY,
+      timer: window.setTimeout(() => {
+        document.getSelection?.()?.removeAllRanges?.();
+        suppressContextMenuUntilRef.current = Date.now() + 900;
+        openMenuAt({ x: startX, y: startY, source: "touch" });
+        clearLongPress();
+      }, LONG_PRESS_DELAY_MS),
+    };
+  }
+
+  function handlePointerMove(event) {
+    if (!longPressRef.current || event.pointerType !== "touch") return;
+    const deltaX = Math.abs(event.clientX - longPressRef.current.startX);
+    const deltaY = Math.abs(event.clientY - longPressRef.current.startY);
+    if (deltaX > LONG_PRESS_MOVE_TOLERANCE || deltaY > LONG_PRESS_MOVE_TOLERANCE) clearLongPress();
+  }
+
+  function handleKeyDown(event) {
+    if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") {
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      openMenuAt({
+        x: rect.left + Math.min(48, rect.width / 2),
+        y: rect.top + Math.min(48, rect.height / 2),
+        source: "keyboard",
+      });
+    }
+  }
+
+  useEffect(() => () => clearLongPress(), []);
+
   if (message.deleted || message.deletedAt) return null;
 
   const displayedBody = showOriginal
       ? message.bodyOriginal
       : message.body;
   const replyGif = findGifAttachment(message.replyTo?.attachments);
-  const hasTranslation = Boolean(message.canShowOriginal);
   const translationNotice =
     !message.isTranslated && message.translationStatus === "disabled"
       ? t("chat.translationDisabled", "Traduction automatique non configuree.")
@@ -472,10 +746,20 @@ function ChatMessage({
 
   return (
     <article
-      ref={(node) => registerMessageRef?.(message.id, node)}
+      ref={(node) => {
+        articleRef.current = node;
+        registerMessageRef?.(message.id, node);
+      }}
+      tabIndex={0}
+      onContextMenu={handleContextMenu}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={clearLongPress}
+      onPointerCancel={clearLongPress}
+      onKeyDown={handleKeyDown}
       className={`rounded-2xl border bg-zinc-950/80 p-4 transition ${
         highlighted ? "border-cyan-300 shadow-[0_0_0_2px_rgba(103,232,249,0.25)]" : "border-zinc-800"
-      }`}
+      } focus:outline-none focus:ring-2 focus:ring-cyan-400/30`}
     >
       <div className="flex items-start gap-3">
         <ChatAvatar author={message.author} />
@@ -545,57 +829,10 @@ function ChatMessage({
             <p className="mt-2 text-xs text-amber-300/80">{translationNotice}</p>
           ) : null}
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            {message.permissions?.canReact ? (
-              QUICK_REACTIONS.map((emoji) => (
-                <Button
-                  key={emoji}
-                  type="button"
-                  variant="outline"
-                  className="h-8 rounded-lg border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-800"
-                  disabled={pendingReactionKey === `${message.id}:${emoji}`}
-                  onClick={() => onToggleReaction(message, emoji)}
-                >
-                  {emoji}
-                </Button>
-              ))
-            ) : null}
-            {hasTranslation ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="h-8 rounded-lg border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-800"
-                onClick={() => onToggleOriginal(message.id)}
-              >
-                {showOriginal ? t("chat.showTranslation", "Voir la traduction") : t("chat.showOriginal", "Voir l'original")}
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 rounded-lg border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-800"
-              onClick={() => onReply(message)}
-            >
-              <Reply className="mr-1 h-3.5 w-3.5" />
-              {t("chat.reply", "Repondre")}
-            </Button>
-            {message.permissions?.canDelete ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="h-8 rounded-lg border-red-500/35 bg-red-500/10 px-2 text-xs text-red-200 hover:bg-red-500/20"
-                onClick={() => onDelete(message)}
-              >
-                <Trash2 className="mr-1 h-3.5 w-3.5" />
-                {t("chat.delete", "Supprimer")}
-              </Button>
-            ) : null}
-          </div>
           <MessageReactions
             message={message}
             pendingReactionKey={pendingReactionKey}
             onToggleReaction={onToggleReaction}
-            t={t}
           />
         </div>
       </div>
@@ -610,6 +847,7 @@ export default function GlobalChatTab({ session }) {
   const textareaRef = useRef(null);
   const scrollRef = useRef(null);
   const messageRefs = useRef(new Map());
+  const messageMenuTriggerRef = useRef(null);
   const messagesRef = useRef([]);
   const latestCursorRef = useRef("");
   const mountedRef = useRef(false);
@@ -623,6 +861,7 @@ export default function GlobalChatTab({ session }) {
   const [selectedGif, setSelectedGif] = useState(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [gifPickerOpen, setGifPickerOpen] = useState(false);
+  const [messageMenu, setMessageMenu] = useState(null);
   const [pendingReactionKey, setPendingReactionKey] = useState("");
   const [highlightedMessageId, setHighlightedMessageId] = useState("");
   const [noticeMessage, setNoticeMessage] = useState("");
@@ -647,6 +886,12 @@ export default function GlobalChatTab({ session }) {
     const latest = messages.length ? messages[messages.length - 1]?.createdAt || "" : "";
     latestCursorRef.current = latest;
   }, [messages]);
+
+  useEffect(() => {
+    if (!messageMenu?.message?.id) return;
+    const stillVisible = messages.some((message) => String(message.id) === String(messageMenu.message.id));
+    if (!stillVisible) closeMessageMenu({ restoreFocus: false });
+  }, [messages, messageMenu?.message?.id]);
 
   async function parsePayload(response) {
     const payload = await response.json().catch(() => ({}));
@@ -814,6 +1059,29 @@ export default function GlobalChatTab({ session }) {
       else next.add(messageId);
       return next;
     });
+  }
+
+  function openMessageMenu(message, point = {}) {
+    if (!message?.id || message.deleted || message.deletedAt) return;
+    const position = clampMessageMenuPosition(Number(point.x || 0), Number(point.y || 0));
+    messageMenuTriggerRef.current = point.triggerElement || null;
+    setEmojiPickerOpen(false);
+    setGifPickerOpen(false);
+    setMessageMenu({
+      message,
+      x: position.x,
+      y: position.y,
+      source: point.source || "mouse",
+    });
+  }
+
+  function closeMessageMenu(options = {}) {
+    setMessageMenu(null);
+    if (options.restoreFocus) {
+      window.requestAnimationFrame(() => {
+        messageMenuTriggerRef.current?.focus?.();
+      });
+    }
   }
 
   function registerMessageRef(messageId, node) {
@@ -1014,7 +1282,13 @@ export default function GlobalChatTab({ session }) {
       ) : null}
 
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70">
-        <div ref={scrollRef} className="max-h-[62vh] min-h-[420px] space-y-3 overflow-y-auto p-4">
+        <div
+          ref={scrollRef}
+          className="max-h-[62vh] min-h-[420px] space-y-3 overflow-y-auto p-4"
+          onScroll={() => {
+            if (messageMenu) closeMessageMenu({ restoreFocus: false });
+          }}
+        >
           {hasMore ? (
             <div className="flex justify-center">
               <Button
@@ -1043,10 +1317,8 @@ export default function GlobalChatTab({ session }) {
                 language={language}
                 t={t}
                 showOriginal={showOriginalIds.has(message.id)}
-                onToggleOriginal={toggleOriginal}
-                onReply={setReplyTo}
-                onDelete={deleteMessage}
                 onJumpToMessage={jumpToMessage}
+                onOpenMenu={openMessageMenu}
                 onToggleReaction={toggleReaction}
                 pendingReactionKey={pendingReactionKey}
                 highlighted={highlightedMessageId === String(message.id)}
@@ -1059,6 +1331,18 @@ export default function GlobalChatTab({ session }) {
             </div>
           )}
         </div>
+
+        <MessageContextMenu
+          menu={messageMenu}
+          showOriginal={messageMenu?.message?.id ? showOriginalIds.has(messageMenu.message.id) : false}
+          pendingReactionKey={pendingReactionKey}
+          t={t}
+          onClose={closeMessageMenu}
+          onReply={setReplyTo}
+          onDelete={deleteMessage}
+          onToggleOriginal={toggleOriginal}
+          onToggleReaction={toggleReaction}
+        />
 
         <div className="border-t border-zinc-800 p-4">
           {replyTo ? (
