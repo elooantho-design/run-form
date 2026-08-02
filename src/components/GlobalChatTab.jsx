@@ -202,8 +202,8 @@ function EmojiPicker({ onPick, onClose, compact = false, language = "fr", t }) {
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [onClose]);
 
-  const pickerWidth = compact ? "min(320px, calc(100vw - 2rem))" : "min(380px, calc(100vw - 2rem))";
-  const pickerHeight = compact ? 360 : 400;
+  const pickerWidth = compact ? "min(392px, calc(100vw - 24px))" : "min(400px, calc(100vw - 24px))";
+  const pickerHeight = compact ? "min(440px, calc(100dvh - 120px))" : "min(460px, calc(100dvh - 120px))";
   const loadingLabel = t("chat.emojiLoading", "Chargement des emojis...");
 
   const loader = (
@@ -221,8 +221,16 @@ function EmojiPicker({ onPick, onClose, compact = false, language = "fr", t }) {
       aria-label={t("chat.emojiPicker", "Selecteur emoji")}
       data-chat-popover-root="true"
       data-chat-context-exclude="true"
+      onWheelCapture={(event) => event.stopPropagation()}
+      onTouchMoveCapture={(event) => event.stopPropagation()}
       style={{
         width: pickerWidth,
+        maxWidth: "calc(100vw - 24px)",
+        maxHeight: compact ? "calc(100dvh - 96px)" : "calc(100dvh - 72px)",
+        boxSizing: "border-box",
+        overflow: "visible",
+        touchAction: "pan-y",
+        "--portal-chat-emoji-picker-height": pickerHeight,
         "--epr-bg-color": "#09090b",
         "--epr-category-label-bg-color": "#09090b",
         "--epr-category-label-text-color": "#a1a1aa",
@@ -242,23 +250,33 @@ function EmojiPicker({ onPick, onClose, compact = false, language = "fr", t }) {
         "--epr-picker-border-color": "#3f3f46",
         "--epr-skin-tone-picker-menu-color": "rgba(24, 24, 27, 0.98)",
         "--epr-horizontal-padding": "10px",
+        "--epr-category-navigation-button-size": "28px",
+        "--epr-emoji-size": "28px",
+        "--epr-emoji-padding": "5px",
       }}
     >
       <style>{`
         .portal-chat-emoji-picker {
           border: 0 !important;
           box-shadow: none !important;
+          height: var(--portal-chat-emoji-picker-height) !important;
+          max-height: var(--portal-chat-emoji-picker-height) !important;
+          max-width: 100% !important;
         }
-        .portal-chat-emoji-picker .epr-body,
-        .portal-chat-emoji-picker .epr-emoji-list {
+        .portal-chat-emoji-picker .epr-body {
+          min-height: 0 !important;
+          overflow-y: auto !important;
           overflow-x: hidden !important;
           scrollbar-width: none;
           -ms-overflow-style: none;
           overscroll-behavior: contain;
+          touch-action: pan-y;
         }
-        .portal-chat-emoji-picker .epr-body::-webkit-scrollbar,
-        .portal-chat-emoji-picker .epr-emoji-list::-webkit-scrollbar {
+        .portal-chat-emoji-picker .epr-body::-webkit-scrollbar {
           display: none;
+        }
+        .portal-chat-emoji-picker .epr-emoji-list {
+          overflow-x: visible !important;
         }
         .portal-chat-emoji-picker .epr-category-nav {
           flex-wrap: wrap !important;
@@ -367,10 +385,13 @@ function MessageContextMenu({
   t,
 }) {
   const menuRef = useRef(null);
+  const pickerRef = useRef(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerStyle, setPickerStyle] = useState(null);
 
   useEffect(() => {
     setPickerOpen(false);
+    setPickerStyle(null);
   }, [menu?.message?.id]);
 
   useEffect(() => {
@@ -435,6 +456,36 @@ function MessageContextMenu({
     };
   }, [menu, onClose, pickerOpen]);
 
+  useEffect(() => {
+    if (!pickerOpen || menu?.source === "touch") {
+      setPickerStyle(null);
+      return undefined;
+    }
+
+    function updatePickerPosition() {
+      const menuNode = menuRef.current;
+      const pickerNode = pickerRef.current;
+      if (!menuNode || !pickerNode) return;
+
+      const viewportMargin = 12;
+      const gap = 8;
+      const menuRect = menuNode.getBoundingClientRect();
+      const pickerRect = pickerNode.getBoundingClientRect();
+      const availableRight = window.innerWidth - menuRect.right - viewportMargin;
+      const availableLeft = menuRect.left - viewportMargin;
+      const openLeft = availableRight < pickerRect.width + gap && availableLeft >= pickerRect.width + gap;
+      const left = openLeft ? -(pickerRect.width + gap) : menuRect.width + gap;
+      const minTop = viewportMargin - menuRect.top;
+      const maxTop = window.innerHeight - viewportMargin - menuRect.top - pickerRect.height;
+      const top = Math.min(Math.max(0, minTop), maxTop);
+
+      setPickerStyle({ left: `${left}px`, top: `${top}px` });
+    }
+
+    const frame = window.requestAnimationFrame(updatePickerPosition);
+    return () => window.cancelAnimationFrame(frame);
+  }, [menu?.source, pickerOpen]);
+
   if (!menu?.message || menu.message.deleted || menu.message.deletedAt) return null;
 
   const { message } = menu;
@@ -442,13 +493,8 @@ function MessageContextMenu({
   const canDelete = Boolean(message.permissions?.canDelete);
   const hasTranslation = Boolean(message.canShowOriginal);
   const isTouchMenu = menu.source === "touch";
-  const pickerOpensLeft =
-    !isTouchMenu &&
-    typeof window !== "undefined" &&
-    menu.x + CONTEXT_MENU_WIDTH + 332 + CONTEXT_MENU_MARGIN > window.innerWidth;
-  const pickerPositionClass = isTouchMenu
-    ? "mt-3"
-    : `absolute top-0 ${pickerOpensLeft ? "right-full mr-2" : "left-full ml-2"}`;
+  const pickerPositionClass = isTouchMenu ? "mt-3" : "absolute top-0";
+  const defaultPickerStyle = isTouchMenu ? undefined : { left: `${CONTEXT_MENU_WIDTH + 8}px`, top: "0px" };
 
   function runAction(action) {
     onClose?.({ restoreFocus: true });
@@ -524,7 +570,13 @@ function MessageContextMenu({
       </div>
 
       {pickerOpen ? (
-        <div className={`${pickerPositionClass} z-50`} data-chat-popover-root="true" data-chat-context-exclude="true">
+        <div
+          ref={pickerRef}
+          className={`${pickerPositionClass} z-50`}
+          style={pickerStyle || defaultPickerStyle}
+          data-chat-popover-root="true"
+          data-chat-context-exclude="true"
+        >
           <EmojiPicker
             compact
             t={t}
@@ -544,7 +596,7 @@ function MessageContextMenu({
     return (
       <div
         ref={menuRef}
-        className="fixed inset-x-3 bottom-3 z-50 rounded-2xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/70"
+        className="fixed inset-x-3 bottom-3 z-50 max-h-[calc(100dvh-24px)] overflow-y-auto overscroll-contain rounded-2xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/70"
         role="menu"
         aria-label={t("chat.messageActions")}
         data-chat-popover-root="true"
