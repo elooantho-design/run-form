@@ -25,6 +25,7 @@
     "browser-image-compression": "^2.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "emoji-picker-react": "^4.19.1",
     "formidable": "^3.5.4",
     "lucide-react": "^0.577.0",
     "radix-ui": "^1.4.3",

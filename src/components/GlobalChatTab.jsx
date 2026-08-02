@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownCircle,
   ImageIcon,
@@ -17,6 +17,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+
+const NativeEmojiPicker = lazy(() => import("emoji-picker-react"));
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -69,31 +71,18 @@ function mergeMessages(previous, incoming) {
   return [...map.values()].sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
 }
 
-const EMOJI_CATEGORIES = [
-  {
-    key: "recent",
-    label: "Recents",
-    emojis: [],
-  },
-  {
-    key: "smileys",
-    label: "Smileys",
-    emojis: ["😀", "😄", "😂", "🤣", "😊", "😍", "😎", "😭", "😅", "😬", "🙃", "😉", "😇", "🥳", "🤔", "🫡"],
-  },
-  {
-    key: "gestures",
-    label: "Gestes",
-    emojis: ["👍", "👎", "👏", "🙌", "🙏", "💪", "👀", "🤝", "👌", "✌️", "🤞", "🫶", "👋", "🖐️", "☝️", "👇"],
-  },
-  {
-    key: "symbols",
-    label: "Symboles",
-    emojis: ["❤️", "🔥", "⭐", "✅", "❌", "⚠️", "💯", "✨", "🎯", "🏆", "💎", "🛡️", "⚔️", "🔁", "📌", "🚀"],
-  },
-];
-
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🔥"];
-const RECENT_EMOJI_KEY = "portal-chat-recent-emojis";
+const EMOJI_PICKER_CATEGORIES = [
+  { category: "suggested", key: "recent", fallback: "Recently used" },
+  { category: "smileys_people", key: "smileysPeople", fallback: "Smileys & people" },
+  { category: "animals_nature", key: "animalsNature", fallback: "Animals & nature" },
+  { category: "food_drink", key: "foodDrink", fallback: "Food & drink" },
+  { category: "activities", key: "activities", fallback: "Activities" },
+  { category: "travel_places", key: "travelPlaces", fallback: "Travel & places" },
+  { category: "objects", key: "objects", fallback: "Objects" },
+  { category: "symbols", key: "symbols", fallback: "Symbols" },
+  { category: "flags", key: "flags", fallback: "Flags" },
+];
 const CONTEXT_MENU_WIDTH = 280;
 const CONTEXT_MENU_HEIGHT = 320;
 const CONTEXT_MENU_MARGIN = 12;
@@ -148,22 +137,6 @@ function eventPathHasChatPopoverRoot(event) {
   return Boolean(event?.target?.closest?.("[data-chat-popover-root='true']"));
 }
 
-function readRecentEmojis() {
-  if (typeof window === "undefined") return [];
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(RECENT_EMOJI_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed.filter(Boolean).slice(0, 18) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRecentEmoji(emoji) {
-  if (typeof window === "undefined" || !emoji) return;
-  const next = [emoji, ...readRecentEmojis().filter((item) => item !== emoji)].slice(0, 18);
-  window.localStorage.setItem(RECENT_EMOJI_KEY, JSON.stringify(next));
-}
-
 function findGifAttachment(attachments) {
   return (attachments || []).find((attachment) => attachment?.attachmentType === "gif");
 }
@@ -176,22 +149,49 @@ function formatDeletedReplyLabel(replyTo, t) {
   return t("chat.replyDeletedOriginalFrom").replace("{name}", authorName);
 }
 
-function EmojiPicker({ onPick, onClose, compact = false, t }) {
+function normalizePickedEmoji(emojiData) {
+  return typeof emojiData?.emoji === "string" ? emojiData.emoji.trim() : "";
+}
+
+function buildEmojiPickerCategories(t) {
+  return EMOJI_PICKER_CATEGORIES.map((category) => ({
+    category: category.category,
+    name: t(`chat.emojiCategory.${category.key}`, category.fallback),
+  }));
+}
+
+function EmojiPicker({ onPick, onClose, compact = false, language = "fr", t }) {
   const rootRef = useRef(null);
-  const [query, setQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState("recent");
-  const recent = useMemo(() => readRecentEmojis(), []);
-  const categories = useMemo(
-    () => EMOJI_CATEGORIES.map((category) => (category.key === "recent" ? { ...category, emojis: recent } : category)),
-    [recent],
-  );
-  const available = useMemo(() => {
-    const source = query
-      ? categories.flatMap((category) => category.emojis)
-      : categories.find((category) => category.key === activeCategory)?.emojis || [];
-    const unique = [...new Set(source)];
-    return query ? unique.filter((emoji) => emoji.includes(query.trim())) : unique;
-  }, [activeCategory, categories, query]);
+  const [emojiData, setEmojiData] = useState(null);
+  const [localeLoading, setLocaleLoading] = useState(false);
+  const categories = useMemo(() => buildEmojiPickerCategories(t), [t, language]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (language !== "fr") {
+      setEmojiData(null);
+      setLocaleLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLocaleLoading(true);
+    import("emoji-picker-react/dist/data/emojis-fr.js")
+      .then((module) => {
+        if (!cancelled) setEmojiData(module.default || module);
+      })
+      .catch(() => {
+        if (!cancelled) setEmojiData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLocaleLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [language]);
 
   useEffect(() => {
     function handlePointerDown(event) {
@@ -202,65 +202,102 @@ function EmojiPicker({ onPick, onClose, compact = false, t }) {
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [onClose]);
 
-  const resultGridColumns = compact ? "grid-cols-6" : "grid-cols-6 sm:grid-cols-8";
+  const pickerWidth = compact ? "min(320px, calc(100vw - 2rem))" : "min(380px, calc(100vw - 2rem))";
+  const pickerHeight = compact ? 360 : 400;
+  const loadingLabel = t("chat.emojiLoading", "Chargement des emojis...");
+
+  const loader = (
+    <div className="flex h-48 items-center justify-center gap-2 text-sm text-zinc-400">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      {loadingLabel}
+    </div>
+  );
 
   return (
     <div
       ref={rootRef}
-      className={`${compact ? "w-[min(320px,calc(100vw-2rem))]" : "w-[min(380px,calc(100vw-2rem))]"} rounded-2xl border border-zinc-700 bg-zinc-950 p-3 shadow-2xl shadow-black/50`}
+      className="rounded-2xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/50"
       role="dialog"
       aria-label={t("chat.emojiPicker", "Selecteur emoji")}
       data-chat-popover-root="true"
       data-chat-context-exclude="true"
+      style={{
+        width: pickerWidth,
+        "--epr-bg-color": "#09090b",
+        "--epr-category-label-bg-color": "#09090b",
+        "--epr-category-label-text-color": "#a1a1aa",
+        "--epr-dark-search-input-bg-color": "#000000",
+        "--epr-search-input-bg-color": "#000000",
+        "--epr-search-input-bg-color-active": "#000000",
+        "--epr-search-input-border-color": "#27272a",
+        "--epr-search-input-text-color": "#f4f4f5",
+        "--epr-search-input-placeholder-color": "#71717a",
+        "--epr-search-border-color": "#27272a",
+        "--epr-search-border-color-active": "rgba(34, 211, 238, 0.65)",
+        "--epr-text-color": "#e4e4e7",
+        "--epr-hover-bg-color": "rgba(39, 39, 42, 0.92)",
+        "--epr-focus-bg-color": "rgba(34, 211, 238, 0.16)",
+        "--epr-highlight-color": "#22d3ee",
+        "--epr-category-icon-active-color": "#67e8f9",
+        "--epr-picker-border-color": "#3f3f46",
+        "--epr-skin-tone-picker-menu-color": "rgba(24, 24, 27, 0.98)",
+        "--epr-horizontal-padding": "10px",
+      }}
     >
-      <label className="relative block">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={t("chat.emojiSearch", "Chercher...")}
-          className="h-10 w-full rounded-xl border border-zinc-800 bg-black pl-9 pr-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/60"
-        />
-      </label>
-      <div className="mt-3 flex flex-wrap gap-1 overflow-x-hidden">
-        {categories.map((category) => (
-          <button
-            key={category.key}
-            type="button"
-            className={`rounded-lg px-2 py-1 text-xs ${
-              activeCategory === category.key ? "bg-cyan-400/20 text-cyan-100" : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-            }`}
-            onClick={() => setActiveCategory(category.key)}
-          >
-            {t(`chat.emojiCategory.${category.key}`, category.label)}
-          </button>
-        ))}
-      </div>
-      <div
-        className={`mt-3 grid max-h-[260px] ${resultGridColumns} gap-1.5 overflow-y-auto overflow-x-hidden overscroll-contain [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden`}
-        data-chat-popover-root="true"
-      >
-        {available.length ? (
-          available.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              className="flex aspect-square w-full min-w-0 items-center justify-center rounded-lg text-xl hover:bg-zinc-800 focus:bg-cyan-400/15 focus:outline-none focus:ring-2 focus:ring-cyan-400/35"
-              aria-label={t("chat.pickEmoji").replace("{emoji}", emoji)}
-              onClick={() => {
-                saveRecentEmoji(emoji);
-                onPick?.(emoji);
-              }}
-            >
-              {emoji}
-            </button>
-          ))
-        ) : (
-          <div className="col-span-full py-5 text-center text-xs text-zinc-500">
-            {t("chat.emojiEmpty", "Aucun emoji.")}
-          </div>
-        )}
-      </div>
+      <style>{`
+        .portal-chat-emoji-picker {
+          border: 0 !important;
+          box-shadow: none !important;
+        }
+        .portal-chat-emoji-picker .epr-body,
+        .portal-chat-emoji-picker .epr-emoji-list {
+          overflow-x: hidden !important;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+          overscroll-behavior: contain;
+        }
+        .portal-chat-emoji-picker .epr-body::-webkit-scrollbar,
+        .portal-chat-emoji-picker .epr-emoji-list::-webkit-scrollbar {
+          display: none;
+        }
+        .portal-chat-emoji-picker .epr-category-nav {
+          flex-wrap: wrap !important;
+          gap: 2px !important;
+          height: auto !important;
+          overflow-x: hidden !important;
+          padding-bottom: 6px !important;
+        }
+        .portal-chat-emoji-picker .epr-category-nav > button,
+        .portal-chat-emoji-picker .epr-emoji-category-label {
+          flex-shrink: 0;
+        }
+      `}</style>
+      {language === "fr" && localeLoading && !emojiData ? (
+        loader
+      ) : (
+        <Suspense fallback={loader}>
+          <NativeEmojiPicker
+            className="portal-chat-emoji-picker"
+            width="100%"
+            height={pickerHeight}
+            theme="dark"
+            emojiStyle="native"
+            lazyLoadEmojis
+            suggestedEmojisMode="recent"
+            searchPlaceholder={t("chat.emojiSearch", "Chercher...")}
+            searchClearButtonLabel={t("chat.emojiClearSearch", "Effacer la recherche")}
+            categories={categories}
+            emojiData={emojiData || undefined}
+            previewConfig={{ showPreview: false }}
+            skinTonePickerLocation="SEARCH"
+            onEmojiClick={(emojiData) => {
+              const emoji = normalizePickedEmoji(emojiData);
+              if (!emoji) return;
+              onPick?.(emoji);
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -321,6 +358,7 @@ function MessageContextMenu({
   menu,
   showOriginal,
   pendingReactionKey,
+  language,
   onClose,
   onReply,
   onDelete,
@@ -490,6 +528,7 @@ function MessageContextMenu({
           <EmojiPicker
             compact
             t={t}
+            language={language}
             onClose={() => setPickerOpen(false)}
             onPick={(emoji) => {
               onToggleReaction(message, emoji);
@@ -1024,6 +1063,19 @@ export default function GlobalChatTab({ session }) {
     return () => window.clearInterval(interval);
   }, [config.pollingMs, isLeader, language]);
 
+  useEffect(() => {
+    if (!emojiPickerOpen) return undefined;
+
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setEmojiPickerOpen(false);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [emojiPickerOpen]);
+
   async function sendMessage() {
     if (!canSend) return;
     if (trimmedComposer.length > maxLength) {
@@ -1381,6 +1433,7 @@ export default function GlobalChatTab({ session }) {
           menu={messageMenu}
           showOriginal={messageMenu?.message?.id ? showOriginalIds.has(messageMenu.message.id) : false}
           pendingReactionKey={pendingReactionKey}
+          language={language}
           t={t}
           onClose={closeMessageMenu}
           onReply={setReplyTo}
@@ -1451,7 +1504,7 @@ export default function GlobalChatTab({ session }) {
                 </Button>
                 {emojiPickerOpen ? (
                   <div className="absolute bottom-full left-0 z-40 mb-2">
-                    <EmojiPicker t={t} onPick={insertEmoji} onClose={() => setEmojiPickerOpen(false)} />
+                    <EmojiPicker t={t} language={language} onPick={insertEmoji} onClose={() => setEmojiPickerOpen(false)} />
                   </div>
                 ) : null}
               </div>
