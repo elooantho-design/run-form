@@ -1150,6 +1150,10 @@ const PORTAL_TRANSLATIONS = {
   "chat.cancelReply": "Cancel reply",
   "chat.delete": "Delete",
   "chat.deleted": "Message deleted.",
+  "chat.replyDeleted": "The message was deleted.",
+  "chat.replyDeletedOriginalFrom": "The original message from {name} was deleted.",
+  "chat.replyDeletedOriginal": "The original message was deleted.",
+  "chat.replyDeletedUnavailable": "The original message is no longer available.",
   "chat.original": "Original",
   "chat.translation": "Translation",
   "chat.showOriginal": "Show original",
@@ -1167,7 +1171,15 @@ const PORTAL_TRANSLATIONS = {
   "chat.polling": "Live refresh by polling",
 };
 
+const PORTAL_FRENCH_TRANSLATIONS = {
+  "chat.replyDeleted": "Le message a été supprimé.",
+  "chat.replyDeletedOriginalFrom": "Le message original de {name} a été supprimé.",
+  "chat.replyDeletedOriginal": "Le message original a été supprimé.",
+  "chat.replyDeletedUnavailable": "Le message original n'est plus disponible.",
+};
+
 function translate(language, key, fallback) {
+  if (language === "fr") return PORTAL_FRENCH_TRANSLATIONS[key] || fallback || key;
   if (language !== "en") return fallback || key;
   return PORTAL_TRANSLATIONS[key] || fallback || key;
 }

@@ -174,29 +174,46 @@ async function loadReplyPreviewMap(rows, targetLanguage, { loadAttachments = fal
   if (error) throw error;
 
   const authors = await loadAuthorMap((data || []).map((row) => row.author_member_id));
-  const translationCache = await loadTranslations(data || [], targetLanguage);
+  const activeReplyRows = (data || []).filter((row) => !row.deleted_at);
+  const translationCache = await loadTranslations(activeReplyRows, targetLanguage);
   const attachmentMap = loadAttachments
-    ? await loadAttachmentsForMessageIds(supabase, (data || []).map((row) => row.id))
+    ? await loadAttachmentsForMessageIds(supabase, activeReplyRows.map((row) => row.id))
     : new Map();
   const replyMap = new Map();
 
   for (const row of data || []) {
     const deleted = Boolean(row.deleted_at);
     const author = authors.get(String(row.author_member_id || ""));
+    const serializedAuthor = serializeAuthor(author, row.author_member_id);
     const translationKey = `${row.id}:${row.body_hash}`;
     const translation = deleted
       ? { status: "deleted", translated_body: "" }
       : await ensureTranslation(row, targetLanguage, translationCache.get(translationKey));
     const displayBody = resolveChatDisplayBody({ bodyOriginal: row.body_original, translation });
 
-    replyMap.set(String(row.id), {
+    const preview = {
       id: row.id,
-      authorName: serializeAuthor(author, row.author_member_id).displayName,
-      bodyOriginal: deleted ? "" : cleanChatText(row.body_original).slice(0, 180),
-      body: deleted ? "" : cleanChatText(displayBody.body).slice(0, 180),
-      isTranslated: displayBody.isTranslated,
-      attachments: deleted ? [] : attachmentMap.get(String(row.id)) || [],
+      author: serializedAuthor,
+      authorName: serializedAuthor.displayName,
       deleted,
+    };
+
+    if (deleted) {
+      replyMap.set(String(row.id), {
+        ...preview,
+        body: null,
+        translation: null,
+        attachments: [],
+      });
+      continue;
+    }
+
+    replyMap.set(String(row.id), {
+      ...preview,
+      bodyOriginal: cleanChatText(row.body_original).slice(0, 180),
+      body: cleanChatText(displayBody.body).slice(0, 180),
+      isTranslated: displayBody.isTranslated,
+      attachments: attachmentMap.get(String(row.id)) || [],
     });
   }
 

@@ -116,6 +116,14 @@ function findGifAttachment(attachments) {
   return (attachments || []).find((attachment) => attachment?.attachmentType === "gif");
 }
 
+function formatDeletedReplyLabel(replyTo, t) {
+  const authorName = replyTo?.author?.displayName || replyTo?.authorName || "";
+  if (!authorName) {
+    return t("chat.replyDeletedOriginal");
+  }
+  return t("chat.replyDeletedOriginalFrom").replace("{name}", authorName);
+}
+
 function EmojiPicker({ onPick, onClose, compact = false, t }) {
   const rootRef = useRef(null);
   const [query, setQuery] = useState("");
@@ -483,7 +491,26 @@ function ChatMessage({
             ) : null}
           </div>
 
-          {message.replyTo && !message.replyTo.deleted ? (
+          {message.replyTo?.deleted ? (
+            <div
+              className="mt-2 flex max-w-full cursor-default items-center gap-2 rounded-lg px-1 py-1 text-left text-[11px] leading-4 text-zinc-500"
+              title={t("chat.replyDeletedUnavailable")}
+            >
+              <span className="h-4 w-4 rounded-tl-md border-l-2 border-t-2 border-zinc-700" aria-hidden="true" />
+              {message.replyTo.author?.avatarUrl ? (
+                <img
+                  src={message.replyTo.author.avatarUrl}
+                  alt=""
+                  className="h-4 w-4 rounded-full object-cover"
+                  loading="lazy"
+                  decoding="async"
+                />
+              ) : null}
+              <span className="min-w-0 truncate text-zinc-500">
+                {formatDeletedReplyLabel(message.replyTo, t)}
+              </span>
+            </div>
+          ) : message.replyTo ? (
             <button
               type="button"
               className="mt-2 flex max-w-full items-center gap-2 rounded-lg px-1 py-1 text-left text-[11px] leading-4 text-zinc-500 transition hover:bg-zinc-900/60 hover:text-zinc-300"
@@ -1041,7 +1068,7 @@ export default function GlobalChatTab({ session }) {
                   {t("chat.replyingTo", "Reponse a")} {replyTo.author?.displayName || replyTo.authorName || "Joueur"}
                 </div>
                 <div className="mt-1 truncate text-cyan-50">
-                  {replyTo.deleted ? t("chat.replyDeleted", "Le message a ete supprime.") : replyTo.body || replyTo.bodyOriginal || ""}
+                  {replyTo.deleted ? t("chat.replyDeleted") : replyTo.body || replyTo.bodyOriginal || ""}
                 </div>
               </div>
               <button
