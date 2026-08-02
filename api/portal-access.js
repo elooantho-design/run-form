@@ -2134,6 +2134,73 @@ async function handleGuildMemberDelete(body, res) {
   sendJson(res, 200, { ok: true, memberId: target.id });
 }
 
+async function handleGuildMemberConvertCommunity(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const leaderCheck = await requireLeaderById(res._portalReq);
+
+  if (leaderCheck.error) {
+    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Membre manquant." });
+    return;
+  }
+
+  const target = await loadSafeMemberById(memberId);
+  if (!target) {
+    sendJson(res, 404, { error: "Joueur introuvable." });
+    return;
+  }
+
+  if (isLeaderRole(target.role)) {
+    sendJson(res, 403, { error: "Le compte leader ne peut pas etre converti en membre communaute." });
+    return;
+  }
+
+  const previousGuildCode = target.guild_code || "";
+  const { data: updated, error } = await supabase
+    .from("guild_members")
+    .update({
+      guild_code: null,
+      role: "community_member",
+      community_access_type: "community",
+      community_status: "active",
+      assignment: "Communaut\u00e9",
+      status: "Actif",
+      defense_1: "\u2014",
+      defense_2: "\u2014",
+    })
+    .eq("id", target.id)
+    .select("id, watcher_name, discord_id, guild_code, role, created_at, preferred_language, community_access_type, community_status")
+    .maybeSingle();
+
+  if (error) {
+    sendJson(res, 500, { error: error.message || "Conversion communaute impossible." });
+    return;
+  }
+
+  if (!updated) {
+    sendJson(res, 404, { error: "Joueur introuvable." });
+    return;
+  }
+
+  await supabase.from("portal_activity_logs").insert({
+    actor_member_id: leaderCheck.leader.id,
+    actor_name: getMemberName(leaderCheck.leader),
+    target_member_id: updated.id,
+    target_name: getMemberName(updated),
+    action_type: "guild_member_convert_community",
+    entity_type: "guild_members",
+    entity_id: updated.id,
+    summary: `${getMemberName(leaderCheck.leader)} a passe ${getMemberName(updated)} en compte communaute`,
+    metadata: { previousGuildCode, role: updated.role, communityStatus: normalizeCommunityStatus(updated.community_status) },
+  });
+
+  sendJson(res, 200, { ok: true, member: serializeCommunityMember(updated) });
+}
+
 async function createOrAttachGuildMember({ actor, name, discordId, guildCode, role = "member", forumPostUrl = "" }) {
   const watcherName = cleanText(name);
   const cleanDiscordId = cleanText(discordId);
@@ -2919,6 +2986,11 @@ export default async function handler(req, res) {
 
     if (action === "guild-member-delete") {
       await handleGuildMemberDelete(body, res);
+      return;
+    }
+
+    if (action === "guild-member-convert-community") {
+      await handleGuildMemberConvertCommunity(body, res);
       return;
     }
 

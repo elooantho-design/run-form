@@ -10,6 +10,7 @@ import {
 import {
   PALADIN_CLUSTER_GUILD_CODES,
   isPaladinGuildCode,
+  isLeaderSession,
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
@@ -133,6 +134,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [memberToTransfer, setMemberToTransfer] = useState(null);
   const [targetGuildCode, setTargetGuildCode] = useState("");
   const [removingMemberId, setRemovingMemberId] = useState("");
+  const [convertingCommunityMemberId, setConvertingCommunityMemberId] = useState("");
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [newMember, setNewMember] = useState({
     name: "",
@@ -158,6 +160,7 @@ export default function PortalGuildManagementTab({ session }) {
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
+  const isLeader = isLeaderSession(session);
   const visibleGuildCodes = useMemo(() => {
     if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
 
@@ -930,6 +933,50 @@ export default function PortalGuildManagementTab({ session }) {
     }
   }
 
+  async function convertMemberToCommunity() {
+    if (!isLeader || !memberToTransfer?.id || convertingCommunityMemberId) return;
+
+    const confirmed = window.confirm(
+      formatText(
+        t(
+          "guildManagement.convertCommunityConfirm",
+          "Passer {player} en compte communaute ? Sa box et ses donnees joueur seront conservees, mais il sortira de sa guilde actuelle.",
+        ),
+        { player: memberToTransfer.name },
+      ),
+    );
+
+    if (!confirmed) return;
+
+    setConvertingCommunityMemberId(memberToTransfer.id);
+    setSavingMessage(t("guildManagement.convertingCommunity", "Conversion en compte communaute..."));
+    setErrorMessage("");
+
+    try {
+      await postPortalAccess("guild-member-convert-community", {
+        memberId: memberToTransfer.id,
+      });
+
+      setMembers((previous) => previous.filter((member) => String(member.id) !== String(memberToTransfer.id)));
+      setDefenseVotes((previous) => previous.filter((vote) => String(vote.memberId) !== String(memberToTransfer.id)));
+      setSelectedMemberId((current) => (String(current) === String(memberToTransfer.id) ? null : current));
+      setTransferDialogOpen(false);
+      setMemberToTransfer(null);
+      setTargetGuildCode("");
+      setSavingMessage(
+        formatText(
+          t("guildManagement.convertCommunitySuccess", "{player} est maintenant dans les membres communaute."),
+          { player: memberToTransfer.name },
+        ),
+      );
+    } catch (error) {
+      setErrorMessage(error?.message || t("guildManagement.convertCommunityError", "Conversion communaute impossible."));
+      setSavingMessage("");
+    } finally {
+      setConvertingCommunityMemberId("");
+    }
+  }
+
   async function addMember() {
     const cleanName = newMember.name.trim();
     const cleanDiscordId = newMember.discordId.trim();
@@ -1664,11 +1711,24 @@ export default function PortalGuildManagementTab({ session }) {
             </div>
 
             <div className="mt-6 flex flex-wrap justify-end gap-2">
+              {isLeader ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-lg border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20"
+                  disabled={Boolean(removingMemberId || convertingCommunityMemberId)}
+                  onClick={convertMemberToCommunity}
+                >
+                  {convertingCommunityMemberId === memberToTransfer.id
+                    ? t("guildManagement.convertingCommunityShort", "Conversion...")
+                    : t("guildManagement.convertCommunity", "Passer en communaute")}
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="destructive"
                 className="rounded-lg bg-red-700 text-white hover:bg-red-600"
-                disabled={Boolean(removingMemberId)}
+                disabled={Boolean(removingMemberId || convertingCommunityMemberId)}
                 onClick={removeMemberFromGuild}
               >
                 {removingMemberId === memberToTransfer.id
@@ -1679,7 +1739,7 @@ export default function PortalGuildManagementTab({ session }) {
                 type="button"
                 variant="outline"
                 className="rounded-lg border-zinc-700 text-zinc-200"
-                disabled={Boolean(removingMemberId)}
+                disabled={Boolean(removingMemberId || convertingCommunityMemberId)}
                 onClick={() => {
                   setTransferDialogOpen(false);
                   setMemberToTransfer(null);
@@ -1692,7 +1752,7 @@ export default function PortalGuildManagementTab({ session }) {
                 type="button"
                 className="rounded-lg bg-amber-500 text-zinc-950 hover:bg-amber-400"
                 disabled={
-                  Boolean(removingMemberId) ||
+                  Boolean(removingMemberId || convertingCommunityMemberId) ||
                   !targetGuildCode ||
                   !visibleGuildCodes.some(
                     (guildCode) => normalizeGuildCodeKey(guildCode) === normalizeGuildCodeKey(targetGuildCode),
