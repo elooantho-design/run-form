@@ -27,9 +27,8 @@ export function isPortalSupportLiveMode(env = {}) {
   return false;
 }
 
-export function canPortalMemberUseSupport(member, env = {}) {
-  if (isPortalSupportPublicEnabled(env)) return true;
-  return normalizeSupportText(member?.role) === "leader";
+export function canPortalMemberUseSupport(member, _env = {}) {
+  return Boolean(member);
 }
 
 export function normalizeSupportType(value) {

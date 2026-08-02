@@ -13,11 +13,13 @@ assert.equal(isPortalSupportPublicEnabled({ PORTAL_SUPPORT_PUBLIC_ENABLED: "true
 assert.equal(isPortalSupportPublicEnabled({ PORTAL_SUPPORT_PUBLIC_ENABLED: "1" }), true);
 
 assert.equal(canPortalMemberUseSupport({ role: "leader" }, {}), true);
-assert.equal(canPortalMemberUseSupport({ role: "admin" }, {}), false);
+assert.equal(canPortalMemberUseSupport({ role: "admin" }, {}), true);
+assert.equal(canPortalMemberUseSupport({ role: "member" }, {}), true);
 assert.equal(
   canPortalMemberUseSupport({ role: "member" }, { PORTAL_SUPPORT_PUBLIC_ENABLED: "true" }),
   true,
 );
+assert.equal(canPortalMemberUseSupport(null, { PORTAL_SUPPORT_PUBLIC_ENABLED: "true" }), false);
 
 assert.equal(isPortalSupportLiveMode({ STRIPE_SECRET_KEY: "sk_test_123" }), false);
 assert.equal(isPortalSupportLiveMode({ STRIPE_SECRET_KEY: "sk_live_123" }), true);

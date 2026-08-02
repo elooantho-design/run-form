@@ -1982,7 +1982,7 @@ function PortalShell({ session, onLogout }) {
   const [portalLicenseLoaded, setPortalLicenseLoaded] = useState(false);
   const [pveContents, setPveContents] = useState(() => mergePveContentNavItems([]));
   const [pveContentsLoaded, setPveContentsLoaded] = useState(false);
-  const [supportPublicEnabled, setSupportPublicEnabled] = useState(false);
+  const [supportPublicEnabled, setSupportPublicEnabled] = useState(true);
   const [editRunInitialId, setEditRunInitialId] = useState("");
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
@@ -2131,9 +2131,9 @@ function PortalShell({ session, onLogout }) {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload?.error || "Support access unavailable.");
-        if (!cancelled) setSupportPublicEnabled(Boolean(payload?.config?.publicEnabled));
+        if (!cancelled) setSupportPublicEnabled(Boolean(payload?.access?.canUseSupport || payload?.config?.publicEnabled));
       } catch {
-        if (!cancelled) setSupportPublicEnabled(false);
+        if (!cancelled) setSupportPublicEnabled(true);
       }
     }
 

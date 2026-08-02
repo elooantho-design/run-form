@@ -144,12 +144,12 @@ async function readSupportAccess(req, res) {
 
   sendPortalJson(res, 200, {
     config: {
-      publicEnabled,
+      publicEnabled: canUseSupport,
       livemode: isPortalSupportLiveMode(process.env),
     },
     access: {
       canUseSupport,
-      leaderOnly: !publicEnabled,
+      leaderOnly: false,
     },
   }, req);
 }
@@ -232,7 +232,7 @@ function buildPublicConfig(targetCents) {
     minAmountEuros: centsToEuros(minCents),
     maxAmountEuros: centsToEuros(maxCents),
     monthlyTargetEuros: centsToEuros(targetCents),
-    publicEnabled: isPortalSupportPublicEnabled(process.env),
+    publicEnabled: true,
     livemode: isPortalSupportLiveMode(process.env),
   };
 }
