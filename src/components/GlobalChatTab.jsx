@@ -130,6 +130,24 @@ function isMessageContextExcludedTarget(target) {
   );
 }
 
+function getEventPath(event) {
+  return typeof event?.composedPath === "function" ? event.composedPath() : [];
+}
+
+function eventPathIncludesNode(event, node) {
+  if (!node) return false;
+  const path = getEventPath(event);
+  return path.length ? path.includes(node) : node.contains(event?.target);
+}
+
+function eventPathHasChatPopoverRoot(event) {
+  const path = getEventPath(event);
+  if (path.length) {
+    return path.some((node) => node?.dataset?.chatPopoverRoot === "true");
+  }
+  return Boolean(event?.target?.closest?.("[data-chat-popover-root='true']"));
+}
+
 function readRecentEmojis() {
   if (typeof window === "undefined") return [];
   try {
@@ -177,18 +195,23 @@ function EmojiPicker({ onPick, onClose, compact = false, t }) {
 
   useEffect(() => {
     function handlePointerDown(event) {
-      if (rootRef.current && !rootRef.current.contains(event.target)) onClose?.();
+      if (eventPathIncludesNode(event, rootRef.current) || eventPathHasChatPopoverRoot(event)) return;
+      onClose?.();
     }
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [onClose]);
 
+  const resultGridColumns = compact ? "grid-cols-6" : "grid-cols-6 sm:grid-cols-8";
+
   return (
     <div
       ref={rootRef}
-      className={`${compact ? "w-72" : "w-[min(360px,calc(100vw-2rem))]"} rounded-2xl border border-zinc-700 bg-zinc-950 p-3 shadow-2xl shadow-black/50`}
+      className={`${compact ? "w-[min(320px,calc(100vw-2rem))]" : "w-[min(380px,calc(100vw-2rem))]"} rounded-2xl border border-zinc-700 bg-zinc-950 p-3 shadow-2xl shadow-black/50`}
       role="dialog"
       aria-label={t("chat.emojiPicker", "Selecteur emoji")}
+      data-chat-popover-root="true"
+      data-chat-context-exclude="true"
     >
       <label className="relative block">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -199,12 +222,12 @@ function EmojiPicker({ onPick, onClose, compact = false, t }) {
           className="h-10 w-full rounded-xl border border-zinc-800 bg-black pl-9 pr-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400/60"
         />
       </label>
-      <div className="mt-3 flex gap-1 overflow-x-auto">
+      <div className="mt-3 flex flex-wrap gap-1 overflow-x-hidden">
         {categories.map((category) => (
           <button
             key={category.key}
             type="button"
-            className={`shrink-0 rounded-lg px-2 py-1 text-xs ${
+            className={`rounded-lg px-2 py-1 text-xs ${
               activeCategory === category.key ? "bg-cyan-400/20 text-cyan-100" : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
             }`}
             onClick={() => setActiveCategory(category.key)}
@@ -213,13 +236,17 @@ function EmojiPicker({ onPick, onClose, compact = false, t }) {
           </button>
         ))}
       </div>
-      <div className="mt-3 grid max-h-52 grid-cols-8 gap-1 overflow-y-auto">
+      <div
+        className={`mt-3 grid max-h-[260px] ${resultGridColumns} gap-1.5 overflow-y-auto overflow-x-hidden overscroll-contain [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden`}
+        data-chat-popover-root="true"
+      >
         {available.length ? (
           available.map((emoji) => (
             <button
               key={emoji}
               type="button"
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-xl hover:bg-zinc-800 focus:bg-cyan-400/15 focus:outline-none"
+              className="flex aspect-square w-full min-w-0 items-center justify-center rounded-lg text-xl hover:bg-zinc-800 focus:bg-cyan-400/15 focus:outline-none focus:ring-2 focus:ring-cyan-400/35"
+              aria-label={t("chat.pickEmoji").replace("{emoji}", emoji)}
               onClick={() => {
                 saveRecentEmoji(emoji);
                 onPick?.(emoji);
@@ -229,7 +256,7 @@ function EmojiPicker({ onPick, onClose, compact = false, t }) {
             </button>
           ))
         ) : (
-          <div className="col-span-8 py-5 text-center text-xs text-zinc-500">
+          <div className="col-span-full py-5 text-center text-xs text-zinc-500">
             {t("chat.emojiEmpty", "Aucun emoji.")}
           </div>
         )}
@@ -324,13 +351,17 @@ function MessageContextMenu({
     if (!menu) return undefined;
 
     function handlePointerDown(event) {
-      if (menuRef.current?.contains(event.target)) return;
+      if (eventPathIncludesNode(event, menuRef.current) || eventPathHasChatPopoverRoot(event)) return;
       onClose?.({ restoreFocus: false });
     }
 
     function handleKeyDown(event) {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (pickerOpen) {
+          setPickerOpen(false);
+          return;
+        }
         onClose?.({ restoreFocus: true });
         return;
       }
@@ -349,17 +380,22 @@ function MessageContextMenu({
       onClose?.({ restoreFocus: false });
     }
 
+    function handleWindowScroll(event) {
+      if (eventPathHasChatPopoverRoot(event)) return;
+      onClose?.({ restoreFocus: false });
+    }
+
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", handleWindowClose);
-    window.addEventListener("scroll", handleWindowClose, true);
+    window.addEventListener("scroll", handleWindowScroll, true);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", handleWindowClose);
-      window.removeEventListener("scroll", handleWindowClose, true);
+      window.removeEventListener("scroll", handleWindowScroll, true);
     };
-  }, [menu, onClose]);
+  }, [menu, onClose, pickerOpen]);
 
   if (!menu?.message || menu.message.deleted || menu.message.deletedAt) return null;
 
@@ -368,6 +404,13 @@ function MessageContextMenu({
   const canDelete = Boolean(message.permissions?.canDelete);
   const hasTranslation = Boolean(message.canShowOriginal);
   const isTouchMenu = menu.source === "touch";
+  const pickerOpensLeft =
+    !isTouchMenu &&
+    typeof window !== "undefined" &&
+    menu.x + CONTEXT_MENU_WIDTH + 332 + CONTEXT_MENU_MARGIN > window.innerWidth;
+  const pickerPositionClass = isTouchMenu
+    ? "mt-3"
+    : `absolute top-0 ${pickerOpensLeft ? "right-full mr-2" : "left-full ml-2"}`;
 
   function runAction(action) {
     onClose?.({ restoreFocus: true });
@@ -443,7 +486,7 @@ function MessageContextMenu({
       </div>
 
       {pickerOpen ? (
-        <div className={`${isTouchMenu ? "mt-3" : "absolute left-full top-0 ml-2"} z-50`} data-chat-context-exclude="true">
+        <div className={`${pickerPositionClass} z-50`} data-chat-popover-root="true" data-chat-context-exclude="true">
           <EmojiPicker
             compact
             t={t}
@@ -465,6 +508,7 @@ function MessageContextMenu({
         className="fixed inset-x-3 bottom-3 z-50 rounded-2xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/70"
         role="menu"
         aria-label={t("chat.messageActions")}
+        data-chat-popover-root="true"
         data-chat-context-exclude="true"
       >
         {content}
@@ -479,6 +523,7 @@ function MessageContextMenu({
       style={{ left: `${menu.x}px`, top: `${menu.y}px` }}
       role="menu"
       aria-label={t("chat.messageActions")}
+      data-chat-popover-root="true"
       data-chat-context-exclude="true"
     >
       {content}
