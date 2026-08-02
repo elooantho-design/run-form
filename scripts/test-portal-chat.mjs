@@ -4,12 +4,15 @@ import {
   createChatBodyHash,
   getChatMaxLength,
   inferChatLanguage,
+  isEmojiOnlyChatBody,
   isSupportedChatLanguage,
   normalizeChatLanguage,
   normalizeChatLimit,
   parseMessageCursor,
   resolveChatDisplayBody,
+  shouldTranslateChatBody,
   shouldTranslateMessage,
+  validateChatMessagePayload,
   validateChatBody,
   validateClientMessageId,
 } from "../api/_portal-chat-core.js";
@@ -57,9 +60,14 @@ try {
 
   assert.equal(inferChatLanguage("Bonjour merci pour ton aide"), "fr");
   assert.equal(inferChatLanguage("Hello and thanks for your help"), "en");
+  assert.equal(inferChatLanguage("😂🔥"), "und");
+  assert.equal(isEmojiOnlyChatBody("😂🔥"), true);
   assert.equal(shouldTranslateMessage({ sourceLanguage: "fr", targetLanguage: "en", deleted: false }), true);
   assert.equal(shouldTranslateMessage({ sourceLanguage: "en", targetLanguage: "en", deleted: false }), false);
   assert.equal(shouldTranslateMessage({ sourceLanguage: "fr", targetLanguage: "en", deleted: true }), false);
+  assert.equal(shouldTranslateChatBody({ bodyOriginal: "😂🔥", sourceLanguage: "und", targetLanguage: "en", deleted: false }), false);
+  assert.equal(shouldTranslateChatBody({ bodyOriginal: "Hello", sourceLanguage: "en", targetLanguage: "fr", deleted: false }), true);
+  assert.equal(validateChatMessagePayload({ body: "", attachment: { type: "gif", provider: "mock", providerItemId: "gif-1" } }).attachment.provider, "mock");
   assert.deepEqual(
     resolveChatDisplayBody({
       bodyOriginal: "Hello everyone",

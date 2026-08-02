@@ -12,14 +12,15 @@ import {
   cleanChatText,
   createChatBodyHash,
   createMessageCursor,
+  getChatMaxLength,
   inferChatLanguage,
   normalizeChatAction,
   normalizeChatLanguage,
   normalizeChatLimit,
   parseMessageCursor,
   resolveChatDisplayBody,
-  shouldTranslateMessage,
-  validateChatBody,
+  shouldTranslateChatBody,
+  validateChatMessagePayload,
   validateClientMessageId,
 } from "./_portal-chat-core.js";
 import {
@@ -29,6 +30,28 @@ import {
   enqueuePortalChatTranslationJob,
   isReadyTranslationForConfig,
 } from "./_portal-chat-queue.js";
+import {
+  checkReactionRateLimit,
+  checkReactionSchema,
+  loadReactionsForMessageIds,
+  countMemberReactionsOnMessage,
+  canAddAnotherReactionForMember,
+  isMissingReactionSchema,
+  validateReactionEmoji,
+} from "./_portal-chat-reactions.js";
+import {
+  CHAT_ATTACHMENT_SELECT,
+  checkAttachmentSchema,
+  isMissingAttachmentSchema,
+  loadAttachmentsForMessageIds,
+} from "./_portal-chat-attachments.js";
+import {
+  checkGifSearchRateLimit,
+  getPortalChatGifConfig,
+  getTrendingGifs,
+  resolveGif,
+  searchGifs,
+} from "./_portal-chat-gif-provider.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -67,6 +90,14 @@ const SPAM_WINDOW_MAX_MESSAGES = 4;
 const DUPLICATE_WINDOW_SECONDS = 15;
 const PROCESS_IP_BUCKETS = new Map();
 
+function parseChatBoolean(value) {
+  return ["1", "true", "yes", "on"].includes(cleanChatText(value).toLowerCase());
+}
+
+function isPortalChatReactionsEnabled() {
+  return parseChatBoolean(process.env.PORTAL_CHAT_REACTIONS_ENABLED);
+}
+
 function isMissingChatSchema(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
@@ -74,7 +105,9 @@ function isMissingChatSchema(error) {
     error?.code === "PGRST205" ||
     error?.code === "PGRST204" ||
     message.includes("portal_chat_messages") ||
-    message.includes("portal_chat_message_translations")
+    message.includes("portal_chat_message_translations") ||
+    message.includes("portal_chat_message_reactions") ||
+    message.includes("portal_chat_message_attachments")
   );
 }
 
@@ -127,7 +160,7 @@ function serializeAuthor(member, fallbackId = "") {
   };
 }
 
-async function loadReplyPreviewMap(rows, targetLanguage) {
+async function loadReplyPreviewMap(rows, targetLanguage, { loadAttachments = false } = {}) {
   const replyIds = [
     ...new Set((rows || []).map((row) => cleanChatText(row.reply_to_message_id)).filter(Boolean)),
   ];
@@ -142,6 +175,9 @@ async function loadReplyPreviewMap(rows, targetLanguage) {
 
   const authors = await loadAuthorMap((data || []).map((row) => row.author_member_id));
   const translationCache = await loadTranslations(data || [], targetLanguage);
+  const attachmentMap = loadAttachments
+    ? await loadAttachmentsForMessageIds(supabase, (data || []).map((row) => row.id))
+    : new Map();
   const replyMap = new Map();
 
   for (const row of data || []) {
@@ -159,6 +195,7 @@ async function loadReplyPreviewMap(rows, targetLanguage) {
       bodyOriginal: deleted ? "" : cleanChatText(row.body_original).slice(0, 180),
       body: deleted ? "" : cleanChatText(displayBody.body).slice(0, 180),
       isTranslated: displayBody.isTranslated,
+      attachments: deleted ? [] : attachmentMap.get(String(row.id)) || [],
       deleted,
     });
   }
@@ -168,7 +205,8 @@ async function loadReplyPreviewMap(rows, targetLanguage) {
 
 async function loadTranslations(rows, targetLanguage) {
   const candidates = (rows || []).filter((row) =>
-    shouldTranslateMessage({
+    shouldTranslateChatBody({
+      bodyOriginal: row.body_original,
       sourceLanguage: row.source_language,
       targetLanguage,
       deleted: Boolean(row.deleted_at),
@@ -199,7 +237,8 @@ async function ensureTranslation(row, targetLanguage, existingTranslation) {
   }
 
   if (
-    !shouldTranslateMessage({
+    !shouldTranslateChatBody({
+      bodyOriginal: row.body_original,
       sourceLanguage: row.source_language,
       targetLanguage,
       deleted: Boolean(row.deleted_at),
@@ -245,8 +284,22 @@ async function ensureTranslation(row, targetLanguage, existingTranslation) {
 async function serializeMessages(rows, { targetLanguage, actorMember }) {
   const visibleRows = (rows || []).filter((row) => !row.deleted_at);
   const authors = await loadAuthorMap(visibleRows.map((row) => row.author_member_id));
-  const replyPreviews = await loadReplyPreviewMap(visibleRows, targetLanguage);
+  const reactionsEnabled = isPortalChatReactionsEnabled();
+  const gifConfig = getPortalChatGifConfig();
+  const [attachmentsReady, contentTypeReady] = gifConfig.enabled
+    ? await Promise.all([
+        checkAttachmentSchema(supabase),
+        checkMessageContentTypeSchema(),
+      ])
+    : [false, false];
+  const shouldLoadAttachments = Boolean(gifConfig.enabled && attachmentsReady && contentTypeReady);
+  const replyPreviews = await loadReplyPreviewMap(visibleRows, targetLanguage, { loadAttachments: shouldLoadAttachments });
   const translationCache = await loadTranslations(visibleRows, targetLanguage);
+  const messageIds = visibleRows.map((row) => row.id);
+  const [attachmentMap, reactionMap] = await Promise.all([
+    shouldLoadAttachments ? loadAttachmentsForMessageIds(supabase, messageIds) : Promise.resolve(new Map()),
+    reactionsEnabled ? loadReactionsForMessageIds(supabase, messageIds, actorMember?.id) : Promise.resolve(new Map()),
+  ]);
   const translationConfig = getPortalChatTranslationConfig();
 
   const serialized = [];
@@ -277,8 +330,11 @@ async function serializeMessages(rows, { targetLanguage, actorMember }) {
       translationProvider: translation?.provider || translationConfig.provider,
       canShowOriginal: displayBody.isTranslated,
       replyTo: replyPreviews.get(String(row.reply_to_message_id || "")) || null,
+      attachments: attachmentMap.get(String(row.id)) || [],
+      reactions: reactionMap.get(String(row.id)) || [],
       permissions: {
         canDelete: isOwnMessage || isLeader,
+        canReact: reactionsEnabled && reactionMap.has(String(row.id)),
       },
       cursor: createMessageCursor(row),
     });
@@ -287,7 +343,7 @@ async function serializeMessages(rows, { targetLanguage, actorMember }) {
   return serialized;
 }
 
-async function checkAntiSpam({ req, member, bodyHash }) {
+async function checkAntiSpam({ req, member, bodyHash, skipDuplicate = false }) {
   const ipCheck = checkProcessIpRateLimit(req);
   if (ipCheck) return ipCheck;
 
@@ -308,21 +364,60 @@ async function checkAntiSpam({ req, member, bodyHash }) {
     return { error: "Trop de messages en peu de temps. Patiente quelques secondes.", status: 429 };
   }
 
-  const { data: duplicate, error: duplicateError } = await supabase
-    .from("portal_chat_messages")
-    .select("id")
-    .eq("channel_key", PORTAL_CHAT_CHANNEL_KEY)
-    .eq("author_member_id", member.id)
-    .eq("body_hash", bodyHash)
-    .is("deleted_at", null)
-    .gte("created_at", duplicateSince)
-    .limit(1)
-    .maybeSingle();
+  if (!skipDuplicate) {
+    const { data: duplicate, error: duplicateError } = await supabase
+      .from("portal_chat_messages")
+      .select("id")
+      .eq("channel_key", PORTAL_CHAT_CHANNEL_KEY)
+      .eq("author_member_id", member.id)
+      .eq("body_hash", bodyHash)
+      .is("deleted_at", null)
+      .gte("created_at", duplicateSince)
+      .limit(1)
+      .maybeSingle();
 
-  if (duplicateError) return { error: duplicateError.message || "Verification doublon impossible.", status: 500 };
-  if (duplicate?.id) return { error: "Message identique deja envoye.", status: 429 };
+    if (duplicateError) return { error: duplicateError.message || "Verification doublon impossible.", status: 500 };
+    if (duplicate?.id) return { error: "Message identique deja envoye.", status: 429 };
+  }
 
   return null;
+}
+
+async function getChatFeatureConfig() {
+  const gifConfig = getPortalChatGifConfig();
+  const reactionsEnabled = isPortalChatReactionsEnabled();
+  const reactionsReady = reactionsEnabled ? await checkReactionSchema(supabase) : false;
+  const [attachmentsReady, contentTypeReady] = gifConfig.enabled
+    ? await Promise.all([
+        checkAttachmentSchema(supabase),
+        checkMessageContentTypeSchema(),
+      ])
+    : [false, false];
+
+  return {
+    reactions: {
+      enabled: Boolean(reactionsEnabled && reactionsReady),
+    },
+    gif: {
+      enabled: Boolean(gifConfig.enabled && attachmentsReady && contentTypeReady),
+      provider: gifConfig.provider,
+      maxResults: gifConfig.maxResults,
+      attribution: gifConfig.provider === "giphy" ? "GIPHY" : "",
+      schemaReady: attachmentsReady && contentTypeReady,
+    },
+  };
+}
+
+async function checkMessageContentTypeSchema() {
+  const { error } = await supabase
+    .from("portal_chat_messages")
+    .select("content_type", { count: "exact", head: true })
+    .limit(1);
+
+  if (!error) return true;
+  if (error?.code === "PGRST204" || `${error?.message || ""}`.toLowerCase().includes("content_type")) return false;
+  if (isMissingChatSchema(error)) return false;
+  throw error;
 }
 
 async function listMessages(req, res, member, params) {
@@ -363,8 +458,9 @@ async function listMessages(req, res, member, params) {
     config: {
       channelKey: PORTAL_CHAT_CHANNEL_KEY,
       targetLanguage,
-      maxLength: validateChatBody("x").maxLength,
+      maxLength: getChatMaxLength(),
       translation: getPortalChatTranslationConfig(),
+      features: await getChatFeatureConfig(),
       pollingMs: 4000,
     },
   }, req);
@@ -398,8 +494,223 @@ async function loadUpdates(req, res, member, params) {
   return sendPortalJson(res, 200, { success: true, messages }, req);
 }
 
+async function loadMessageContext(req, res, member, params) {
+  const targetLanguage = normalizeChatLanguage(params.targetLanguage || params.language);
+  const messageId = cleanChatText(params.messageId || params.message_id || params.id);
+  if (!messageId) return sendPortalJson(res, 400, { error: "Message cible manquant." }, req);
+
+  const { data: target, error: targetError } = await supabase
+    .from("portal_chat_messages")
+    .select(MESSAGE_SELECT)
+    .eq("id", messageId)
+    .eq("channel_key", PORTAL_CHAT_CHANNEL_KEY)
+    .maybeSingle();
+
+  if (targetError) {
+    const status = isMissingChatSchema(targetError) ? 503 : 500;
+    return sendPortalJson(res, status, { error: targetError.message || "Lecture du message cible impossible." }, req);
+  }
+
+  if (!target) return sendPortalJson(res, 404, { error: "Message d'origine introuvable.", unavailable: true }, req);
+  if (target.deleted_at) {
+    return sendPortalJson(res, 410, { error: "Message d'origine supprime.", unavailable: true, deletedMessageId: target.id }, req);
+  }
+
+  const [beforeResult, afterResult] = await Promise.all([
+    supabase
+      .from("portal_chat_messages")
+      .select(MESSAGE_SELECT)
+      .eq("channel_key", PORTAL_CHAT_CHANNEL_KEY)
+      .is("deleted_at", null)
+      .lt("created_at", target.created_at)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(25),
+    supabase
+      .from("portal_chat_messages")
+      .select(MESSAGE_SELECT)
+      .eq("channel_key", PORTAL_CHAT_CHANNEL_KEY)
+      .is("deleted_at", null)
+      .gt("created_at", target.created_at)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(25),
+  ]);
+
+  const contextError = beforeResult.error || afterResult.error;
+  if (contextError) {
+    const status = isMissingChatSchema(contextError) ? 503 : 500;
+    return sendPortalJson(res, status, { error: contextError.message || "Chargement du contexte impossible." }, req);
+  }
+
+  const rowMap = new Map();
+  for (const row of [...(beforeResult.data || []).reverse(), target, ...(afterResult.data || [])]) {
+    if (row?.id && !row.deleted_at) rowMap.set(String(row.id), row);
+  }
+
+  const messages = await serializeMessages([...rowMap.values()], { targetLanguage, actorMember: member });
+  return sendPortalJson(res, 200, { success: true, messages, targetMessageId: target.id }, req);
+}
+
+async function loadReactionState(req, res, member, body) {
+  if (!isPortalChatReactionsEnabled()) {
+    return sendPortalJson(res, 200, {
+      success: true,
+      enabled: false,
+      reactionsByMessageId: {},
+      deletedMessageIds: [],
+    }, req);
+  }
+
+  const ids = Array.isArray(body.messageIds || body.message_ids)
+    ? body.messageIds || body.message_ids
+    : [];
+  const safeIds = [...new Set(ids.map((value) => cleanChatText(value)).filter(Boolean))].slice(0, 100);
+  const reactionMap = await loadReactionsForMessageIds(supabase, safeIds, member.id);
+  const { data: deletedRows, error: deletedError } = await supabase
+    .from("portal_chat_messages")
+    .select("id")
+    .in("id", safeIds)
+    .not("deleted_at", "is", null);
+
+  if (deletedError) {
+    const status = isMissingChatSchema(deletedError) ? 503 : 500;
+    return sendPortalJson(res, status, { error: deletedError.message || "Verification suppressions impossible." }, req);
+  }
+
+  const reactionsByMessageId = {};
+  for (const id of safeIds) reactionsByMessageId[id] = reactionMap.get(id) || [];
+  return sendPortalJson(res, 200, {
+    success: true,
+    reactionsByMessageId,
+    deletedMessageIds: (deletedRows || []).map((row) => row.id).filter(Boolean),
+  }, req);
+}
+
+async function toggleReaction(req, res, member, body) {
+  if (!isPortalChatReactionsEnabled()) {
+    return sendPortalJson(res, 503, { error: "Les reactions ne sont pas activees.", schemaReady: false }, req);
+  }
+
+  const messageId = cleanChatText(body.messageId || body.message_id || body.id);
+  const validation = validateReactionEmoji(body.emoji);
+  if (!messageId) return sendPortalJson(res, 400, { error: "Message manquant." }, req);
+  if (validation.error) return sendPortalJson(res, validation.status, { error: validation.error }, req);
+
+  const rateLimit = checkReactionRateLimit(member.id);
+  if (rateLimit) return sendPortalJson(res, rateLimit.status, { error: rateLimit.error }, req);
+
+  const { data: message, error: messageError } = await supabase
+    .from("portal_chat_messages")
+    .select("id, channel_key, deleted_at")
+    .eq("id", messageId)
+    .maybeSingle();
+
+  if (messageError) return sendPortalJson(res, 500, { error: messageError.message || "Lecture message impossible." }, req);
+  if (!message || message.channel_key !== PORTAL_CHAT_CHANNEL_KEY || message.deleted_at) {
+    return sendPortalJson(res, 404, { error: "Message introuvable ou supprime." }, req);
+  }
+
+  const existing = await supabase
+    .from("portal_chat_message_reactions")
+    .select("id")
+    .eq("message_id", messageId)
+    .eq("member_id", member.id)
+    .eq("emoji", validation.emoji)
+    .maybeSingle();
+
+  if (existing.error) {
+    const status = isMissingReactionSchema(existing.error) ? 503 : 500;
+    return sendPortalJson(res, status, { error: existing.error.message || "Reaction indisponible.", schemaReady: false }, req);
+  }
+
+  let reactedByMe = false;
+  if (existing.data?.id) {
+    const { error } = await supabase
+      .from("portal_chat_message_reactions")
+      .delete()
+      .eq("id", existing.data.id)
+      .eq("member_id", member.id);
+    if (error) return sendPortalJson(res, 500, { error: error.message || "Retrait reaction impossible." }, req);
+  } else {
+    const memberReactionCount = await countMemberReactionsOnMessage(supabase, messageId, member.id);
+    if (!memberReactionCount.schemaReady) {
+      return sendPortalJson(res, 503, { error: "Les reactions ne sont pas encore configurees.", schemaReady: false }, req);
+    }
+    if (!canAddAnotherReactionForMember(memberReactionCount.count)) {
+      return sendPortalJson(res, 429, { error: "Trop de reactions differentes sur ce message." }, req);
+    }
+
+    const { error } = await supabase
+      .from("portal_chat_message_reactions")
+      .insert({
+        message_id: messageId,
+        member_id: member.id,
+        emoji: validation.emoji,
+      });
+    if (error && error.code !== "23505") {
+      const status = isMissingReactionSchema(error) ? 503 : 500;
+      return sendPortalJson(res, status, { error: error.message || "Ajout reaction impossible.", schemaReady: false }, req);
+    }
+    reactedByMe = true;
+  }
+
+  const reactionMap = await loadReactionsForMessageIds(supabase, [messageId], member.id);
+  return sendPortalJson(res, 200, {
+    success: true,
+    messageId,
+    emoji: validation.emoji,
+    reactedByMe,
+    reactions: reactionMap.get(messageId) || [],
+  }, req);
+}
+
+async function loadGifResults(req, res, member, params) {
+  const rateLimit = checkGifSearchRateLimit(member.id);
+  if (rateLimit) return sendPortalJson(res, rateLimit.status, { error: rateLimit.error }, req);
+
+  const config = getPortalChatGifConfig();
+  if (!config.enabled) {
+    return sendPortalJson(res, 200, {
+      success: true,
+      enabled: false,
+      provider: config.provider,
+      items: [],
+      nextCursor: "",
+    }, req);
+  }
+
+  const [attachmentsReady, contentTypeReady] = await Promise.all([
+    checkAttachmentSchema(supabase),
+    checkMessageContentTypeSchema(),
+  ]);
+  if (!attachmentsReady || !contentTypeReady) {
+    return sendPortalJson(res, 200, {
+      success: true,
+      enabled: false,
+      provider: config.provider,
+      items: [],
+      nextCursor: "",
+      schemaReady: false,
+    }, req);
+  }
+
+  try {
+    const query = cleanChatText(params.query || params.q);
+    const payload = query
+      ? await searchGifs({ query, locale: params.language || params.targetLanguage, cursor: params.cursor, limit: params.limit })
+      : await getTrendingGifs({ locale: params.language || params.targetLanguage, cursor: params.cursor, limit: params.limit });
+    return sendPortalJson(res, 200, { success: true, ...payload }, req);
+  } catch (error) {
+    return sendPortalJson(res, 502, { error: error?.message || "Recherche GIF indisponible." }, req);
+  }
+}
+
 async function sendMessage(req, res, member, body) {
-  const validation = validateChatBody(body.body || body.message || body.text);
+  const validation = validateChatMessagePayload({
+    body: body.body || body.message || body.text,
+    attachment: body.attachment || body.gif || null,
+  });
   if (validation.error) return sendPortalJson(res, validation.status, { error: validation.error }, req);
 
   const clientMessageId = validateClientMessageId(body.clientMessageId || body.client_message_id);
@@ -409,6 +720,31 @@ async function sendMessage(req, res, member, body) {
   const replyToMessageId = cleanChatText(body.replyToMessageId || body.reply_to_message_id) || null;
   const bodyHash = createChatBodyHash(validation.body);
   const sourceLanguage = inferChatLanguage(validation.body);
+  let resolvedAttachment = null;
+
+  if (validation.attachment) {
+    const gifConfig = getPortalChatGifConfig();
+    if (!gifConfig.enabled) {
+      return sendPortalJson(res, 503, { error: "Les GIF du chat ne sont pas actives.", schemaReady: false }, req);
+    }
+
+    const [attachmentsReady, contentTypeReady] = await Promise.all([
+      checkAttachmentSchema(supabase),
+      checkMessageContentTypeSchema(),
+    ]);
+    if (!attachmentsReady || !contentTypeReady) {
+      return sendPortalJson(res, 503, { error: "Les pieces jointes du chat ne sont pas encore configurees.", schemaReady: false }, req);
+    }
+
+    try {
+      resolvedAttachment = await resolveGif({
+        provider: validation.attachment.provider,
+        providerItemId: validation.attachment.providerItemId,
+      });
+    } catch (error) {
+      return sendPortalJson(res, 400, { error: error?.message || "GIF invalide." }, req);
+    }
+  }
 
   if (replyToMessageId) {
     const { data: reply, error: replyError } = await supabase
@@ -424,10 +760,11 @@ async function sendMessage(req, res, member, body) {
     }
   }
 
-  const spamCheck = await checkAntiSpam({ req, member, bodyHash });
+  const spamCheck = await checkAntiSpam({ req, member, bodyHash, skipDuplicate: Boolean(resolvedAttachment && !validation.body) });
   if (spamCheck) return sendPortalJson(res, spamCheck.status, { error: spamCheck.error }, req);
 
-  const translationNeeded = shouldTranslateMessage({
+  const translationNeeded = shouldTranslateChatBody({
+    bodyOriginal: validation.body,
     sourceLanguage,
     targetLanguage,
     deleted: false,
@@ -444,6 +781,10 @@ async function sendMessage(req, res, member, body) {
     reply_to_message_id: replyToMessageId,
     translation_status: translationNeeded ? (translationConfig.enabled ? "pending" : "disabled") : "ready",
   };
+
+  if (resolvedAttachment) {
+    insertPayload.content_type = validation.body ? "mixed" : "gif";
+  }
 
   let row;
   const inserted = await supabase
@@ -466,6 +807,36 @@ async function sendMessage(req, res, member, body) {
     return sendPortalJson(res, status, { error: inserted.error.message || "Envoi message impossible.", schemaReady: false }, req);
   } else {
     row = inserted.data;
+  }
+
+  if (row?.id && resolvedAttachment) {
+    const attachmentInsert = await supabase
+      .from("portal_chat_message_attachments")
+      .insert({
+        message_id: row.id,
+        attachment_type: "gif",
+        provider: resolvedAttachment.provider,
+        provider_item_id: resolvedAttachment.providerItemId,
+        media_url: resolvedAttachment.mediaUrl,
+        preview_url: resolvedAttachment.previewUrl || resolvedAttachment.mediaUrl,
+        width: resolvedAttachment.width,
+        height: resolvedAttachment.height,
+        title: resolvedAttachment.title,
+      })
+      .select(CHAT_ATTACHMENT_SELECT)
+      .maybeSingle();
+
+    if (attachmentInsert.error && attachmentInsert.error.code !== "23505") {
+      await supabase
+        .from("portal_chat_messages")
+        .update({ deleted_at: new Date().toISOString(), translation_status: "disabled" })
+        .eq("id", row.id);
+      const status = isMissingAttachmentSchema(attachmentInsert.error) ? 503 : 500;
+      return sendPortalJson(res, status, {
+        error: attachmentInsert.error.message || "Enregistrement du GIF impossible.",
+        schemaReady: status !== 503,
+      }, req);
+    }
   }
 
   const messages = await serializeMessages(row ? [row] : [], { targetLanguage, actorMember: member });
@@ -541,6 +912,12 @@ export default async function handler(req, res) {
 
     if (action === "list") return await listMessages(req, res, sessionCheck.member, params);
     if (action === "updates") return await loadUpdates(req, res, sessionCheck.member, params);
+    if (action === "context" || action === "message-context" || action === "around-message") {
+      return await loadMessageContext(req, res, sessionCheck.member, params);
+    }
+    if (action === "reaction-state") return await loadReactionState(req, res, sessionCheck.member, body);
+    if (action === "toggle-reaction") return await toggleReaction(req, res, sessionCheck.member, body);
+    if (action === "gif-search" || action === "gif-trending") return await loadGifResults(req, res, sessionCheck.member, params);
     if (action === "send") return await sendMessage(req, res, sessionCheck.member, body);
     if (action === "delete") return await deleteMessage(req, res, sessionCheck.member, body);
 

@@ -1,5 +1,5 @@
 /* global process */
-import { cleanChatText, shouldTranslateMessage } from "./_portal-chat-core.js";
+import { cleanChatText, shouldTranslateChatBody } from "./_portal-chat-core.js";
 
 export const TRANSLATION_JOB_SELECT = [
   "id",
@@ -41,7 +41,8 @@ export function buildTranslationJobPayload(row, targetLanguage, config) {
   if (!config?.enabled) return null;
   if (!row?.id || !row?.body_hash) return null;
   if (
-    !shouldTranslateMessage({
+    !shouldTranslateChatBody({
+      bodyOriginal: row.body_original,
       sourceLanguage: row.source_language,
       targetLanguage,
       deleted: Boolean(row.deleted_at),

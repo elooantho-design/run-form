@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* global process */
 import { createClient } from "@supabase/supabase-js";
-import { cleanChatText } from "../api/_portal-chat-core.js";
+import { cleanChatText, shouldTranslateChatBody } from "../api/_portal-chat-core.js";
 import { getPortalChatTranslationConfig, translatePortalChatMessage } from "../api/_portal-chat-translation.js";
 
 const WORKER_ID = cleanChatText(process.env.PORTAL_CHAT_TRANSLATION_WORKER_ID) || `translator-${process.pid}`;
@@ -105,6 +105,19 @@ async function processJob(supabase, job) {
   if (messageError) throw messageError;
   if (!message || message.deleted_at) {
     await completeJob(supabase, job);
+    return true;
+  }
+
+  if (
+    !shouldTranslateChatBody({
+      bodyOriginal: message.body_original,
+      sourceLanguage: message.source_language,
+      targetLanguage: job.target_language,
+      deleted: Boolean(message.deleted_at),
+    })
+  ) {
+    await completeJob(supabase, job);
+    await markMessageStatus(supabase, job.message_id, "ready");
     return true;
   }
 
