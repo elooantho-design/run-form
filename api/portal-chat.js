@@ -149,7 +149,7 @@ async function loadReplyPreviewMap(rows) {
         {
           id: row.id,
           authorName: serializeAuthor(author, row.author_member_id).displayName,
-          body: deleted ? "Message supprime." : cleanChatText(row.body_original).slice(0, 180),
+          body: deleted ? "" : cleanChatText(row.body_original).slice(0, 180),
           deleted,
         },
       ];
@@ -234,14 +234,14 @@ async function ensureTranslation(row, targetLanguage, existingTranslation) {
 }
 
 async function serializeMessages(rows, { targetLanguage, actorMember }) {
-  const authors = await loadAuthorMap((rows || []).map((row) => row.author_member_id));
-  const replyPreviews = await loadReplyPreviewMap(rows);
-  const translationCache = await loadTranslations(rows, targetLanguage);
+  const visibleRows = (rows || []).filter((row) => !row.deleted_at);
+  const authors = await loadAuthorMap(visibleRows.map((row) => row.author_member_id));
+  const replyPreviews = await loadReplyPreviewMap(visibleRows);
+  const translationCache = await loadTranslations(visibleRows, targetLanguage);
   const translationConfig = getPortalChatTranslationConfig();
 
   const serialized = [];
-  for (const row of rows || []) {
-    const deleted = Boolean(row.deleted_at);
+  for (const row of visibleRows) {
     const author = serializeAuthor(authors.get(String(row.author_member_id || "")), row.author_member_id);
     const translationKey = `${row.id}:${row.body_hash}`;
     const translation = await ensureTranslation(row, targetLanguage, translationCache.get(translationKey));
@@ -257,23 +257,21 @@ async function serializeMessages(rows, { targetLanguage, actorMember }) {
       channelKey: row.channel_key || PORTAL_CHAT_CHANNEL_KEY,
       author,
       createdAt: row.created_at,
-      deletedAt: row.deleted_at || null,
-      deleted,
-      bodyOriginal: deleted ? "" : row.body_original || "",
-      body: deleted
-        ? "Message supprime."
-        : hasTranslation
+      deletedAt: null,
+      deleted: false,
+      bodyOriginal: row.body_original || "",
+      body: hasTranslation
           ? translation.translated_body
           : row.body_original || "",
       sourceLanguage: row.source_language || "und",
       targetLanguage,
       isTranslated: Boolean(hasTranslation),
-      translationStatus: deleted ? "none" : translation?.status || (translationConfig.enabled ? "pending" : "disabled"),
+      translationStatus: translation?.status || (translationConfig.enabled ? "pending" : "disabled"),
       translationProvider: translation?.provider || translationConfig.provider,
       canShowOriginal: Boolean(hasTranslation),
       replyTo: replyPreviews.get(String(row.reply_to_message_id || "")) || null,
       permissions: {
-        canDelete: !deleted && (isOwnMessage || isLeader),
+        canDelete: isOwnMessage || isLeader,
       },
       cursor: createMessageCursor(row),
     });
@@ -329,6 +327,7 @@ async function listMessages(req, res, member, params) {
     .from("portal_chat_messages")
     .select(MESSAGE_SELECT)
     .eq("channel_key", PORTAL_CHAT_CHANNEL_KEY)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(limit + 1);
@@ -377,6 +376,7 @@ async function loadUpdates(req, res, member, params) {
     .from("portal_chat_messages")
     .select(MESSAGE_SELECT)
     .eq("channel_key", PORTAL_CHAT_CHANNEL_KEY)
+    .is("deleted_at", null)
     .gt("created_at", after)
     .order("created_at", { ascending: true })
     .order("id", { ascending: true })
@@ -408,6 +408,7 @@ async function sendMessage(req, res, member, body) {
       .from("portal_chat_messages")
       .select("id, channel_key")
       .eq("id", replyToMessageId)
+      .is("deleted_at", null)
       .maybeSingle();
 
     if (replyError) return sendPortalJson(res, 500, { error: replyError.message || "Verification reponse impossible." }, req);
@@ -487,8 +488,11 @@ async function deleteMessage(req, res, member, body) {
 
   if (error) return sendPortalJson(res, 500, { error: error.message || "Suppression message impossible." }, req);
 
-  const messages = await serializeMessages(data ? [data] : [], { targetLanguage, actorMember: member });
-  return sendPortalJson(res, 200, { success: true, message: messages[0] || null }, req);
+  return sendPortalJson(res, 200, {
+    success: true,
+    ok: true,
+    deletedMessageId: data?.id || messageId,
+  }, req);
 }
 
 function getQueryParams(req) {

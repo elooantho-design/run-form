@@ -57,8 +57,12 @@ function createClientMessageId() {
 
 function mergeMessages(previous, incoming) {
   const map = new Map();
-  for (const message of previous || []) map.set(String(message.id), message);
-  for (const message of incoming || []) map.set(String(message.id), message);
+  for (const message of previous || []) {
+    if (message?.id && !message.deleted && !message.deletedAt) map.set(String(message.id), message);
+  }
+  for (const message of incoming || []) {
+    if (message?.id && !message.deleted && !message.deletedAt) map.set(String(message.id), message);
+  }
   return [...map.values()].sort((left, right) => new Date(left.createdAt) - new Date(right.createdAt));
 }
 
@@ -82,18 +86,19 @@ function ChatAvatar({ author }) {
 }
 
 function ChatMessage({ message, language, onReply, onDelete, showOriginal, onToggleOriginal, t }) {
-  const displayedBody = message.deleted
-    ? t("chat.deleted", "Message supprime.")
-    : showOriginal
+  if (message.deleted || message.deletedAt) return null;
+
+  const displayedBody = showOriginal
       ? message.bodyOriginal
       : message.body;
+  const replyDeletedLabel = t("chat.replyDeleted", "Le message a ete supprime.");
   const hasTranslation = Boolean(message.canShowOriginal);
   const translationNotice =
-    !message.deleted && !message.isTranslated && message.translationStatus === "disabled"
+    !message.isTranslated && message.translationStatus === "disabled"
       ? t("chat.translationDisabled", "Traduction automatique non configuree.")
-      : !message.deleted && !message.isTranslated && message.translationStatus === "pending"
+      : !message.isTranslated && message.translationStatus === "pending"
         ? t("chat.translationPending", "Traduction en preparation.")
-      : !message.deleted && message.translationStatus === "failed"
+      : message.translationStatus === "failed"
         ? t("chat.translationFailed", "Traduction indisponible.")
         : "";
 
@@ -116,15 +121,18 @@ function ChatMessage({ message, language, onReply, onDelete, showOriginal, onTog
           {message.replyTo ? (
             <button
               type="button"
-              className="mt-3 w-full rounded-xl border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-left text-xs text-zinc-400"
+              className="mt-2 flex max-w-full items-center gap-2 rounded-lg px-1 py-1 text-left text-[11px] leading-4 text-zinc-500 transition hover:bg-zinc-900/60 hover:text-zinc-300"
               onClick={() => onReply(message.replyTo)}
             >
-              <span className="font-semibold text-zinc-300">{message.replyTo.authorName}</span>
-              <span className="ml-2 line-clamp-1">{message.replyTo.body}</span>
+              <span className="h-4 w-4 rounded-tl-md border-l-2 border-t-2 border-zinc-700" aria-hidden="true" />
+              <span className="shrink-0 font-semibold text-zinc-400">@{message.replyTo.authorName}</span>
+              <span className={`min-w-0 truncate ${message.replyTo.deleted ? "italic text-zinc-600" : ""}`}>
+                {message.replyTo.deleted ? replyDeletedLabel : message.replyTo.body}
+              </span>
             </button>
           ) : null}
 
-          <p className={`mt-3 whitespace-pre-wrap break-words text-sm leading-6 ${message.deleted ? "text-zinc-500 italic" : "text-zinc-200"}`}>
+          <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-200">
             {displayedBody}
           </p>
 
@@ -143,17 +151,15 @@ function ChatMessage({ message, language, onReply, onDelete, showOriginal, onTog
                 {showOriginal ? t("chat.showTranslation", "Voir la traduction") : t("chat.showOriginal", "Voir l'original")}
               </Button>
             ) : null}
-            {!message.deleted ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="h-8 rounded-lg border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-800"
-                onClick={() => onReply(message)}
-              >
-                <Reply className="mr-1 h-3.5 w-3.5" />
-                {t("chat.reply", "Repondre")}
-              </Button>
-            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 rounded-lg border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 hover:bg-zinc-800"
+              onClick={() => onReply(message)}
+            >
+              <Reply className="mr-1 h-3.5 w-3.5" />
+              {t("chat.reply", "Repondre")}
+            </Button>
             {message.permissions?.canDelete ? (
               <Button
                 type="button"
@@ -341,7 +347,13 @@ export default function GlobalChatTab({ session }) {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || t("chat.errorDelete", "Suppression impossible."));
-      if (payload.message) setMessages((previous) => mergeMessages(previous, [payload.message]));
+      const deletedMessageId = String(payload.deletedMessageId || message.id);
+      setMessages((previous) => (previous || []).filter((item) => String(item.id) !== deletedMessageId));
+      setShowOriginalIds((previous) => {
+        const next = new Set(previous);
+        next.delete(deletedMessageId);
+        return next;
+      });
       if (replyTo?.id === message.id) setReplyTo(null);
     } catch (error) {
       setErrorMessage(error?.message || t("chat.errorDelete", "Suppression impossible."));
