@@ -275,7 +275,7 @@ async function serializeMessages(rows, { targetLanguage, actorMember }) {
       isTranslated: displayBody.isTranslated,
       translationStatus: translation?.status || (translationConfig.enabled ? "pending" : "disabled"),
       translationProvider: translation?.provider || translationConfig.provider,
-      canShowOriginal: Boolean(hasTranslation),
+      canShowOriginal: displayBody.isTranslated,
       replyTo: replyPreviews.get(String(row.reply_to_message_id || "")) || null,
       permissions: {
         canDelete: isOwnMessage || isLeader,
