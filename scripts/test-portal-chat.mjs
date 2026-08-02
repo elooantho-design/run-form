@@ -8,6 +8,7 @@ import {
   normalizeChatLanguage,
   normalizeChatLimit,
   parseMessageCursor,
+  resolveChatDisplayBody,
   shouldTranslateMessage,
   validateChatBody,
   validateClientMessageId,
@@ -59,6 +60,28 @@ try {
   assert.equal(shouldTranslateMessage({ sourceLanguage: "fr", targetLanguage: "en", deleted: false }), true);
   assert.equal(shouldTranslateMessage({ sourceLanguage: "en", targetLanguage: "en", deleted: false }), false);
   assert.equal(shouldTranslateMessage({ sourceLanguage: "fr", targetLanguage: "en", deleted: true }), false);
+  assert.deepEqual(
+    resolveChatDisplayBody({
+      bodyOriginal: "Hello everyone",
+      translation: { status: "ready", translated_body: "Bonjour tout le monde" },
+    }),
+    {
+      bodyOriginal: "Hello everyone",
+      body: "Bonjour tout le monde",
+      isTranslated: true,
+    },
+  );
+  assert.deepEqual(
+    resolveChatDisplayBody({
+      bodyOriginal: "Hello everyone",
+      translation: { status: "pending", translated_body: "" },
+    }),
+    {
+      bodyOriginal: "Hello everyone",
+      body: "Hello everyone",
+      isTranslated: false,
+    },
+  );
 
   assert.equal(parseMessageCursor("2026-08-01T12:00:00.000Z"), "2026-08-01T12:00:00.000Z");
   assert.equal(parseMessageCursor("nope"), "");

@@ -101,3 +101,15 @@ export function shouldTranslateMessage({ sourceLanguage, targetLanguage, deleted
   if (!sourceLanguage || sourceLanguage === "und") return true;
   return sourceLanguage !== targetLanguage;
 }
+
+export function resolveChatDisplayBody({ bodyOriginal, translation }) {
+  const original = cleanChatText(bodyOriginal);
+  const translated = cleanChatText(translation?.translated_body || translation?.translatedBody);
+  const hasTranslation = translation?.status === "ready" && Boolean(translated);
+
+  return {
+    bodyOriginal: original,
+    body: hasTranslation ? translated : original,
+    isTranslated: hasTranslation,
+  };
+}

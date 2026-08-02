@@ -470,7 +470,9 @@ export default function GlobalChatTab({ session }) {
                 <div className="text-xs uppercase tracking-[0.18em] text-cyan-200/80">
                   {t("chat.replyingTo", "Reponse a")} {replyTo.author?.displayName || replyTo.authorName || "Joueur"}
                 </div>
-                <div className="mt-1 truncate text-cyan-50">{replyTo.bodyOriginal || replyTo.body || ""}</div>
+                <div className="mt-1 truncate text-cyan-50">
+                  {replyTo.deleted ? t("chat.replyDeleted", "Le message a ete supprime.") : replyTo.body || replyTo.bodyOriginal || ""}
+                </div>
               </div>
               <button
                 type="button"

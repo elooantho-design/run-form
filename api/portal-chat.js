@@ -17,6 +17,7 @@ import {
   normalizeChatLanguage,
   normalizeChatLimit,
   parseMessageCursor,
+  resolveChatDisplayBody,
   shouldTranslateMessage,
   validateChatBody,
   validateClientMessageId,
@@ -126,7 +127,7 @@ function serializeAuthor(member, fallbackId = "") {
   };
 }
 
-async function loadReplyPreviewMap(rows) {
+async function loadReplyPreviewMap(rows, targetLanguage) {
   const replyIds = [
     ...new Set((rows || []).map((row) => cleanChatText(row.reply_to_message_id)).filter(Boolean)),
   ];
@@ -140,21 +141,29 @@ async function loadReplyPreviewMap(rows) {
   if (error) throw error;
 
   const authors = await loadAuthorMap((data || []).map((row) => row.author_member_id));
-  return new Map(
-    (data || []).map((row) => {
-      const deleted = Boolean(row.deleted_at);
-      const author = authors.get(String(row.author_member_id || ""));
-      return [
-        String(row.id),
-        {
-          id: row.id,
-          authorName: serializeAuthor(author, row.author_member_id).displayName,
-          body: deleted ? "" : cleanChatText(row.body_original).slice(0, 180),
-          deleted,
-        },
-      ];
-    }),
-  );
+  const translationCache = await loadTranslations(data || [], targetLanguage);
+  const replyMap = new Map();
+
+  for (const row of data || []) {
+    const deleted = Boolean(row.deleted_at);
+    const author = authors.get(String(row.author_member_id || ""));
+    const translationKey = `${row.id}:${row.body_hash}`;
+    const translation = deleted
+      ? { status: "deleted", translated_body: "" }
+      : await ensureTranslation(row, targetLanguage, translationCache.get(translationKey));
+    const displayBody = resolveChatDisplayBody({ bodyOriginal: row.body_original, translation });
+
+    replyMap.set(String(row.id), {
+      id: row.id,
+      authorName: serializeAuthor(author, row.author_member_id).displayName,
+      bodyOriginal: deleted ? "" : cleanChatText(row.body_original).slice(0, 180),
+      body: deleted ? "" : cleanChatText(displayBody.body).slice(0, 180),
+      isTranslated: displayBody.isTranslated,
+      deleted,
+    });
+  }
+
+  return replyMap;
 }
 
 async function loadTranslations(rows, targetLanguage) {
@@ -236,7 +245,7 @@ async function ensureTranslation(row, targetLanguage, existingTranslation) {
 async function serializeMessages(rows, { targetLanguage, actorMember }) {
   const visibleRows = (rows || []).filter((row) => !row.deleted_at);
   const authors = await loadAuthorMap(visibleRows.map((row) => row.author_member_id));
-  const replyPreviews = await loadReplyPreviewMap(visibleRows);
+  const replyPreviews = await loadReplyPreviewMap(visibleRows, targetLanguage);
   const translationCache = await loadTranslations(visibleRows, targetLanguage);
   const translationConfig = getPortalChatTranslationConfig();
 
@@ -245,7 +254,7 @@ async function serializeMessages(rows, { targetLanguage, actorMember }) {
     const author = serializeAuthor(authors.get(String(row.author_member_id || "")), row.author_member_id);
     const translationKey = `${row.id}:${row.body_hash}`;
     const translation = await ensureTranslation(row, targetLanguage, translationCache.get(translationKey));
-    const hasTranslation = translation?.status === "ready" && Boolean(translation?.translated_body);
+    const displayBody = resolveChatDisplayBody({ bodyOriginal: row.body_original, translation });
     const isOwnMessage = String(row.author_member_id || "") === String(actorMember?.id || "");
     const isLeader = cleanChatText(actorMember?.role)
       .normalize("NFD")
@@ -259,13 +268,11 @@ async function serializeMessages(rows, { targetLanguage, actorMember }) {
       createdAt: row.created_at,
       deletedAt: null,
       deleted: false,
-      bodyOriginal: row.body_original || "",
-      body: hasTranslation
-          ? translation.translated_body
-          : row.body_original || "",
+      bodyOriginal: displayBody.bodyOriginal,
+      body: displayBody.body,
       sourceLanguage: row.source_language || "und",
       targetLanguage,
-      isTranslated: Boolean(hasTranslation),
+      isTranslated: displayBody.isTranslated,
       translationStatus: translation?.status || (translationConfig.enabled ? "pending" : "disabled"),
       translationProvider: translation?.provider || translationConfig.provider,
       canShowOriginal: Boolean(hasTranslation),
