@@ -163,6 +163,13 @@ function normalizeAwakeningLevel(value) {
   return Math.min(5, Math.max(0, Math.round(numeric)));
 }
 
+export function normalizeHeroBoxAwakeningLevel(value) {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < -1 || numeric > 5) return null;
+  return numeric;
+}
+
 function validateUuid(value) {
   const clean = cleanText(value);
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean)
@@ -237,6 +244,54 @@ function filterMembersForActor(members, actor, options = {}) {
 async function getScopedMembers(supabase, actor, options = {}) {
   const allMembers = await selectMembersWithFallback(supabase);
   return filterMembersForActor(allMembers, actor, options).map(serializeMember);
+}
+
+function serializeHeroBoxAwakening(row) {
+  const awakeningLevel = normalizeHeroBoxAwakeningLevel(row?.awakening_level);
+  if (awakeningLevel === null) throw new Error("Valeur d'eveil Hero Box invalide apres sauvegarde.");
+  return {
+    champion_id: row.champion_id,
+    championId: row.champion_id,
+    awakening_level: awakeningLevel,
+    awakeningLevel,
+  };
+}
+
+export async function upsertHeroBoxAwakening(supabase, { memberId, championId, awakeningLevel }) {
+  const normalizedAwakeningLevel = normalizeHeroBoxAwakeningLevel(awakeningLevel);
+  if (normalizedAwakeningLevel === null) throw new Error("Eveil Hero Box invalide.");
+
+  const { data, error } = await supabase
+    .from("member_awakenings")
+    .upsert(
+      {
+        member_id: memberId,
+        champion_id: championId,
+        awakening_level: normalizedAwakeningLevel,
+      },
+      { onConflict: "member_id,champion_id" },
+    )
+    .select("champion_id, awakening_level")
+    .single();
+
+  if (error) throw error;
+  return serializeHeroBoxAwakening(data);
+}
+
+export async function upsertHeroBoxAwakenings(supabase, rows) {
+  const normalizedRows = (rows || []).map((row) => {
+    const awakeningLevel = normalizeHeroBoxAwakeningLevel(row?.awakening_level);
+    if (awakeningLevel === null) throw new Error("Eveil Hero Box invalide.");
+    return { ...row, awakening_level: awakeningLevel };
+  });
+
+  const { data, error } = await supabase
+    .from("member_awakenings")
+    .upsert(normalizedRows, { onConflict: "member_id,champion_id" })
+    .select("champion_id, awakening_level");
+
+  if (error) throw error;
+  return (data || []).map(serializeHeroBoxAwakening);
 }
 
 export async function fetchMemberAwakeningsPageByPage(supabase, memberIds, options = {}) {
@@ -321,17 +376,17 @@ async function handleSetHeroAwakening(req, res, supabase, actor, body) {
   const championId = Number(body.championId || body.champion_id);
   if (!Number.isFinite(championId)) return sendJson(req, res, 400, { ok: false, error: "Champion invalide." });
 
-  const awakeningLevel = normalizeAwakeningLevel(body.awakeningLevel ?? body.awakening_level);
-  const { error } = await supabase.from("member_awakenings").upsert(
-    {
-      member_id: target.id,
-      champion_id: championId,
-      awakening_level: awakeningLevel,
-    },
-    { onConflict: "member_id,champion_id" },
-  );
-  if (error) throw error;
-  return sendJson(req, res, 200, { ok: true, awakening: { champion_id: championId, awakening_level: awakeningLevel } });
+  const awakeningLevel = normalizeHeroBoxAwakeningLevel(body.awakeningLevel ?? body.awakening_level);
+  if (awakeningLevel === null) {
+    return sendJson(req, res, 400, { ok: false, error: "Eveil Hero Box invalide." });
+  }
+
+  const awakening = await upsertHeroBoxAwakening(supabase, {
+    memberId: target.id,
+    championId,
+    awakeningLevel,
+  });
+  return sendJson(req, res, 200, { ok: true, ...awakening, awakening });
 }
 
 async function handleBulkHeroAwakening(req, res, supabase, actor, body) {
@@ -341,17 +396,24 @@ async function handleBulkHeroAwakening(req, res, supabase, actor, body) {
   }
 
   const rows = parseJsonArray(body.entries)
-    .map((entry) => ({
-      member_id: target.id,
-      champion_id: Number(entry.championId || entry.champion_id),
-      awakening_level: normalizeAwakeningLevel(entry.awakeningLevel ?? entry.awakening_level),
-    }))
+    .map((entry) => {
+      const championId = Number(entry.championId || entry.champion_id);
+      const awakeningLevel = normalizeHeroBoxAwakeningLevel(entry.awakeningLevel ?? entry.awakening_level);
+      return {
+        member_id: target.id,
+        champion_id: championId,
+        awakening_level: awakeningLevel,
+      };
+    })
     .filter((entry) => Number.isFinite(entry.champion_id));
 
   if (!rows.length) return sendJson(req, res, 400, { ok: false, error: "Aucun eveil valide." });
-  const { error } = await supabase.from("member_awakenings").upsert(rows, { onConflict: "member_id,champion_id" });
-  if (error) throw error;
-  return sendJson(req, res, 200, { ok: true, count: rows.length });
+  if (rows.some((entry) => entry.awakening_level === null)) {
+    return sendJson(req, res, 400, { ok: false, error: "Eveil Hero Box invalide." });
+  }
+
+  const awakenings = await upsertHeroBoxAwakenings(supabase, rows);
+  return sendJson(req, res, 200, { ok: true, count: awakenings.length, awakenings });
 }
 
 async function handlePersonalBest(req, res, supabase, actor, body) {
