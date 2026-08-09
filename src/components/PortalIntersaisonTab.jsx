@@ -157,15 +157,11 @@ export default function PortalIntersaisonTab({ session }) {
       const data = await callPortalIntersaison({ action, ...payload });
       if (data.state) {
         const state = data.state || emptyIntersaisonState();
-        if (!state.campaign) {
-          resetState();
-        } else {
-          applyLoadedState(state);
-        }
+        applyLoadedState(state);
       }
       return data;
     },
-    [applyLoadedState, resetState],
+    [applyLoadedState],
   );
 
   const loadIntersaisonData = useCallback(async () => {
@@ -175,13 +171,7 @@ export default function PortalIntersaisonTab({ session }) {
     setMessage("");
 
     try {
-      const data = await runIntersaisonAction("load");
-      const state = data.state || emptyIntersaisonState();
-      if (!state.campaign) {
-        resetState();
-      } else {
-        applyLoadedState(state);
-      }
+      await runIntersaisonAction("load");
     } catch (error) {
       console.error("Erreur chargement intersaison:", error);
       resetState();
@@ -189,7 +179,7 @@ export default function PortalIntersaisonTab({ session }) {
     } finally {
       setLoading(false);
     }
-  }, [applyLoadedState, canManage, resetState, runIntersaisonAction]);
+  }, [canManage, resetState, runIntersaisonAction]);
 
   useEffect(() => {
     void loadIntersaisonData();
@@ -436,7 +426,6 @@ export default function PortalIntersaisonTab({ session }) {
         campaignId: campaign.id,
       });
       setFinalizeDialogOpen(false);
-      resetState();
       setMessage("Campagne intersaison mise hors service.");
     } catch (error) {
       console.error("Erreur suppression campagne intersaison:", error);
@@ -497,7 +486,6 @@ export default function PortalIntersaisonTab({ session }) {
         campaignId: campaign.id,
       });
       setFinalizeDialogOpen(false);
-      resetState();
       setMessage("Intersaison validee, transferts et sorties communaute appliques.");
     } catch (error) {
       console.error("Erreur lancement transferts intersaison:", error);
