@@ -3,6 +3,7 @@ import {
   ArrowRightLeft,
   CheckCircle2,
   ClipboardCopy,
+  Link2,
   MessageSquare,
   Play,
   RefreshCw,
@@ -209,7 +210,11 @@ export default function PortalIntersaisonTab({ session }) {
     if (!query) return [];
 
     return assignments
-      .filter((assignment) => String(assignment.watcher_name || "").toLowerCase().includes(query))
+      .filter((assignment) =>
+        [assignment.watcher_name, assignment.accountLinkSearchText]
+          .map((value) => String(value || "").toLowerCase())
+          .some((value) => value.includes(query)),
+      )
       .sort(sortByName)
       .slice(0, 8);
   }, [assignments, searchQuery]);
@@ -941,6 +946,18 @@ export default function PortalIntersaisonTab({ session }) {
                               className="w-full rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-left transition hover:bg-zinc-800"
                             >
                               <div className="font-medium text-zinc-50">{row.watcher_name}</div>
+                              {row.accountLink?.isSecondary ? (
+                                <div className="mt-1 flex items-center gap-1 text-xs text-sky-300">
+                                  <Link2 className="h-3 w-3" />
+                                  Compte secondaire de {row.accountLink.primaryWatcherName || "compte principal"}
+                                  {row.accountLink.primaryGuildCode ? ` · principal ${row.accountLink.primaryGuildCode}` : ""}
+                                </div>
+                              ) : row.accountLink?.isPrimary ? (
+                                <div className="mt-1 flex items-center gap-1 text-xs text-violet-300">
+                                  <Link2 className="h-3 w-3" />
+                                  {row.accountLink.secondaryCount} compte(s) secondaire(s)
+                                </div>
+                              ) : null}
                               <div className="text-sm text-zinc-500">Dashboard : {dashboard?.name || "-"}</div>
                             </button>
                           );
@@ -1034,14 +1051,28 @@ export default function PortalIntersaisonTab({ session }) {
                                 event.stopPropagation();
                                 openNoteDialog(row);
                               }}
-                              className="flex min-w-0 items-center gap-2 text-left font-medium text-zinc-100 hover:text-sky-300"
+                              className="min-w-0 text-left font-medium text-zinc-100 hover:text-sky-300"
                             >
-                              <span className="truncate">{row.watcher_name}</span>
-                              {note ? (
-                                <MessageSquare className="h-4 w-4 shrink-0 text-sky-300" aria-label="Note" />
-                              ) : null}
-                              {row.discord_id_raw ? (
-                                <span className="truncate text-xs text-zinc-500">{row.discord_id_raw}</span>
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className="truncate">{row.watcher_name}</span>
+                                {note ? (
+                                  <MessageSquare className="h-4 w-4 shrink-0 text-sky-300" aria-label="Note" />
+                                ) : null}
+                                {row.discord_id_raw ? (
+                                  <span className="truncate text-xs text-zinc-500">{row.discord_id_raw}</span>
+                                ) : null}
+                              </span>
+                              {row.accountLink?.isSecondary ? (
+                                <span className="mt-1 flex items-center gap-1 text-xs font-normal text-sky-300">
+                                  <Link2 className="h-3 w-3" />
+                                  Compte secondaire de {row.accountLink.primaryWatcherName || "compte principal"}
+                                  {row.accountLink.primaryGuildCode ? ` · principal ${row.accountLink.primaryGuildCode}` : ""}
+                                </span>
+                              ) : row.accountLink?.isPrimary ? (
+                                <span className="mt-1 flex items-center gap-1 text-xs font-normal text-violet-300">
+                                  <Link2 className="h-3 w-3" />
+                                  {row.accountLink.secondaryCount} compte(s) secondaire(s)
+                                </span>
                               ) : null}
                             </button>
                             <div className="text-center text-zinc-300">{row.source_guild_code || "-"}</div>

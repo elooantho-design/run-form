@@ -15,6 +15,12 @@ import {
   cleanIntersaisonText,
   normalizeIntersaisonCode,
 } from "./_portal-intersaison-core.js";
+import {
+  buildLinkedAccountSearchText,
+  getLinkedGuildCode,
+  getLinkedWatcherName,
+  getPrimaryMemberId,
+} from "../src/lib/linkedAccounts.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -39,6 +45,8 @@ const ASSIGNMENT_SELECT = `
   wished_guild_codes
 `;
 const MEMBER_VALIDATION_SELECT =
+  "id, watcher_name, guild_code, role, community_access_type, community_status, roster_status, primary_member_id";
+const MEMBER_VALIDATION_SELECT_FALLBACK =
   "id, watcher_name, guild_code, role, community_access_type, community_status, roster_status";
 const GUILD_SELECT = "id, organization_id, guild_code, display_name, is_active";
 
@@ -48,6 +56,15 @@ function sendJson(res, status, payload, req = null) {
 
 function cleanText(value) {
   return cleanIntersaisonText(value);
+}
+
+function isMissingColumn(error, columnName) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42703" ||
+    error?.code === "PGRST204" ||
+    message.includes(String(columnName || "").toLowerCase())
+  );
 }
 
 function normalizeGuildCode(value) {
@@ -191,7 +208,8 @@ async function loadState(organization) {
   if (dashboardsError) throw dashboardsError;
   if (assignmentsError) throw assignmentsError;
 
-  const assignmentIds = (assignments || []).map((assignment) => assignment.id).filter(Boolean);
+  const enrichedAssignments = await enrichAssignmentsWithLinkedAccounts(assignments || []);
+  const assignmentIds = enrichedAssignments.map((assignment) => assignment.id).filter(Boolean);
   let notes = [];
   if (assignmentIds.length > 0) {
     const { data: loadedNotes, error: notesError } = await supabase
@@ -208,7 +226,7 @@ async function loadState(organization) {
     guilds,
     campaign,
     dashboards: dashboards || [],
-    assignments: assignments || [],
+    assignments: enrichedAssignments,
     notes,
   };
 }
@@ -233,16 +251,117 @@ async function loadAssignmentForActiveCampaign(assignmentId, organization) {
   return { campaign, assignment: data };
 }
 
-async function loadMembersForAssignments(assignments) {
-  const memberIds = [...new Set((assignments || []).map((assignment) => assignment.member_id).filter(Boolean))];
-  if (memberIds.length === 0) return [];
+async function loadGuildMembersByIds(memberIds, { includeLinkedAccounts = true } = {}) {
+  const ids = [...new Set((memberIds || []).map(cleanText).filter(Boolean))];
+  if (ids.length === 0) return [];
+
+  const select = includeLinkedAccounts ? MEMBER_VALIDATION_SELECT : MEMBER_VALIDATION_SELECT_FALLBACK;
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(select)
+    .in("id", ids);
+
+  if (error) {
+    if (includeLinkedAccounts && isMissingColumn(error, "primary_member_id")) {
+      return loadGuildMembersByIds(ids, { includeLinkedAccounts: false });
+    }
+    throw error;
+  }
+
+  return data || [];
+}
+
+async function loadSecondaryRowsForPrincipals(primaryMemberIds) {
+  const ids = [...new Set((primaryMemberIds || []).map(cleanText).filter(Boolean))];
+  if (ids.length === 0) return [];
 
   const { data, error } = await supabase
     .from("guild_members")
     .select(MEMBER_VALIDATION_SELECT)
-    .in("id", memberIds);
-  if (error) throw error;
+    .in("primary_member_id", ids)
+    .order("watcher_name", { ascending: true });
+
+  if (error) {
+    if (isMissingColumn(error, "primary_member_id")) return [];
+    throw error;
+  }
+
   return data || [];
+}
+
+async function enrichAssignmentsWithLinkedAccounts(assignments) {
+  const rows = assignments || [];
+  const memberIds = [...new Set(rows.map((assignment) => assignment.member_id).filter(Boolean))];
+  if (memberIds.length === 0) {
+    return rows.map((assignment) => ({
+      ...assignment,
+      accountLink: null,
+      accountLinkSearchText: "",
+    }));
+  }
+
+  const members = await loadGuildMembersByIds(memberIds);
+  const memberById = new Map(members.map((member) => [String(member.id), member]));
+  const primaryIds = [
+    ...new Set(members.map((member) => getPrimaryMemberId(member)).filter(Boolean)),
+  ];
+  const missingPrimaryIds = primaryIds.filter((primaryId) => !memberById.has(String(primaryId)));
+  const primaryRows = await loadGuildMembersByIds(missingPrimaryIds);
+  const primaryById = new Map(primaryRows.map((member) => [String(member.id), member]));
+
+  const principalIdsToInspect = [
+    ...new Set([...memberIds, ...primaryIds].map(cleanText).filter(Boolean)),
+  ];
+  const secondaryRows = await loadSecondaryRowsForPrincipals(principalIdsToInspect);
+  const secondariesByPrimaryId = secondaryRows.reduce((grouped, secondary) => {
+    const primaryId = getPrimaryMemberId(secondary);
+    if (!primaryId) return grouped;
+    const list = grouped.get(primaryId) || [];
+    list.push(secondary);
+    grouped.set(primaryId, list);
+    return grouped;
+  }, new Map());
+
+  return rows.map((assignment) => {
+    const member = memberById.get(String(assignment.member_id));
+    let accountLink = null;
+
+    if (member) {
+      const primaryMemberId = getPrimaryMemberId(member);
+      if (primaryMemberId) {
+        const primary = memberById.get(String(primaryMemberId)) || primaryById.get(String(primaryMemberId)) || null;
+        accountLink = {
+          type: "secondary",
+          isSecondary: true,
+          isPrimary: false,
+          primaryMemberId,
+          primaryWatcherName: primary ? getLinkedWatcherName(primary) : "",
+          primaryGuildCode: primary ? getLinkedGuildCode(primary) : "",
+        };
+      } else {
+        const secondaryCount = (secondariesByPrimaryId.get(String(member.id)) || []).length;
+        if (secondaryCount > 0) {
+          accountLink = {
+            type: "primary",
+            isSecondary: false,
+            isPrimary: true,
+            secondaryCount,
+          };
+        }
+      }
+    }
+
+    return {
+      ...assignment,
+      accountLink,
+      accountLinkSearchText: buildLinkedAccountSearchText({ ...assignment, accountLink }),
+    };
+  });
+}
+
+async function loadMembersForAssignments(assignments) {
+  const memberIds = [...new Set((assignments || []).map((assignment) => assignment.member_id).filter(Boolean))];
+  return loadGuildMembersByIds(memberIds);
 }
 
 async function loadGuildsForMemberValidation({ members, activeGuilds }) {

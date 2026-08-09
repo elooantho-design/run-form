@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, ExternalLink, MessageSquare, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ArrowRightLeft, ExternalLink, Link2, MessageSquare, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, Unlink, UserCog, UserPlus, Users, X } from "lucide-react";
 import GestionDefenseTab from "@/components/GestionDefenseTab";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -117,6 +117,415 @@ async function postPortalAccess(action, payload = {}) {
   return data;
 }
 
+function getEmptyMemberEditDraft() {
+  return {
+    watcherName: "",
+    guildCode: "",
+    role: "member",
+    rosterStatus: "active",
+    discordId: "",
+    personalForumPostUrl: "",
+  };
+}
+
+function createMemberEditDraft(member) {
+  return {
+    watcherName: member?.watcherName || member?.name || "",
+    guildCode: member?.guildCode || "",
+    role: member?.role || "member",
+    rosterStatus: member?.rosterStatus || "active",
+    discordId: member?.discordId || "",
+    personalForumPostUrl: member?.personalForumPostUrl || "",
+  };
+}
+
+function MemberEditModal({
+  t,
+  isLeader,
+  profile,
+  draft,
+  results,
+  query,
+  linkedAccounts,
+  isSecondary,
+  canLinkSecondaries,
+  effectiveDiscordId,
+  linkQuery,
+  linkResults,
+  loading,
+  saving,
+  linkLoading,
+  linkSearchLoading,
+  error,
+  message,
+  setQuery,
+  setDraft,
+  setLinkQuery,
+  onClose,
+  onSearch,
+  onLoadProfile,
+  onSave,
+  onSearchLink,
+  onLinkSecondary,
+  onUnlinkSecondary,
+  onResetSelection,
+}) {
+  const member = profile?.member || null;
+  const primary = profile?.primary || null;
+  const secondaryCount = linkedAccounts.filter((linked) => String(linked.primaryMemberId) === String(member?.id)).length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-violet-500/30 bg-violet-500/10">
+              <UserCog className="h-5 w-5 text-violet-200" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-zinc-50">
+                {t("guildManagement.editMember", "Modifier un joueur")}
+              </h3>
+              <p className="mt-1 text-sm text-zinc-400">
+                {t("guildManagement.editMemberHelp", "Recherche un compte existant, puis modifie sa fiche dediee.")}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+            disabled={loading || saving || linkLoading}
+            onClick={onClose}
+            title={t("common.close", "Fermer")}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-5 lg:grid-cols-[320px_1fr]">
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+              {t("guildManagement.memberEditSearch", "Recherche joueur")}
+            </div>
+            <div className="mt-3 flex gap-2">
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void onSearch();
+                  }
+                }}
+                placeholder={t("guildManagement.memberEditSearchPlaceholder", "Nom du joueur...")}
+                className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-lg border-violet-500/40 bg-violet-500/10 px-3 text-violet-100 hover:bg-violet-500/20"
+                disabled={loading}
+                onClick={onSearch}
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="mt-3 grid gap-2">
+              {results.length ? (
+                results.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+                      String(item.id) === String(member?.id)
+                        ? "border-violet-300/60 bg-violet-500/15 text-violet-100"
+                        : "border-zinc-800 bg-zinc-950 text-zinc-300 hover:border-zinc-600 hover:text-zinc-100"
+                    }`}
+                    onClick={() => onLoadProfile(item.id)}
+                  >
+                    <div className="font-semibold">{item.name || item.watcherName}</div>
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-zinc-500">
+                      <span>{item.guildCode || "-"}</span>
+                      <span>{item.role || "member"}</span>
+                      {item.linkedAccountRole === "secondary" ? <span>secondaire</span> : null}
+                    </div>
+                  </button>
+                ))
+              ) : (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-6 text-center text-sm text-zinc-500">
+                  {t("guildManagement.memberEditNoSearch", "Lance une recherche pour choisir un joueur.")}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+            {!member ? (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-12 text-center text-sm text-zinc-500">
+                {t("guildManagement.memberEditSelectHelp", "Selectionne un joueur pour ouvrir sa fiche.")}
+              </div>
+            ) : (
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                      {t("guildManagement.memberEditSheet", "Fiche joueur")}
+                    </div>
+                    <h4 className="mt-1 text-xl font-semibold text-zinc-50">{member.name || member.watcherName}</h4>
+                    <p className="mt-1 text-sm text-zinc-400">
+                      {isSecondary && primary
+                        ? formatText(
+                            t("guildManagement.secondaryOf", "Compte secondaire de {primary} · principal {guild}"),
+                            { primary: primary.name || primary.watcherName, guild: primary.guildCode || "-" },
+                          )
+                        : t("guildManagement.primaryAccount", "Compte principal / autonome")}
+                    </p>
+                  </div>
+                  {isSecondary ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-lg border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20"
+                      disabled={linkLoading}
+                      onClick={() => onUnlinkSecondary(member)}
+                    >
+                      <Unlink className="mr-2 h-4 w-4" />
+                      {t("guildManagement.unlinkSecondary", "Delier")}
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-sm text-zinc-400">{t("guildManagement.playerName", "Nom joueur")}</span>
+                    <input
+                      type="text"
+                      value={draft.watcherName}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, watcherName: event.target.value }))}
+                      className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-sm text-zinc-400">Guilde</span>
+                    <input
+                      type="text"
+                      value={draft.guildCode}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, guildCode: event.target.value }))}
+                      className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-sm text-zinc-400">Role</span>
+                    <select
+                      value={draft.role}
+                      disabled={!isLeader}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, role: event.target.value }))}
+                      className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20 disabled:cursor-not-allowed disabled:opacity-60 [&>option]:bg-zinc-950 [&>option]:text-zinc-100"
+                    >
+                      {["member", "admin", "leader", "community_member", "content_creator"].map((role) => (
+                        <option key={role} value={role}>
+                          {role}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-sm text-zinc-400">Roster</span>
+                    <select
+                      value={draft.rosterStatus}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, rosterStatus: event.target.value }))}
+                      className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20 [&>option]:bg-zinc-950 [&>option]:text-zinc-100"
+                    >
+                      <option value="active">active</option>
+                      <option value="non_roster">non_roster</option>
+                      <option value="inactive">inactive</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-sm text-zinc-400">ID Discord</span>
+                    <input
+                      type="text"
+                      value={isSecondary ? effectiveDiscordId : draft.discordId}
+                      disabled={isSecondary}
+                      onChange={(event) => setDraft((previous) => ({ ...previous, discordId: event.target.value }))}
+                      className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    {isSecondary ? (
+                      <span className="mt-2 block text-xs text-zinc-500">
+                        {t("guildManagement.discordInherited", "Discord herite du compte principal.")}
+                      </span>
+                    ) : null}
+                  </label>
+                  <label className="block">
+                    <span className="text-sm text-zinc-400">
+                      {t("guildManagement.personalForumLink", "Lien forum personnel")}
+                    </span>
+                    <input
+                      type="url"
+                      value={draft.personalForumPostUrl}
+                      onChange={(event) =>
+                        setDraft((previous) => ({ ...previous, personalForumPostUrl: event.target.value }))
+                      }
+                      placeholder="https://discord.com/channels/..."
+                      className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20"
+                    />
+                    <span className="mt-2 block text-xs text-zinc-500">
+                      {t("guildManagement.forumPerAccount", "Ce lien reste propre a ce compte.")}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+                    <Link2 className="h-4 w-4 text-violet-300" />
+                    {t("guildManagement.linkedAccounts", "Comptes lies")}
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    {isSecondary
+                      ? t("guildManagement.secondaryAccount", "Ce compte est secondaire.")
+                      : formatText(t("guildManagement.secondaryCount", "{count} compte(s) secondaire(s)."), {
+                          count: secondaryCount,
+                        })}
+                  </div>
+
+                  {linkedAccounts.length ? (
+                    <div className="mt-3 grid gap-2">
+                      {linkedAccounts.map((linked) => (
+                        <div
+                          key={linked.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm"
+                        >
+                          <div>
+                            <div className="font-semibold text-zinc-100">{linked.name || linked.watcherName}</div>
+                            <div className="mt-1 text-xs text-zinc-500">
+                              {linked.guildCode || "-"} · {linked.role || "member"}
+                              {linked.primaryMemberId ? " · secondaire" : " · principal"}
+                            </div>
+                          </div>
+                          {linked.primaryMemberId ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-9 rounded-lg border-red-500/40 bg-red-500/10 px-3 text-red-100 hover:bg-red-500/20"
+                              disabled={linkLoading}
+                              onClick={() => onUnlinkSecondary(linked)}
+                            >
+                              <Unlink className="mr-2 h-4 w-4" />
+                              {t("guildManagement.unlinkSecondary", "Delier")}
+                            </Button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-4 text-center text-sm text-zinc-500">
+                      {t("guildManagement.noLinkedAccounts", "Aucun autre compte lie pour le moment.")}
+                    </div>
+                  )}
+
+                  {canLinkSecondaries ? (
+                    <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/80 p-3">
+                      <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">
+                        {t("guildManagement.linkExistingAccount", "Lier un compte existant")}
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <input
+                          type="search"
+                          value={linkQuery}
+                          onChange={(event) => setLinkQuery(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              void onSearchLink();
+                            }
+                          }}
+                          placeholder={t("guildManagement.memberEditSearchPlaceholder", "Nom du joueur...")}
+                          className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-10 rounded-lg border-violet-500/40 bg-violet-500/10 px-3 text-violet-100 hover:bg-violet-500/20"
+                          disabled={linkSearchLoading}
+                          onClick={onSearchLink}
+                        >
+                          <Search className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      {linkResults.length ? (
+                        <div className="mt-3 grid gap-2">
+                          {linkResults.map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-left text-sm text-zinc-300 transition hover:border-violet-400/50 hover:text-zinc-100"
+                              disabled={linkLoading}
+                              onClick={() => onLinkSecondary(item)}
+                            >
+                              <div className="font-semibold">{item.name || item.watcherName}</div>
+                              <div className="mt-1 text-xs text-zinc-500">
+                                {item.guildCode || "-"} · {item.role || "member"}
+                                {item.linkedAccountRole === "secondary" ? " · deja secondaire" : ""}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                {message ? (
+                  <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+                    {message}
+                  </div>
+                ) : null}
+                {error ? (
+                  <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                    {error}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-lg border-zinc-700 text-zinc-200"
+                    disabled={saving}
+                    onClick={onResetSelection}
+                  >
+                    {t("common.reset", "Reset")}
+                  </Button>
+                  <Button
+                    type="button"
+                    className="rounded-lg bg-violet-500 text-zinc-950 hover:bg-violet-400"
+                    disabled={saving || !draft.watcherName.trim()}
+                    onClick={onSave}
+                  >
+                    <Save className="mr-2 h-4 w-4" />
+                    {saving ? t("common.saving", "Sauvegarde...") : t("common.save", "Sauvegarder")}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {loading && !member ? (
+          <div className="mt-4 rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
+            {t("common.loading", "Chargement...")}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function PortalGuildManagementTab({ session }) {
   const { t, language } = usePortalLanguage();
   const [activeGuildCode, setActiveGuildCode] = useState(getSessionGuildCode(session));
@@ -157,6 +566,19 @@ export default function PortalGuildManagementTab({ session }) {
   const [heroSearchLoading, setHeroSearchLoading] = useState(false);
   const [heroSearchError, setHeroSearchError] = useState("");
   const [activeHeroSearchIndex, setActiveHeroSearchIndex] = useState(null);
+  const [memberEditOpen, setMemberEditOpen] = useState(false);
+  const [memberEditQuery, setMemberEditQuery] = useState("");
+  const [memberEditResults, setMemberEditResults] = useState([]);
+  const [memberEditProfile, setMemberEditProfile] = useState(null);
+  const [memberEditDraft, setMemberEditDraft] = useState(getEmptyMemberEditDraft);
+  const [memberEditLoading, setMemberEditLoading] = useState(false);
+  const [memberEditSaving, setMemberEditSaving] = useState(false);
+  const [memberEditError, setMemberEditError] = useState("");
+  const [memberEditMessage, setMemberEditMessage] = useState("");
+  const [linkSearchQuery, setLinkSearchQuery] = useState("");
+  const [linkSearchResults, setLinkSearchResults] = useState([]);
+  const [linkSearchLoading, setLinkSearchLoading] = useState(false);
+  const [linkActionLoading, setLinkActionLoading] = useState(false);
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -788,6 +1210,198 @@ export default function PortalGuildManagementTab({ session }) {
     resetHeroSearchModal();
   }
 
+  function resetMemberEditModal() {
+    setMemberEditQuery("");
+    setMemberEditResults([]);
+    setMemberEditProfile(null);
+    setMemberEditDraft(getEmptyMemberEditDraft());
+    setMemberEditError("");
+    setMemberEditMessage("");
+    setLinkSearchQuery("");
+    setLinkSearchResults([]);
+  }
+
+  function openMemberEditModal() {
+    resetMemberEditModal();
+    setMemberEditOpen(true);
+  }
+
+  function updateMemberEditLocal(profile) {
+    const member = profile?.member;
+    if (!member?.id) return;
+
+    updateMemberLocal(member.id, {
+      name: member.name || member.watcherName,
+      discordId: member.discordId,
+      guildCode: member.guildCode,
+      role: member.role,
+      personalForumPostUrl: member.personalForumPostUrl,
+    });
+  }
+
+  async function searchMembersToEdit() {
+    const query = memberEditQuery.trim();
+    if (query.length < 2) {
+      setMemberEditResults([]);
+      setMemberEditError(t("guildManagement.memberEditQueryShort", "Tape au moins 2 caracteres."));
+      return;
+    }
+
+    setMemberEditLoading(true);
+    setMemberEditError("");
+    setMemberEditMessage("");
+
+    try {
+      const payload = await postPortalAccess("member-edit-search", { query });
+      setMemberEditResults(payload.results || []);
+    } catch (error) {
+      setMemberEditError(error?.message || t("guildManagement.memberEditSearchError", "Recherche joueur impossible."));
+    } finally {
+      setMemberEditLoading(false);
+    }
+  }
+
+  async function loadMemberEditProfile(memberId) {
+    if (!memberId) return;
+
+    setMemberEditLoading(true);
+    setMemberEditError("");
+    setMemberEditMessage("");
+
+    try {
+      const payload = await postPortalAccess("member-edit-load", { memberId });
+      const profile = payload.profile || null;
+      setMemberEditProfile(profile);
+      setMemberEditDraft(createMemberEditDraft(profile?.member));
+      setLinkSearchQuery("");
+      setLinkSearchResults([]);
+      updateMemberEditLocal(profile);
+    } catch (error) {
+      setMemberEditError(error?.message || t("guildManagement.memberEditLoadError", "Chargement fiche joueur impossible."));
+    } finally {
+      setMemberEditLoading(false);
+    }
+  }
+
+  async function saveMemberEditProfile() {
+    const member = memberEditProfile?.member;
+    if (!member?.id || memberEditSaving) return;
+
+    setMemberEditSaving(true);
+    setMemberEditError("");
+    setMemberEditMessage("");
+
+    try {
+      const payload = await postPortalAccess("member-edit-update", {
+        memberId: member.id,
+        patch: {
+          watcherName: memberEditDraft.watcherName,
+          guildCode: memberEditDraft.guildCode,
+          role: memberEditDraft.role,
+          rosterStatus: memberEditDraft.rosterStatus,
+          discordId: memberEditIsSecondary ? memberEditEffectiveDiscordId : memberEditDraft.discordId,
+          personalForumPostUrl: memberEditDraft.personalForumPostUrl,
+        },
+      });
+      const profile = payload.profile || null;
+      setMemberEditProfile(profile);
+      setMemberEditDraft(createMemberEditDraft(profile?.member));
+      updateMemberEditLocal(profile);
+      setMemberEditMessage(t("guildManagement.memberEditSaved", "Fiche joueur sauvegardee."));
+    } catch (error) {
+      setMemberEditError(error?.message || t("guildManagement.memberEditSaveError", "Sauvegarde fiche joueur impossible."));
+    } finally {
+      setMemberEditSaving(false);
+    }
+  }
+
+  async function searchMembersToLink() {
+    const query = linkSearchQuery.trim();
+    if (query.length < 2) {
+      setLinkSearchResults([]);
+      setMemberEditError(t("guildManagement.memberEditQueryShort", "Tape au moins 2 caracteres."));
+      return;
+    }
+
+    setLinkSearchLoading(true);
+    setMemberEditError("");
+    setMemberEditMessage("");
+
+    try {
+      const payload = await postPortalAccess("member-edit-search", { query });
+      const currentId = memberEditProfile?.member?.id;
+      setLinkSearchResults((payload.results || []).filter((member) => String(member.id) !== String(currentId)));
+    } catch (error) {
+      setMemberEditError(error?.message || t("guildManagement.memberEditSearchError", "Recherche joueur impossible."));
+    } finally {
+      setLinkSearchLoading(false);
+    }
+  }
+
+  async function linkSecondaryAccount(secondary) {
+    const primary = memberEditProfile?.member;
+    if (!primary?.id || !secondary?.id || linkActionLoading) return;
+
+    const confirmed = window.confirm(
+      formatText(
+        t("guildManagement.linkSecondaryConfirm", "Definir {secondary} comme compte secondaire de {primary} ?"),
+        { primary: primary.name || primary.watcherName, secondary: secondary.name || secondary.watcherName },
+      ),
+    );
+    if (!confirmed) return;
+
+    setLinkActionLoading(true);
+    setMemberEditError("");
+    setMemberEditMessage("");
+
+    try {
+      const payload = await postPortalAccess("member-link-secondary", {
+        primaryMemberId: primary.id,
+        secondaryMemberId: secondary.id,
+      });
+      const profile = payload.profile || null;
+      setMemberEditProfile(profile);
+      setMemberEditDraft(createMemberEditDraft(profile?.member));
+      setLinkSearchQuery("");
+      setLinkSearchResults([]);
+      updateMemberEditLocal(profile);
+      setMemberEditMessage(t("guildManagement.linkSecondarySaved", "Compte secondaire lie."));
+    } catch (error) {
+      setMemberEditError(error?.message || t("guildManagement.linkSecondaryError", "Lien compte secondaire impossible."));
+    } finally {
+      setLinkActionLoading(false);
+    }
+  }
+
+  async function unlinkSecondaryAccount(member) {
+    if (!member?.id || linkActionLoading) return;
+
+    const confirmed = window.confirm(
+      formatText(
+        t("guildManagement.unlinkSecondaryConfirm", "Delier {secondary} de son compte principal ?"),
+        { secondary: member.name || member.watcherName },
+      ),
+    );
+    if (!confirmed) return;
+
+    setLinkActionLoading(true);
+    setMemberEditError("");
+    setMemberEditMessage("");
+
+    try {
+      const payload = await postPortalAccess("member-unlink-secondary", { memberId: member.id });
+      const profile = payload.profile || null;
+      setMemberEditProfile(profile);
+      setMemberEditDraft(createMemberEditDraft(profile?.member));
+      updateMemberEditLocal(profile);
+      setMemberEditMessage(t("guildManagement.unlinkSecondarySaved", "Compte delie."));
+    } catch (error) {
+      setMemberEditError(error?.message || t("guildManagement.unlinkSecondaryError", "Deliaison impossible."));
+    } finally {
+      setLinkActionLoading(false);
+    }
+  }
+
   function updateHeroSearchCriterion(index, patch) {
     setHeroSearchCriteria((previous) =>
       previous.map((criterion, currentIndex) =>
@@ -1022,6 +1636,14 @@ export default function PortalGuildManagementTab({ session }) {
     }
   }
 
+  const memberEditMember = memberEditProfile?.member || null;
+  const memberEditLinkedAccounts = (memberEditProfile?.linkedAccounts || []).filter(
+    (member) => String(member.id) !== String(memberEditMember?.id),
+  );
+  const memberEditIsSecondary = memberEditMember?.linkedAccountRole === "secondary";
+  const memberEditCanLinkSecondaries = Boolean(memberEditMember?.id && !memberEditIsSecondary);
+  const memberEditEffectiveDiscordId = memberEditProfile?.effectiveDiscordId || memberEditDraft.discordId || "";
+
   return (
     <section className="space-y-5">
       <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5">
@@ -1062,6 +1684,16 @@ export default function PortalGuildManagementTab({ session }) {
             >
               <UserPlus className="mr-2 h-4 w-4" />
               {t("guildManagement.addMember", "Ajouter un membre")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-lg border-violet-500/40 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20"
+              disabled={!isAdmin}
+              onClick={openMemberEditModal}
+            >
+              <UserCog className="mr-2 h-4 w-4" />
+              {t("guildManagement.editMember", "Modifier un joueur")}
             </Button>
             <Button
               type="button"
@@ -1251,6 +1883,51 @@ export default function PortalGuildManagementTab({ session }) {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {memberEditOpen ? (
+        <MemberEditModal
+          t={t}
+          isLeader={isLeader}
+          profile={memberEditProfile}
+          draft={memberEditDraft}
+          results={memberEditResults}
+          query={memberEditQuery}
+          linkedAccounts={memberEditLinkedAccounts}
+          isSecondary={memberEditIsSecondary}
+          canLinkSecondaries={memberEditCanLinkSecondaries}
+          effectiveDiscordId={memberEditEffectiveDiscordId}
+          linkQuery={linkSearchQuery}
+          linkResults={linkSearchResults}
+          loading={memberEditLoading}
+          saving={memberEditSaving}
+          linkLoading={linkActionLoading}
+          linkSearchLoading={linkSearchLoading}
+          error={memberEditError}
+          message={memberEditMessage}
+          setQuery={setMemberEditQuery}
+          setDraft={setMemberEditDraft}
+          setLinkQuery={setLinkSearchQuery}
+          onClose={() => {
+            if (memberEditLoading || memberEditSaving || linkActionLoading) return;
+            setMemberEditOpen(false);
+            resetMemberEditModal();
+          }}
+          onSearch={searchMembersToEdit}
+          onLoadProfile={loadMemberEditProfile}
+          onSave={saveMemberEditProfile}
+          onSearchLink={searchMembersToLink}
+          onLinkSecondary={linkSecondaryAccount}
+          onUnlinkSecondary={unlinkSecondaryAccount}
+          onResetSelection={() => {
+            setMemberEditProfile(null);
+            setMemberEditDraft(getEmptyMemberEditDraft());
+            setLinkSearchQuery("");
+            setLinkSearchResults([]);
+            setMemberEditMessage("");
+            setMemberEditError("");
+          }}
+        />
       ) : null}
 
       {heroSearchOpen ? (

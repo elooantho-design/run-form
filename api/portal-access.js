@@ -13,6 +13,14 @@ import {
   verifyCurrentPortalPasswordForSession,
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
+import {
+  buildLinkedAccountSummary,
+  cleanLinkedAccountText,
+  getEffectiveDiscordId,
+  getLinkedAccountRole,
+  getPrimaryMemberId,
+  validateSecondaryLink,
+} from "../src/lib/linkedAccounts.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -38,12 +46,15 @@ const DEFENSE_STATUSES = new Set([TODO_STATUS, VERIFY_STATUS, VALID_STATUS]);
 const COMMUNITY_ROLES = new Set(["community_member", "content_creator"]);
 const COMMUNITY_STATUSES = new Set(["active", "inactive"]);
 const COMMUNITY_REQUEST_STATUSES = new Set(["pending", "accepted", "refused"]);
+const ROSTER_STATUSES = new Set(["active", "non_roster", "inactive"]);
 const EMPTY_DEFENSE_SLOT = "--";
 const DEFAULT_MEMBER_PASSWORD = "motdepassemembre";
 const HERO_SEARCH_PAGE_SIZE = 1000;
 const HERO_SEARCH_MAX_REQUIREMENTS = 10;
 const SAFE_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required";
+const EDIT_MEMBER_SELECT =
+  "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, roster_status, primary_member_id";
 const HERO_SEARCH_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, role, community_access_type, community_status";
 const SAFE_MEMBER_SELECT_WITH_AWAKENINGS = `
@@ -151,6 +162,11 @@ function normalizeCommunityRequestStatus(status) {
   return COMMUNITY_REQUEST_STATUSES.has(normalized) ? normalized : "pending";
 }
 
+function normalizeRosterStatus(status) {
+  const normalized = normalizeText(status);
+  return ROSTER_STATUSES.has(normalized) ? normalized : "active";
+}
+
 function normalizeGuildCode(value) {
   return cleanText(value).toUpperCase().replace(/\s+/g, "_");
 }
@@ -171,6 +187,15 @@ function isMissingFollowupTable(error) {
 function isMissingOptionalTable(error, tableName) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return error?.code === "42P01" || error?.code === "PGRST205" || message.includes(String(tableName || "").toLowerCase());
+}
+
+function isMissingColumn(error, columnName) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42703" ||
+    error?.code === "PGRST204" ||
+    message.includes(String(columnName || "").toLowerCase())
+  );
 }
 
 function getMemberName(member) {
@@ -376,6 +401,138 @@ function serializeManagedMember(row) {
     defense1: row.defense_1 || EMPTY_DEFENSE_SLOT,
     defense2: row.defense_2 || EMPTY_DEFENSE_SLOT,
     awakenings,
+  };
+}
+
+function serializeEditableMember(row) {
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    watcherName: row.watcher_name || "",
+    name: getMemberName(row),
+    discordId: row.discord_id || "",
+    guildCode: row.guild_code || "",
+    role: row.role || "member",
+    rosterStatus: normalizeRosterStatus(row.roster_status),
+    assignment: row.assignment || "",
+    status: row.status || "",
+    awakeningStatus: row.awakening_status || "",
+    personalForumPostUrl: row.personal_forum_post_url || "",
+    preferredLanguage: row.preferred_language || "fr",
+    communityAccessType: row.community_access_type || "",
+    communityStatus: row.community_status || "",
+    primaryMemberId: row.primary_member_id || null,
+    linkedAccountRole: getLinkedAccountRole(row),
+  };
+}
+
+function serializeEditableMemberSuggestion(row) {
+  return {
+    id: row.id,
+    watcherName: row.watcher_name || "",
+    name: getMemberName(row),
+    guildCode: row.guild_code || "",
+    role: row.role || "member",
+    rosterStatus: normalizeRosterStatus(row.roster_status),
+    primaryMemberId: row.primary_member_id || null,
+    linkedAccountRole: getLinkedAccountRole(row),
+  };
+}
+
+async function loadEditableMemberById(memberId) {
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(EDIT_MEMBER_SELECT)
+    .eq("id", memberId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingColumn(error, "primary_member_id")) {
+      const missing = new Error("Migration comptes secondaires non executee : colonne primary_member_id manquante.");
+      missing.statusCode = 428;
+      throw missing;
+    }
+    throw new Error(error.message || "Chargement du membre impossible.");
+  }
+
+  return data || null;
+}
+
+async function loadEditableMembersByIds(memberIds) {
+  const ids = [...new Set((memberIds || []).map(cleanText).filter(Boolean))];
+  if (ids.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(EDIT_MEMBER_SELECT)
+    .in("id", ids);
+
+  if (error) {
+    if (isMissingColumn(error, "primary_member_id")) {
+      const missing = new Error("Migration comptes secondaires non executee : colonne primary_member_id manquante.");
+      missing.statusCode = 428;
+      throw missing;
+    }
+    throw new Error(error.message || "Chargement des membres lies impossible.");
+  }
+
+  return data || [];
+}
+
+async function loadEditableMemberProfile(memberId, admin) {
+  const member = await loadEditableMemberById(memberId);
+  if (!member) return null;
+
+  if (!canAdminManageTarget(admin, member)) {
+    const error = new Error("Ce joueur n'est pas dans ton perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  let primary = null;
+  let secondaries = [];
+  let linkedAccounts = [];
+
+  const primaryMemberId = getPrimaryMemberId(member);
+  if (primaryMemberId) {
+    const rows = await loadEditableMembersByIds([primaryMemberId]);
+    primary = rows[0] || null;
+  }
+
+  const rootId = primary?.id || member.id;
+  const { data: secondaryRows, error: secondariesError } = await supabase
+    .from("guild_members")
+    .select(EDIT_MEMBER_SELECT)
+    .eq("primary_member_id", rootId)
+    .order("watcher_name", { ascending: true });
+
+  if (secondariesError) {
+    if (isMissingColumn(secondariesError, "primary_member_id")) {
+      const missing = new Error("Migration comptes secondaires non executee : colonne primary_member_id manquante.");
+      missing.statusCode = 428;
+      throw missing;
+    }
+    throw new Error(secondariesError.message || "Chargement des comptes lies impossible.");
+  }
+
+  secondaries = secondaryRows || [];
+  linkedAccounts = [primary || member, ...secondaries]
+    .filter(Boolean)
+    .filter((row) => canAdminManageTarget(admin, row))
+    .map(serializeEditableMemberSuggestion);
+
+  const visiblePrimary = primary && canAdminManageTarget(admin, primary) ? primary : null;
+
+  return {
+    member: serializeEditableMember(member),
+    primary: visiblePrimary ? serializeEditableMemberSuggestion(visiblePrimary) : null,
+    linkedAccounts,
+    linkedSummary: buildLinkedAccountSummary(member, {
+      primary: visiblePrimary,
+      linkedAccounts,
+    }),
+    effectiveDiscordId: getEffectiveDiscordId(member, visiblePrimary),
   };
 }
 
@@ -2058,6 +2215,402 @@ async function handleGuildMemberUpdate(body, res) {
   sendJson(res, 200, { member: serializeManagedMember(updated || target) });
 }
 
+function normalizeMemberEditPatch(patch) {
+  const payload = {};
+  const allowed = {
+    watcher_name: "watcher_name",
+    watcherName: "watcher_name",
+    name: "watcher_name",
+    guild_code: "guild_code",
+    guildCode: "guild_code",
+    role: "role",
+    roster_status: "roster_status",
+    rosterStatus: "roster_status",
+    discord_id: "discord_id",
+    discordId: "discord_id",
+    personal_forum_post_url: "personal_forum_post_url",
+    personalForumPostUrl: "personal_forum_post_url",
+  };
+
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    const dbKey = allowed[key];
+    if (!dbKey) return;
+    payload[dbKey] = typeof value === "string" ? cleanText(value) : value;
+  });
+
+  if (payload.guild_code !== undefined) {
+    payload.guild_code = payload.guild_code ? normalizeGuildCode(payload.guild_code) : null;
+  }
+
+  if (payload.roster_status !== undefined) {
+    const rosterStatus = normalizeText(payload.roster_status);
+    if (!ROSTER_STATUSES.has(rosterStatus)) {
+      const error = new Error("Statut roster invalide.");
+      error.statusCode = 400;
+      throw error;
+    }
+    payload.roster_status = rosterStatus;
+  }
+
+  return payload;
+}
+
+async function handleMemberEditSearch(body, res) {
+  const query = cleanLinkedAccountText(body.query || body.search || body.term).slice(0, 80);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (query.length < 2) {
+    sendJson(res, 200, { results: [] });
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(EDIT_MEMBER_SELECT)
+    .ilike("watcher_name", `%${query}%`)
+    .order("watcher_name", { ascending: true })
+    .limit(80);
+
+  if (error) {
+    if (isMissingColumn(error, "primary_member_id")) {
+      sendJson(res, 428, { error: "Migration comptes secondaires non executee : colonne primary_member_id manquante." });
+      return;
+    }
+    sendJson(res, 500, { error: error.message || "Recherche membre impossible." });
+    return;
+  }
+
+  const results = (data || [])
+    .filter((member) => canAdminManageTarget(adminCheck.admin, member))
+    .slice(0, MAX_SUGGESTIONS)
+    .map(serializeEditableMemberSuggestion);
+
+  sendJson(res, 200, { results });
+}
+
+async function handleMemberEditLoad(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Membre manquant." });
+    return;
+  }
+
+  try {
+    const profile = await loadEditableMemberProfile(memberId, adminCheck.admin);
+    if (!profile) {
+      sendJson(res, 404, { error: "Joueur introuvable." });
+      return;
+    }
+    sendJson(res, 200, { profile });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Chargement fiche joueur impossible." });
+  }
+}
+
+async function handleMemberEditUpdate(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Membre manquant." });
+    return;
+  }
+
+  let patch;
+  try {
+    patch = normalizeMemberEditPatch(body.patch || {});
+  } catch (error) {
+    sendJson(res, error?.statusCode || 400, { error: error?.message || "Modification invalide." });
+    return;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    sendJson(res, 400, { error: "Aucune modification fournie." });
+    return;
+  }
+
+  try {
+    const target = await loadEditableMemberById(memberId);
+    if (!target) {
+      sendJson(res, 404, { error: "Joueur introuvable." });
+      return;
+    }
+
+    if (!canAdminManageTarget(adminCheck.admin, target)) {
+      sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+      return;
+    }
+
+    if (patch.role && !isLeaderRole(adminCheck.admin.role)) {
+      sendJson(res, 403, { error: "Seul le leader peut modifier les roles." });
+      return;
+    }
+
+    if (patch.guild_code && !canViewGuildCode(adminCheck.admin, patch.guild_code, { leaderSeesAll: true })) {
+      sendJson(res, 403, { error: "Guilde cible hors perimetre." });
+      return;
+    }
+
+    let primary = null;
+    if (getPrimaryMemberId(target)) {
+      const rows = await loadEditableMembersByIds([getPrimaryMemberId(target)]);
+      primary = rows[0] || null;
+      if (!primary) {
+        sendJson(res, 409, { error: "Compte principal introuvable pour ce secondaire." });
+        return;
+      }
+
+      const inheritedDiscordId = cleanText(primary.discord_id);
+      if (
+        patch.discord_id !== undefined &&
+        cleanText(patch.discord_id) !== inheritedDiscordId
+      ) {
+        sendJson(res, 400, {
+          error: "Le Discord ID d'un compte secondaire est herite du compte principal.",
+        });
+        return;
+      }
+      patch.discord_id = inheritedDiscordId || null;
+    }
+
+    if (!getPrimaryMemberId(target) && patch.discord_id !== undefined && !isLeaderRole(adminCheck.admin.role)) {
+      const { data: secondaries, error: secondariesError } = await supabase
+        .from("guild_members")
+        .select(EDIT_MEMBER_SELECT)
+        .eq("primary_member_id", target.id);
+
+      if (secondariesError) {
+        sendJson(res, 500, { error: secondariesError.message || "Verification comptes secondaires impossible." });
+        return;
+      }
+
+      const outOfScopeSecondary = (secondaries || []).find(
+        (secondary) => !canAdminManageTarget(adminCheck.admin, secondary),
+      );
+      if (outOfScopeSecondary) {
+        sendJson(res, 403, {
+          error: "Ce Discord ID est partage avec un compte secondaire hors de ton perimetre.",
+        });
+        return;
+      }
+    }
+
+    const { data: updated, error } = await supabase
+      .from("guild_members")
+      .update(patch)
+      .eq("id", target.id)
+      .select(EDIT_MEMBER_SELECT)
+      .maybeSingle();
+
+    if (error) {
+      sendJson(res, 500, { error: error.message || "Mise a jour fiche joueur impossible." });
+      return;
+    }
+
+    if (!updated) {
+      sendJson(res, 404, { error: "Joueur introuvable." });
+      return;
+    }
+
+    if (!getPrimaryMemberId(updated) && patch.discord_id !== undefined) {
+      const { error: syncError } = await supabase
+        .from("guild_members")
+        .update({ discord_id: cleanText(updated.discord_id) || null })
+        .eq("primary_member_id", updated.id);
+
+      if (syncError) {
+        sendJson(res, 500, { error: syncError.message || "Synchronisation Discord des comptes secondaires impossible." });
+        return;
+      }
+    }
+
+    await supabase.from("portal_activity_logs").insert({
+      actor_member_id: adminCheck.admin.id,
+      actor_name: getMemberName(adminCheck.admin),
+      target_member_id: updated.id,
+      target_name: getMemberName(updated),
+      action_type: "guild_member_edit_profile",
+      entity_type: "guild_members",
+      entity_id: updated.id,
+      summary: `${getMemberName(adminCheck.admin)} a modifie la fiche de ${getMemberName(updated)}`,
+      metadata: { fields: Object.keys(patch), guildCode: updated.guild_code || "" },
+    });
+
+    const profile = await loadEditableMemberProfile(updated.id, adminCheck.admin);
+    sendJson(res, 200, { profile });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Mise a jour fiche joueur impossible." });
+  }
+}
+
+async function countSecondaryChildren(memberId) {
+  const { count, error } = await supabase
+    .from("guild_members")
+    .select("id", { count: "exact", head: true })
+    .eq("primary_member_id", memberId);
+
+  if (error) {
+    if (isMissingColumn(error, "primary_member_id")) {
+      const missing = new Error("Migration comptes secondaires non executee : colonne primary_member_id manquante.");
+      missing.statusCode = 428;
+      throw missing;
+    }
+    throw new Error(error.message || "Verification des comptes secondaires impossible.");
+  }
+
+  return count || 0;
+}
+
+async function handleMemberLinkSecondary(body, res) {
+  const primaryMemberId = cleanText(body.primaryMemberId || body.primary_member_id);
+  const secondaryMemberId = cleanText(body.secondaryMemberId || body.secondary_member_id);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!primaryMemberId || !secondaryMemberId) {
+    sendJson(res, 400, { error: "Compte principal ou secondaire manquant." });
+    return;
+  }
+
+  try {
+    const [primary, secondary] = await Promise.all([
+      loadEditableMemberById(primaryMemberId),
+      loadEditableMemberById(secondaryMemberId),
+    ]);
+
+    if (!primary || !secondary) {
+      sendJson(res, 404, { error: "Compte introuvable." });
+      return;
+    }
+
+    if (!canAdminManageTarget(adminCheck.admin, primary) || !canAdminManageTarget(adminCheck.admin, secondary)) {
+      sendJson(res, 403, { error: "Tu dois avoir le droit de gerer les deux comptes pour les lier." });
+      return;
+    }
+
+    const secondaryChildrenCount = await countSecondaryChildren(secondary.id);
+    const validation = validateSecondaryLink({ primary, secondary, secondaryChildrenCount });
+    if (!validation.ok) {
+      sendJson(res, 400, { error: validation.errors[0] || "Lien de comptes invalide." });
+      return;
+    }
+
+    const { error } = await supabase
+      .from("guild_members")
+      .update({
+        primary_member_id: primary.id,
+        discord_id: cleanText(primary.discord_id) || null,
+      })
+      .eq("id", secondary.id);
+
+    if (error) {
+      sendJson(res, 500, { error: error.message || "Lien compte secondaire impossible." });
+      return;
+    }
+
+    await supabase.from("portal_activity_logs").insert({
+      actor_member_id: adminCheck.admin.id,
+      actor_name: getMemberName(adminCheck.admin),
+      target_member_id: secondary.id,
+      target_name: getMemberName(secondary),
+      action_type: "guild_member_link_secondary",
+      entity_type: "guild_members",
+      entity_id: secondary.id,
+      summary: `${getMemberName(secondary)} lie comme compte secondaire de ${getMemberName(primary)}`,
+      metadata: { primaryMemberId: primary.id, secondaryMemberId: secondary.id },
+    });
+
+    const profile = await loadEditableMemberProfile(primary.id, adminCheck.admin);
+    sendJson(res, 200, { profile });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Lien compte secondaire impossible." });
+  }
+}
+
+async function handleMemberUnlinkSecondary(body, res) {
+  const memberId = cleanText(body.memberId || body.member_id);
+  const adminCheck = await requireAdminById(res._portalReq);
+
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  if (!memberId) {
+    sendJson(res, 400, { error: "Compte secondaire manquant." });
+    return;
+  }
+
+  try {
+    const member = await loadEditableMemberById(memberId);
+    if (!member) {
+      sendJson(res, 404, { error: "Compte introuvable." });
+      return;
+    }
+
+    if (!canAdminManageTarget(adminCheck.admin, member)) {
+      sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+      return;
+    }
+
+    const previousPrimaryId = getPrimaryMemberId(member);
+    if (!previousPrimaryId) {
+      sendJson(res, 400, { error: "Ce compte est deja autonome." });
+      return;
+    }
+
+    const { data: updated, error } = await supabase
+      .from("guild_members")
+      .update({ primary_member_id: null })
+      .eq("id", member.id)
+      .select(EDIT_MEMBER_SELECT)
+      .maybeSingle();
+
+    if (error) {
+      sendJson(res, 500, { error: error.message || "Deliaison impossible." });
+      return;
+    }
+
+    await supabase.from("portal_activity_logs").insert({
+      actor_member_id: adminCheck.admin.id,
+      actor_name: getMemberName(adminCheck.admin),
+      target_member_id: member.id,
+      target_name: getMemberName(updated || member),
+      action_type: "guild_member_unlink_secondary",
+      entity_type: "guild_members",
+      entity_id: member.id,
+      summary: `${getMemberName(member)} redevient un compte autonome`,
+      metadata: { previousPrimaryMemberId: previousPrimaryId },
+    });
+
+    const profile = await loadEditableMemberProfile(updated?.id || member.id, adminCheck.admin);
+    sendJson(res, 200, { profile });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Deliaison impossible." });
+  }
+}
+
 async function handleGuildMemberDelete(body, res) {
   const memberId = cleanText(body.memberId || body.member_id);
   const adminCheck = await requireAdminById(res._portalReq);
@@ -2080,6 +2633,24 @@ async function handleGuildMemberDelete(body, res) {
 
   if (!canAdminManageTarget(adminCheck.admin, target)) {
     sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+    return;
+  }
+
+  const { data: linkedSecondaries, error: linkedSecondariesError } = await supabase
+    .from("guild_members")
+    .select("id, watcher_name")
+    .eq("primary_member_id", target.id)
+    .limit(1);
+
+  if (linkedSecondariesError && !isMissingColumn(linkedSecondariesError, "primary_member_id")) {
+    sendJson(res, 500, { error: linkedSecondariesError.message || "Verification comptes secondaires impossible." });
+    return;
+  }
+
+  if ((linkedSecondaries || []).length > 0) {
+    sendJson(res, 409, {
+      error: "Impossible de supprimer ce compte principal : delie d'abord ses comptes secondaires.",
+    });
     return;
   }
 
@@ -3010,6 +3581,31 @@ export default async function handler(req, res) {
 
     if (action === "hero-availability-search") {
       await handleHeroAvailabilitySearch(body, res);
+      return;
+    }
+
+    if (action === "member-edit-search") {
+      await handleMemberEditSearch(body, res);
+      return;
+    }
+
+    if (action === "member-edit-load") {
+      await handleMemberEditLoad(body, res);
+      return;
+    }
+
+    if (action === "member-edit-update") {
+      await handleMemberEditUpdate(body, res);
+      return;
+    }
+
+    if (action === "member-link-secondary") {
+      await handleMemberLinkSecondary(body, res);
+      return;
+    }
+
+    if (action === "member-unlink-secondary") {
+      await handleMemberUnlinkSecondary(body, res);
       return;
     }
 
