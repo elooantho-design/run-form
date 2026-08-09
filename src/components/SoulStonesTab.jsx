@@ -158,6 +158,10 @@ export default function SoulStonesTab({ session }) {
   }, [memberQuery, members]);
 
   const canEditSoulStones = useMemo(() => {
+    if (typeof selectedMember?.permissions?.canEdit === "boolean") {
+      return selectedMember.permissions.canEdit;
+    }
+
     const role = getSessionRole(session);
     const isAdmin =
       session?.isAdmin ||
@@ -194,6 +198,8 @@ export default function SoulStonesTab({ session }) {
           name: row.name || row.watcher_name || "Joueur",
           discordId: row.discordId || row.discord_id || "",
           guildCode: row.guildCode || row.guild_code || "",
+          primaryMemberId: row.primaryMemberId || row.primary_member_id || null,
+          permissions: row.permissions || null,
         }));
 
         setMembers(mappedMembers);

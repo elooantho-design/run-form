@@ -2932,7 +2932,6 @@ function HeroBoxView({ session }) {
   const isAdminUser = isAdminSession(session);
   const connectedPlayerKey = connectedPlayerId ? String(connectedPlayerId) : "";
   const selectedPlayerKey = selectedPlayerId ? String(selectedPlayerId) : "";
-  const canEdit = Boolean(isAdminUser || (selectedPlayerKey && selectedPlayerKey === connectedPlayerKey));
   const championIdByHeroId = useMemo(() => buildChampionIdByHeroId(heroCards), [heroCards]);
   const heroRarityFilters = useMemo(() => buildHeroRarityFilters(heroCards), [heroCards]);
   const heroRoleFilters = useMemo(
@@ -2974,6 +2973,14 @@ function HeroBoxView({ session }) {
     () => bulkAwakeningHeroes.filter((hero) => (heroStates[hero.id] || { awakening: -1 }).awakening !== 5).length,
     [bulkAwakeningHeroes, heroStates],
   );
+  const selectedPlayer = useMemo(
+    () => members.find((member) => String(member.id) === selectedPlayerKey) || null,
+    [members, selectedPlayerKey],
+  );
+  const canEdit = Boolean(
+    selectedPlayer?.permissions?.canEdit ??
+      (isAdminUser || (selectedPlayerKey && selectedPlayerKey === connectedPlayerKey)),
+  );
   const canBulkAwaken =
     canEdit &&
     selectedPlayerKey &&
@@ -2981,11 +2988,6 @@ function HeroBoxView({ session }) {
     bulkAwakeningPendingCount > 0 &&
     !heroBoxLoading &&
     !bulkSavingRarity;
-
-  const selectedPlayer = useMemo(
-    () => members.find((member) => String(member.id) === selectedPlayerKey) || null,
-    [members, selectedPlayerKey],
-  );
 
   const playerSuggestions = useMemo(() => {
     const normalizedPlayerQuery = normalizeHeroKey(playerQuery);

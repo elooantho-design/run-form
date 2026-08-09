@@ -116,6 +116,10 @@ export default function DemonMonstersTab({ session }) {
   }, [memberQuery, members]);
 
   const canEditDemonicMonsters = useMemo(() => {
+    if (typeof selectedMember?.permissions?.canEdit === "boolean") {
+      return selectedMember.permissions.canEdit;
+    }
+
     const role = getSessionRole(session);
     const isAdmin =
       session?.isAdmin ||
@@ -151,6 +155,8 @@ export default function DemonMonstersTab({ session }) {
           name: row.name || row.watcher_name || "Joueur",
           discordId: row.discord_id || row.discordId || "",
           guildCode: row.guild_code || row.guildCode || "",
+          primaryMemberId: row.primary_member_id || row.primaryMemberId || null,
+          permissions: row.permissions || null,
         }));
         setMembers(mappedMembers);
         let nextSelectedMemberId = data.selectedMemberId || "";

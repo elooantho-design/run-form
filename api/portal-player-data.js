@@ -2,9 +2,7 @@
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
-  isPortalAdminRole,
   isPortalCommunityRole,
-  isPortalLeaderRole,
   normalizePortalText,
   readJsonBody,
   requirePortalSession,
@@ -12,17 +10,18 @@ import {
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
 import {
-  COMMUNITY_SPACE_KEY,
-  PALADIN_CLUSTER_GUILD_CODES,
-  PALADIN_SPACE_KEY,
-  getGuildSpaceKey,
-  isPaladinGuildCode,
   normalizeGuildCode,
-  normalizeGuildCodeKey,
 } from "../src/lib/guildScope.js";
+import {
+  canEditOwnedMemberData,
+  canViewOwnedMemberData,
+  filterMembersForMemberDataActor,
+  getMemberDataGuildCode,
+  serializeMemberDataPermissions,
+} from "./_member-data-permissions.js";
 
 const SAFE_MEMBER_SELECT =
-  "id, role, discord_id, watcher_name, guild_code, assignment, community_access_type, community_status, preferred_language";
+  "id, role, discord_id, watcher_name, guild_code, assignment, community_access_type, community_status, preferred_language, primary_member_id";
 const SAFE_MEMBER_SELECT_FALLBACK = "id, role, discord_id, watcher_name, guild_code, assignment";
 const PB_ENTRY_SELECT_WITH_AWAKENING = `
   id,
@@ -90,48 +89,19 @@ function isMissingColumn(error, columnName) {
   return error?.code === "PGRST204" || error?.code === "42703" || message.includes(String(columnName || "").toLowerCase());
 }
 
-function isActorLeader(actor) {
-  return isPortalLeaderRole(actor?.role);
-}
-
-function isActorAdmin(actor) {
-  return isPortalAdminRole(actor?.role);
-}
-
-function isCommunityMember(member) {
-  return member?.community_access_type === "community" || isPortalCommunityRole(member?.role);
-}
-
-function getMemberGuildCode(member) {
-  return isCommunityMember(member) ? COMMUNITY_SPACE_KEY : normalizeGuildCode(member?.guild_code || "G1");
-}
-
 function getMemberName(member) {
   return member?.watcher_name || member?.discord_id || "Joueur";
 }
 
-function getMemberSpaceKey(member) {
-  if (isCommunityMember(member)) return COMMUNITY_SPACE_KEY;
-  return getGuildSpaceKey(getMemberGuildCode(member));
-}
-
 function canViewMember(actor, target) {
-  if (!actor || !target) return false;
-  if (isActorLeader(actor)) return true;
-  if (String(actor.id) === String(target.id)) return true;
-  if (isCommunityMember(actor) || isCommunityMember(target)) return false;
-  return getMemberSpaceKey(actor) === getMemberSpaceKey(target);
+  return canViewOwnedMemberData(actor, target);
 }
 
 function canEditMember(actor, target) {
-  if (!actor || !target) return false;
-  if (isActorLeader(actor)) return true;
-  if (String(actor.id) === String(target.id)) return true;
-  if (isCommunityMember(actor) || isCommunityMember(target)) return false;
-  return isActorAdmin(actor) && getMemberSpaceKey(actor) === getMemberSpaceKey(target);
+  return canEditOwnedMemberData(actor, target);
 }
 
-function serializeMember(member) {
+function serializeMember(member, actor = null) {
   return {
     id: member.id,
     role: member.role || "member",
@@ -140,12 +110,15 @@ function serializeMember(member) {
     watcher_name: member.watcher_name || "",
     watcherName: member.watcher_name || "",
     name: member.watcher_name || member.discord_id || "Joueur",
-    guild_code: getMemberGuildCode(member),
-    guildCode: getMemberGuildCode(member),
+    guild_code: getMemberDataGuildCode(member),
+    guildCode: getMemberDataGuildCode(member),
     assignment: member.assignment || "",
     community_access_type: member.community_access_type || "",
     community_status: member.community_status || "",
     preferred_language: member.preferred_language || "",
+    primary_member_id: member.primary_member_id || null,
+    primaryMemberId: member.primary_member_id || null,
+    permissions: serializeMemberDataPermissions(actor, member),
   };
 }
 
@@ -179,13 +152,18 @@ function validateUuid(value) {
 
 async function selectMembersWithFallback(supabase) {
   let { data, error } = await supabase.from("guild_members").select(SAFE_MEMBER_SELECT).order("watcher_name", { ascending: true });
-  if (isMissingColumn(error, "community_access_type") || isMissingColumn(error, "preferred_language")) {
+  if (
+    isMissingColumn(error, "community_access_type") ||
+    isMissingColumn(error, "preferred_language") ||
+    isMissingColumn(error, "primary_member_id")
+  ) {
     const fallback = await supabase.from("guild_members").select(SAFE_MEMBER_SELECT_FALLBACK).order("watcher_name", { ascending: true });
     data = (fallback.data || []).map((member) => ({
       ...member,
       community_access_type: isPortalCommunityRole(member?.role) ? "community" : "",
       community_status: "",
       preferred_language: "",
+      primary_member_id: null,
     }));
     error = fallback.error;
   }
@@ -197,7 +175,11 @@ async function fetchMemberById(supabase, memberId) {
   const cleanId = validateUuid(memberId);
   if (!cleanId) return null;
   let { data, error } = await supabase.from("guild_members").select(SAFE_MEMBER_SELECT).eq("id", cleanId).maybeSingle();
-  if (isMissingColumn(error, "community_access_type") || isMissingColumn(error, "preferred_language")) {
+  if (
+    isMissingColumn(error, "community_access_type") ||
+    isMissingColumn(error, "preferred_language") ||
+    isMissingColumn(error, "primary_member_id")
+  ) {
     const fallback = await supabase.from("guild_members").select(SAFE_MEMBER_SELECT_FALLBACK).eq("id", cleanId).maybeSingle();
     data = fallback.data
       ? {
@@ -205,6 +187,7 @@ async function fetchMemberById(supabase, memberId) {
           community_access_type: isPortalCommunityRole(fallback.data?.role) ? "community" : "",
           community_status: "",
           preferred_language: "",
+          primary_member_id: null,
         }
       : null;
     error = fallback.error;
@@ -214,36 +197,12 @@ async function fetchMemberById(supabase, memberId) {
 }
 
 function filterMembersForActor(members, actor, options = {}) {
-  const targetGuildCode = normalizeGuildCodeKey(options.guildCode);
-
-  if (isActorLeader(actor)) {
-    if (!targetGuildCode) return members;
-    return members.filter((member) => normalizeGuildCodeKey(member.guild_code) === targetGuildCode);
-  }
-
-  if (isCommunityMember(actor)) {
-    return members.filter((member) => String(member.id) === String(actor.id));
-  }
-
-  const actorGuildCode = normalizeGuildCodeKey(actor.guild_code || "G1");
-  const actorSpaceKey = getMemberSpaceKey(actor);
-
-  if (targetGuildCode && isPaladinGuildCode(targetGuildCode) && actorSpaceKey === PALADIN_SPACE_KEY) {
-    return members.filter((member) => normalizeGuildCodeKey(member.guild_code) === targetGuildCode);
-  }
-
-  return members.filter((member) => {
-    if (isCommunityMember(member)) return false;
-    const rowGuildCode = normalizeGuildCodeKey(member.guild_code);
-    if (!rowGuildCode) return actorSpaceKey === PALADIN_SPACE_KEY;
-    if (actorSpaceKey === PALADIN_SPACE_KEY) return PALADIN_CLUSTER_GUILD_CODES.includes(rowGuildCode);
-    return getGuildSpaceKey(rowGuildCode) === actorSpaceKey && (!targetGuildCode || rowGuildCode === targetGuildCode);
-  });
+  return filterMembersForMemberDataActor(members, actor, options);
 }
 
 async function getScopedMembers(supabase, actor, options = {}) {
   const allMembers = await selectMembersWithFallback(supabase);
-  return filterMembersForActor(allMembers, actor, options).map(serializeMember);
+  return filterMembersForActor(allMembers, actor, options).map((member) => serializeMember(member, actor));
 }
 
 function serializeHeroBoxAwakening(row) {
@@ -364,7 +323,11 @@ async function handleHeroAwakenings(req, res, supabase, actor, body) {
   if (championIds.length) query = query.in("champion_id", championIds);
   const { data, error } = await query;
   if (error) throw error;
-  return sendJson(req, res, 200, { ok: true, awakenings: data || [] });
+  return sendJson(req, res, 200, {
+    ok: true,
+    awakenings: data || [],
+    permissions: serializeMemberDataPermissions(actor, target),
+  });
 }
 
 async function handleSetHeroAwakening(req, res, supabase, actor, body) {
@@ -568,6 +531,7 @@ async function handleDemonicMonsters(req, res, supabase, actor, body) {
     ok: true,
     members,
     selectedMemberId: selectedMember?.id || null,
+    selectedMemberPermissions: selectedMember ? serializeMemberDataPermissions(actor, selectedMember) : null,
     monsters: monstersResult.data || [],
     entries: entriesResult.data || [],
   });
@@ -642,6 +606,7 @@ async function handleSoulStones(req, res, supabase, actor, body) {
     ok: true,
     members,
     selectedMemberId: selectedMember?.id || null,
+    selectedMemberPermissions: selectedMember ? serializeMemberDataPermissions(actor, selectedMember) : null,
     stones: stonesResult.data || [],
     rankingRows,
     rankingError: rankingResult.error?.message || "",

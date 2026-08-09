@@ -385,6 +385,8 @@ export default function PersonalBestTab({ session }) {
           guildCode: row.guild_code || activeGuildCode || guildCode,
           assignment: row.assignment || "Tour",
           awakenings: buildMemberAwakenings(row.awakenings),
+          primaryMemberId: row.primary_member_id || row.primaryMemberId || null,
+          permissions: row.permissions || null,
           })),
         );
 
@@ -552,6 +554,8 @@ export default function PersonalBestTab({ session }) {
     : null;
 
   function canEditRow(rowMemberId) {
+    const member = members.find((item) => String(item.id) === String(rowMemberId));
+    if (typeof member?.permissions?.canEdit === "boolean") return member.permissions.canEdit;
     return isAdmin || String(rowMemberId) === String(sessionMemberId);
   }
 
