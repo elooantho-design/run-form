@@ -3,7 +3,6 @@ import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
   isPortalCommunityRole,
-  isPortalLeaderRole,
   normalizePortalText,
   readJsonBody,
   requirePortalAdminSession,
@@ -11,15 +10,20 @@ import {
   validatePortalInput,
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
+import {
+  buildIntersaisonValidationPreview,
+  cleanIntersaisonText,
+  normalizeIntersaisonCode,
+} from "./_portal-intersaison-core.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-const PALADIN_CLUSTER_GUILD_CODES = new Set(["G1", "G2", "G3", "G4", "G5", "G6", "G7"]);
 const ASSIGNMENT_SELECT = `
   id,
   campaign_id,
+  organization_id,
   dashboard_id,
   member_id,
   watcher_name,
@@ -34,21 +38,20 @@ const ASSIGNMENT_SELECT = `
   is_manually_confirmed,
   wished_guild_codes
 `;
+const MEMBER_VALIDATION_SELECT =
+  "id, watcher_name, guild_code, role, community_access_type, community_status, roster_status";
+const GUILD_SELECT = "id, organization_id, guild_code, display_name, is_active";
 
 function sendJson(res, status, payload, req = null) {
   sendPortalJson(res, status, payload, req);
 }
 
 function cleanText(value) {
-  return String(value || "").trim();
+  return cleanIntersaisonText(value);
 }
 
 function normalizeGuildCode(value) {
-  return cleanText(value).toUpperCase().replace(/\s+/g, "_");
-}
-
-function isPaladinGuildCode(value) {
-  return PALADIN_CLUSTER_GUILD_CODES.has(normalizeGuildCode(value));
+  return normalizeIntersaisonCode(value);
 }
 
 function isCommunityAccount(member) {
@@ -56,9 +59,7 @@ function isCommunityAccount(member) {
 }
 
 function canManageIntersaison(actor) {
-  if (!actor || isCommunityAccount(actor)) return false;
-  if (isPortalLeaderRole(actor.role)) return true;
-  return isPaladinGuildCode(actor.guild_code);
+  return Boolean(actor && !isCommunityAccount(actor));
 }
 
 async function logPortalActivity(actor, { actionType, entityType, entityId = null, summary, metadata = {} }) {
@@ -79,20 +80,92 @@ async function logPortalActivity(actor, { actionType, entityType, entityId = nul
   }
 }
 
-async function loadActiveCampaign() {
+function serializeOrganization(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    organization_key: row.organization_key,
+    organizationKey: row.organization_key,
+    display_name: row.display_name,
+    displayName: row.display_name,
+    organization_type: row.organization_type,
+    organizationType: row.organization_type,
+    is_active: row.is_active,
+    isActive: row.is_active,
+  };
+}
+
+async function loadOrganizationById(organizationId) {
   const { data, error } = await supabase
-    .from("intersaison_campaigns")
-    .select("*")
-    .eq("status", "active")
+    .from("portal_organizations")
+    .select("id, organization_key, display_name, organization_type, is_active")
+    .eq("id", organizationId)
+    .eq("is_active", true)
     .maybeSingle();
   if (error) throw error;
   return data || null;
 }
 
-async function loadState() {
-  const campaign = await loadActiveCampaign();
+async function resolveActorOrganization(actor) {
+  const actorGuildCode = cleanText(actor?.guild_code);
+  if (!actorGuildCode || isCommunityAccount(actor)) {
+    const error = new Error("Compte hors organisation.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const { data: guild, error: guildError } = await supabase
+    .from("portal_guilds")
+    .select(GUILD_SELECT)
+    .eq("guild_code", normalizeGuildCode(actorGuildCode))
+    .eq("is_active", true)
+    .maybeSingle();
+  if (guildError) throw guildError;
+  if (!guild?.organization_id) {
+    const error = new Error("Organisation introuvable pour cette session.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const organization = await loadOrganizationById(guild.organization_id);
+  if (!organization) {
+    const error = new Error("Organisation inactive ou introuvable.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return { organization: serializeOrganization(organization), actorGuild: guild };
+}
+
+async function loadActiveGuilds(organizationId) {
+  const { data, error } = await supabase
+    .from("portal_guilds")
+    .select(GUILD_SELECT)
+    .eq("organization_id", organizationId)
+    .eq("is_active", true)
+    .order("guild_code", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadActiveCampaign(organizationId) {
+  const { data, error } = await supabase
+    .from("intersaison_campaigns")
+    .select("*")
+    .eq("status", "active")
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function loadState(organization) {
+  const guilds = await loadActiveGuilds(organization.id);
+  const campaign = await loadActiveCampaign(organization.id);
   if (!campaign) {
     return {
+      organization,
+      guilds,
       campaign: null,
       dashboards: [],
       assignments: [],
@@ -106,11 +179,13 @@ async function loadState() {
         .from("intersaison_dashboards")
         .select("*")
         .eq("campaign_id", campaign.id)
+        .eq("organization_id", organization.id)
         .order("sort_order", { ascending: true }),
       supabase
         .from("intersaison_assignments")
         .select(ASSIGNMENT_SELECT)
         .eq("campaign_id", campaign.id)
+        .eq("organization_id", organization.id)
         .order("created_at", { ascending: true }),
     ]);
   if (dashboardsError) throw dashboardsError;
@@ -129,6 +204,8 @@ async function loadState() {
   }
 
   return {
+    organization,
+    guilds,
     campaign,
     dashboards: dashboards || [],
     assignments: assignments || [],
@@ -136,8 +213,8 @@ async function loadState() {
   };
 }
 
-async function loadAssignmentForActiveCampaign(assignmentId) {
-  const campaign = await loadActiveCampaign();
+async function loadAssignmentForActiveCampaign(assignmentId, organization) {
+  const campaign = await loadActiveCampaign(organization.id);
   if (!campaign) return { error: "Aucune campagne intersaison active.", status: 404 };
 
   const id = validatePortalInput(assignmentId, 80);
@@ -147,6 +224,7 @@ async function loadAssignmentForActiveCampaign(assignmentId) {
     .from("intersaison_assignments")
     .select(ASSIGNMENT_SELECT)
     .eq("campaign_id", campaign.id)
+    .eq("organization_id", organization.id)
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
@@ -155,46 +233,58 @@ async function loadAssignmentForActiveCampaign(assignmentId) {
   return { campaign, assignment: data };
 }
 
-async function deleteCampaignRows(campaignId) {
-  const { data: assignmentRows, error: readAssignmentsError } = await supabase
-    .from("intersaison_assignments")
-    .select("id")
-    .eq("campaign_id", campaignId);
-  if (readAssignmentsError) throw readAssignmentsError;
+async function loadMembersForAssignments(assignments) {
+  const memberIds = [...new Set((assignments || []).map((assignment) => assignment.member_id).filter(Boolean))];
+  if (memberIds.length === 0) return [];
 
-  const assignmentIds = (assignmentRows || []).map((assignment) => assignment.id).filter(Boolean);
-  if (assignmentIds.length > 0) {
-    const { error: notesError } = await supabase
-      .from("intersaison_notes")
-      .delete()
-      .in("assignment_id", assignmentIds);
-    if (notesError) throw notesError;
-  }
-
-  const { error: assignmentsError } = await supabase
-    .from("intersaison_assignments")
-    .delete()
-    .eq("campaign_id", campaignId);
-  if (assignmentsError) throw assignmentsError;
-
-  const { error: dashboardsError } = await supabase
-    .from("intersaison_dashboards")
-    .delete()
-    .eq("campaign_id", campaignId);
-  if (dashboardsError) throw dashboardsError;
-
-  const { error: campaignError } = await supabase.from("intersaison_campaigns").delete().eq("id", campaignId);
-  if (campaignError) throw campaignError;
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(MEMBER_VALIDATION_SELECT)
+    .in("id", memberIds);
+  if (error) throw error;
+  return data || [];
 }
 
-async function handleCreateCampaign(body, actor) {
-  const guildCount = Number.parseInt(body.guildCount, 10);
-  if (!Number.isInteger(guildCount) || guildCount < 1 || guildCount > 20) {
-    return { status: 400, payload: { ok: false, error: "Le nombre de guildes doit etre entre 1 et 20." } };
+async function loadGuildsForMemberValidation({ members, activeGuilds }) {
+  const guildCodes = [
+    ...new Set(
+      [...(members || []), ...(activeGuilds || [])]
+        .map((row) => cleanText(row.guild_code))
+        .filter(Boolean),
+    ),
+  ];
+  if (guildCodes.length === 0) return [];
+
+  const { data, error } = await supabase.from("portal_guilds").select(GUILD_SELECT).in("guild_code", guildCodes);
+  if (error) throw error;
+  return data || [];
+}
+
+async function buildValidationPreviewForOrganization(organization) {
+  const state = await loadState(organization);
+  if (!state.campaign) {
+    const error = new Error("Campagne active introuvable.");
+    error.statusCode = 404;
+    throw error;
   }
 
-  const { error } = await supabase.rpc("create_intersaison_campaign", {
-    p_guild_count: guildCount,
+  const members = await loadMembersForAssignments(state.assignments);
+  const memberGuilds = await loadGuildsForMemberValidation({ members, activeGuilds: state.guilds });
+  const preview = buildIntersaisonValidationPreview({
+    campaign: state.campaign,
+    dashboards: state.dashboards,
+    assignments: state.assignments,
+    members,
+    memberGuilds,
+    activeGuilds: state.guilds,
+  });
+
+  return { state, preview };
+}
+
+async function handleCreateCampaign(actor, organization) {
+  const { data: campaignId, error } = await supabase.rpc("create_intersaison_campaign_for_organization", {
+    p_organization_id: organization.id,
     p_poll_channel_id: null,
   });
   if (error) throw error;
@@ -202,182 +292,157 @@ async function handleCreateCampaign(body, actor) {
   await logPortalActivity(actor, {
     actionType: "intersaison_campaign_create",
     entityType: "intersaison_campaign",
-    summary: `${actor.watcher_name || "Admin"} a lance une intersaison`,
-    metadata: { guildCount },
+    entityId: campaignId || null,
+    summary: `${actor.watcher_name || "Admin"} a lance une intersaison pour ${organization.display_name}`,
+    metadata: { organizationId: organization.id, organizationKey: organization.organization_key },
   });
 
-  return { status: 200, payload: { ok: true, state: await loadState() } };
+  return { status: 200, payload: { ok: true, state: await loadState(organization) } };
 }
 
-async function handleSaveNote(body, actor) {
-  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId);
+async function handleSaveNote(body, actor, organization) {
+  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId, organization);
   if (loaded.error) return { status: loaded.status, payload: { ok: false, error: loaded.error } };
 
   const note = validatePortalInput(body.note, 4000);
-  const { data: existingNote, error: existingError } = await supabase
-    .from("intersaison_notes")
-    .select("*")
-    .eq("assignment_id", loaded.assignment.id)
-    .maybeSingle();
-  if (existingError) throw existingError;
-
-  if (!note) {
-    if (existingNote?.id) {
-      const { error: deleteError } = await supabase.from("intersaison_notes").delete().eq("id", existingNote.id);
-      if (deleteError) throw deleteError;
-    }
-    return { status: 200, payload: { ok: true, state: await loadState() } };
-  }
-
-  if (existingNote?.id) {
-    const { error: updateError } = await supabase
-      .from("intersaison_notes")
-      .update({ note, updated_at: new Date().toISOString() })
-      .eq("id", existingNote.id);
-    if (updateError) throw updateError;
-  } else {
-    const { error: insertError } = await supabase.from("intersaison_notes").insert({
-      assignment_id: loaded.assignment.id,
-      note,
-      created_by_member_id: actor.id,
-    });
-    if (insertError) throw insertError;
-  }
-
-  return { status: 200, payload: { ok: true, state: await loadState() } };
-}
-
-async function handleToggleConfirmation(body) {
-  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId);
-  if (loaded.error) return { status: loaded.status, payload: { ok: false, error: loaded.error } };
-
-  const nextConfirmedValue = !loaded.assignment.is_manually_confirmed;
-  const { error } = await supabase
-    .from("intersaison_assignments")
-    .update({
-      is_manually_confirmed: nextConfirmedValue,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", loaded.assignment.id);
+  const { error } = await supabase.rpc("save_intersaison_assignment_note_for_organization", {
+    p_campaign_id: loaded.campaign.id,
+    p_organization_id: organization.id,
+    p_assignment_id: loaded.assignment.id,
+    p_note: note,
+    p_actor_member_id: actor.id,
+  });
   if (error) throw error;
 
-  return { status: 200, payload: { ok: true, state: await loadState() } };
+  return { status: 200, payload: { ok: true, state: await loadState(organization) } };
 }
 
-async function handleMoveAssignment(body) {
-  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId);
+async function handleToggleConfirmation(body, organization) {
+  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId, organization);
+  if (loaded.error) return { status: loaded.status, payload: { ok: false, error: loaded.error } };
+
+  const { error } = await supabase.rpc("toggle_intersaison_assignment_confirmation_for_organization", {
+    p_campaign_id: loaded.campaign.id,
+    p_organization_id: organization.id,
+    p_assignment_id: loaded.assignment.id,
+  });
+  if (error) throw error;
+
+  return { status: 200, payload: { ok: true, state: await loadState(organization) } };
+}
+
+async function handleMoveAssignment(body, organization) {
+  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId, organization);
   if (loaded.error) return { status: loaded.status, payload: { ok: false, error: loaded.error } };
 
   const dashboardId = validatePortalInput(body.dashboardId, 80);
   if (!dashboardId) return { status: 400, payload: { ok: false, error: "Dashboard cible invalide." } };
 
-  const { data: dashboard, error: dashboardError } = await supabase
-    .from("intersaison_dashboards")
-    .select("*")
-    .eq("campaign_id", loaded.campaign.id)
-    .eq("id", dashboardId)
-    .maybeSingle();
-  if (dashboardError) throw dashboardError;
-  if (!dashboard) return { status: 404, payload: { ok: false, error: "Dashboard cible introuvable." } };
-
-  const { error } = await supabase
-    .from("intersaison_assignments")
-    .update({
-      dashboard_id: dashboard.id,
-      target_guild_code: dashboard.is_draft ? null : dashboard.code,
-      is_manually_confirmed: true,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", loaded.assignment.id);
+  const { error } = await supabase.rpc("move_intersaison_assignment_for_organization", {
+    p_campaign_id: loaded.campaign.id,
+    p_organization_id: organization.id,
+    p_assignment_id: loaded.assignment.id,
+    p_dashboard_id: dashboardId,
+  });
   if (error) throw error;
 
-  return { status: 200, payload: { ok: true, state: await loadState() } };
+  return { status: 200, payload: { ok: true, state: await loadState(organization) } };
 }
 
-async function handleSaveWish(body) {
-  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId);
+async function handleSaveWish(body, organization) {
+  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId, organization);
   if (loaded.error) return { status: loaded.status, payload: { ok: false, error: loaded.error } };
 
-  const guildCodes = new Set(Array.from({ length: loaded.campaign.guild_count || 7 }, (_, index) => `G${index + 1}`));
   const wishedGuildCodes = Array.isArray(body.wishedGuildCodes)
-    ? [...new Set(body.wishedGuildCodes.map(normalizeGuildCode).filter((code) => guildCodes.has(code)))].sort()
+    ? [
+        ...new Set(
+          body.wishedGuildCodes
+            .map((code) => cleanText(code).replace(/\s+/g, " "))
+            .filter(Boolean),
+        ),
+      ]
     : [];
 
-  const { error } = await supabase
-    .from("intersaison_assignments")
-    .update({ wished_guild_codes: wishedGuildCodes, updated_at: new Date().toISOString() })
-    .eq("id", loaded.assignment.id);
+  const { error } = await supabase.rpc("save_intersaison_assignment_wishes_for_organization", {
+    p_campaign_id: loaded.campaign.id,
+    p_organization_id: organization.id,
+    p_assignment_id: loaded.assignment.id,
+    p_wished_guild_codes: wishedGuildCodes,
+  });
   if (error) throw error;
 
-  return { status: 200, payload: { ok: true, state: await loadState() } };
+  return { status: 200, payload: { ok: true, state: await loadState(organization) } };
 }
 
-async function handleCancelCampaign(body, actor) {
-  const campaign = await loadActiveCampaign();
+async function handleRetireCampaign(body, actor, organization) {
+  const campaign = await loadActiveCampaign(organization.id);
   const campaignId = validatePortalInput(body.campaignId, 80);
   if (!campaign || String(campaign.id) !== String(campaignId)) {
     return { status: 404, payload: { ok: false, error: "Campagne active introuvable." } };
   }
 
-  const stateBeforeDelete = await loadState();
-  await deleteCampaignRows(campaign.id);
+  const { error } = await supabase
+    .from("intersaison_campaigns")
+    .update({ status: "archived" })
+    .eq("id", campaign.id)
+    .eq("organization_id", organization.id)
+    .eq("status", "active");
+  if (error) throw error;
+
   await logPortalActivity(actor, {
     actionType: "intersaison_campaign_cancel",
     entityType: "intersaison_campaign",
     entityId: campaign.id,
-    summary: `${actor.watcher_name || "Admin"} a annule la campagne intersaison`,
-    metadata: { assignmentCount: stateBeforeDelete.assignments.length },
+    summary: `${actor.watcher_name || "Admin"} a mis hors service la campagne intersaison`,
+    metadata: { organizationId: organization.id },
   });
 
-  return { status: 200, payload: { ok: true, state: await loadState() } };
+  return { status: 200, payload: { ok: true, state: await loadState(organization) } };
 }
 
-async function handleLaunchTransfers(body, actor) {
-  const campaign = await loadActiveCampaign();
+async function handlePreviewValidation(organization) {
+  const { preview } = await buildValidationPreviewForOrganization(organization);
+  return { status: 200, payload: { ok: true, preview } };
+}
+
+async function handleLaunchTransfers(body, actor, organization) {
   const campaignId = validatePortalInput(body.campaignId, 80);
-  if (!campaign || String(campaign.id) !== String(campaignId)) {
+  const { state, preview } = await buildValidationPreviewForOrganization(organization);
+  if (!state.campaign || String(state.campaign.id) !== String(campaignId)) {
     return { status: 404, payload: { ok: false, error: "Campagne active introuvable." } };
   }
 
-  const state = await loadState();
-  const unconfirmed = state.assignments.filter((assignment) => !assignment.is_manually_confirmed);
-  if (unconfirmed.length > 0) {
+  if (preview.blockedAssignments.length > 0) {
     return {
       status: 409,
-      payload: { ok: false, error: `${unconfirmed.length} joueur(s) non valides.` },
+      payload: {
+        ok: false,
+        error: `${preview.blockedAssignments.length} assignation(s) hors perimetre ou invalide(s). Validation bloquee.`,
+        preview,
+      },
     };
   }
 
-  const confirmedTransfers = state.assignments.filter(
-    (assignment) => assignment.is_manually_confirmed && assignment.member_id && assignment.target_guild_code,
-  );
-  if (confirmedTransfers.length === 0) {
-    return { status: 400, payload: { ok: false, error: "Aucun transfert reel a appliquer." } };
-  }
+  const { error } = await supabase.rpc("finalize_intersaison_campaign_for_organization", {
+    p_campaign_id: state.campaign.id,
+    p_organization_id: organization.id,
+  });
+  if (error) throw error;
 
-  for (const assignment of confirmedTransfers) {
-    const targetGuild = normalizeGuildCode(assignment.target_guild_code);
-    if (!isPaladinGuildCode(targetGuild)) {
-      return { status: 400, payload: { ok: false, error: "Guilde cible invalide pour l'intersaison." } };
-    }
-
-    const { error } = await supabase
-      .from("guild_members")
-      .update({ guild_code: targetGuild })
-      .eq("id", assignment.member_id);
-    if (error) throw error;
-  }
-
-  await deleteCampaignRows(campaign.id);
   await logPortalActivity(actor, {
     actionType: "intersaison_transfers_apply",
     entityType: "intersaison_campaign",
-    entityId: campaign.id,
-    summary: `${actor.watcher_name || "Admin"} a applique les transferts intersaison`,
-    metadata: { transferCount: confirmedTransfers.length },
+    entityId: state.campaign.id,
+    summary: `${actor.watcher_name || "Admin"} a valide l'intersaison de ${organization.display_name}`,
+    metadata: {
+      organizationId: organization.id,
+      guildTransferCount: preview.guildTransfers.length,
+      communityConversionCount: preview.communityConversions.length,
+      unchangedGuildPlacementCount: preview.unchangedGuildPlacements.length,
+    },
   });
 
-  return { status: 200, payload: { ok: true, state: await loadState() } };
+  return { status: 200, payload: { ok: true, preview, state: await loadState(organization) } };
 }
 
 export default async function handler(req, res) {
@@ -394,26 +459,28 @@ export default async function handler(req, res) {
       return sendJson(res, sessionCheck.status || 401, { ok: false, error: sessionCheck.error }, req);
     }
     if (!canManageIntersaison(sessionCheck.member)) {
-      return sendJson(res, 403, { ok: false, error: "Intersaison reservee au cluster Paladin." }, req);
+      return sendJson(res, 403, { ok: false, error: "Intersaison reservee aux admins d'une organisation." }, req);
     }
 
+    const { organization } = await resolveActorOrganization(sessionCheck.member);
     const body = await readJsonBody(req);
     const action = cleanText(body.action);
     let result;
 
-    if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState() } };
-    else if (action === "create-campaign") result = await handleCreateCampaign(body, sessionCheck.member);
-    else if (action === "save-note") result = await handleSaveNote(body, sessionCheck.member);
-    else if (action === "toggle-confirmation") result = await handleToggleConfirmation(body);
-    else if (action === "move-assignment") result = await handleMoveAssignment(body);
-    else if (action === "save-wish") result = await handleSaveWish(body);
-    else if (action === "cancel-campaign") result = await handleCancelCampaign(body, sessionCheck.member);
-    else if (action === "launch-transfers") result = await handleLaunchTransfers(body, sessionCheck.member);
+    if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState(organization) } };
+    else if (action === "create-campaign") result = await handleCreateCampaign(sessionCheck.member, organization);
+    else if (action === "save-note") result = await handleSaveNote(body, sessionCheck.member, organization);
+    else if (action === "toggle-confirmation") result = await handleToggleConfirmation(body, organization);
+    else if (action === "move-assignment") result = await handleMoveAssignment(body, organization);
+    else if (action === "save-wish") result = await handleSaveWish(body, organization);
+    else if (action === "cancel-campaign") result = await handleRetireCampaign(body, sessionCheck.member, organization);
+    else if (action === "preview-validation") result = await handlePreviewValidation(organization);
+    else if (action === "launch-transfers") result = await handleLaunchTransfers(body, sessionCheck.member, organization);
     else result = { status: 400, payload: { ok: false, error: "Action inconnue." } };
 
     return sendJson(res, result.status, result.payload, req);
   } catch (error) {
     console.error("[portal-intersaison]", error);
-    return sendJson(res, 500, { ok: false, error: error.message || "Erreur serveur." }, req);
+    return sendJson(res, error.statusCode || 500, { ok: false, error: error.message || "Erreur serveur." }, req);
   }
 }

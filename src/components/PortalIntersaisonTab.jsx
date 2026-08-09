@@ -65,6 +65,8 @@ function canManageIntersaison(session) {
 
 function emptyIntersaisonState() {
   return {
+    organization: null,
+    guilds: [],
     campaign: null,
     dashboards: [],
     assignments: [],
@@ -82,6 +84,8 @@ export default function PortalIntersaisonTab({ session }) {
   const canManage = canManageIntersaison(session);
 
   const [campaign, setCampaign] = useState(null);
+  const [organization, setOrganization] = useState(null);
+  const [guilds, setGuilds] = useState([]);
   const [dashboards, setDashboards] = useState([]);
   const [selectedDashboardId, setSelectedDashboardId] = useState("");
   const [assignments, setAssignments] = useState([]);
@@ -93,7 +97,6 @@ export default function PortalIntersaisonTab({ session }) {
   const [highlightedRowId, setHighlightedRowId] = useState(null);
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [guildCountInput, setGuildCountInput] = useState("7");
   const [creating, setCreating] = useState(false);
 
   const [noteDialogOpen, setNoteDialogOpen] = useState(false);
@@ -112,9 +115,13 @@ export default function PortalIntersaisonTab({ session }) {
 
   const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  const [validationPreview, setValidationPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const resetState = useCallback(() => {
     const empty = emptyIntersaisonState();
+    setOrganization(empty.organization);
+    setGuilds(empty.guilds);
     setCampaign(empty.campaign);
     setDashboards(empty.dashboards);
     setAssignments(empty.assignments);
@@ -127,6 +134,8 @@ export default function PortalIntersaisonTab({ session }) {
 
   const applyLoadedState = useCallback((state = emptyIntersaisonState()) => {
     const dashboardsList = state.dashboards || [];
+    setOrganization(state.organization || null);
+    setGuilds(state.guilds || []);
     setCampaign(state.campaign || null);
     setDashboards(dashboardsList);
     setAssignments(state.assignments || []);
@@ -136,9 +145,11 @@ export default function PortalIntersaisonTab({ session }) {
         return previous;
       }
 
+      const draftDashboard = dashboardsList.find((dashboard) => dashboard.is_draft);
       const firstRealDashboard = dashboardsList.find((dashboard) => !dashboard.is_draft);
-      return String(firstRealDashboard?.id || dashboardsList[0]?.id || "");
+      return String(draftDashboard?.id || firstRealDashboard?.id || dashboardsList[0]?.id || "");
     });
+    setValidationPreview(null);
   }, []);
 
   const runIntersaisonAction = useCallback(
@@ -185,9 +196,8 @@ export default function PortalIntersaisonTab({ session }) {
   }, [loadIntersaisonData]);
 
   const guildCodes = useMemo(() => {
-    const count = Number(campaign?.guild_count || 7);
-    return Array.from({ length: Number.isFinite(count) && count > 0 ? count : 7 }, (_, index) => `G${index + 1}`);
-  }, [campaign?.guild_count]);
+    return (guilds || []).map((guild) => guild.guild_code).filter(Boolean);
+  }, [guilds]);
 
   const selectedDashboard = useMemo(
     () => dashboards.find((dashboard) => String(dashboard.id) === String(selectedDashboardId)) || null,
@@ -230,21 +240,15 @@ export default function PortalIntersaisonTab({ session }) {
       return "Aucune donnee intersaison disponible.";
     }
 
-    const confirmedAssignments = assignments.filter((assignment) => assignment.is_manually_confirmed);
-
-    if (confirmedAssignments.length === 0) {
-      return "Aucun transfert valide pour le moment.";
-    }
-
     const lines = [];
 
     dashboards
       .filter((dashboard) => !dashboard.is_draft)
       .forEach((dashboard) => {
-        const arrivals = confirmedAssignments.filter(
+        const arrivals = assignments.filter(
           (assignment) => String(assignment.dashboard_id) === String(dashboard.id),
         );
-        const departures = confirmedAssignments.filter(
+        const departures = assignments.filter(
           (assignment) =>
             assignment.source_guild_code === dashboard.code &&
             assignment.target_guild_code !== dashboard.code,
@@ -284,16 +288,27 @@ export default function PortalIntersaisonTab({ session }) {
         lines.push("");
       });
 
+    const draftDashboard = dashboards.find((dashboard) => dashboard.is_draft);
+    const draftRows = draftDashboard
+      ? assignments.filter((assignment) => String(assignment.dashboard_id) === String(draftDashboard.id))
+      : [];
+    lines.push("Sorties vers communaute :");
+    if (draftRows.length > 0) {
+      draftRows.forEach((assignment) => {
+        lines.push(`- ${assignment.watcher_name} (${assignment.source_guild_code || "-"} -> Communauté)`);
+      });
+    } else {
+      lines.push("- Aucune");
+    }
+
     return lines.join("\n").trim();
   }, [assignments, dashboards]);
 
   const createCampaign = async () => {
     if (!canManage || creating) return;
 
-    const parsedGuildCount = Number(guildCountInput);
-
-    if (!Number.isInteger(parsedGuildCount) || parsedGuildCount < 1 || parsedGuildCount > 20) {
-      setMessage("Le nombre de guildes doit etre un entier entre 1 et 20.");
+    if (!guildCodes.length) {
+      setMessage("Aucune guilde active disponible pour ton organisation.");
       return;
     }
 
@@ -301,9 +316,7 @@ export default function PortalIntersaisonTab({ session }) {
     setMessage("");
 
     try {
-      await runIntersaisonAction("create-campaign", {
-        guildCount: parsedGuildCount,
-      });
+      await runIntersaisonAction("create-campaign");
       setCreateDialogOpen(false);
     } catch (error) {
       console.error("Erreur creation campagne intersaison:", error);
@@ -411,7 +424,7 @@ export default function PortalIntersaisonTab({ session }) {
     if (!canManage || !campaign?.id || finalizing) return;
 
     const confirmCancel = window.confirm(
-      "Annuler completement la campagne active d'intersaison ? Cette action supprimera les dashboards previsionnels, les affectations et les notes.",
+      "Mettre hors service la campagne active d'intersaison ? Les donnees seront conservees en historique.",
     );
 
     if (!confirmCancel) return;
@@ -424,7 +437,7 @@ export default function PortalIntersaisonTab({ session }) {
       });
       setFinalizeDialogOpen(false);
       resetState();
-      setMessage("Campagne intersaison annulee.");
+      setMessage("Campagne intersaison mise hors service.");
     } catch (error) {
       console.error("Erreur suppression campagne intersaison:", error);
       setMessage(error.message || "Suppression de la campagne impossible.");
@@ -433,29 +446,46 @@ export default function PortalIntersaisonTab({ session }) {
     }
   };
 
+  const loadValidationPreview = useCallback(async () => {
+    if (!canManage || !campaign?.id) return null;
+
+    setPreviewLoading(true);
+
+    try {
+      const data = await runIntersaisonAction("preview-validation");
+      setValidationPreview(data.preview || null);
+      return data.preview || null;
+    } catch (error) {
+      console.error("Erreur preview validation intersaison:", error);
+      setValidationPreview(null);
+      setMessage(error.message || "Preview validation impossible.");
+      return null;
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [campaign?.id, canManage, runIntersaisonAction]);
+
+  useEffect(() => {
+    if (finalizeDialogOpen && campaign?.id) {
+      void loadValidationPreview();
+    }
+  }, [campaign?.id, finalizeDialogOpen, loadValidationPreview]);
+
   const launchRealTransfers = async () => {
     if (!canManage || !campaign?.id || finalizing) return;
 
-    const unconfirmedAssignments = assignments.filter((assignment) => !assignment.is_manually_confirmed);
-    if (unconfirmedAssignments.length > 0) {
+    const preview = validationPreview || (await loadValidationPreview());
+    if (!preview) return;
+
+    if ((preview.blockedAssignments || []).length > 0) {
       setMessage(
-        `Impossible de lancer les transferts reels : ${unconfirmedAssignments.length} joueur(s) non valides.`,
+        `Validation bloquee : ${preview.blockedAssignments.length} assignation(s) hors perimetre ou invalide(s).`,
       );
       return;
     }
 
-    const confirmedAssignments = assignments.filter(
-      (assignment) =>
-        assignment.is_manually_confirmed && assignment.member_id && assignment.target_guild_code,
-    );
-
-    if (confirmedAssignments.length === 0) {
-      setMessage("Aucun transfert reel a appliquer.");
-      return;
-    }
-
     const confirmLaunch = window.confirm(
-      "Confirmer le lancement des transferts reels ? Cette action modifie les guildes actives.",
+      `Confirmer la validation finale ? ${preview.guildTransfers.length} transfert(s), ${preview.communityConversions.length} sortie(s) vers communaute.`,
     );
 
     if (!confirmLaunch) return;
@@ -468,7 +498,7 @@ export default function PortalIntersaisonTab({ session }) {
       });
       setFinalizeDialogOpen(false);
       resetState();
-      setMessage("Transferts reels appliques et campagne cloturee.");
+      setMessage("Intersaison validee, transferts et sorties communaute appliques.");
     } catch (error) {
       console.error("Erreur lancement transferts intersaison:", error);
       setMessage(error.message || "Transfert impossible.");
@@ -495,19 +525,20 @@ export default function PortalIntersaisonTab({ session }) {
             <DialogTitle>Lancer une intersaison</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <label className="space-y-2 text-sm text-zinc-300">
-              <span>Nombre de guildes prevues</span>
-              <Input
-                type="number"
-                min="1"
-                max="20"
-                value={guildCountInput}
-                onChange={(event) => setGuildCountInput(event.target.value)}
-                className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100"
-              />
-            </label>
             <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-sm text-zinc-400">
-              Creation des dashboards previsionnels demandes, plus un dashboard brouillon.
+              La campagne sera creee pour {organization?.display_name || "ton organisation"} avec les guildes actives :
+              <div className="mt-2 flex flex-wrap gap-2">
+                {guildCodes.length > 0 ? (
+                  guildCodes.map((code) => (
+                    <Badge key={code} className="rounded-md bg-emerald-500/15 text-emerald-300">
+                      {code}
+                    </Badge>
+                  ))
+                ) : (
+                  <span className="text-zinc-500">aucune guilde active</span>
+                )}
+              </div>
+              <div className="mt-2">Tous les joueurs eligibles seront places dans BROUILLON.</div>
             </div>
             <div className="flex justify-end gap-2">
               <Button
@@ -699,6 +730,80 @@ export default function PortalIntersaisonTab({ session }) {
             <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
               Cette etape peut modifier les guildes actives. Verifie les validations avant de continuer.
             </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-100">Preview de validation</div>
+                  <div className="text-xs text-zinc-500">
+                    Les joueurs en BROUILLON deviendront des comptes communaute.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-lg border-zinc-700 bg-zinc-950 text-zinc-100"
+                  onClick={loadValidationPreview}
+                  disabled={previewLoading}
+                >
+                  <RefreshCw className={`h-4 w-4 ${previewLoading ? "animate-spin" : ""}`} />
+                  Recalculer
+                </Button>
+              </div>
+
+              {previewLoading ? (
+                <div className="mt-3 text-sm text-zinc-500">Calcul de la preview...</div>
+              ) : validationPreview ? (
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
+                    <div className="text-xs uppercase tracking-wide text-emerald-300">Transferts</div>
+                    <div className="mt-1 text-2xl font-semibold text-emerald-100">
+                      {validationPreview.guildTransfers?.length || 0}
+                    </div>
+                    <div className="mt-2 max-h-28 space-y-1 overflow-y-auto text-xs text-emerald-100/80">
+                      {(validationPreview.guildTransfers || []).slice(0, 8).map((item) => (
+                        <div key={item.assignmentId}>
+                          {item.watcherName} : {item.from || "-"} -&gt; {item.to}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-3">
+                    <div className="text-xs uppercase tracking-wide text-sky-300">Vers communaute</div>
+                    <div className="mt-1 text-2xl font-semibold text-sky-100">
+                      {validationPreview.communityConversions?.length || 0}
+                    </div>
+                    <div className="mt-2 max-h-28 space-y-1 overflow-y-auto text-xs text-sky-100/80">
+                      {(validationPreview.communityConversions || []).slice(0, 8).map((item) => (
+                        <div key={item.assignmentId}>
+                          {item.watcherName} depuis {item.from || "-"}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div
+                    className={`rounded-lg border p-3 ${
+                      (validationPreview.blockedAssignments || []).length > 0
+                        ? "border-red-500/30 bg-red-500/10"
+                        : "border-zinc-700 bg-zinc-950"
+                    }`}
+                  >
+                    <div className="text-xs uppercase tracking-wide text-red-300">Blocages</div>
+                    <div className="mt-1 text-2xl font-semibold text-zinc-100">
+                      {validationPreview.blockedAssignments?.length || 0}
+                    </div>
+                    <div className="mt-2 max-h-28 space-y-1 overflow-y-auto text-xs text-red-100/80">
+                      {(validationPreview.blockedAssignments || []).slice(0, 8).map((item) => (
+                        <div key={item.assignmentId}>
+                          {item.watcherName || item.memberId || "Assignation"} : {item.reason}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3 text-sm text-zinc-500">Preview non calculee.</div>
+              )}
+            </div>
             <div className="grid gap-3 md:grid-cols-2">
               <Button type="button" className="rounded-lg" onClick={copyTransferSummary}>
                 <ClipboardCopy className="h-4 w-4" />
@@ -719,7 +824,11 @@ export default function PortalIntersaisonTab({ session }) {
                 variant="destructive"
                 className="rounded-lg bg-red-700 text-white hover:bg-red-600 md:col-span-2"
                 onClick={launchRealTransfers}
-                disabled={finalizing}
+                disabled={
+                  finalizing ||
+                  previewLoading ||
+                  (validationPreview?.blockedAssignments || []).length > 0
+                }
               >
                 <Play className="h-4 w-4" />
                 {finalizing ? "Traitement..." : "Lancer les transferts reels"}
@@ -752,10 +861,7 @@ export default function PortalIntersaisonTab({ session }) {
               <Button
                 type="button"
                 className="rounded-lg"
-                onClick={() => {
-                  setGuildCountInput("7");
-                  setCreateDialogOpen(true);
-                }}
+                onClick={() => setCreateDialogOpen(true)}
               >
                 <Play className="h-4 w-4" />
                 Lancer une intersaison
@@ -796,7 +902,9 @@ export default function PortalIntersaisonTab({ session }) {
                   <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
                     <div className="text-xs uppercase tracking-wide text-zinc-500">Campagne active</div>
                     <div className="mt-1 text-lg font-semibold text-zinc-50">{campaign.label}</div>
-                    <div className="text-sm text-zinc-500">{campaign.guild_count} guilde(s) prevues</div>
+                    <div className="text-sm text-zinc-500">
+                      {organization?.display_name || "Organisation"} - {guildCodes.length} guilde(s) active(s)
+                    </div>
                   </div>
                   <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
                     <div className="text-xs uppercase tracking-wide text-zinc-500">Joueurs</div>

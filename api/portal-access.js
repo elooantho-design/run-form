@@ -168,6 +168,11 @@ function isMissingFollowupTable(error) {
   );
 }
 
+function isMissingOptionalTable(error, tableName) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return error?.code === "42P01" || error?.code === "PGRST205" || message.includes(String(tableName || "").toLowerCase());
+}
+
 function getMemberName(member) {
   return member?.watcher_name || member?.discord_id || "Joueur";
 }
@@ -2080,27 +2085,56 @@ async function handleGuildMemberDelete(body, res) {
 
   const { data: intersaisonAssignments, error: intersaisonAssignmentsError } = await supabase
     .from("intersaison_assignments")
-    .select("id")
+    .select("id, campaign_id")
     .eq("member_id", target.id);
 
-  if (intersaisonAssignmentsError && intersaisonAssignmentsError.code !== "42P01") {
+  if (intersaisonAssignmentsError && !isMissingOptionalTable(intersaisonAssignmentsError, "intersaison_assignments")) {
     sendJson(res, 500, { error: intersaisonAssignmentsError.message || "Chargement intersaison impossible." });
     return;
   }
 
-  const intersaisonIds = (intersaisonAssignments || []).map((row) => row.id).filter(Boolean);
-  if (intersaisonIds.length > 0) {
-    const { error: notesError } = await supabase
-      .from("intersaison_notes")
-      .delete()
-      .in("assignment_id", intersaisonIds);
-    if (notesError) {
-      sendJson(res, 500, { error: notesError.message || "Suppression notes intersaison impossible." });
+  const intersaisonRows = intersaisonAssignmentsError ? [] : intersaisonAssignments || [];
+  const intersaisonCampaignIds = [...new Set(intersaisonRows.map((row) => row.campaign_id).filter(Boolean))];
+
+  if (intersaisonCampaignIds.length > 0) {
+    const { data: activeCampaigns, error: activeCampaignsError } = await supabase
+      .from("intersaison_campaigns")
+      .select("id, label, status")
+      .in("id", intersaisonCampaignIds)
+      .eq("status", "active")
+      .limit(1);
+
+    if (activeCampaignsError && !isMissingOptionalTable(activeCampaignsError, "intersaison_campaigns")) {
+      sendJson(res, 500, { error: activeCampaignsError.message || "Verification campagne intersaison impossible." });
+      return;
+    }
+
+    if ((activeCampaigns || []).length > 0) {
+      sendJson(res, 409, {
+        error: "Impossible de supprimer ce membre : il participe a une campagne Inter-saison active.",
+      });
       return;
     }
   }
 
-  await deleteRowsIfPresent("intersaison_assignments", "member_id", target.id);
+  const { error: detachAssignmentsError } = await supabase
+    .from("intersaison_assignments")
+    .update({ member_id: null })
+    .eq("member_id", target.id);
+  if (detachAssignmentsError && !isMissingOptionalTable(detachAssignmentsError, "intersaison_assignments")) {
+    sendJson(res, 500, { error: detachAssignmentsError.message || "Detachement intersaison impossible." });
+    return;
+  }
+
+  const { error: detachNotesError } = await supabase
+    .from("intersaison_notes")
+    .update({ created_by_member_id: null })
+    .eq("created_by_member_id", target.id);
+  if (detachNotesError && !isMissingOptionalTable(detachNotesError, "intersaison_notes")) {
+    sendJson(res, 500, { error: detachNotesError.message || "Detachement notes intersaison impossible." });
+    return;
+  }
+
   await deleteRowsIfPresent("cluster_defense_likes", "member_id", target.id);
   await deleteRowsIfPresent("member_awakenings", "member_id", target.id);
   await deleteRowsIfPresent("member_pb_entries", "member_id", target.id);
