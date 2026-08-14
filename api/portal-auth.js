@@ -9,9 +9,10 @@ import {
   hashPortalPassword,
   isForcedPortalPassword,
   isPortalAdminRole,
+  isPortalAuthResolutionError,
   isPortalCommunityRole,
   isPortalLeaderRole,
-  loadPortalMemberByDiscordId,
+  loadPortalPrincipalByDiscordId,
   readJsonBody,
   requirePortalSession,
   sendPortalJson,
@@ -111,8 +112,12 @@ async function handleLogin(req, res, body) {
 
   let member;
   try {
-    member = await loadPortalMemberByDiscordId(supabase, discordId, { includePassword: true });
-  } catch {
+    member = await loadPortalPrincipalByDiscordId(supabase, discordId, { includePassword: true });
+  } catch (error) {
+    if (isPortalAuthResolutionError(error)) {
+      sendPortalJson(res, error.status || 409, { error: error.message }, req);
+      return;
+    }
     sendPortalJson(res, 500, { error: "Connexion impossible. Reessaie ou contacte un admin." }, req);
     return;
   }
@@ -246,13 +251,14 @@ async function handleForgotAdmins(req, res, body) {
     return;
   }
 
-  const { data: member, error: memberError } = await supabase
-    .from("guild_members")
-    .select("id, watcher_name, discord_id, guild_code, role, community_access_type, community_status")
-    .eq("discord_id", discordId)
-    .maybeSingle();
-
-  if (memberError) {
+  let member;
+  try {
+    member = await loadPortalPrincipalByDiscordId(supabase, discordId);
+  } catch (error) {
+    if (isPortalAuthResolutionError(error)) {
+      sendPortalJson(res, error.status || 409, { error: error.message }, req);
+      return;
+    }
     sendPortalJson(res, 500, { error: "Recherche impossible pour le moment." }, req);
     return;
   }

@@ -290,11 +290,24 @@ function isMissingPasswordChangeColumn(error) {
 }
 
 const MEMBER_SELECT =
-  "id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language, password_change_required";
+  "id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language, password_change_required, primary_member_id";
 const MEMBER_SELECT_WITH_PASSWORD = `${MEMBER_SELECT}, password`;
 const MEMBER_SELECT_FALLBACK =
-  "id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language";
+  "id, role, discord_id, watcher_name, guild_code, community_access_type, community_status, preferred_language, primary_member_id";
 const MEMBER_SELECT_FALLBACK_WITH_PASSWORD = `${MEMBER_SELECT_FALLBACK}, password`;
+
+export class PortalAuthResolutionError extends Error {
+  constructor(message, { code = "portal_auth_resolution_failed", status = 409 } = {}) {
+    super(message);
+    this.name = "PortalAuthResolutionError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function isPortalAuthResolutionError(error) {
+  return error instanceof PortalAuthResolutionError || error?.name === "PortalAuthResolutionError";
+}
 
 async function queryMember(supabase, column, value, options = {}) {
   const select = options.includePassword ? MEMBER_SELECT_WITH_PASSWORD : MEMBER_SELECT;
@@ -320,10 +333,70 @@ export async function loadPortalMemberById(supabase, memberId, options = {}) {
   return queryMember(supabase, "id", cleanMemberId, options);
 }
 
-export async function loadPortalMemberByDiscordId(supabase, discordId, options = {}) {
+async function queryMembersByDiscordId(supabase, discordId) {
   const cleanDiscordId = cleanText(discordId);
   if (!cleanDiscordId) return null;
-  return queryMember(supabase, "discord_id", cleanDiscordId, options);
+
+  let { data, error } = await supabase
+    .from("guild_members")
+    .select(MEMBER_SELECT)
+    .eq("discord_id", cleanDiscordId);
+
+  if (isMissingPasswordChangeColumn(error)) {
+    const fallback = await supabase
+      .from("guild_members")
+      .select(MEMBER_SELECT_FALLBACK)
+      .eq("discord_id", cleanDiscordId);
+    data = fallback.data;
+    error = fallback.error;
+    if (data) {
+      data = data.map((row) => ({
+        ...row,
+        password_change_required: false,
+      }));
+    }
+  }
+
+  if (error) throw error;
+  return data || [];
+}
+
+function resolvePortalPrincipalForDiscordId(rows) {
+  if (!rows?.length) return null;
+
+  const principals = rows.filter((row) => !cleanText(row?.primary_member_id));
+
+  if (principals.length === 1) {
+    return principals[0];
+  }
+
+  if (principals.length === 0) {
+    throw new PortalAuthResolutionError("Compte principal introuvable pour cet ID Discord.", {
+      code: "portal_auth_principal_missing",
+      status: 409,
+    });
+  }
+
+  throw new PortalAuthResolutionError("Plusieurs comptes principaux utilisent cet ID Discord. Contacte un leader Portal.", {
+    code: "portal_auth_principal_ambiguous",
+    status: 409,
+  });
+}
+
+export async function loadPortalPrincipalByDiscordId(supabase, discordId, options = {}) {
+  const rows = await queryMembersByDiscordId(supabase, discordId);
+  const principal = resolvePortalPrincipalForDiscordId(rows);
+  if (!principal) return null;
+
+  if (options.includePassword) {
+    return loadPortalMemberById(supabase, principal.id, { includePassword: true });
+  }
+
+  return principal;
+}
+
+export async function loadPortalMemberByDiscordId(supabase, discordId, options = {}) {
+  return loadPortalPrincipalByDiscordId(supabase, discordId, options);
 }
 
 export async function updatePortalMemberPassword(supabase, memberId, passwordHash, options = {}) {
