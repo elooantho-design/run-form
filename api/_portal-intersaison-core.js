@@ -17,6 +17,18 @@ export function isIntersaisonLeaderRole(value) {
   return normalizeIntersaisonRole(value) === "leader";
 }
 
+export const INTERSAISON_ASSIGNMENT_ROLES = Object.freeze(["member", "officer", "leader"]);
+
+export function normalizeIntersaisonAssignmentRole(value) {
+  const role = cleanIntersaisonText(value).toLowerCase();
+  return INTERSAISON_ASSIGNMENT_ROLES.includes(role) ? role : "member";
+}
+
+export function isValidIntersaisonAssignmentRole(value) {
+  const role = cleanIntersaisonText(value).toLowerCase();
+  return INTERSAISON_ASSIGNMENT_ROLES.includes(role);
+}
+
 export function isActiveRosterMember(member) {
   return cleanIntersaisonText(member?.roster_status || "active").toLowerCase() === "active";
 }

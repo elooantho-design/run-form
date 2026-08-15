@@ -13,6 +13,8 @@ import {
 import {
   buildIntersaisonValidationPreview,
   cleanIntersaisonText,
+  isValidIntersaisonAssignmentRole,
+  normalizeIntersaisonAssignmentRole,
   normalizeIntersaisonCode,
 } from "./_portal-intersaison-core.js";
 import {
@@ -27,6 +29,25 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 });
 
 const ASSIGNMENT_SELECT = `
+  id,
+  campaign_id,
+  organization_id,
+  dashboard_id,
+  member_id,
+  watcher_name,
+  discord_id_raw,
+  source_guild_code,
+  target_guild_code,
+  poll_choice,
+  assignment_source,
+  has_note,
+  created_at,
+  updated_at,
+  is_manually_confirmed,
+  wished_guild_codes,
+  intersaison_role
+`;
+const ASSIGNMENT_SELECT_FALLBACK = `
   id,
   campaign_id,
   organization_id,
@@ -69,6 +90,13 @@ function isMissingColumn(error, columnName) {
 
 function normalizeGuildCode(value) {
   return normalizeIntersaisonCode(value);
+}
+
+function normalizeAssignmentForState(assignment) {
+  return {
+    ...assignment,
+    intersaison_role: normalizeIntersaisonAssignmentRole(assignment?.intersaison_role),
+  };
 }
 
 function isCommunityAccount(member) {
@@ -176,6 +204,50 @@ async function loadActiveCampaign(organizationId) {
   return data || null;
 }
 
+async function loadAssignmentsForCampaign(campaignId, organizationId) {
+  const query = () =>
+    supabase
+      .from("intersaison_assignments")
+      .select(ASSIGNMENT_SELECT)
+      .eq("campaign_id", campaignId)
+      .eq("organization_id", organizationId)
+      .order("created_at", { ascending: true });
+
+  let { data, error } = await query();
+  if (error && isMissingColumn(error, "intersaison_role")) {
+    ({ data, error } = await supabase
+      .from("intersaison_assignments")
+      .select(ASSIGNMENT_SELECT_FALLBACK)
+      .eq("campaign_id", campaignId)
+      .eq("organization_id", organizationId)
+      .order("created_at", { ascending: true }));
+  }
+  if (error) throw error;
+  return (data || []).map(normalizeAssignmentForState);
+}
+
+async function loadAssignmentRow(campaignId, organizationId, assignmentId) {
+  let { data, error } = await supabase
+    .from("intersaison_assignments")
+    .select(ASSIGNMENT_SELECT)
+    .eq("campaign_id", campaignId)
+    .eq("organization_id", organizationId)
+    .eq("id", assignmentId)
+    .maybeSingle();
+
+  if (error && isMissingColumn(error, "intersaison_role")) {
+    ({ data, error } = await supabase
+      .from("intersaison_assignments")
+      .select(ASSIGNMENT_SELECT_FALLBACK)
+      .eq("campaign_id", campaignId)
+      .eq("organization_id", organizationId)
+      .eq("id", assignmentId)
+      .maybeSingle());
+  }
+  if (error) throw error;
+  return data ? normalizeAssignmentForState(data) : null;
+}
+
 async function loadState(organization) {
   const guilds = await loadActiveGuilds(organization.id);
   const campaign = await loadActiveCampaign(organization.id);
@@ -190,7 +262,7 @@ async function loadState(organization) {
     };
   }
 
-  const [{ data: dashboards, error: dashboardsError }, { data: assignments, error: assignmentsError }] =
+  const [{ data: dashboards, error: dashboardsError }, assignments] =
     await Promise.all([
       supabase
         .from("intersaison_dashboards")
@@ -198,15 +270,9 @@ async function loadState(organization) {
         .eq("campaign_id", campaign.id)
         .eq("organization_id", organization.id)
         .order("sort_order", { ascending: true }),
-      supabase
-        .from("intersaison_assignments")
-        .select(ASSIGNMENT_SELECT)
-        .eq("campaign_id", campaign.id)
-        .eq("organization_id", organization.id)
-        .order("created_at", { ascending: true }),
+      loadAssignmentsForCampaign(campaign.id, organization.id),
     ]);
   if (dashboardsError) throw dashboardsError;
-  if (assignmentsError) throw assignmentsError;
 
   const enrichedAssignments = await enrichAssignmentsWithLinkedAccounts(assignments || []);
   const assignmentIds = enrichedAssignments.map((assignment) => assignment.id).filter(Boolean);
@@ -238,14 +304,7 @@ async function loadAssignmentForActiveCampaign(assignmentId, organization) {
   const id = validatePortalInput(assignmentId, 80);
   if (!id) return { error: "Assignation invalide.", status: 400 };
 
-  const { data, error } = await supabase
-    .from("intersaison_assignments")
-    .select(ASSIGNMENT_SELECT)
-    .eq("campaign_id", campaign.id)
-    .eq("organization_id", organization.id)
-    .eq("id", id)
-    .maybeSingle();
-  if (error) throw error;
+  const data = await loadAssignmentRow(campaign.id, organization.id, id);
   if (!data) return { error: "Assignation introuvable.", status: 404 };
 
   return { campaign, assignment: data };
@@ -436,6 +495,27 @@ async function handleSaveNote(body, actor, organization) {
   return { status: 200, payload: { ok: true, state: await loadState(organization) } };
 }
 
+async function handleSaveRole(body, organization) {
+  const loaded = await loadAssignmentForActiveCampaign(body.assignmentId, organization);
+  if (loaded.error) return { status: loaded.status, payload: { ok: false, error: loaded.error } };
+
+  const rawRole = cleanText(body.intersaisonRole ?? body.role);
+  if (!isValidIntersaisonAssignmentRole(rawRole)) {
+    return { status: 400, payload: { ok: false, error: "Role intersaison invalide." } };
+  }
+
+  const role = normalizeIntersaisonAssignmentRole(rawRole);
+  const { error } = await supabase.rpc("save_intersaison_assignment_role_for_organization", {
+    p_campaign_id: loaded.campaign.id,
+    p_organization_id: organization.id,
+    p_assignment_id: loaded.assignment.id,
+    p_intersaison_role: role,
+  });
+  if (error) throw error;
+
+  return { status: 200, payload: { ok: true, state: await loadState(organization) } };
+}
+
 async function handleToggleConfirmation(body, organization) {
   const loaded = await loadAssignmentForActiveCampaign(body.assignmentId, organization);
   if (loaded.error) return { status: loaded.status, payload: { ok: false, error: loaded.error } };
@@ -589,6 +669,7 @@ export default async function handler(req, res) {
     if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState(organization) } };
     else if (action === "create-campaign") result = await handleCreateCampaign(sessionCheck.member, organization);
     else if (action === "save-note") result = await handleSaveNote(body, sessionCheck.member, organization);
+    else if (action === "save-role") result = await handleSaveRole(body, organization);
     else if (action === "toggle-confirmation") result = await handleToggleConfirmation(body, organization);
     else if (action === "move-assignment") result = await handleMoveAssignment(body, organization);
     else if (action === "save-wish") result = await handleSaveWish(body, organization);

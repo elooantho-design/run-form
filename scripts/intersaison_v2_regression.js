@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import {
   buildIntersaisonValidationPreview,
   getActiveGuildCodesForOrganization,
+  isValidIntersaisonAssignmentRole,
+  normalizeIntersaisonAssignmentRole,
   selectEligibleRosterMembers,
 } from "../api/_portal-intersaison-core.js";
 
@@ -291,12 +293,17 @@ const multiAccountPreview = buildIntersaisonValidationPreview({
 });
 assert.deepEqual(multiAccountPreview.guildTransfers.map((item) => item.memberId), ["darius-main"]);
 assert.deepEqual(multiAccountPreview.communityConversions.map((item) => item.memberId), ["darius-alt"]);
+assert.equal(normalizeIntersaisonAssignmentRole("officer"), "officer");
+assert.equal(normalizeIntersaisonAssignmentRole("leader"), "leader");
+assert.equal(normalizeIntersaisonAssignmentRole("captain"), "member");
+assert.equal(isValidIntersaisonAssignmentRole("guild_leader"), false);
 
 const finalizeSql = readFileSync(new URL("./intersaison_v2_finalize_campaign_rpc.sql", import.meta.url), "utf8");
 const mutationSql = readFileSync(
   new URL("./intersaison_v2_assignment_mutations_rpc.sql", import.meta.url),
   "utf8",
 );
+const rolesSql = readFileSync(new URL("./intersaison_roles.sql", import.meta.url), "utf8");
 const portalIntersaisonApi = readFileSync(new URL("../api/portal-intersaison.js", import.meta.url), "utf8");
 const portalAccessApi = readFileSync(new URL("../api/portal-access.js", import.meta.url), "utf8");
 const memberDeletePreflightSql = readFileSync(
@@ -361,11 +368,26 @@ assert.match(mutationSql, /Codes de guildes souhaites invalides ou hors organisa
 assert.match(mutationSql, /array_agg\(guild\.guild_code order by requested\.first_position\)/);
 assert.match(mutationSql, /revoke all on function public\.move_intersaison_assignment_for_organization/);
 assert.match(mutationSql, /grant execute on function public\.save_intersaison_assignment_note_for_organization/);
+assert.doesNotMatch(mutationSql, /intersaison_role/);
+assert.doesNotMatch(finalizeSql, /intersaison_role/);
+assert.match(rolesSql, /add column if not exists intersaison_role text/);
+assert.match(rolesSql, /alter column intersaison_role set default 'member'/);
+assert.match(rolesSql, /campaign\.status = 'active'/);
+assert.match(rolesSql, /create or replace function public\.save_intersaison_assignment_role_for_organization/);
+assert.match(rolesSql, /security definer/);
+assert.match(rolesSql, /set search_path = public/);
+assert.match(rolesSql, /campaign\.status = 'active'\s+for update/);
+assert.match(rolesSql, /assignment\.campaign_id = p_campaign_id\s+for update/);
+assert.match(rolesSql, /v_assignment\.organization_id is distinct from p_organization_id/);
+assert.match(rolesSql, /grant execute on function public\.save_intersaison_assignment_role_for_organization/);
+assert.doesNotMatch(rolesSql, /guild_members\s+.*role/s);
 
 assert.match(portalIntersaisonApi, /rpc\("move_intersaison_assignment_for_organization"/);
 assert.match(portalIntersaisonApi, /rpc\("toggle_intersaison_assignment_confirmation_for_organization"/);
 assert.match(portalIntersaisonApi, /rpc\("save_intersaison_assignment_wishes_for_organization"/);
 assert.match(portalIntersaisonApi, /rpc\("save_intersaison_assignment_note_for_organization"/);
+assert.match(portalIntersaisonApi, /rpc\("save_intersaison_assignment_role_for_organization"/);
+assert.match(portalIntersaisonApi, /action === "save-role"/);
 assert.doesNotMatch(portalIntersaisonApi, /\.from\("intersaison_assignments"\)\s*\.update/s);
 assert.doesNotMatch(portalIntersaisonApi, /\.from\("intersaison_notes"\)\s*\.insert/s);
 assert.doesNotMatch(portalIntersaisonApi, /\.from\("intersaison_notes"\)\s*\.delete/s);

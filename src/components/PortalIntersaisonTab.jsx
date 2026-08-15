@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRightLeft,
   CheckCircle2,
@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { usePortalLanguage } from "@/lib/portalLanguage";
 
 function getApiBase() {
   const configured = import.meta.env.VITE_API_BASE_URL;
@@ -81,8 +82,64 @@ function sortByName(a, b) {
   });
 }
 
+const INTERSAISON_ROLE_VALUES = ["member", "officer", "leader"];
+const VISIBLE_INTERSAISON_ROLE_COUNTERS = ["leader", "officer"];
+const INTERSAISON_ROLE_META = {
+  member: {
+    icon: "",
+    labelKey: "intersaison.role.member",
+    labelFallback: "Membre",
+    singularKey: "intersaison.role.member",
+    singularFallback: "Membre",
+    pluralKey: "intersaison.role.members",
+    pluralFallback: "Membres",
+  },
+  officer: {
+    icon: "\u{1F6E1}\uFE0F",
+    labelKey: "intersaison.role.officer",
+    labelFallback: "Officier",
+    singularKey: "intersaison.role.officer",
+    singularFallback: "Officier",
+    pluralKey: "intersaison.role.officers",
+    pluralFallback: "Officiers",
+  },
+  leader: {
+    icon: "\u{1F451}",
+    labelKey: "intersaison.role.leader",
+    labelFallback: "Leader",
+    singularKey: "intersaison.role.leader",
+    singularFallback: "Leader",
+    pluralKey: "intersaison.role.leaders",
+    pluralFallback: "Leaders",
+  },
+};
+
+function normalizeAssignmentRole(role) {
+  const normalized = String(role || "").trim().toLowerCase();
+  return INTERSAISON_ROLE_VALUES.includes(normalized) ? normalized : "member";
+}
+
+function getAssignmentRoleMeta(role, t) {
+  const value = normalizeAssignmentRole(role);
+  const meta = INTERSAISON_ROLE_META[value] || INTERSAISON_ROLE_META.member;
+  return {
+    value,
+    icon: meta.icon,
+    label: t(meta.labelKey, meta.labelFallback),
+    singular: t(meta.singularKey, meta.singularFallback),
+    plural: t(meta.pluralKey, meta.pluralFallback),
+  };
+}
+
+function getRoleCounterLabel(role, count, t) {
+  const meta = getAssignmentRoleMeta(role, t);
+  return count === 1 ? meta.singular : meta.plural;
+}
+
 export default function PortalIntersaisonTab({ session }) {
+  const { t } = usePortalLanguage();
   const canManage = canManageIntersaison(session);
+  const rowRefs = useRef(new Map());
 
   const [campaign, setCampaign] = useState(null);
   const [organization, setOrganization] = useState(null);
@@ -104,6 +161,9 @@ export default function PortalIntersaisonTab({ session }) {
   const [selectedNoteRow, setSelectedNoteRow] = useState(null);
   const [noteInput, setNoteInput] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  const [roleInput, setRoleInput] = useState("member");
+  const [savingRole, setSavingRole] = useState(false);
+  const [rolePopover, setRolePopover] = useState(null);
 
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [assignmentToMove, setAssignmentToMove] = useState(null);
@@ -131,6 +191,7 @@ export default function PortalIntersaisonTab({ session }) {
     setSourceFilter("Tous");
     setSearchQuery("");
     setHighlightedRowId(null);
+    setRolePopover(null);
   }, []);
 
   const applyLoadedState = useCallback((state = emptyIntersaisonState()) => {
@@ -141,6 +202,7 @@ export default function PortalIntersaisonTab({ session }) {
     setDashboards(dashboardsList);
     setAssignments(state.assignments || []);
     setNotes(state.notes || []);
+    setRolePopover(null);
     setSelectedDashboardId((previous) => {
       if (previous && dashboardsList.some((dashboard) => String(dashboard.id) === String(previous))) {
         return previous;
@@ -195,15 +257,26 @@ export default function PortalIntersaisonTab({ session }) {
     [dashboards, selectedDashboardId],
   );
 
-  const selectedRows = useMemo(() => {
+  const selectedDashboardRows = useMemo(() => {
     if (!selectedDashboardId) return [];
 
-    return assignments
-      .filter((assignment) => String(assignment.dashboard_id) === String(selectedDashboardId))
-      .filter((assignment) =>
-        sourceFilter === "Tous" ? true : assignment.source_guild_code === sourceFilter,
-      );
-  }, [assignments, selectedDashboardId, sourceFilter]);
+    return assignments.filter((assignment) => String(assignment.dashboard_id) === String(selectedDashboardId));
+  }, [assignments, selectedDashboardId]);
+
+  const selectedRows = useMemo(() => {
+    return selectedDashboardRows.filter((assignment) =>
+      sourceFilter === "Tous" ? true : assignment.source_guild_code === sourceFilter,
+    );
+  }, [selectedDashboardRows, sourceFilter]);
+
+  const roleSummary = useMemo(() => {
+    return VISIBLE_INTERSAISON_ROLE_COUNTERS.reduce((summary, role) => {
+      summary[role] = selectedDashboardRows
+        .filter((assignment) => normalizeAssignmentRole(assignment.intersaison_role) === role)
+        .sort(sortByName);
+      return summary;
+    }, {});
+  }, [selectedDashboardRows]);
 
   const searchResults = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -229,6 +302,25 @@ export default function PortalIntersaisonTab({ session }) {
       notes.find((note) => String(note.assignment_id) === String(assignmentId)) || null,
     [notes],
   );
+
+  const focusAssignmentRow = useCallback((row) => {
+    if (!row?.id) return;
+
+    setRolePopover(null);
+    setSearchQuery("");
+    setSourceFilter("Tous");
+    setSelectedDashboardId(String(row.dashboard_id || ""));
+    setHighlightedRowId(String(row.id));
+
+    if (typeof window === "undefined") return;
+
+    window.setTimeout(() => {
+      const node = rowRefs.current.get(String(row.id));
+      if (node) {
+        node.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 120);
+  }, []);
 
   const buildTransferSummary = useCallback(() => {
     if (!dashboards.length || !assignments.length) {
@@ -325,6 +417,7 @@ export default function PortalIntersaisonTab({ session }) {
     const existingNote = getNoteForAssignment(row.id);
     setSelectedNoteRow(row);
     setNoteInput(existingNote?.note || "");
+    setRoleInput(normalizeAssignmentRole(row.intersaison_role));
     setNoteDialogOpen(true);
   };
 
@@ -346,6 +439,30 @@ export default function PortalIntersaisonTab({ session }) {
       setMessage(error.message || "Enregistrement impossible.");
     } finally {
       setSavingNote(false);
+    }
+  };
+
+  const saveRole = async () => {
+    if (!selectedNoteRow?.id || savingRole) return;
+
+    const role = normalizeAssignmentRole(roleInput);
+    setSavingRole(true);
+
+    try {
+      await runIntersaisonAction("save-role", {
+        assignmentId: selectedNoteRow.id,
+        intersaisonRole: role,
+      });
+      setSelectedNoteRow((current) =>
+        current ? { ...current, intersaison_role: role } : current,
+      );
+      setRoleInput(role);
+      setMessage(t("intersaison.role.saved", "Rôle intersaison mis à jour."));
+    } catch (error) {
+      console.error("Erreur enregistrement role intersaison:", error);
+      setMessage(error.message || "Enregistrement du role impossible.");
+    } finally {
+      setSavingRole(false);
     }
   };
 
@@ -557,6 +674,7 @@ export default function PortalIntersaisonTab({ session }) {
           if (!open) {
             setSelectedNoteRow(null);
             setNoteInput("");
+            setRoleInput("member");
           }
         }}
       >
@@ -568,6 +686,40 @@ export default function PortalIntersaisonTab({ session }) {
             <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
               <div className="text-xs uppercase tracking-wide text-zinc-500">Joueur selectionne</div>
               <div className="mt-1 font-medium text-zinc-50">{selectedNoteRow?.watcher_name || "-"}</div>
+            </div>
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+              <label className="space-y-2 text-sm text-zinc-300">
+                <span>{t("intersaison.role.dialogLabel", "Rôle dans cette Inter-saison")}</span>
+                <select
+                  value={roleInput}
+                  onChange={(event) => setRoleInput(normalizeAssignmentRole(event.target.value))}
+                  className="h-9 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none"
+                >
+                  {INTERSAISON_ROLE_VALUES.map((roleValue) => {
+                    const role = getAssignmentRoleMeta(roleValue, t);
+
+                    return (
+                      <option key={role.value} value={role.value}>
+                        {role.icon ? `${role.icon} ` : ""}
+                        {role.label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+              <div className="mt-3 flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-lg border-zinc-700 bg-zinc-950 text-zinc-100"
+                  onClick={saveRole}
+                  disabled={savingRole || normalizeAssignmentRole(selectedNoteRow?.intersaison_role) === roleInput}
+                >
+                  {savingRole
+                    ? t("intersaison.role.saving", "Enregistrement...")
+                    : t("intersaison.role.save", "Enregistrer le rôle")}
+                </Button>
+              </div>
             </div>
             <label className="space-y-2 text-sm text-zinc-300">
               <span>Message / note</span>
@@ -938,11 +1090,7 @@ export default function PortalIntersaisonTab({ session }) {
                             <button
                               key={row.id}
                               type="button"
-                              onClick={() => {
-                                setSelectedDashboardId(String(row.dashboard_id));
-                                setHighlightedRowId(String(row.id));
-                                setSearchQuery("");
-                              }}
+                              onClick={() => focusAssignmentRow(row)}
                               className="w-full rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-left transition hover:bg-zinc-800"
                             >
                               <div className="font-medium text-zinc-50">{row.watcher_name}</div>
@@ -1006,18 +1154,70 @@ export default function PortalIntersaisonTab({ session }) {
                   </select>
                 </label>
                 {selectedDashboard ? (
-                  <div className="text-sm text-zinc-500">
-                    {selectedRows.length} joueur(s) dans {selectedDashboard.name}
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-500">
+                    <span>
+                      {selectedRows.length} joueur(s) dans {selectedDashboard.name}
+                    </span>
+                    <div className="relative flex flex-wrap gap-2">
+                      {VISIBLE_INTERSAISON_ROLE_COUNTERS.map((roleValue) => {
+                        const role = getAssignmentRoleMeta(roleValue, t);
+                        const rows = roleSummary[role.value] || [];
+                        const count = rows.length;
+                        const open = rolePopover === role.value;
+
+                        return (
+                          <div key={role.value} className="relative">
+                            <button
+                              type="button"
+                              className={`rounded-lg border px-3 py-1 text-xs font-medium transition ${
+                                count > 0
+                                  ? "border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-800"
+                                  : "cursor-default border-zinc-800 bg-zinc-950/70 text-zinc-600"
+                              }`}
+                              onClick={() =>
+                                count > 0
+                                  ? setRolePopover((current) => (current === role.value ? null : role.value))
+                                  : null
+                              }
+                              disabled={count === 0}
+                            >
+                              <span aria-hidden="true">{role.icon}</span>{" "}
+                              {count} {getRoleCounterLabel(role.value, count, t)}
+                            </button>
+                            {open ? (
+                              <div className="absolute left-0 top-full z-30 mt-2 w-56 rounded-lg border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/40">
+                                <div className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                  {role.plural}
+                                </div>
+                                <div className="max-h-64 overflow-y-auto">
+                                  {rows.map((row) => (
+                                    <button
+                                      key={`${role.value}-${row.id}`}
+                                      type="button"
+                                      onClick={() => focusAssignmentRow(row)}
+                                      className="w-full rounded-md px-2 py-1.5 text-left text-sm text-zinc-100 transition hover:bg-zinc-800"
+                                    >
+                                      {row.watcher_name || "-"}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 ) : null}
               </div>
 
               <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950">
                 <div className="overflow-x-auto">
-                  <div className="min-w-[980px]">
-                    <div className="grid grid-cols-[64px_minmax(220px,1fr)_120px_120px_170px_120px_110px] items-center border-b border-zinc-800 bg-zinc-900/70 px-4 py-3 text-sm font-semibold text-zinc-300">
+                  <div className="min-w-[1060px]">
+                    <div className="grid grid-cols-[64px_minmax(220px,1fr)_76px_120px_120px_170px_120px_110px] items-center border-b border-zinc-800 bg-zinc-900/70 px-4 py-3 text-sm font-semibold text-zinc-300">
                       <div>N</div>
                       <div>Joueur</div>
+                      <div className="text-center">{t("intersaison.role.column", "Rôle")}</div>
                       <div className="text-center">Provenance</div>
                       <div className="text-center">Destination</div>
                       <div className="text-center">Souhait</div>
@@ -1029,14 +1229,20 @@ export default function PortalIntersaisonTab({ session }) {
                       selectedRows.map((row, index) => {
                         const note = getNoteForAssignment(row.id);
                         const highlighted = String(highlightedRowId) === String(row.id);
+                        const assignmentRole = getAssignmentRoleMeta(row.intersaison_role, t);
 
                         return (
                           <div
                             key={row.id}
+                            ref={(node) => {
+                              if (node) rowRefs.current.set(String(row.id), node);
+                              else rowRefs.current.delete(String(row.id));
+                            }}
                             onClick={() => {
                               if (highlighted) setHighlightedRowId(null);
+                              openNoteDialog(row);
                             }}
-                            className={`grid grid-cols-[64px_minmax(220px,1fr)_120px_120px_170px_120px_110px] items-center border-b border-zinc-800 px-4 py-3 text-sm last:border-b-0 ${
+                            className={`grid grid-cols-[64px_minmax(220px,1fr)_76px_120px_120px_170px_120px_110px] items-center border-b border-zinc-800 px-4 py-3 text-sm last:border-b-0 ${
                               highlighted
                                 ? "bg-sky-500/20 ring-1 ring-sky-400"
                                 : row.is_manually_confirmed
@@ -1075,6 +1281,19 @@ export default function PortalIntersaisonTab({ session }) {
                                 </span>
                               ) : null}
                             </button>
+                            <div className="flex justify-center text-lg">
+                              {assignmentRole.icon ? (
+                                <span
+                                  role="img"
+                                  aria-label={assignmentRole.label}
+                                  title={assignmentRole.label}
+                                >
+                                  {assignmentRole.icon}
+                                </span>
+                              ) : (
+                                <span className="sr-only">{assignmentRole.label}</span>
+                              )}
+                            </div>
                             <div className="text-center text-zinc-300">{row.source_guild_code || "-"}</div>
                             <div className="text-center text-zinc-300">
                               {row.target_guild_code || "BROUILLON"}
