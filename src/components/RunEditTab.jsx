@@ -10,29 +10,11 @@ import { fetchPortalChampions } from "@/lib/portalChampions";
 import { HERO_DIRECTION_OPTIONS } from "@/lib/heroDirectionOverlay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
+import { getRunGridSpec } from "@/run-config/gridConfig";
 
 const MAX_SLOTS = 5;
 
 const HEROES_FALLBACK = ["laya"];
-
-const RUN_GRID_MODES = {
-  tour: {
-    key: "tour",
-    label: "Tour",
-    rows: 7,
-    cols: 10,
-    bgUrl: "/maps-actuelles/tour.png",
-    bgObjectPosition: "center",
-  },
-  bastion: {
-    key: "bastion",
-    label: "Bastion",
-    rows: 8,
-    cols: 11,
-    bgUrl: "/maps-actuelles/bastion.png",
-    bgObjectPosition: "center",
-  },
-};
 
 function makeRows(count) {
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
@@ -141,7 +123,7 @@ const [deleteLoading, setDeleteLoading] = useState(false);
   const session = portalSession || dashboardSession;
 
   const gridSpec = useMemo(() => {
-    return RUN_GRID_MODES[mode] || RUN_GRID_MODES.tour;
+    return getRunGridSpec(mode);
   }, [mode]);
 
   const ROWS = useMemo(() => makeRows(gridSpec.rows).reverse(), [gridSpec.rows]);
@@ -596,7 +578,7 @@ useEffect(() => {
                             top: "clamp(16px, 3vw, 24px)",
                             width: "calc(100% - clamp(20px, 4vw, 36px))",
                             height: "calc(100% - clamp(16px, 3vw, 24px))",
-                            objectFit: "cover",
+                            objectFit: gridSpec.bgObjectFit || "fill",
                             objectPosition: gridSpec.bgObjectPosition,
                             opacity: 0.75,
                             borderRadius: 16,

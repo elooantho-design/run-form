@@ -1,4 +1,4 @@
-export const BASTION_BG_URL = "/maps-actuelles/bastion.png";
+export const BASTION_BG_URL = "/maps-actuelles/bastion-11x8-current.png";
 export const TOUR_BG_URL = "/maps-actuelles/tour.png";
 
 export const RUN_GRID_CONFIG = {
@@ -8,6 +8,8 @@ export const RUN_GRID_CONFIG = {
     rows: 7,
     cols: 10,
     bgUrl: TOUR_BG_URL,
+    bgObjectFit: "fill",
+    bgObjectPosition: "center",
   },
   bastion: {
     key: "bastion",
@@ -15,6 +17,8 @@ export const RUN_GRID_CONFIG = {
     rows: 8,
     cols: 11,
     bgUrl: BASTION_BG_URL,
+    bgObjectFit: "fill",
+    bgObjectPosition: "center",
   },
 };
 
