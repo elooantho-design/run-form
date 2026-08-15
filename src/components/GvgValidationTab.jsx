@@ -12,9 +12,10 @@ import { buildPublicPreviewUrl, resolvePublicAssetProxyUrl } from "@/lib/vpsAsse
 const DIRECTIONS = ["N", "S", "E", "O"];
 const DEFENSE_SLOT_COUNT = 5;
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
-const POSITION_OPTIONS = ["A", "B", "C", "D", "E", "F", "G"].flatMap((row) =>
-  Array.from({ length: 7 }, (_, index) => `${row}${index + 1}`)
-);
+const GVG_MAP_GRID_OPTIONS = {
+  tower: { rows: 7, cols: 10 },
+  fortress: { rows: 8, cols: 11 },
+};
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -164,6 +165,27 @@ function getDefenseLabel(item) {
   return item?.def || item?.raw_name || "Defense inconnue";
 }
 
+function makePositionOptions({ rows, cols }) {
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").slice(0, Math.max(0, rows));
+  return letters.flatMap((row) => Array.from({ length: Math.max(0, cols) }, (_, index) => `${row}${index + 1}`));
+}
+
+function getItemGridKind(item) {
+  const explicitType = String(item?.type || "").toLowerCase();
+  if (explicitType === "fortress") return "fortress";
+  if (explicitType === "tower") return "tower";
+
+  const value = String(item?.def || item?.raw_name || "").toLowerCase();
+  if (value.includes("tower")) return "tower";
+  if (value.includes("fortress")) return "fortress";
+  return "tower";
+}
+
+function getPositionOptionsForItem(item) {
+  const grid = GVG_MAP_GRID_OPTIONS[getItemGridKind(item)] || GVG_MAP_GRID_OPTIONS.tower;
+  return makePositionOptions(grid);
+}
+
 function getValidationTone(item) {
   if (item?._validated && item?._edited) return "border-amber-400/45 bg-amber-500/10";
   if (item?._validated) return "border-emerald-400/45 bg-emerald-500/10";
@@ -250,6 +272,7 @@ export default function GvgValidationTab({ session }) {
   const hiddenJobsCount = jobs.length - visibleJobs.length;
   const selectedGuildAllowed = isGuildAllowed(guild, visibleGuilds);
   const selectedItem = items[selectedIndex] || null;
+  const positionOptions = useMemo(() => getPositionOptionsForItem(selectedItem), [selectedItem]);
   const validatedCount = items.filter((item) => item._validated).length;
   const editedCount = items.filter((item) => item._edited).length;
   const suspiciousCount = items.filter(needsManualReview).length;
@@ -855,7 +878,7 @@ export default function GvgValidationTab({ session }) {
                         ))}
                       </datalist>
                       <datalist id="gvg-validation-positions">
-                        {POSITION_OPTIONS.map((position) => (
+                        {positionOptions.map((position) => (
                           <option key={position} value={position} />
                         ))}
                       </datalist>

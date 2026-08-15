@@ -12,7 +12,7 @@ export const RUN_GRID_CONFIG = {
   bastion: {
     key: "bastion",
     label: "Bastion",
-    rows: 7,
+    rows: 8,
     cols: 11,
     bgUrl: BASTION_BG_URL,
   },

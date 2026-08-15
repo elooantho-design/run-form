@@ -27,7 +27,7 @@ const RUN_GRID_MODES = {
   bastion: {
     key: "bastion",
     label: "Bastion",
-    rows: 7,
+    rows: 8,
     cols: 11,
     bgUrl: "/maps-actuelles/bastion.png",
     bgObjectPosition: "center",

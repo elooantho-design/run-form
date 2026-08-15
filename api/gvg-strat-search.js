@@ -18,10 +18,33 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-function normalizePos(pos) {
+const GVG_POSITION_GRIDS = {
+  tower: { rows: 7, cols: 10 },
+  fortress: { rows: 8, cols: 11 },
+};
+
+function normalizeGvgMapType(mapType) {
+  const value = String(mapType || "").trim().toLowerCase();
+  if (value === "fortress" || value === "bastion") return "fortress";
+  if (value === "tower" || value === "tour") return "tower";
+  return "tower";
+}
+
+export function normalizeGvgPosition(pos, mapType = "tower") {
   if (!pos) return null;
   const p = String(pos).trim().toUpperCase();
-  return /^[A-H][1-8]$/.test(p) ? p : null;
+  const match = /^([A-Z])([1-9]\d?)$/.exec(p);
+  if (!match) return null;
+
+  const grid = GVG_POSITION_GRIDS[normalizeGvgMapType(mapType)] || GVG_POSITION_GRIDS.tower;
+  const row = match[1].charCodeAt(0) - "A".charCodeAt(0) + 1;
+  const col = Number(match[2]);
+
+  return row >= 1 && row <= grid.rows && col >= 1 && col <= grid.cols ? p : null;
+}
+
+function normalizePos(pos, mapType = "tower") {
+  return normalizeGvgPosition(pos, mapType);
 }
 
 function normalizeChampionName(name) {
@@ -94,8 +117,8 @@ function slotMatchesQuery(slot, q) {
   if (chSlot !== chQ) return false;
 
   if (q.position) {
-    const posSlot = normalizePos(slot.position);
-    const posQ = normalizePos(q.position);
+    const posSlot = normalizePos(slot.position, q.mapType);
+    const posQ = normalizePos(q.position, q.mapType);
     if (posSlot !== posQ) return false;
   }
 
@@ -138,15 +161,17 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
 async function searchDefenceStrict(
   supabaseClient,
   queryItems,
-  { limit = 10, maxCandidates = 50000, scope = null, targetGuildCode = "" } = {}
+  { limit = 10, maxCandidates = 50000, scope = null, targetGuildCode = "", mapType = "tower" } = {}
 ) {
   if (!queryItems?.length) return [];
 
+  const normalizedMapType = normalizeGvgMapType(mapType);
   const normQuery = queryItems
     .map((q) => ({
       champion: normalizeChampion(q.champion),
-      position: normalizePos(q.position),
+      position: normalizePos(q.position, normalizedMapType),
       direction: normalizeDir(q.direction),
+      mapType: normalizedMapType,
     }))
     .filter((q) => q.champion);
 
@@ -275,7 +300,7 @@ export default async function handler(req, res) {
 
     const { data: defense, error: defenseError } = await supabase
       .from("gvg_defense")
-      .select("id, guild, heroes")
+      .select("id, guild, heroes, type")
       .eq("id", gvgDefenseId)
       .maybeSingle();
 
@@ -296,6 +321,19 @@ export default async function handler(req, res) {
       }))
       .filter((hero) => hero.champion);
 
+    const defenseMapType = normalizeGvgMapType(defense.type);
+    const invalidPositions = queryItems
+      .filter((hero) => hero.position)
+      .map((hero) => String(hero.position || "").trim().toUpperCase())
+      .filter((position) => !normalizePos(position, defenseMapType));
+
+    if (invalidPositions.length) {
+      return res.status(400).json({
+        error: `position invalide pour ${defenseMapType}`,
+        invalidPositions,
+      });
+    }
+
     const scope = await resolveRunScope(supabase, req, req.portalMember);
 
     if (!scope.canUseGvg || !scope.canSearchRuns) {
@@ -310,6 +348,7 @@ export default async function handler(req, res) {
       limit: 10,
       scope,
       targetGuildCode: defense.guild,
+      mapType: defenseMapType,
     });
 
     return res.status(200).json({

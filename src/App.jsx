@@ -154,7 +154,7 @@ export default function PrototypeFormulaireRunGrille() {
 
   const gridSpec = useMemo(() => {
     if (mode === "bastion") {
-      return { rows: 7, cols: 11, bgUrl: BASTION_BG_URL, label: "Bastion" };
+      return { rows: 8, cols: 11, bgUrl: BASTION_BG_URL, label: "Bastion" };
     }
     return { rows: 7, cols: 10, bgUrl: TOUR_BG_URL, label: "Tour" };
   }, [mode]);
@@ -269,7 +269,7 @@ function resetAll() {
     const row = pos.slice(0, 1);
     const col = Number(pos.slice(1));
 
-    const maxRows = mode === "bastion" ? 7 : 7;
+    const maxRows = mode === "bastion" ? 8 : 7;
     const maxCols = mode === "bastion" ? 11 : 10;
 
     return /^[A-Z]\d+$/.test(pos)
@@ -281,7 +281,7 @@ function resetAll() {
 
     for (const slot of slots) {
       if (!slot || typeof slot.id !== "string") continue;
-      if (!validPos(slot.id)) problems.push(`Position invalide (A-H + 1-8) sur ${slot.id}.`);
+      if (!validPos(slot.id)) problems.push(`Position invalide sur ${slot.id}.`);
       if (!String(slot.hero || "").trim()) problems.push(`Héros manquant sur ${slot.id}.`);
       if (!String(slot.dir || "").trim()) problems.push(`Direction manquante sur ${slot.id}.`);
     }
