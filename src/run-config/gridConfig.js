@@ -1,5 +1,5 @@
 export const BASTION_BG_URL = "/maps-actuelles/bastion-11x8-current.png";
-export const TOUR_BG_URL = "/maps-actuelles/tour.png";
+export const TOUR_BG_URL = "/maps-actuelles/tour-10x7-current.png";
 
 export const RUN_GRID_CONFIG = {
   tour: {
