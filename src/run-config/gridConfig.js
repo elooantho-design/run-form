@@ -8,6 +8,12 @@ export const RUN_GRID_CONFIG = {
     rows: 7,
     cols: 10,
     bgUrl: TOUR_BG_URL,
+    gridBounds: {
+      left: 0.109802,
+      top: 0.04,
+      width: 0.785217,
+      height: 0.91,
+    },
     bgObjectFit: "fill",
     bgObjectPosition: "center",
   },

@@ -205,6 +205,7 @@ const gridSpec = useMemo(() => {
 
   const ROWS = useMemo(() => makeRows(gridSpec.rows).reverse(), [gridSpec.rows]);
   const COLS = useMemo(() => makeCols(gridSpec.cols), [gridSpec.cols]);
+  const gridBounds = gridSpec.gridBounds || { left: 0, top: 0, width: 1, height: 1 };
 
   const slotByPos = useMemo(() => {
     const map = new Map();
@@ -652,12 +653,114 @@ async function toggleResultBoycott(result, nextBoycott) {
                       />
                     )}
 
+                    {gridSpec.gridBounds ? (
+                      <div
+                        className="absolute"
+                        style={{
+                          left: "clamp(20px, 4vw, 36px)",
+                          top: "clamp(16px, 3vw, 24px)",
+                          width: "calc(100% - clamp(20px, 4vw, 36px))",
+                          height: "calc(100% - clamp(16px, 3vw, 24px))",
+                          zIndex: 2,
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <div
+                          className="absolute grid"
+                          style={{
+                            left: `${gridBounds.left * 100}%`,
+                            top: `${gridBounds.top * 100}%`,
+                            width: `${gridBounds.width * 100}%`,
+                            height: `${gridBounds.height * 100}%`,
+                            gridTemplateColumns: `repeat(${gridSpec.cols}, minmax(0, 1fr))`,
+                            gridTemplateRows: `repeat(${gridSpec.rows}, minmax(0, 1fr))`,
+                            pointerEvents: "auto",
+                          }}
+                        >
+                          {ROWS.map((r) => (
+                            <React.Fragment key={r}>
+                              {COLS.map((c) => {
+                                const pos = `${r}${c}`;
+                                const isSelected = slotByPos.has(pos);
+                                const isActive = activePos === pos;
+                                const slot = slotByPos.get(pos);
+                                const isComplete =
+                                  slot &&
+                                  String(slot.hero || "").trim() &&
+                                  String(slot.dir || "").trim();
+
+                                return (
+                                  <button
+                                    key={pos}
+                                    type="button"
+                                    onClick={() => addOrSelectPos(pos)}
+                                    className={
+                                      `relative rounded-xl border transition ` +
+                                      (isComplete
+                                        ? "border-emerald-500 bg-emerald-500/30 "
+                                        : isSelected
+                                          ? "bg-zinc-900/80 border-zinc-600 "
+                                          : "bg-zinc-900/40 border-zinc-800 ") +
+                                      (isActive ? "ring-2 ring-blue-400" : "hover:bg-zinc-800/80")
+                                    }
+                                    aria-label={`Case ${pos}`}
+                                    disabled={!isSelected && !canAddMore}
+                                  >
+                                    <div
+                                      className="absolute inset-0 rounded-xl"
+                                      style={{ boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.03)" }}
+                                    />
+
+                                    <div className="absolute left-2 top-2 flex items-center gap-1">
+                                      {isSelected ? (
+                                        <Badge className="px-1.5 text-[10px]">
+                                          {(slot && slot.dir) || "â€¢"}
+                                        </Badge>
+                                      ) : (
+                                        <span className="text-[10px] text-zinc-500">&nbsp;</span>
+                                      )}
+                                    </div>
+
+                                    <div className="absolute inset-0 flex items-center justify-center p-1">
+                                      {isSelected ? (
+                                        slot && slot.hero ? (
+                                          <div className="relative flex h-full w-full items-center justify-center overflow-visible">
+                                            <img
+                                              src={getHeroImageSrc(slot.hero)}
+                                              alt={translateChampionName(slot.hero, championDisplayMap, language)}
+                                              className="max-h-[72%] max-w-[72%] object-contain"
+                                              onError={(e) => {
+                                                e.currentTarget.style.display = "none";
+                                              }}
+                                            />
+
+                                            <HeroDirectionOverlay direction={slot.dir} />
+                                          </div>
+                                        ) : (
+                                          <div className="max-w-[90%] truncate text-[11px] font-medium text-zinc-200">
+                                            (hÃ©ros)
+                                          </div>
+                                        )
+                                      ) : (
+                                        <div className="text-[11px] text-zinc-500">+</div>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </React.Fragment>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
                     <div
                       className="grid relative"
                       style={{
                 gridTemplateColumns: `clamp(20px, 4vw, 36px) repeat(${gridSpec.cols}, minmax(0, 1fr))`,
                 gridTemplateRows: `clamp(16px, 3vw, 24px) repeat(${gridSpec.rows}, minmax(0, 1fr))`,
                         zIndex: 1,
+                        visibility: gridSpec.gridBounds ? "hidden" : "visible",
                       }}
                     >
                       <div />
@@ -693,7 +796,7 @@ async function toggleResultBoycott(result, nextBoycott) {
                                 type="button"
                                 onClick={() => addOrSelectPos(pos)}
                                 className={
-                                  `relative aspect-square rounded-xl border transition ` +
+                                  `relative rounded-xl border transition ` +
                                   (isComplete
                                     ? "border-emerald-500 bg-emerald-500/30 "
                                     : isSelected
@@ -701,6 +804,7 @@ async function toggleResultBoycott(result, nextBoycott) {
                                       : "bg-zinc-900/40 border-zinc-800 ") +
                                   (isActive ? "ring-2 ring-blue-400" : "hover:bg-zinc-800/80")
                                 }
+                                style={{ aspectRatio: gridSpec.cellAspectRatio || "1 / 1" }}
                                 aria-label={`Case ${pos}`}
                                 disabled={!isSelected && !canAddMore}
                               >
