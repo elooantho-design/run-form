@@ -2741,10 +2741,10 @@ async function handleGuildMemberDelete(body, res) {
 
 async function handleGuildMemberConvertCommunity(body, res) {
   const memberId = cleanText(body.memberId || body.member_id);
-  const leaderCheck = await requireLeaderById(res._portalReq);
+  const adminCheck = await requireAdminById(res._portalReq);
 
-  if (leaderCheck.error) {
-    sendJson(res, leaderCheck.status, { error: leaderCheck.error });
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
     return;
   }
 
@@ -2759,8 +2759,18 @@ async function handleGuildMemberConvertCommunity(body, res) {
     return;
   }
 
+  if (!canAdminManageTarget(adminCheck.admin, target)) {
+    sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+    return;
+  }
+
   if (isLeaderRole(target.role)) {
     sendJson(res, 403, { error: "Le compte leader ne peut pas etre converti en membre communaute." });
+    return;
+  }
+
+  if (isAdminRole(target.role) && !isLeaderRole(adminCheck.admin?.role)) {
+    sendJson(res, 403, { error: "Seul le leader peut convertir un compte admin en compte communaute." });
     return;
   }
 
@@ -2792,14 +2802,14 @@ async function handleGuildMemberConvertCommunity(body, res) {
   }
 
   await supabase.from("portal_activity_logs").insert({
-    actor_member_id: leaderCheck.leader.id,
-    actor_name: getMemberName(leaderCheck.leader),
+    actor_member_id: adminCheck.admin.id,
+    actor_name: getMemberName(adminCheck.admin),
     target_member_id: updated.id,
     target_name: getMemberName(updated),
     action_type: "guild_member_convert_community",
     entity_type: "guild_members",
     entity_id: updated.id,
-    summary: `${getMemberName(leaderCheck.leader)} a passe ${getMemberName(updated)} en compte communaute`,
+    summary: `${getMemberName(adminCheck.admin)} a passe ${getMemberName(updated)} en compte communaute`,
     metadata: { previousGuildCode, role: updated.role, communityStatus: normalizeCommunityStatus(updated.community_status) },
   });
 

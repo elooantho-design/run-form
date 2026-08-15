@@ -1548,7 +1548,7 @@ export default function PortalGuildManagementTab({ session }) {
   }
 
   async function convertMemberToCommunity() {
-    if (!isLeader || !memberToTransfer?.id || convertingCommunityMemberId) return;
+    if (!isAdmin || !memberToTransfer?.id || convertingCommunityMemberId) return;
 
     const confirmed = window.confirm(
       formatText(
@@ -2388,7 +2388,7 @@ export default function PortalGuildManagementTab({ session }) {
             </div>
 
             <div className="mt-6 flex flex-wrap justify-end gap-2">
-              {isLeader ? (
+              {isAdmin ? (
                 <Button
                   type="button"
                   variant="outline"
