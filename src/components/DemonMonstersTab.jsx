@@ -96,8 +96,7 @@ export default function DemonMonstersTab({ session }) {
   const [levelSaving, setLevelSaving] = useState(false);
   const [ownerSearchOpen, setOwnerSearchOpen] = useState(false);
   const [ownerSearchGuildCode, setOwnerSearchGuildCode] = useState("");
-  const [ownerSearchMonsterId, setOwnerSearchMonsterId] = useState("");
-  const [ownerSearchMonsterQuery, setOwnerSearchMonsterQuery] = useState("");
+  const [selectedOwnerSearchMonster, setSelectedOwnerSearchMonster] = useState(null);
   const [ownerSearchMinimumLevel, setOwnerSearchMinimumLevel] = useState("");
   const [ownerSearchLoading, setOwnerSearchLoading] = useState(false);
   const [ownerSearchError, setOwnerSearchError] = useState("");
@@ -147,20 +146,19 @@ export default function DemonMonstersTab({ session }) {
     );
   }, [members, sessionOrganizationKey]);
 
-  const ownerSearchMonsterOptions = useMemo(() => {
-    const normalizedQuery = normalizeText(ownerSearchMonsterQuery);
+  const selectedOwnerSearchTone = useMemo(() => {
+    return DEMON_RARITY_TONES[selectedOwnerSearchMonster?.rarity] || DEMON_RARITY_TONES.rare;
+  }, [selectedOwnerSearchMonster]);
 
-    return demonicMonsters
-      .filter((monster) => {
-        if (!normalizedQuery) return true;
-        return normalizeText(`${monster.name} ${monster.slug} ${monster.rarity}`).includes(normalizedQuery);
-      })
-      .slice(0, 10);
-  }, [demonicMonsters, ownerSearchMonsterQuery]);
-
-  const selectedOwnerSearchMonster = useMemo(() => {
-    return demonicMonsters.find((monster) => String(monster.id) === String(ownerSearchMonsterId)) || null;
-  }, [demonicMonsters, ownerSearchMonsterId]);
+  const ownerSearchTitle = useMemo(() => {
+    if (!selectedOwnerSearchMonster?.name) {
+      return t("demon.ownerSearchTitle", "Qui possede ce monstre ?");
+    }
+    return t("demon.ownerSearchTitleWithMonster", "Qui possede {monsterName} ?").replace(
+      "{monsterName}",
+      selectedOwnerSearchMonster.name,
+    );
+  }, [selectedOwnerSearchMonster, t]);
 
   const canEditDemonicMonsters = useMemo(() => {
     if (typeof selectedMember?.permissions?.canEdit === "boolean") {
@@ -385,7 +383,7 @@ export default function DemonMonstersTab({ session }) {
       setOwnerSearchError(t("demon.ownerSearchMissingGuild", "Selectionne une guilde."));
       return;
     }
-    if (!ownerSearchMonsterId) {
+    if (!selectedOwnerSearchMonster?.id) {
       setOwnerSearchError(t("demon.ownerSearchMissingMonster", "Selectionne un monstre."));
       return;
     }
@@ -398,7 +396,7 @@ export default function DemonMonstersTab({ session }) {
       const data = await callPortalPlayerData({
         action: "searchDemonicMonsterOwners",
         guildCode: ownerSearchGuildCode,
-        monsterId: ownerSearchMonsterId,
+        monsterId: selectedOwnerSearchMonster.id,
         minimumLevel: ownerSearchMinimumLevel.trim() ? ownerSearchMinimumLevel.trim() : null,
       });
 
@@ -410,6 +408,16 @@ export default function DemonMonstersTab({ session }) {
     } finally {
       setOwnerSearchLoading(false);
     }
+  }
+
+  function openOwnerSearch(monster, event) {
+    event?.stopPropagation?.();
+    setSelectedOwnerSearchMonster(monster);
+    setOwnerSearchMinimumLevel("");
+    setOwnerSearchError("");
+    setOwnerSearchResults([]);
+    setOwnerSearchSearched(false);
+    setOwnerSearchOpen(true);
   }
 
   function openOwnerSearchResult(result) {
@@ -563,26 +571,14 @@ export default function DemonMonstersTab({ session }) {
                   </div>
                 </div>
 
-                <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11 rounded-xl border-red-400/40 bg-red-500/10 text-red-50 hover:bg-red-500/20"
-                    onClick={() => setOwnerSearchOpen(true)}
-                  >
-                    <Search className="mr-2 h-4 w-4" />
-                    {t("demon.ownerSearchButton", "Rechercher qui possede")}
-                  </Button>
-
-                  <div className="relative w-full sm:w-[340px]">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-                    <Input
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      placeholder={t("demon.searchMonster", "Rechercher un monstre")}
-                      className="h-11 rounded-xl border-zinc-800 bg-zinc-950 pl-9 text-zinc-100"
-                    />
-                  </div>
+                <div className="relative w-full lg:w-[340px]">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                  <Input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder={t("demon.searchMonster", "Rechercher un monstre")}
+                    className="h-11 rounded-xl border-zinc-800 bg-zinc-950 pl-9 text-zinc-100"
+                  />
                 </div>
               </div>
 
@@ -632,14 +628,28 @@ export default function DemonMonstersTab({ session }) {
                             {monster.level > 0 ? monster.level : "?"}
                           </button>
                         </div>
-                        <div className="mt-4 flex items-center justify-between gap-3">
-                          <div>
+                        <div className="mt-4 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
                             <div className="text-base font-semibold text-zinc-50">{monster.name}</div>
                             <div className="text-sm text-zinc-500">{monster.slug}</div>
                           </div>
-                          <div className="flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-                            <Sparkles className="h-4 w-4" />
-                            {t("demon.levelShort", "Niv.")} {monster.level || 0}
+                          <div className="flex shrink-0 flex-col items-end gap-2">
+                            <div className="flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                              <Sparkles className="h-4 w-4" />
+                              {t("demon.levelShort", "Niv.")} {monster.level || 0}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(event) => openOwnerSearch(monster, event)}
+                              aria-label={t(
+                                "demon.ownerSearchButtonAria",
+                                "Rechercher les joueurs possedant {monsterName}",
+                              ).replace("{monsterName}", monster.name || monster.slug || "")}
+                              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-500/10 px-2.5 text-xs font-semibold text-red-50 transition hover:border-red-300/60 hover:bg-red-500/20"
+                            >
+                              <Search className="h-3.5 w-3.5" />
+                              {t("demon.ownerSearchButton", "Qui l'a ?")}
+                            </button>
                           </div>
                         </div>
                       </article>
@@ -706,16 +716,33 @@ export default function DemonMonstersTab({ session }) {
       </Dialog>
 
       <Dialog open={ownerSearchOpen} onOpenChange={setOwnerSearchOpen}>
-        <DialogContent className="max-h-[92vh] max-w-4xl overflow-hidden rounded-3xl border-zinc-800 bg-zinc-950 p-0 text-zinc-100">
+        <DialogContent className="max-h-[92vh] w-[calc(100vw-2rem)] max-w-[820px] overflow-hidden rounded-3xl border-zinc-800 bg-zinc-950 p-0 text-zinc-100">
           <DialogHeader className="border-b border-zinc-800 px-5 py-4">
-            <DialogTitle className="flex items-center gap-2 text-xl">
-              <Search className="h-5 w-5 text-red-200" />
-              {t("demon.ownerSearchTitle", "Rechercher qui possede un monstre")}
+            <DialogTitle className="flex min-w-0 items-center gap-3 pr-8 text-xl">
+              {selectedOwnerSearchMonster ? (
+                <img
+                  src={selectedOwnerSearchMonster.image_url || getDemonicMonsterImageUrl(selectedOwnerSearchMonster.slug)}
+                  alt=""
+                  className="h-12 w-12 shrink-0 rounded-xl border border-zinc-800 object-cover"
+                />
+              ) : (
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-red-400/25 bg-red-500/10">
+                  <Search className="h-5 w-5 text-red-200" />
+                </span>
+              )}
+              <span className="min-w-0">
+                <span className="block truncate">{ownerSearchTitle}</span>
+                {selectedOwnerSearchMonster ? (
+                  <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs ${selectedOwnerSearchTone.badge}`}>
+                    {t(`demon.rarity.${selectedOwnerSearchMonster.rarity}`, selectedOwnerSearchTone.label)}
+                  </span>
+                ) : null}
+              </span>
             </DialogTitle>
           </DialogHeader>
 
           <div className="max-h-[calc(92vh-74px)] space-y-5 overflow-y-auto p-5">
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_180px]">
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_170px] md:items-end">
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-owner-guild">
                   {t("demon.ownerSearchGuild", "Guilde")}
@@ -739,23 +766,6 @@ export default function DemonMonstersTab({ session }) {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-owner-monster">
-                  {t("demon.ownerSearchMonster", "Monstre demoniaque")}
-                </label>
-                <div className="flex h-11 items-center gap-2 rounded-xl border border-zinc-800 bg-black px-3 text-sm text-zinc-100 ring-red-400/30 transition focus-within:border-red-400 focus-within:ring-2">
-                  <Search className="h-4 w-4 shrink-0 text-zinc-500" />
-                  <input
-                    id="demon-owner-monster"
-                    type="search"
-                    value={ownerSearchMonsterQuery}
-                    onChange={(event) => setOwnerSearchMonsterQuery(event.target.value)}
-                    placeholder={t("demon.ownerSearchMonsterPlaceholder", "Chercher un monstre")}
-                    className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-owner-min-level">
                   {t("demon.ownerSearchMinimumLevel", "Niveau minimum")}
                 </label>
@@ -774,81 +784,12 @@ export default function DemonMonstersTab({ session }) {
                   className="h-11 rounded-xl border-zinc-800 bg-black text-zinc-100"
                 />
               </div>
-            </div>
 
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)]">
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/45 p-3">
-                <div className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                  {t("demon.ownerSearchMonsterList", "Monstres")}
-                </div>
-                <div className="grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
-                  {ownerSearchMonsterOptions.length === 0 ? (
-                    <div className="rounded-xl border border-zinc-800 bg-black/40 px-3 py-2 text-sm text-zinc-500">
-                      {t("demon.ownerSearchNoMonster", "Aucun monstre trouve.")}
-                    </div>
-                  ) : (
-                    ownerSearchMonsterOptions.map((monster) => {
-                      const selected = String(monster.id) === String(ownerSearchMonsterId);
-                      const tone = DEMON_RARITY_TONES[monster.rarity] || DEMON_RARITY_TONES.rare;
-                      return (
-                        <button
-                          key={monster.id}
-                          type="button"
-                          onClick={() => {
-                            setOwnerSearchMonsterId(monster.id);
-                            setOwnerSearchResults([]);
-                            setOwnerSearchSearched(false);
-                          }}
-                          className={`flex min-w-0 items-center gap-3 rounded-xl border p-2 text-left transition ${
-                            selected
-                              ? "border-red-300/70 bg-red-500/15 text-white"
-                              : "border-zinc-800 bg-black/35 text-zinc-300 hover:border-red-400/35"
-                          }`}
-                        >
-                          <img
-                            src={monster.image_url || getDemonicMonsterImageUrl(monster.slug)}
-                            alt=""
-                            className="h-12 w-12 shrink-0 rounded-lg border border-zinc-800 object-cover"
-                          />
-                          <span className="min-w-0">
-                            <span className="block truncate text-sm font-semibold">{monster.name}</span>
-                            <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] ${tone.badge}`}>
-                              {t(`demon.rarity.${monster.rarity}`, tone.label)}
-                            </span>
-                          </span>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/45 p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                  {t("demon.ownerSearchSelectedMonster", "Monstre selectionne")}
-                </div>
-                <div className="mt-3 flex items-center gap-3">
-                  {selectedOwnerSearchMonster ? (
-                    <>
-                      <img
-                        src={selectedOwnerSearchMonster.image_url || getDemonicMonsterImageUrl(selectedOwnerSearchMonster.slug)}
-                        alt=""
-                        className="h-16 w-16 rounded-xl border border-zinc-800 object-cover"
-                      />
-                      <div className="min-w-0">
-                        <div className="truncate font-semibold text-zinc-50">{selectedOwnerSearchMonster.name}</div>
-                        <div className="truncate text-sm text-zinc-500">{selectedOwnerSearchMonster.slug}</div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="text-sm text-zinc-500">{t("demon.ownerSearchPickMonster", "Selectionne un monstre.")}</div>
-                  )}
-                </div>
-
+              <div>
                 <Button
                   type="button"
-                  className="mt-5 h-11 w-full rounded-xl"
-                  disabled={ownerSearchLoading || !ownerSearchGuildCode || !ownerSearchMonsterId}
+                  className="h-11 w-full rounded-xl"
+                  disabled={ownerSearchLoading || !ownerSearchGuildCode || !selectedOwnerSearchMonster?.id}
                   onClick={runOwnerSearch}
                 >
                   <Search className="mr-2 h-4 w-4" />
@@ -878,6 +819,10 @@ export default function DemonMonstersTab({ session }) {
                   <div className="px-3 py-5 text-sm text-zinc-400">{t("demon.ownerSearchLoading", "Recherche...")}</div>
                 ) : ownerSearchSearched && ownerSearchResults.length === 0 ? (
                   <div className="px-3 py-5 text-sm text-zinc-500">{t("demon.ownerSearchNoResults", "Aucun joueur trouve.")}</div>
+                ) : !ownerSearchSearched ? (
+                  <div className="px-3 py-5 text-sm text-zinc-500">
+                    {t("demon.ownerSearchInitial", "Selectionne une guilde puis lance la recherche.")}
+                  </div>
                 ) : (
                   ownerSearchResults.map((result) => (
                     <button
@@ -888,12 +833,6 @@ export default function DemonMonstersTab({ session }) {
                     >
                       <span className="min-w-0">
                         <span className="block truncate font-semibold text-zinc-100">{result.watcherName}</span>
-                        <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                          {getGuildDisplayName({
-                            guildCode: result.guildCode,
-                            organizationKey: sessionOrganizationKey,
-                          })}
-                        </span>
                       </span>
                       <span className="shrink-0 rounded-full border border-red-300/35 bg-red-500/10 px-3 py-1 text-sm font-semibold text-red-100">
                         {t("demon.ownerSearchLevel", "Niveau")} {result.level}
