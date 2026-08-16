@@ -150,6 +150,19 @@ function validateUuid(value) {
     : "";
 }
 
+function createPortalPlayerDataError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+export function normalizeDemonicMonsterOwnerMinLevel(value) {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return 1;
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < 1 || numeric > 20) return null;
+  return numeric;
+}
+
 async function selectMembersWithFallback(supabase) {
   let { data, error } = await supabase.from("guild_members").select(SAFE_MEMBER_SELECT).order("watcher_name", { ascending: true });
   if (
@@ -537,6 +550,101 @@ async function handleDemonicMonsters(req, res, supabase, actor, body) {
   });
 }
 
+export async function searchDemonicMonsterOwners(supabase, { actor, guildCode, monsterId, minimumLevel }) {
+  const requestedGuildCode = normalizeGuildCode(guildCode);
+  if (!requestedGuildCode) {
+    throw createPortalPlayerDataError(400, "Guilde invalide.");
+  }
+
+  const normalizedMonsterId = validateUuid(monsterId);
+  if (!normalizedMonsterId) {
+    throw createPortalPlayerDataError(400, "Monstre invalide.");
+  }
+
+  const normalizedMinimumLevel = normalizeDemonicMonsterOwnerMinLevel(minimumLevel);
+  if (normalizedMinimumLevel === null) {
+    throw createPortalPlayerDataError(400, "Niveau minimum invalide.");
+  }
+
+  const scopedMembers = await getScopedMembers(supabase, actor, { guildCode: requestedGuildCode });
+  if (!scopedMembers.length) {
+    throw createPortalPlayerDataError(403, "Acces guilde refuse.");
+  }
+
+  const { data: monster, error: monsterError } = await supabase
+    .from("demonic_monsters")
+    .select("id, name, slug, rarity, image_url")
+    .eq("id", normalizedMonsterId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (monsterError) throw monsterError;
+  if (!monster?.id) {
+    throw createPortalPlayerDataError(400, "Monstre invalide.");
+  }
+
+  const scopedMemberIds = scopedMembers.map((member) => member.id).filter(Boolean);
+  const memberById = new Map(scopedMembers.map((member) => [String(member.id), member]));
+
+  const { data: entries, error: entriesError } = await supabase
+    .from("member_demonic_monsters")
+    .select("member_id, monster_id, level")
+    .eq("monster_id", monster.id)
+    .gte("level", normalizedMinimumLevel)
+    .in("member_id", scopedMemberIds);
+
+  if (entriesError) throw entriesError;
+
+  const results = (entries || [])
+    .map((entry) => {
+      const member = memberById.get(String(entry.member_id));
+      if (!member) return null;
+      return {
+        memberId: member.id,
+        watcherName: member.name || member.watcher_name || "Joueur",
+        guildCode: member.guildCode || member.guild_code || requestedGuildCode,
+        monsterId: monster.id,
+        monsterName: monster.name || "",
+        monsterSlug: monster.slug || "",
+        monsterRarity: monster.rarity || "",
+        level: Number(entry.level || 0),
+      };
+    })
+    .filter((entry) => entry && entry.level >= normalizedMinimumLevel)
+    .sort((left, right) => {
+      if (right.level !== left.level) return right.level - left.level;
+      return String(left.watcherName || "").localeCompare(String(right.watcherName || ""), "fr", {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+
+  return {
+    guildCode: requestedGuildCode,
+    minimumLevel: normalizedMinimumLevel,
+    monster,
+    results,
+  };
+}
+
+async function handleSearchDemonicMonsterOwners(req, res, supabase, actor, body) {
+  try {
+    const searchResult = await searchDemonicMonsterOwners(supabase, {
+      actor,
+      guildCode: body.guildCode || body.guild_code,
+      monsterId: body.monsterId || body.monster_id,
+      minimumLevel: body.minimumLevel ?? body.minimum_level ?? body.minLevel ?? body.min_level,
+    });
+
+    return sendJson(req, res, 200, { ok: true, ...searchResult });
+  } catch (error) {
+    if (error?.statusCode) {
+      return sendJson(req, res, error.statusCode, { ok: false, error: error.message || "Recherche refusee." });
+    }
+    throw error;
+  }
+}
+
 async function handleSetDemonicMonsterLevel(req, res, supabase, actor, body) {
   const target = await fetchMemberById(supabase, body.memberId || body.member_id);
   if (!canEditMember(actor, target)) {
@@ -666,6 +774,7 @@ const HANDLERS = {
   updatePersonalBestHero: handleUpdatePersonalBestHero,
   updatePersonalBestValue: handleUpdatePersonalBestValue,
   demonicMonsters: handleDemonicMonsters,
+  searchDemonicMonsterOwners: handleSearchDemonicMonsterOwners,
   setDemonicMonsterLevel: handleSetDemonicMonsterLevel,
   soulStones: handleSoulStones,
   addSoulStone: handleAddSoulStone,
