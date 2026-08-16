@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionDisplayName, getChampionEnglishName } from "@/lib/championDisplay";
+import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
@@ -784,7 +785,7 @@ export default function PersonalBestTab({ session }) {
                       className="rounded-2xl"
                       onClick={() => setActiveGuildCode(code)}
                     >
-                      {code}
+                      {getGuildDisplayName({ guildCode: code })}
                     </Button>
                   ))}
                 </div>

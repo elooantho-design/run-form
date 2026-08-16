@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 function getApiBase() {
@@ -252,6 +253,28 @@ export default function PortalIntersaisonTab({ session }) {
     return (guilds || []).map((guild) => guild.guild_code).filter(Boolean);
   }, [guilds]);
 
+  const getIntersaisonGuildLabel = useCallback(
+    (guildCode, emptyFallback = "-") =>
+      getGuildDisplayName({
+        guildCode,
+        guilds,
+        organizationId: organization?.id,
+        organizationKey: organization?.organization_key || organization?.organizationKey,
+        emptyFallback,
+      }),
+    [guilds, organization?.id, organization?.organizationKey, organization?.organization_key],
+  );
+
+  const getDashboardLabel = useCallback(
+    (dashboard) => {
+      if (!dashboard) return "-";
+      if (dashboard.is_draft || dashboard.code === "BROUILLON") return dashboard.name || "BROUILLON";
+      const guildLabel = getIntersaisonGuildLabel(dashboard.code, "");
+      return guildLabel || dashboard.name || dashboard.code || "-";
+    },
+    [getIntersaisonGuildLabel],
+  );
+
   const selectedDashboard = useMemo(
     () => dashboards.find((dashboard) => String(dashboard.id) === String(selectedDashboardId)) || null,
     [dashboards, selectedDashboardId],
@@ -341,14 +364,14 @@ export default function PortalIntersaisonTab({ session }) {
             assignment.target_guild_code !== dashboard.code,
         );
 
-        lines.push(`${dashboard.name}`);
+        lines.push(`${getDashboardLabel(dashboard)}`);
         lines.push("");
         lines.push("Arrivees :");
         if (arrivals.length > 0) {
           arrivals.forEach((assignment) => {
             lines.push(
-              `- ${assignment.watcher_name} (${assignment.source_guild_code || "-"} -> ${
-                assignment.target_guild_code || "BROUILLON"
+              `- ${assignment.watcher_name} (${getIntersaisonGuildLabel(assignment.source_guild_code)} -> ${
+                assignment.target_guild_code ? getIntersaisonGuildLabel(assignment.target_guild_code) : "BROUILLON"
               })`,
             );
           });
@@ -361,8 +384,8 @@ export default function PortalIntersaisonTab({ session }) {
         if (departures.length > 0) {
           departures.forEach((assignment) => {
             lines.push(
-              `- ${assignment.watcher_name} (${assignment.source_guild_code || "-"} -> ${
-                assignment.target_guild_code || "BROUILLON"
+              `- ${assignment.watcher_name} (${getIntersaisonGuildLabel(assignment.source_guild_code)} -> ${
+                assignment.target_guild_code ? getIntersaisonGuildLabel(assignment.target_guild_code) : "BROUILLON"
               })`,
             );
           });
@@ -382,14 +405,14 @@ export default function PortalIntersaisonTab({ session }) {
     lines.push("Sorties vers communaute :");
     if (draftRows.length > 0) {
       draftRows.forEach((assignment) => {
-        lines.push(`- ${assignment.watcher_name} (${assignment.source_guild_code || "-"} -> Communauté)`);
+        lines.push(`- ${assignment.watcher_name} (${getIntersaisonGuildLabel(assignment.source_guild_code)} -> Communauté)`);
       });
     } else {
       lines.push("- Aucune");
     }
 
     return lines.join("\n").trim();
-  }, [assignments, dashboards]);
+  }, [assignments, dashboards, getDashboardLabel, getIntersaisonGuildLabel]);
 
   const createCampaign = async () => {
     if (!canManage || creating) return;
@@ -641,7 +664,7 @@ export default function PortalIntersaisonTab({ session }) {
                 {guildCodes.length > 0 ? (
                   guildCodes.map((code) => (
                     <Badge key={code} className="rounded-md bg-emerald-500/15 text-emerald-300">
-                      {code}
+                      {getIntersaisonGuildLabel(code)}
                     </Badge>
                   ))
                 ) : (
@@ -778,7 +801,7 @@ export default function PortalIntersaisonTab({ session }) {
                   .filter((dashboard) => String(dashboard.id) !== String(assignmentToMove?.dashboard_id))
                   .map((dashboard) => (
                     <option key={dashboard.id} value={String(dashboard.id)}>
-                      {dashboard.name}
+                      {getDashboardLabel(dashboard)}
                     </option>
                   ))}
               </select>
@@ -843,12 +866,14 @@ export default function PortalIntersaisonTab({ session }) {
                         : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
                     }`}
                   >
-                    {code}
+                    {getIntersaisonGuildLabel(code)}
                   </button>
                 );
               })}
             </div>
-            <div className="text-xs text-zinc-500">Selection : {wishInput.join(", ") || "aucune"}</div>
+            <div className="text-xs text-zinc-500">
+              Selection : {wishInput.map((code) => getIntersaisonGuildLabel(code)).join(", ") || "aucune"}
+            </div>
             <div className="flex justify-end gap-2">
               <Button
                 type="button"
@@ -1098,7 +1123,9 @@ export default function PortalIntersaisonTab({ session }) {
                                 <div className="mt-1 flex items-center gap-1 text-xs text-sky-300">
                                   <Link2 className="h-3 w-3" />
                                   Compte secondaire de {row.accountLink.primaryWatcherName || "compte principal"}
-                                  {row.accountLink.primaryGuildCode ? ` · principal ${row.accountLink.primaryGuildCode}` : ""}
+                                  {row.accountLink.primaryGuildCode
+                                    ? ` · principal ${getIntersaisonGuildLabel(row.accountLink.primaryGuildCode)}`
+                                    : ""}
                                 </div>
                               ) : row.accountLink?.isPrimary ? (
                                 <div className="mt-1 flex items-center gap-1 text-xs text-violet-300">
@@ -1106,7 +1133,7 @@ export default function PortalIntersaisonTab({ session }) {
                                   {row.accountLink.secondaryCount} compte(s) secondaire(s)
                                 </div>
                               ) : null}
-                              <div className="text-sm text-zinc-500">Dashboard : {dashboard?.name || "-"}</div>
+                              <div className="text-sm text-zinc-500">Dashboard : {getDashboardLabel(dashboard)}</div>
                             </button>
                           );
                         })
@@ -1133,7 +1160,7 @@ export default function PortalIntersaisonTab({ session }) {
                   >
                     {dashboards.map((dashboard) => (
                       <option key={dashboard.id} value={String(dashboard.id)}>
-                        {dashboard.name}
+                        {getDashboardLabel(dashboard)}
                       </option>
                     ))}
                   </select>
@@ -1148,7 +1175,7 @@ export default function PortalIntersaisonTab({ session }) {
                     <option value="Tous">Tous</option>
                     {guildCodes.map((code) => (
                       <option key={code} value={code}>
-                        {code}
+                        {getIntersaisonGuildLabel(code)}
                       </option>
                     ))}
                   </select>
@@ -1156,7 +1183,7 @@ export default function PortalIntersaisonTab({ session }) {
                 {selectedDashboard ? (
                   <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-500">
                     <span>
-                      {selectedRows.length} joueur(s) dans {selectedDashboard.name}
+                      {selectedRows.length} joueur(s) dans {getDashboardLabel(selectedDashboard)}
                     </span>
                     <div className="relative flex flex-wrap gap-2">
                       {VISIBLE_INTERSAISON_ROLE_COUNTERS.map((roleValue) => {
@@ -1272,7 +1299,9 @@ export default function PortalIntersaisonTab({ session }) {
                                 <span className="mt-1 flex items-center gap-1 text-xs font-normal text-sky-300">
                                   <Link2 className="h-3 w-3" />
                                   Compte secondaire de {row.accountLink.primaryWatcherName || "compte principal"}
-                                  {row.accountLink.primaryGuildCode ? ` · principal ${row.accountLink.primaryGuildCode}` : ""}
+                                  {row.accountLink.primaryGuildCode
+                                    ? ` · principal ${getIntersaisonGuildLabel(row.accountLink.primaryGuildCode)}`
+                                    : ""}
                                 </span>
                               ) : row.accountLink?.isPrimary ? (
                                 <span className="mt-1 flex items-center gap-1 text-xs font-normal text-violet-300">
@@ -1294,9 +1323,9 @@ export default function PortalIntersaisonTab({ session }) {
                                 <span className="sr-only">{assignmentRole.label}</span>
                               )}
                             </div>
-                            <div className="text-center text-zinc-300">{row.source_guild_code || "-"}</div>
+                            <div className="text-center text-zinc-300">{getIntersaisonGuildLabel(row.source_guild_code)}</div>
                             <div className="text-center text-zinc-300">
-                              {row.target_guild_code || "BROUILLON"}
+                              {row.target_guild_code ? getIntersaisonGuildLabel(row.target_guild_code) : "BROUILLON"}
                             </div>
                             <div className="flex justify-center">
                               <button
@@ -1314,7 +1343,7 @@ export default function PortalIntersaisonTab({ session }) {
                                       key={`${row.id}-${code}`}
                                       className="rounded-md bg-sky-500/15 text-sky-300"
                                     >
-                                      {code}
+                                      {getIntersaisonGuildLabel(code)}
                                     </Badge>
                                   ))
                                 ) : (

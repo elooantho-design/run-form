@@ -66,6 +66,7 @@ import GlobalChatTab from "@/components/GlobalChatTab";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
+import { getGuildDisplayName, getSessionGuildDisplayName } from "@/lib/guildDisplay";
 import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
 import moontonHeroImages from "@/data/moontonHeroImages.json";
 import {
@@ -1194,6 +1195,14 @@ function getMemberGuildLabel(member) {
   return member?.guild_code || "Sans guilde";
 }
 
+function getMemberGuildDisplayLabel(member, options = {}) {
+  return getGuildDisplayName({
+    guildCode: member?.guild_code || member?.guildCode,
+    emptyFallback: options.emptyFallback || "Sans guilde",
+    ...options,
+  });
+}
+
 function buildHeroRarityFilters(heroes) {
   const rarities = [...new Set((heroes || []).map((hero) => hero.rarity).filter(Boolean))].sort((left, right) =>
     sortHeroValues(left, right, heroRarityOrder),
@@ -1991,7 +2000,11 @@ function PortalShell({ session, onLogout }) {
   const isCommunityUser = isPortalCommunitySession(session);
   const isMobileMode = viewMode === "mobile";
   const controlBrand = getControlBrand(session);
-  const guildScopeDescription = getGuildScopeDescription(session);
+  const technicalGuildScopeDescription = getGuildScopeDescription(session);
+  const guildScopeDescription =
+    isPaladinUser || isCommunityUser
+      ? t("portal.communityDashboard", "Dashboard communautaire")
+      : technicalGuildScopeDescription;
   const portalAccess = useMemo(
     () => {
       const canUseSupportProject = isLeaderUser || supportPublicEnabled;
@@ -2729,8 +2742,11 @@ function PortalShell({ session, onLogout }) {
 function HomeView({ session, setActive }) {
   const { t } = usePortalLanguage();
   const displayName = session.watcherName || session.name || "Joueur";
+  const guildDisplayName = getSessionGuildDisplayName(session, {
+    emptyFallback: t("common.community", "Communauté"),
+  });
   const summaryCards = [
-    { label: t("home.guild", "Guilde"), value: session.guild || "Paladin", icon: Users },
+    { label: t("home.guild", "Guilde"), value: guildDisplayName || session.guild || "Paladin", icon: Users },
     { label: t("home.role", "Role"), value: session.role || "Joueur", icon: Shield },
     { label: t("home.profile", "Profil"), value: t("home.notValidated", "Non valide"), icon: CheckCircle2 },
   ];
@@ -3367,7 +3383,11 @@ function HeroBoxView({ session }) {
           <div className="hero-box-player-current">
             <span>{t("heroBox.viewedBox", "Box consultee")}</span>
             <strong>{selectedPlayer ? getMemberDisplayName(selectedPlayer) : t("common.none", "Aucun joueur")}</strong>
-            <small>{selectedPlayer ? getMemberGuildLabel(selectedPlayer) : t("heroBox.selectPlayer", "Selectionne un joueur")}</small>
+            <small>
+              {selectedPlayer
+                ? getMemberGuildDisplayLabel(selectedPlayer, { emptyFallback: t("common.noGuild", "Sans guilde") })
+                : t("heroBox.selectPlayer", "Selectionne un joueur")}
+            </small>
           </div>
 
           <label className="hero-box-player-search">
@@ -3397,7 +3417,7 @@ function HeroBoxView({ session }) {
                   }}
                 >
                   <strong>{getMemberDisplayName(member)}</strong>
-                  <span>{getMemberGuildLabel(member)}</span>
+                  <span>{getMemberGuildDisplayLabel(member, { emptyFallback: t("common.noGuild", "Sans guilde") })}</span>
                 </button>
               );
             })}
@@ -7263,6 +7283,9 @@ function LogsView({ session }) {
 
 function SettingsView({ session, onLogout }) {
   const { t } = usePortalLanguage();
+  const guildDisplayName = getSessionGuildDisplayName(session, {
+    emptyFallback: "",
+  });
 
   return (
     <section className="space-y-5">
@@ -7279,7 +7302,7 @@ function SettingsView({ session, onLogout }) {
             <div className="text-sm font-semibold uppercase tracking-[0.16em] text-zinc-500">{t("settings.connectedAccount", "Compte connecte")}</div>
             <div className="mt-2 text-lg font-semibold text-zinc-50">{session?.watcherName || session?.name || t("common.player", "Joueur")}</div>
             <div className="mt-1 text-sm text-zinc-500">
-              {session?.role || t("common.member", "Membre")} {session?.guildCode ? `- ${session.guildCode}` : ""}
+              {session?.role || t("common.member", "Membre")} {guildDisplayName ? `- ${guildDisplayName}` : ""}
             </div>
           </div>
 

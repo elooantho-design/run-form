@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -425,7 +426,10 @@ export default function DemonMonstersTab({ session }) {
                         >
                           <span className="block truncate text-sm font-semibold">{member.name}</span>
                           <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                            {member.guildCode || t("common.cluster", "Cluster")} {member.discordId ? `- ${member.discordId}` : ""}
+                            {getGuildDisplayName({
+                              guildCode: member.guildCode,
+                              emptyFallback: t("common.community", "Communauté"),
+                            })}
                           </span>
                         </button>
                       );
@@ -439,7 +443,12 @@ export default function DemonMonstersTab({ session }) {
                   <Shield className="h-4 w-4 text-red-200" />
                   {selectedMember?.name || t("common.noMember", "Aucun membre")}
                 </div>
-                <div className="mt-1 text-xs text-zinc-500">{selectedMember?.guildCode || t("common.cluster", "Cluster")}</div>
+                <div className="mt-1 text-xs text-zinc-500">
+                  {getGuildDisplayName({
+                    guildCode: selectedMember?.guildCode,
+                    emptyFallback: t("common.community", "Communauté"),
+                  })}
+                </div>
                 <p className="mt-2 leading-5">
                   {t("demon.levelHelp", "Clique sur le niveau au centre d'une carte pour renseigner ou corriger le niveau du monstre.")}
                 </p>

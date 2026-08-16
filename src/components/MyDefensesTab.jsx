@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { getGuildDisplayName } from "@/lib/guildDisplay";
 import {
   isPaladinGuildCode,
   isSameGuildSpace,
@@ -166,6 +167,10 @@ export default function MyDefensesTab({ session }) {
   const [championDisplayMap, setChampionDisplayMap] = useState(() => new Map());
 
   const guildCode = getSessionGuildCode(session);
+  const guildDisplayName = getGuildDisplayName({
+    guildCode,
+    emptyFallback: t("common.community", "Communauté"),
+  });
   const connectedMemberId = session?.memberId || session?.id || "";
 
   const selectedMemberBase = useMemo(() => {
@@ -572,7 +577,10 @@ export default function MyDefensesTab({ session }) {
                     {member.assignment || "Tour"} - {t("defenses.openEdit", "edition ouverte")}
                   </div>
                   <Badge className="mt-3 w-fit rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
-                    {member.guildCode || guildCode}
+                    {getGuildDisplayName({
+                      guildCode: member.guildCode || guildCode,
+                      emptyFallback: guildDisplayName,
+                    })}
                   </Badge>
                 </div>
 
@@ -617,7 +625,10 @@ export default function MyDefensesTab({ session }) {
                           >
                             <span className="block truncate text-sm font-semibold">{suggestion.name}</span>
                             <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                              {suggestion.guildCode || "Cluster"} {suggestion.discordId ? `- ${suggestion.discordId}` : ""}
+                              {getGuildDisplayName({
+                                guildCode: suggestion.guildCode,
+                                emptyFallback: t("common.community", "Communauté"),
+                              })}
                             </span>
                           </button>
                         );

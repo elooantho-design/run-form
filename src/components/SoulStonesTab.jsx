@@ -3,6 +3,7 @@ import { Crown, Gem, History, Minus, Plus, Search, Shield, Trophy } from "lucide
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -460,7 +461,10 @@ export default function SoulStonesTab({ session }) {
                         >
                           <span className="block truncate text-sm font-semibold">{member.name}</span>
                           <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                            {member.guildCode || t("common.cluster", "Cluster")} {member.discordId ? `- ${member.discordId}` : ""}
+                            {getGuildDisplayName({
+                              guildCode: member.guildCode,
+                              emptyFallback: t("common.community", "Communauté"),
+                            })}
                           </span>
                         </button>
                       );
@@ -479,7 +483,12 @@ export default function SoulStonesTab({ session }) {
                   <Shield className="h-4 w-4 text-zinc-100" />
                   {selectedMember?.name || t("common.noMember", "Aucun membre")}
                 </div>
-                <div className="mt-1 text-xs text-zinc-500">{selectedMember?.guildCode || t("common.cluster", "Cluster")}</div>
+                <div className="mt-1 text-xs text-zinc-500">
+                  {getGuildDisplayName({
+                    guildCode: selectedMember?.guildCode,
+                    emptyFallback: t("common.community", "Communauté"),
+                  })}
+                </div>
                 <p className="mt-2 leading-5">
                   {t("soul.buttonsHelp", "Les boutons + et - ajoutent une entree ou retirent la derniere entree du type choisi.")}
                 </p>

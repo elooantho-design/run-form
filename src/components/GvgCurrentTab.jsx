@@ -3,6 +3,7 @@ import { Ban, Pencil, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
+import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
 import {
   getGuildSpaceKey,
@@ -1328,7 +1329,7 @@ function renderDesktopSlot(slot, team) {
                       setSelectedGuild(guild);
                     }}
                   >
-                    {getGvgGuildLabel(guild)}
+                    {getGuildDisplayName({ guildCode: guild })}
                   </Button>
                 ))}
               </div>
@@ -1339,7 +1340,7 @@ function renderDesktopSlot(slot, team) {
                 <div>
                   <div className="text-sm text-zinc-400">{t("gvg.selectedGuild", "Guilde selectionnee")}</div>
                   <div className="text-2xl font-semibold text-zinc-100">
-                    {getGvgGuildLabel(selectedGuild)}
+                    {getGuildDisplayName({ guildCode: selectedGuild })}
                   </div>
                 </div>
 
