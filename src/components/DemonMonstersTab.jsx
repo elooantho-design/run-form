@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Search, Shield, Skull, Sparkles } from "lucide-react";
+import { ChevronDown, Search, Shield, Skull, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -716,24 +716,26 @@ export default function DemonMonstersTab({ session }) {
       </Dialog>
 
       <Dialog open={ownerSearchOpen} onOpenChange={setOwnerSearchOpen}>
-        <DialogContent className="max-h-[92vh] w-[calc(100vw-2rem)] max-w-[820px] overflow-hidden rounded-3xl border-zinc-800 bg-zinc-950 p-0 text-zinc-100">
-          <DialogHeader className="border-b border-zinc-800 px-5 py-4">
-            <DialogTitle className="flex min-w-0 items-center gap-3 pr-8 text-xl">
+        <DialogContent className="!flex max-h-[min(88vh,760px)] w-[calc(100vw-2rem)] !max-w-[880px] flex-col gap-0 overflow-hidden rounded-3xl border-zinc-800 bg-zinc-950 p-0 text-zinc-100 sm:w-[calc(100vw-3rem)]">
+          <DialogHeader className="shrink-0 border-b border-zinc-800 px-5 py-5 sm:px-7">
+            <DialogTitle className="flex min-w-0 items-center gap-4 pr-10 text-left">
               {selectedOwnerSearchMonster ? (
                 <img
                   src={selectedOwnerSearchMonster.image_url || getDemonicMonsterImageUrl(selectedOwnerSearchMonster.slug)}
                   alt=""
-                  className="h-12 w-12 shrink-0 rounded-xl border border-zinc-800 object-cover"
+                  className="h-14 w-14 shrink-0 rounded-2xl border border-zinc-800 bg-black object-cover sm:h-16 sm:w-16"
                 />
               ) : (
-                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-red-400/25 bg-red-500/10">
-                  <Search className="h-5 w-5 text-red-200" />
+                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-red-400/25 bg-red-500/10 sm:h-16 sm:w-16">
+                  <Search className="h-6 w-6 text-red-200" />
                 </span>
               )}
               <span className="min-w-0">
-                <span className="block truncate">{ownerSearchTitle}</span>
+                <span className="block text-lg font-semibold leading-tight text-zinc-50 sm:text-xl md:text-2xl">
+                  {ownerSearchTitle}
+                </span>
                 {selectedOwnerSearchMonster ? (
-                  <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs ${selectedOwnerSearchTone.badge}`}>
+                  <span className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${selectedOwnerSearchTone.badge}`}>
                     {t(`demon.rarity.${selectedOwnerSearchMonster.rarity}`, selectedOwnerSearchTone.label)}
                   </span>
                 ) : null}
@@ -741,60 +743,65 @@ export default function DemonMonstersTab({ session }) {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="max-h-[calc(92vh-74px)] space-y-5 overflow-y-auto p-5">
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_180px_170px] md:items-end">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-owner-guild">
-                  {t("demon.ownerSearchGuild", "Guilde")}
-                </label>
-                <select
-                  id="demon-owner-guild"
-                  value={ownerSearchGuildCode}
-                  onChange={(event) => {
-                    setOwnerSearchGuildCode(event.target.value);
-                    setOwnerSearchResults([]);
-                    setOwnerSearchSearched(false);
-                  }}
-                  className="h-11 w-full rounded-xl border border-zinc-800 bg-black px-3 text-sm text-zinc-100 outline-none ring-red-400/30 transition focus:border-red-400 focus:ring-2"
-                >
-                  {accessibleGuildOptions.map((guild) => (
-                    <option key={guild.guildCode} value={guild.guildCode} className="bg-black text-zinc-100">
-                      {guild.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-hidden p-5 sm:p-6">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/45 p-4 sm:p-5">
+              <div className="grid gap-4 lg:grid-cols-[minmax(260px,1.35fr)_minmax(180px,0.75fr)_minmax(160px,auto)] lg:items-end">
+                <div className="min-w-0 space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-owner-guild">
+                    {t("demon.ownerSearchGuild", "Guilde")}
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="demon-owner-guild"
+                      value={ownerSearchGuildCode}
+                      onChange={(event) => {
+                        setOwnerSearchGuildCode(event.target.value);
+                        setOwnerSearchResults([]);
+                        setOwnerSearchSearched(false);
+                      }}
+                      className="h-12 w-full appearance-none rounded-xl border border-zinc-700 bg-black px-4 pr-10 text-sm font-medium text-zinc-100 outline-none ring-red-400/30 transition focus:border-red-400 focus:ring-2"
+                    >
+                      {accessibleGuildOptions.map((guild) => (
+                        <option key={guild.guildCode} value={guild.guildCode} className="bg-black text-zinc-100">
+                          {guild.label}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                  </div>
+                </div>
 
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-owner-min-level">
-                  {t("demon.ownerSearchMinimumLevel", "Niveau minimum")}
-                </label>
-                <Input
-                  id="demon-owner-min-level"
-                  type="number"
-                  min="1"
-                  max="20"
-                  value={ownerSearchMinimumLevel}
-                  onChange={(event) => {
-                    setOwnerSearchMinimumLevel(event.target.value);
-                    setOwnerSearchResults([]);
-                    setOwnerSearchSearched(false);
-                  }}
-                  placeholder={t("demon.ownerSearchNoMinimum", "Optionnel")}
-                  className="h-11 rounded-xl border-zinc-800 bg-black text-zinc-100"
-                />
-              </div>
+                <div className="min-w-0 space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500" htmlFor="demon-owner-min-level">
+                    {t("demon.ownerSearchMinimumLevel", "Niveau minimum")}
+                  </label>
+                  <Input
+                    id="demon-owner-min-level"
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={ownerSearchMinimumLevel}
+                    onChange={(event) => {
+                      setOwnerSearchMinimumLevel(event.target.value);
+                      setOwnerSearchResults([]);
+                      setOwnerSearchSearched(false);
+                    }}
+                    placeholder={t("demon.ownerSearchNoMinimum", "Optionnel")}
+                    className="h-12 rounded-xl border-zinc-700 bg-black text-zinc-100 placeholder:text-zinc-600"
+                  />
+                </div>
 
-              <div>
-                <Button
-                  type="button"
-                  className="h-11 w-full rounded-xl"
-                  disabled={ownerSearchLoading || !ownerSearchGuildCode || !selectedOwnerSearchMonster?.id}
-                  onClick={runOwnerSearch}
-                >
-                  <Search className="mr-2 h-4 w-4" />
-                  {ownerSearchLoading ? t("demon.ownerSearchLoading", "Recherche...") : t("common.search", "Rechercher")}
-                </Button>
+                <div className="lg:self-end">
+                  <Button
+                    type="button"
+                    className="h-12 w-full min-w-[150px] rounded-xl px-5"
+                    disabled={ownerSearchLoading || !ownerSearchGuildCode || !selectedOwnerSearchMonster?.id}
+                    onClick={runOwnerSearch}
+                  >
+                    <Search className="mr-2 h-4 w-4" />
+                    {ownerSearchLoading ? t("demon.ownerSearchLoading", "Recherche...") : t("common.search", "Rechercher")}
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -804,9 +811,9 @@ export default function DemonMonstersTab({ session }) {
               </div>
             ) : null}
 
-            <div className="rounded-2xl border border-zinc-800 bg-black/35">
-              <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
-                <div className="font-semibold text-zinc-50">{t("demon.ownerSearchResults", "Resultats")}</div>
+            <div className="flex min-h-[230px] flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-black/35">
+              <div className="flex shrink-0 flex-col gap-1 border-b border-zinc-800 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                <div className="text-base font-semibold text-zinc-50">{t("demon.ownerSearchResults", "Resultats")}</div>
                 <div className="text-sm text-zinc-500">
                   {ownerSearchSearched
                     ? t("demon.ownerSearchFoundCount", "{count} joueur(s) trouve(s)").replace("{count}", String(ownerSearchResults.length))
@@ -814,13 +821,13 @@ export default function DemonMonstersTab({ session }) {
                 </div>
               </div>
 
-              <div className="max-h-80 overflow-y-auto p-2">
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
                 {ownerSearchLoading ? (
-                  <div className="px-3 py-5 text-sm text-zinc-400">{t("demon.ownerSearchLoading", "Recherche...")}</div>
+                  <div className="px-3 py-8 text-sm text-zinc-400">{t("demon.ownerSearchLoading", "Recherche...")}</div>
                 ) : ownerSearchSearched && ownerSearchResults.length === 0 ? (
-                  <div className="px-3 py-5 text-sm text-zinc-500">{t("demon.ownerSearchNoResults", "Aucun joueur trouve.")}</div>
+                  <div className="px-3 py-8 text-sm text-zinc-500">{t("demon.ownerSearchNoResults", "Aucun joueur trouve.")}</div>
                 ) : !ownerSearchSearched ? (
-                  <div className="px-3 py-5 text-sm text-zinc-500">
+                  <div className="px-3 py-8 text-sm text-zinc-500">
                     {t("demon.ownerSearchInitial", "Selectionne une guilde puis lance la recherche.")}
                   </div>
                 ) : (
@@ -829,7 +836,7 @@ export default function DemonMonstersTab({ session }) {
                       key={`${result.memberId}:${result.monsterId}`}
                       type="button"
                       onClick={() => openOwnerSearchResult(result)}
-                      className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-left transition hover:bg-zinc-900"
+                      className="flex w-full items-center justify-between gap-4 rounded-xl px-4 py-3.5 text-left transition hover:bg-zinc-900"
                     >
                       <span className="min-w-0">
                         <span className="block truncate font-semibold text-zinc-100">{result.watcherName}</span>
