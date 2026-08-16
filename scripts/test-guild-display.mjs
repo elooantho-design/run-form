@@ -5,6 +5,8 @@ import {
 } from "../src/lib/guildDisplay.js";
 
 assert.equal(getGuildDisplayName({ guildCode: "G1", organizationKey: "paladin" }), "Légende");
+assert.equal(getGuildDisplayName({ guildCode: "G5", organizationKey: "paladin" }), "Senatores");
+assert.equal(getGuildDisplayName({ guildCode: "G6", organizationKey: "paladin" }), "Legacy");
 assert.equal(getGuildDisplayName({ guildCode: "G7", organizationKey: "paladin" }), "Magistratus");
 assert.equal(getGuildDisplayName({ guildCode: "MAD G1", organizationKey: "mad" }), "MAD G1");
 assert.equal(getGuildDisplayName({ guildCode: "G1", organizationKey: "mad" }), "G1");

@@ -9,8 +9,8 @@ export const PALADIN_GUILD_DISPLAY_NAMES = {
   G2: "Imperatores",
   G3: "Loyalty",
   G4: "Collegium",
-  G5: "Legacy",
-  G6: "Senatores",
+  G5: "Senatores",
+  G6: "Legacy",
   G7: "Magistratus",
 };
 
