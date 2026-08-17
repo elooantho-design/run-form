@@ -44,6 +44,7 @@ const DISCORD_STATUS_VERIFY = "\u26a0\uFE0F";
 const DISCORD_STATUS_DONE = "\u2705";
 const DEFENSE_STATUSES = new Set([TODO_STATUS, VERIFY_STATUS, VALID_STATUS]);
 const COMMUNITY_ROLES = new Set(["community_member", "content_creator"]);
+const EDITABLE_MEMBER_ROLES = new Set(["member", "admin", "leader", "community_member", "content_creator"]);
 const COMMUNITY_STATUSES = new Set(["active", "inactive"]);
 const COMMUNITY_REQUEST_STATUSES = new Set(["pending", "accepted", "refused"]);
 const ROSTER_STATUSES = new Set(["active", "non_roster", "inactive"]);
@@ -145,6 +146,11 @@ function isLeaderRole(role) {
 
 function isCommunityRole(role) {
   return COMMUNITY_ROLES.has(normalizeText(role));
+}
+
+function normalizeEditableMemberRole(role) {
+  const normalized = normalizeText(role);
+  return normalized === "administrateur" ? "admin" : normalized;
 }
 
 function normalizeCommunityRole(role) {
@@ -327,12 +333,20 @@ async function initializeMemberData(memberId, memberName) {
   return warnings;
 }
 
-function isCommunityAccount(member) {
+export function isCommunityAccount(member) {
+  const hasGuild = Boolean(normalizeGuildCode(member?.guild_code));
+  const roleIsCommunity = isCommunityRole(member?.role);
+  if (hasGuild && !roleIsCommunity) return false;
   return (
     member?.community_access_type === "community" ||
-    isCommunityRole(member?.role) ||
-    (!member?.guild_code && isCommunityRole(member?.role))
+    roleIsCommunity ||
+    (!hasGuild && roleIsCommunity)
   );
+}
+
+export function isPrivilegedDashboardRole(role) {
+  const normalized = normalizeText(role);
+  return normalized === "leader" || normalized === "admin" || normalized === "administrateur";
 }
 
 function getGuildSpaceKeyLocal(value) {
@@ -724,15 +738,76 @@ async function deleteRowsIfPresent(table, column, value) {
   }
 }
 
-function canAdminManageTarget(admin, target) {
+export function canAdminManageTarget(admin, target) {
   if (isLeaderRole(admin?.role)) return true;
+  if (!isAdminRole(admin?.role)) return false;
+  if (isPrivilegedDashboardRole(target?.role)) return false;
 
   const adminGuild = normalizeGuildCode(admin?.guild_code);
   const targetGuild = normalizeGuildCode(target?.guild_code);
-  if (!adminGuild || !targetGuild) return false;
+  if (!adminGuild) return false;
+
+  if (!targetGuild) {
+    return isCommunityAccount(target) && isPaladinGuildCode(adminGuild);
+  }
 
   if (isPaladinGuildCode(adminGuild) && isPaladinGuildCode(targetGuild)) return true;
   return adminGuild === targetGuild;
+}
+
+function canAdminSetTargetRole(admin, target, nextRole) {
+  if (isLeaderRole(admin?.role)) return true;
+  if (!isAdminRole(admin?.role)) return false;
+  return !isPrivilegedDashboardRole(target?.role) && !isPrivilegedDashboardRole(nextRole);
+}
+
+export function applyMemberEditUpdatePolicy({ admin, target, patch }) {
+  const nextPatch = { ...(patch || {}) };
+
+  if (!canAdminManageTarget(admin, target)) {
+    const error = new Error("Ce joueur n'est pas dans ton perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (nextPatch.role !== undefined) {
+    const nextRole = normalizeEditableMemberRole(nextPatch.role);
+    if (!EDITABLE_MEMBER_ROLES.has(nextRole)) {
+      const error = new Error("Role invalide.");
+      error.statusCode = 400;
+      throw error;
+    }
+    nextPatch.role = nextRole;
+
+    if (!canAdminSetTargetRole(admin, target, nextRole)) {
+      const error = new Error("Seul le leader peut modifier les roles privilegies.");
+      error.statusCode = 403;
+      throw error;
+    }
+  }
+
+  if (nextPatch.guild_code && !canViewGuildCode(admin, nextPatch.guild_code, { leaderSeesAll: true })) {
+    const error = new Error("Guilde cible hors perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const nextGuildCode = nextPatch.guild_code !== undefined ? nextPatch.guild_code : target?.guild_code;
+  const nextRole = nextPatch.role !== undefined ? nextPatch.role : target?.role;
+  if (nextGuildCode && !isCommunityRole(nextRole)) {
+    const hadCommunityResidue = target?.community_access_type === "community" || isCommunityRole(target?.role);
+    nextPatch.community_access_type = null;
+    nextPatch.community_status = null;
+
+    if (hadCommunityResidue) {
+      nextPatch.assignment = "Tour";
+      nextPatch.status = TODO_STATUS;
+      if (target?.defense_1 === "\u2014") nextPatch.defense_1 = EMPTY_DEFENSE_SLOT;
+      if (target?.defense_2 === "\u2014") nextPatch.defense_2 = EMPTY_DEFENSE_SLOT;
+    }
+  }
+
+  return nextPatch;
 }
 
 function getDiscordBotToken() {
@@ -2138,7 +2213,7 @@ async function handleGuildManagementLoad(body, res) {
 
 async function handleGuildMemberUpdate(body, res) {
   const memberId = cleanText(body.memberId || body.member_id);
-  const patch = normalizeMemberPatch(body.patch || body);
+  let patch = normalizeMemberPatch(body.patch || body);
   const adminCheck = await requireAdminById(res._portalReq);
 
   if (adminCheck.error) {
@@ -2162,13 +2237,10 @@ async function handleGuildMemberUpdate(body, res) {
     return;
   }
 
-  if (patch.role && !isLeaderRole(adminCheck.admin.role)) {
-    sendJson(res, 403, { error: "Seul le leader peut modifier les roles." });
-    return;
-  }
-
-  if (patch.guild_code && !canViewGuildCode(adminCheck.admin, patch.guild_code, { leaderSeesAll: true })) {
-    sendJson(res, 403, { error: "Guilde cible hors perimetre." });
+  try {
+    patch = applyMemberEditUpdatePolicy({ admin: adminCheck.admin, target, patch });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Modification refusee." });
     return;
   }
 
@@ -2358,13 +2430,10 @@ async function handleMemberEditUpdate(body, res) {
       return;
     }
 
-    if (patch.role && !isLeaderRole(adminCheck.admin.role)) {
-      sendJson(res, 403, { error: "Seul le leader peut modifier les roles." });
-      return;
-    }
-
-    if (patch.guild_code && !canViewGuildCode(adminCheck.admin, patch.guild_code, { leaderSeesAll: true })) {
-      sendJson(res, 403, { error: "Guilde cible hors perimetre." });
+    try {
+      patch = applyMemberEditUpdatePolicy({ admin: adminCheck.admin, target, patch });
+    } catch (error) {
+      sendJson(res, error?.statusCode || 403, { error: error?.message || "Modification refusee." });
       return;
     }
 

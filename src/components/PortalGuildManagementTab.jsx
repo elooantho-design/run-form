@@ -22,6 +22,8 @@ const EMPTY_DEFENSE = "--";
 const GUILD_STATUS_TODO = "\u00c0 faire";
 const GUILD_STATUS_VERIFY = "\u00c0 v\u00e9rifier";
 const GUILD_STATUS_VALID = "Valid\u00e9";
+const LEADER_MEMBER_ROLE_OPTIONS = ["member", "admin", "leader", "community_member", "content_creator"];
+const ADMIN_MEMBER_ROLE_OPTIONS = ["member", "community_member", "content_creator"];
 
 function getEmptyHeroSearchCriteria() {
   return [{ championId: "", heroQuery: "", minAwakening: 0 }];
@@ -83,6 +85,11 @@ function normalizeRoleValue(role) {
     .toLowerCase();
 }
 
+function isPrivilegedMemberRole(role) {
+  const normalized = normalizeRoleValue(role);
+  return normalized === "admin" || normalized === "administrateur" || normalized === "leader";
+}
+
 function normalizeHeroSearchText(value) {
   return String(value || "")
     .trim()
@@ -142,6 +149,7 @@ function createMemberEditDraft(member) {
 function MemberEditModal({
   t,
   isLeader,
+  isAdmin,
   profile,
   draft,
   results,
@@ -173,6 +181,9 @@ function MemberEditModal({
   const member = profile?.member || null;
   const primary = profile?.primary || null;
   const secondaryCount = linkedAccounts.filter((linked) => String(linked.primaryMemberId) === String(member?.id)).length;
+  const canEditRole = isLeader || (isAdmin && member && !isPrivilegedMemberRole(member.role));
+  const baseRoleOptions = isLeader ? LEADER_MEMBER_ROLE_OPTIONS : ADMIN_MEMBER_ROLE_OPTIONS;
+  const roleOptions = baseRoleOptions.includes(draft.role) ? baseRoleOptions : [draft.role, ...baseRoleOptions];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -320,11 +331,11 @@ function MemberEditModal({
                     <span className="text-sm text-zinc-400">Role</span>
                     <select
                       value={draft.role}
-                      disabled={!isLeader}
+                      disabled={!canEditRole}
                       onChange={(event) => setDraft((previous) => ({ ...previous, role: event.target.value }))}
                       className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition focus:border-violet-400/60 focus:ring-2 focus:ring-violet-400/20 disabled:cursor-not-allowed disabled:opacity-60 [&>option]:bg-zinc-950 [&>option]:text-zinc-100"
                     >
-                      {["member", "admin", "leader", "community_member", "content_creator"].map((role) => (
+                      {roleOptions.map((role) => (
                         <option key={role} value={role}>
                           {role}
                         </option>
@@ -1889,6 +1900,7 @@ export default function PortalGuildManagementTab({ session }) {
         <MemberEditModal
           t={t}
           isLeader={isLeader}
+          isAdmin={isAdmin}
           profile={memberEditProfile}
           draft={memberEditDraft}
           results={memberEditResults}

@@ -26,7 +26,10 @@ function isActorAdmin(actor) {
 }
 
 export function isCommunityMemberDataScope(member) {
-  return member?.community_access_type === "community" || isPortalCommunityRole(member?.role);
+  const hasGuild = Boolean(normalizeGuildCode(member?.guild_code));
+  const roleIsCommunity = isPortalCommunityRole(member?.role);
+  if (hasGuild && !roleIsCommunity) return false;
+  return member?.community_access_type === "community" || roleIsCommunity;
 }
 
 export function getMemberDataGuildCode(member) {
