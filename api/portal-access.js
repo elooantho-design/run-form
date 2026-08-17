@@ -46,6 +46,7 @@ const DEFENSE_STATUSES = new Set([TODO_STATUS, VERIFY_STATUS, VALID_STATUS]);
 const COMMUNITY_ROLES = new Set(["community_member", "content_creator"]);
 const EDITABLE_MEMBER_ROLES = new Set(["member", "admin", "leader", "community_member", "content_creator"]);
 const COMMUNITY_STATUSES = new Set(["active", "inactive"]);
+const NON_COMMUNITY_STATUS = "inactive";
 const COMMUNITY_REQUEST_STATUSES = new Set(["pending", "accepted", "refused"]);
 const ROSTER_STATUSES = new Set(["active", "non_roster", "inactive"]);
 const EMPTY_DEFENSE_SLOT = "--";
@@ -841,7 +842,7 @@ export function applyMemberEditUpdatePolicy({ admin, target, patch, editableScop
   if (nextGuildCode && !isCommunityRole(nextRole)) {
     const hadCommunityResidue = target?.community_access_type === "community" || isCommunityRole(target?.role);
     nextPatch.community_access_type = null;
-    nextPatch.community_status = null;
+    nextPatch.community_status = NON_COMMUNITY_STATUS;
 
     if (hadCommunityResidue) {
       nextPatch.assignment = "Tour";
@@ -3062,7 +3063,7 @@ async function createOrAttachGuildMember({ actor, name, discordId, guildCode, ro
         guild_code: cleanGuildCode,
         role: cleanRole,
         community_access_type: null,
-        community_status: null,
+        community_status: NON_COMMUNITY_STATUS,
         ...(cleanForumUrl ? { personal_forum_post_url: cleanForumUrl } : {}),
       })
       .eq("id", existingMember.id)

@@ -168,7 +168,7 @@ const cleanupPatch = applyMemberEditUpdatePolicy({
 });
 
 assert.equal(cleanupPatch.community_access_type, null);
-assert.equal(cleanupPatch.community_status, null);
+assert.equal(cleanupPatch.community_status, "inactive");
 assert.equal(cleanupPatch.assignment, "Tour");
 assert.equal(cleanupPatch.status, "\u00c0 faire");
 assert.equal(cleanupPatch.defense_1, "--");
