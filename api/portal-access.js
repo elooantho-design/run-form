@@ -52,6 +52,7 @@ const EMPTY_DEFENSE_SLOT = "--";
 const DEFAULT_MEMBER_PASSWORD = "motdepassemembre";
 const HERO_SEARCH_PAGE_SIZE = 1000;
 const HERO_SEARCH_MAX_REQUIREMENTS = 10;
+const PALADIN_ORGANIZATION_KEY = "paladin";
 const SAFE_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required";
 const EDIT_MEMBER_SELECT =
@@ -494,11 +495,11 @@ async function loadEditableMembersByIds(memberIds) {
   return data || [];
 }
 
-async function loadEditableMemberProfile(memberId, admin) {
+async function loadEditableMemberProfile(memberId, admin, scope = {}) {
   const member = await loadEditableMemberById(memberId);
   if (!member) return null;
 
-  if (!canAdminManageTarget(admin, member)) {
+  if (!canManageEditableGuildMember(admin, member, scope)) {
     const error = new Error("Ce joueur n'est pas dans ton perimetre.");
     error.statusCode = 403;
     throw error;
@@ -533,10 +534,10 @@ async function loadEditableMemberProfile(memberId, admin) {
   secondaries = secondaryRows || [];
   linkedAccounts = [primary || member, ...secondaries]
     .filter(Boolean)
-    .filter((row) => canAdminManageTarget(admin, row))
+    .filter((row) => canManageEditableGuildMember(admin, row, scope))
     .map(serializeEditableMemberSuggestion);
 
-  const visiblePrimary = primary && canAdminManageTarget(admin, primary) ? primary : null;
+  const visiblePrimary = primary && canManageEditableGuildMember(admin, primary, scope) ? primary : null;
 
   return {
     member: serializeEditableMember(member),
@@ -755,16 +756,55 @@ export function canAdminManageTarget(admin, target) {
   return adminGuild === targetGuild;
 }
 
+export function isPaladinGlobalGuildAdmin(actor, scope = {}) {
+  if (!isAdminRole(actor?.role) || isLeaderRole(actor?.role)) return false;
+  const organizationKey = normalizeText(scope.organizationKey || scope.organization_key);
+  if (organizationKey) return organizationKey === PALADIN_ORGANIZATION_KEY;
+  return scope.paladinGlobalAdmin === true || scope.paladin_global_admin === true;
+}
+
+export function canManageEditableGuildMember(admin, target, scope = {}) {
+  if (isLeaderRole(admin?.role)) return true;
+  if (!isAdminRole(admin?.role)) return false;
+  if (isPrivilegedDashboardRole(target?.role)) return false;
+  if (isPaladinGlobalGuildAdmin(admin, scope)) return true;
+  return canAdminManageTarget(admin, target);
+}
+
 function canAdminSetTargetRole(admin, target, nextRole) {
   if (isLeaderRole(admin?.role)) return true;
   if (!isAdminRole(admin?.role)) return false;
   return !isPrivilegedDashboardRole(target?.role) && !isPrivilegedDashboardRole(nextRole);
 }
 
-export function applyMemberEditUpdatePolicy({ admin, target, patch }) {
-  const nextPatch = { ...(patch || {}) };
+function canSetEditableGuildCode(admin, guildCode, scope = {}) {
+  if (!guildCode) return true;
+  if (isLeaderRole(admin?.role)) return true;
+  if (isPaladinGlobalGuildAdmin(admin, scope)) {
+    const requestedGuildCode = normalizeGuildCode(guildCode);
+    const allowedGuildCodes = Array.isArray(scope.allowedGuildCodes) ? scope.allowedGuildCodes : [];
+    return allowedGuildCodes.some((allowedGuildCode) => normalizeGuildCode(allowedGuildCode) === requestedGuildCode);
+  }
+  return canViewGuildCode(admin, guildCode, { leaderSeesAll: true });
+}
 
-  if (!canAdminManageTarget(admin, target)) {
+function getCanonicalEditableGuildCode(guildCode, scope = {}) {
+  if (!guildCode) return guildCode;
+  const requestedGuildCode = normalizeGuildCode(guildCode);
+  const allowedGuildCodes = Array.isArray(scope.allowedGuildCodes) ? scope.allowedGuildCodes : [];
+  const canonicalGuildCode = allowedGuildCodes.find(
+    (allowedGuildCode) => normalizeGuildCode(allowedGuildCode) === requestedGuildCode,
+  );
+  return canonicalGuildCode || guildCode;
+}
+
+export function applyMemberEditUpdatePolicy({ admin, target, patch, editableScope = false, scope = {} }) {
+  const nextPatch = { ...(patch || {}) };
+  const canManageTarget = editableScope
+    ? canManageEditableGuildMember(admin, target, scope)
+    : canAdminManageTarget(admin, target);
+
+  if (!canManageTarget) {
     const error = new Error("Ce joueur n'est pas dans ton perimetre.");
     error.statusCode = 403;
     throw error;
@@ -786,7 +826,11 @@ export function applyMemberEditUpdatePolicy({ admin, target, patch }) {
     }
   }
 
-  if (nextPatch.guild_code && !canViewGuildCode(admin, nextPatch.guild_code, { leaderSeesAll: true })) {
+  const guildCodeAllowed = editableScope
+    ? canSetEditableGuildCode(admin, nextPatch.guild_code, scope)
+    : !nextPatch.guild_code || canViewGuildCode(admin, nextPatch.guild_code, { leaderSeesAll: true });
+
+  if (!guildCodeAllowed) {
     const error = new Error("Guilde cible hors perimetre.");
     error.statusCode = 403;
     throw error;
@@ -808,6 +852,65 @@ export function applyMemberEditUpdatePolicy({ admin, target, patch }) {
   }
 
   return nextPatch;
+}
+
+async function resolveGuildManagementActorScope(actor) {
+  const actorGuildCode = normalizeGuildCode(actor?.guild_code);
+  const emptyScope = { organizationId: "", organizationKey: "", paladinGlobalAdmin: false, allowedGuildCodes: [] };
+  if (!actorGuildCode || isCommunityAccount(actor)) return emptyScope;
+
+  const { data: guild, error: guildError } = await supabase
+    .from("portal_guilds")
+    .select("id, organization_id, guild_code, is_active")
+    .eq("guild_code", actorGuildCode)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (guildError) {
+    const error = new Error(guildError.message || "Resolution organisation impossible.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  if (!guild?.organization_id) return emptyScope;
+
+  const { data: organization, error: organizationError } = await supabase
+    .from("portal_organizations")
+    .select("id, organization_key, is_active")
+    .eq("id", guild.organization_id)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (organizationError) {
+    const error = new Error(organizationError.message || "Resolution organisation impossible.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const organizationKey = organization?.organization_key || "";
+  const paladinGlobalAdmin = isPaladinGlobalGuildAdmin(actor, { organizationKey });
+  let guildCodesQuery = supabase
+    .from("portal_guilds")
+    .select("guild_code, organization_id, is_active")
+    .eq("is_active", true)
+    .order("guild_code", { ascending: true });
+  if (!paladinGlobalAdmin) {
+    guildCodesQuery = guildCodesQuery.eq("organization_id", organization?.id || guild.organization_id);
+  }
+
+  const { data: guildCodeRows, error: guildCodesError } = await guildCodesQuery;
+  if (guildCodesError) {
+    const error = new Error(guildCodesError.message || "Chargement guildes autorisees impossible.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return {
+    organizationId: organization?.id || guild.organization_id,
+    organizationKey,
+    paladinGlobalAdmin,
+    allowedGuildCodes: (guildCodeRows || []).map((row) => row.guild_code).filter(Boolean),
+  };
 }
 
 function getDiscordBotToken() {
@@ -2341,6 +2444,14 @@ async function handleMemberEditSearch(body, res) {
     return;
   }
 
+  let actorScope;
+  try {
+    actorScope = await resolveGuildManagementActorScope(adminCheck.admin);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Resolution perimetre impossible." });
+    return;
+  }
+
   const { data, error } = await supabase
     .from("guild_members")
     .select(EDIT_MEMBER_SELECT)
@@ -2358,7 +2469,7 @@ async function handleMemberEditSearch(body, res) {
   }
 
   const results = (data || [])
-    .filter((member) => canAdminManageTarget(adminCheck.admin, member))
+    .filter((member) => canManageEditableGuildMember(adminCheck.admin, member, actorScope))
     .slice(0, MAX_SUGGESTIONS)
     .map(serializeEditableMemberSuggestion);
 
@@ -2380,7 +2491,8 @@ async function handleMemberEditLoad(body, res) {
   }
 
   try {
-    const profile = await loadEditableMemberProfile(memberId, adminCheck.admin);
+    const actorScope = await resolveGuildManagementActorScope(adminCheck.admin);
+    const profile = await loadEditableMemberProfile(memberId, adminCheck.admin, actorScope);
     if (!profile) {
       sendJson(res, 404, { error: "Joueur introuvable." });
       return;
@@ -2419,19 +2531,30 @@ async function handleMemberEditUpdate(body, res) {
   }
 
   try {
+    const actorScope = await resolveGuildManagementActorScope(adminCheck.admin);
+    if (patch.guild_code) {
+      patch.guild_code = getCanonicalEditableGuildCode(patch.guild_code, actorScope);
+    }
+
     const target = await loadEditableMemberById(memberId);
     if (!target) {
       sendJson(res, 404, { error: "Joueur introuvable." });
       return;
     }
 
-    if (!canAdminManageTarget(adminCheck.admin, target)) {
+    if (!canManageEditableGuildMember(adminCheck.admin, target, actorScope)) {
       sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
       return;
     }
 
     try {
-      patch = applyMemberEditUpdatePolicy({ admin: adminCheck.admin, target, patch });
+      patch = applyMemberEditUpdatePolicy({
+        admin: adminCheck.admin,
+        target,
+        patch,
+        editableScope: true,
+        scope: actorScope,
+      });
     } catch (error) {
       sendJson(res, error?.statusCode || 403, { error: error?.message || "Modification refusee." });
       return;
@@ -2471,7 +2594,7 @@ async function handleMemberEditUpdate(body, res) {
       }
 
       const outOfScopeSecondary = (secondaries || []).find(
-        (secondary) => !canAdminManageTarget(adminCheck.admin, secondary),
+        (secondary) => !canManageEditableGuildMember(adminCheck.admin, secondary, actorScope),
       );
       if (outOfScopeSecondary) {
         sendJson(res, 403, {
@@ -2522,7 +2645,7 @@ async function handleMemberEditUpdate(body, res) {
       metadata: { fields: Object.keys(patch), guildCode: updated.guild_code || "" },
     });
 
-    const profile = await loadEditableMemberProfile(updated.id, adminCheck.admin);
+    const profile = await loadEditableMemberProfile(updated.id, adminCheck.admin, actorScope);
     sendJson(res, 200, { profile });
   } catch (error) {
     sendJson(res, error?.statusCode || 500, { error: error?.message || "Mise a jour fiche joueur impossible." });
@@ -2563,6 +2686,7 @@ async function handleMemberLinkSecondary(body, res) {
   }
 
   try {
+    const actorScope = await resolveGuildManagementActorScope(adminCheck.admin);
     const [primary, secondary] = await Promise.all([
       loadEditableMemberById(primaryMemberId),
       loadEditableMemberById(secondaryMemberId),
@@ -2573,7 +2697,10 @@ async function handleMemberLinkSecondary(body, res) {
       return;
     }
 
-    if (!canAdminManageTarget(adminCheck.admin, primary) || !canAdminManageTarget(adminCheck.admin, secondary)) {
+    if (
+      !canManageEditableGuildMember(adminCheck.admin, primary, actorScope) ||
+      !canManageEditableGuildMember(adminCheck.admin, secondary, actorScope)
+    ) {
       sendJson(res, 403, { error: "Tu dois avoir le droit de gerer les deux comptes pour les lier." });
       return;
     }
@@ -2610,7 +2737,7 @@ async function handleMemberLinkSecondary(body, res) {
       metadata: { primaryMemberId: primary.id, secondaryMemberId: secondary.id },
     });
 
-    const profile = await loadEditableMemberProfile(primary.id, adminCheck.admin);
+    const profile = await loadEditableMemberProfile(primary.id, adminCheck.admin, actorScope);
     sendJson(res, 200, { profile });
   } catch (error) {
     sendJson(res, error?.statusCode || 500, { error: error?.message || "Lien compte secondaire impossible." });
@@ -2632,13 +2759,14 @@ async function handleMemberUnlinkSecondary(body, res) {
   }
 
   try {
+    const actorScope = await resolveGuildManagementActorScope(adminCheck.admin);
     const member = await loadEditableMemberById(memberId);
     if (!member) {
       sendJson(res, 404, { error: "Compte introuvable." });
       return;
     }
 
-    if (!canAdminManageTarget(adminCheck.admin, member)) {
+    if (!canManageEditableGuildMember(adminCheck.admin, member, actorScope)) {
       sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
       return;
     }
@@ -2673,7 +2801,7 @@ async function handleMemberUnlinkSecondary(body, res) {
       metadata: { previousPrimaryMemberId: previousPrimaryId },
     });
 
-    const profile = await loadEditableMemberProfile(updated?.id || member.id, adminCheck.admin);
+    const profile = await loadEditableMemberProfile(updated?.id || member.id, adminCheck.admin, actorScope);
     sendJson(res, 200, { profile });
   } catch (error) {
     sendJson(res, error?.statusCode || 500, { error: error?.message || "Deliaison impossible." });
