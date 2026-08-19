@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionDisplayName, getChampionEnglishName } from "@/lib/championDisplay";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
+import { formatPbAverage, formatPbInputValue, normalizePbRawInput, normalizeStoredPbRaw } from "@/lib/personalBestValues";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
@@ -49,50 +50,6 @@ function getSessionGuildCode(session) {
 
 function getSessionRole(session) {
   return normalizeText(session?.role || "");
-}
-
-function normalizeStoredPbRaw(value) {
-  let number = Number(value || 0);
-
-  if (!Number.isFinite(number) || number <= 0) return 0;
-
-  while (number >= 1000) {
-    number /= 1000;
-  }
-
-  return number;
-}
-
-function truncatePbValue(value) {
-  const number = normalizeStoredPbRaw(value);
-
-  if (!number) return 0;
-
-  return Math.trunc((number + Number.EPSILON) * 1000) / 1000;
-}
-
-function formatPbAverage(value) {
-  const truncated = truncatePbValue(value);
-
-  if (!truncated) return "-";
-
-  return truncated.toFixed(3).replace(".", ",");
-}
-
-function formatPbInputValue(value) {
-  const formatted = formatPbAverage(value);
-
-  return formatted === "-" ? "" : formatted;
-}
-
-function normalizePbRawInput(value) {
-  const digits = String(value || "").replace(/\D/g, "").slice(0, 6);
-
-  if (!digits) return NaN;
-
-  if (digits.length <= 3) return Number(digits);
-
-  return Number(`${digits.slice(0, 3)}.${digits.slice(3)}`);
 }
 
 function normalizePbAwakeningValue(value) {
