@@ -197,8 +197,9 @@ export default function MyDefensesTab({ session }) {
   }, [memberQuery, members]);
 
   const canEdit = useMemo(() => {
-    return Boolean(member?.id);
-  }, [member?.id]);
+    if (typeof member?.permissions?.canEdit === "boolean") return member.permissions.canEdit;
+    return Boolean(member?.id && connectedMemberId && String(member.id) === String(connectedMemberId));
+  }, [connectedMemberId, member?.id, member?.permissions?.canEdit]);
 
   const memberDefenses = useMemo(() => {
     const memberGuildCode = member?.guildCode || guildCode;

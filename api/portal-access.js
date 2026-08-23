@@ -21,6 +21,10 @@ import {
   getPrimaryMemberId,
   validateSecondaryLink,
 } from "../src/lib/linkedAccounts.js";
+import {
+  isDirectLinkedSecondaryTarget,
+  resolveMemberDataViewPermission,
+} from "./_member-data-permissions.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -55,7 +59,7 @@ const HERO_SEARCH_PAGE_SIZE = 1000;
 const HERO_SEARCH_MAX_REQUIREMENTS = 10;
 const PALADIN_ORGANIZATION_KEY = "paladin";
 const SAFE_MEMBER_SELECT =
-  "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required";
+  "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, primary_member_id";
 const EDIT_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, roster_status, primary_member_id";
 const HERO_SEARCH_MEMBER_SELECT =
@@ -75,6 +79,7 @@ const SAFE_MEMBER_SELECT_WITH_AWAKENINGS = `
   preferred_language,
   community_access_type,
   community_status,
+  primary_member_id,
   member_awakenings (
     awakening_level,
     champion_id,
@@ -391,7 +396,48 @@ function canViewDefense(actor, defense, { guildCode = "", leaderSeesAll = false 
   return sameGuildSpace(actorGuild, defenseGuild);
 }
 
-function serializeManagedMember(row) {
+function sameMemberId(left, right) {
+  return Boolean(left && right && String(left) === String(right));
+}
+
+function resolveDefenseMemberViewPermission(actor, target) {
+  const memberDataView = resolveMemberDataViewPermission(actor, target);
+  if (memberDataView.canView) return memberDataView;
+  if (canViewGuildCode(actor, target?.guild_code, { leaderSeesAll: true })) {
+    return { canView: true, reason: "same_scope" };
+  }
+  return { canView: false, reason: "denied" };
+}
+
+function canViewDefenseMemberData(actor, target) {
+  return resolveDefenseMemberViewPermission(actor, target).canView;
+}
+
+function resolveDefenseMemberEditPermission(actor, target) {
+  if (!actor || !target) return { canEdit: false, reason: "denied" };
+  if (isLeaderRole(actor?.role)) return { canEdit: true, reason: "leader" };
+  if (sameMemberId(actor.id, target.id)) return { canEdit: true, reason: "self" };
+  if (isDirectLinkedSecondaryTarget(actor, target)) {
+    return { canEdit: true, reason: "linked_secondary" };
+  }
+  if (isAdminRole(actor?.role) && canAdminManageTarget(actor, target)) {
+    return { canEdit: true, reason: "admin" };
+  }
+  return { canEdit: false, reason: "denied" };
+}
+
+function serializeDefenseMemberDataPermissions(actor, target) {
+  const view = resolveDefenseMemberViewPermission(actor, target);
+  const edit = resolveDefenseMemberEditPermission(actor, target);
+  return {
+    canView: view.canView,
+    viewReason: view.reason,
+    canEdit: edit.canEdit,
+    editReason: edit.reason,
+  };
+}
+
+function serializeManagedMember(row, actor = null) {
   const awakenings = {};
 
   (row?.member_awakenings || []).forEach((entry) => {
@@ -414,6 +460,9 @@ function serializeManagedMember(row) {
     preferredLanguage: row.preferred_language || "fr",
     communityAccessType: row.community_access_type || "",
     communityStatus: row.community_status || "",
+    primaryMemberId: row.primary_member_id || null,
+    primary_member_id: row.primary_member_id || null,
+    permissions: actor ? serializeDefenseMemberDataPermissions(actor, row) : null,
     defense1: row.defense_1 || EMPTY_DEFENSE_SLOT,
     defense2: row.defense_2 || EMPTY_DEFENSE_SLOT,
     awakenings,
@@ -1861,9 +1910,9 @@ async function handleMyDefensesLoad(body, res) {
   }
 
   const members = (membersResult.data || [])
-    .filter((member) => canViewGuildCode(actor, member.guild_code, { leaderSeesAll: true }))
     .filter((member) => !isCommunityAccount(member))
-    .map(serializeManagedMember);
+    .filter((member) => canViewDefenseMemberData(actor, member))
+    .map((member) => serializeManagedMember(member, actor));
   const defenseVotes = await loadDefenseVotes(defenses);
 
   sendJson(res, 200, {
@@ -1894,7 +1943,7 @@ async function handleMemberAwakeningsLoad(body, res) {
   }
 
   const target = await loadSafeMemberById(memberId);
-  if (!target || !canViewGuildCode(actor, target.guild_code, { leaderSeesAll: true })) {
+  if (!target || !canViewDefenseMemberData(actor, target)) {
     sendJson(res, 404, { error: "Joueur introuvable dans ton perimetre." });
     return;
   }
@@ -1952,9 +2001,8 @@ async function handleMemberDefenseAssign(body, res) {
     return;
   }
 
-  const selfEdit = String(actor.id) === String(target.id);
-  const adminEdit = isAdminRole(actor.role) && canAdminManageTarget(actor, target);
-  if (!selfEdit && !adminEdit) {
+  const editPermission = resolveDefenseMemberEditPermission(actor, target);
+  if (!editPermission.canEdit) {
     sendJson(res, 403, { error: "Tu ne peux pas modifier ce joueur." });
     return;
   }
@@ -1998,7 +2046,7 @@ async function handleMemberDefenseAssign(body, res) {
     metadata: { slot, defenseName, guildCode: target.guild_code || "" },
   });
 
-  sendJson(res, 200, { member: serializeManagedMember(updated || target) });
+  sendJson(res, 200, { member: serializeManagedMember(updated || target, actor) });
 }
 
 async function handleDefenseVote(body, res) {
