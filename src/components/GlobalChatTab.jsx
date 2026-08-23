@@ -769,7 +769,7 @@ function ChatAvatar({ author }) {
       avatar={author?.cosmetics?.avatar}
       frame={author?.cosmetics?.frame}
       name={author?.displayName || author?.initial || "?"}
-      size={64}
+      size={128}
     />
   );
 }
