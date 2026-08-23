@@ -2,6 +2,9 @@ export const PROFILE_COSMETIC_AVATAR = "avatar";
 export const PROFILE_COSMETIC_FRAME = "frame";
 export const PROFILE_COSMETIC_ASSET_TYPES = new Set([PROFILE_COSMETIC_AVATAR, PROFILE_COSMETIC_FRAME]);
 export const DEFAULT_FRAME_CONTENT_INSET = 0.14;
+export const PROFILE_FRAME_VISUAL_INSET_SCALE = 0.72;
+export const MIN_PROFILE_FRAME_VISUAL_INSET = 0.06;
+export const MAX_PROFILE_FRAME_VISUAL_INSET = 0.12;
 
 export function cleanProfileCosmeticText(value, maxLength = 240) {
   return String(value || "").trim().slice(0, maxLength);
@@ -22,6 +25,12 @@ export function getFrameContentInset(frame) {
   const inset = Number(metadata.contentInset ?? metadata.content_inset ?? DEFAULT_FRAME_CONTENT_INSET);
   if (!Number.isFinite(inset)) return DEFAULT_FRAME_CONTENT_INSET;
   return Math.min(0.35, Math.max(0, inset));
+}
+
+export function getFrameVisualInset(frame) {
+  const inset = getFrameContentInset(frame);
+  if (inset <= 0) return 0;
+  return Math.min(MAX_PROFILE_FRAME_VISUAL_INSET, Math.max(MIN_PROFILE_FRAME_VISUAL_INSET, inset * PROFILE_FRAME_VISUAL_INSET_SCALE));
 }
 
 export function normalizeProfileCosmeticAsset(row) {

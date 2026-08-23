@@ -1374,6 +1374,22 @@ body {
   width: auto;
 }
 
+.profile-avatar-root .profile-avatar-avatar-img,
+.profile-avatar-root .profile-avatar-frame-img {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.profile-avatar-root .profile-avatar-avatar-img {
+  object-fit: cover;
+}
+
+.profile-avatar-root .profile-avatar-frame-img {
+  object-fit: contain;
+}
+
 body.portal-mobile-active {
   overflow-x: hidden;
 }

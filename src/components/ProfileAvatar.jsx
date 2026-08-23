@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { getFrameContentInset } from "@/lib/profileCosmetics";
+import { getFrameVisualInset } from "@/lib/profileCosmetics";
 
 function getInitial(name) {
   return String(name || "?").trim().slice(0, 1).toUpperCase() || "?";
@@ -22,7 +22,7 @@ export default function ProfileAvatar({
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [frameFailed, setFrameFailed] = useState(false);
   const numericSize = Number(size) || 48;
-  const insetPercent = useMemo(() => getFrameContentInset(frame) * 100, [frame]);
+  const insetPercent = useMemo(() => getFrameVisualInset(frame) * 100, [frame]);
 
   useEffect(() => {
     setAvatarFailed(false);
@@ -46,12 +46,12 @@ export default function ProfileAvatar({
 
   return (
     <div
-      className={`relative shrink-0 ${className}`}
+      className={`profile-avatar-root relative isolate shrink-0 overflow-visible ${className}`}
       style={{ width: numericSize, height: numericSize }}
       aria-hidden="true"
     >
       <div
-        className="absolute overflow-hidden rounded-full"
+        className="profile-avatar-avatar-layer absolute z-0 overflow-hidden rounded-full"
         style={{
           inset: frameUrl && !frameFailed ? `${insetPercent}%` : 0,
         }}
@@ -59,7 +59,7 @@ export default function ProfileAvatar({
         <img
           src={avatarUrl}
           alt=""
-          className="h-full w-full object-cover"
+          className="profile-avatar-avatar-img h-full w-full object-cover"
           draggable="false"
           loading="lazy"
           decoding="async"
@@ -70,9 +70,9 @@ export default function ProfileAvatar({
         <img
           src={frameUrl}
           alt=""
-          className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+          className="profile-avatar-frame-img pointer-events-none absolute inset-0 z-10 h-full w-full object-contain"
           draggable="false"
-          loading="lazy"
+          loading="eager"
           decoding="async"
           onError={() => setFrameFailed(true)}
         />

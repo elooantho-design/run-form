@@ -2633,7 +2633,7 @@ function PortalShell({ session, onLogout }) {
                     avatar={profileCosmeticsSelection?.avatar}
                     frame={profileCosmeticsSelection?.frame}
                     name={profileDisplayName}
-                    size={46}
+                    size={60}
                   />
                 </button>
                 <div className="min-w-0">
@@ -2681,7 +2681,7 @@ function PortalShell({ session, onLogout }) {
                 avatar={profileCosmeticsSelection?.avatar}
                 frame={profileCosmeticsSelection?.frame}
                 name={profileDisplayName}
-                size={48}
+                size={60}
               />
             </button>
             <div className="min-w-0 flex-1">

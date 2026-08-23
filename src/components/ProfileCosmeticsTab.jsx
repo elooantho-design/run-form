@@ -170,7 +170,7 @@ export default function ProfileCosmeticsTab({
             {t("profile.preview", "Apercu")}
           </p>
           <div className="mt-5 flex flex-col items-center text-center">
-            <ProfileAvatar avatar={draftAvatar} frame={draftFrame} name={displayName} size={180} />
+            <ProfileAvatar avatar={draftAvatar} frame={draftFrame} name={displayName} size={220} />
             <div className="mt-4 text-lg font-semibold text-zinc-50">{displayName}</div>
             <p className="mt-1 text-sm text-zinc-500">
               {draftAvatar ? draftAvatar.displayName : t("profile.noAvatarSelected", "Aucun avatar selectionne")}
@@ -206,7 +206,7 @@ export default function ProfileCosmeticsTab({
                     setErrorMessage("");
                   }}
                 >
-                  <ProfileAvatar avatar={avatar} frame={draftFrame} name={displayName} size={76} />
+                  <ProfileAvatar avatar={avatar} frame={draftFrame} name={displayName} size={88} />
                 </CosmeticChoice>
               ))}
             </div>
@@ -230,7 +230,7 @@ export default function ProfileCosmeticsTab({
                   !draftFrameId ? "border-cyan-300/70 shadow-[0_0_0_2px_rgba(103,232,249,0.18)]" : "border-zinc-800 hover:border-zinc-600"
                 }`}
               >
-                <div className="flex h-[76px] items-center justify-center rounded-full border border-dashed border-zinc-700 text-xs text-zinc-500">
+                <div className="flex h-[88px] items-center justify-center rounded-full border border-dashed border-zinc-700 text-xs text-zinc-500">
                   {t("profile.noFrame", "Aucun cadre")}
                 </div>
                 <div className="mt-3 truncate text-sm font-medium text-zinc-100">{t("profile.noFrame", "Aucun cadre")}</div>
@@ -248,7 +248,7 @@ export default function ProfileCosmeticsTab({
                     setErrorMessage("");
                   }}
                 >
-                  <ProfileAvatar avatar={draftAvatar} frame={frame} name={displayName} size={76} />
+                  <ProfileAvatar avatar={draftAvatar} frame={frame} name={displayName} size={88} />
                 </CosmeticChoice>
               ))}
             </div>

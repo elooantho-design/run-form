@@ -769,7 +769,7 @@ function ChatAvatar({ author }) {
       avatar={author?.cosmetics?.avatar}
       frame={author?.cosmetics?.frame}
       name={author?.displayName || author?.initial || "?"}
-      size={40}
+      size={52}
     />
   );
 }
@@ -890,7 +890,7 @@ function ChatMessage({
         highlighted ? "border-cyan-300 shadow-[0_0_0_2px_rgba(103,232,249,0.25)]" : "border-zinc-800"
       } focus:outline-none focus:ring-2 focus:ring-cyan-400/30`}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-4">
         <ChatAvatar author={message.author} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -915,7 +915,7 @@ function ChatMessage({
                   avatar={message.replyTo.author.cosmetics.avatar}
                   frame={message.replyTo.author.cosmetics.frame}
                   name={message.replyTo.author.displayName || message.replyTo.authorName}
-                  size={16}
+                  size={20}
                 />
               ) : null}
               <span className="min-w-0 truncate text-zinc-500">
