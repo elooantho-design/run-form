@@ -46,6 +46,9 @@ import {
   loadAttachmentsForMessageIds,
 } from "./_portal-chat-attachments.js";
 import {
+  loadCosmeticsForMemberIds,
+} from "./_portal-cosmetics.js";
+import {
   checkGifSearchRateLimit,
   getPortalChatGifConfig,
   getTrendingGifs,
@@ -145,7 +148,16 @@ async function loadAuthorMap(memberIds) {
     .in("id", ids);
 
   if (error) throw error;
-  return new Map((data || []).map((member) => [String(member.id), member]));
+  const cosmeticsByMemberId = await loadCosmeticsForMemberIds(supabase, (data || []).map((member) => member.id));
+  return new Map(
+    (data || []).map((member) => [
+      String(member.id),
+      {
+        ...member,
+        cosmetics: cosmeticsByMemberId.get(String(member.id)) || null,
+      },
+    ]),
+  );
 }
 
 function serializeAuthor(member, fallbackId = "") {
@@ -155,7 +167,8 @@ function serializeAuthor(member, fallbackId = "") {
     displayName,
     discordId: member?.discord_id || "",
     guildCode: member?.guild_code || "",
-    avatarUrl: null,
+    avatarUrl: member?.cosmetics?.avatar?.url || null,
+    cosmetics: member?.cosmetics || null,
     initial: displayName.slice(0, 1).toUpperCase() || "?",
   };
 }

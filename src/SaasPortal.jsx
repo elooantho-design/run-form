@@ -63,6 +63,8 @@ import GuildBossPlacementTab from "@/components/GuildBossPlacementTab";
 import PveLibraryTab from "@/components/PveLibraryTab";
 import SupportProjectTab from "@/components/SupportProjectTab";
 import GlobalChatTab from "@/components/GlobalChatTab";
+import ProfileAvatar from "@/components/ProfileAvatar";
+import ProfileCosmeticsTab from "@/components/ProfileCosmeticsTab";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
@@ -602,6 +604,7 @@ const categoryCards = [
     descriptionKey: "home.myProfile.description",
     icon: Users,
     tone: "border-sky-500/25 bg-sky-500/10 text-sky-200",
+    target: "profile",
   },
   {
     id: "hero-box",
@@ -1992,6 +1995,8 @@ function PortalShell({ session, onLogout }) {
   const [pveContents, setPveContents] = useState(() => mergePveContentNavItems([]));
   const [pveContentsLoaded, setPveContentsLoaded] = useState(false);
   const [supportPublicEnabled, setSupportPublicEnabled] = useState(true);
+  const [profileCosmeticsState, setProfileCosmeticsState] = useState(null);
+  const [profileCosmeticsLoading, setProfileCosmeticsLoading] = useState(false);
   const [editRunInitialId, setEditRunInitialId] = useState("");
   const loggedTabViewsRef = useRef(new Set());
   const isAdminUser = isAdminSession(session);
@@ -2093,6 +2098,7 @@ function PortalShell({ session, onLogout }) {
 
   const activeTitle = useMemo(() => {
     if (activePveTab) return activePveItem?.label || t("nav.pve", "PVE");
+    if (active === "profile") return t("profile.title", "Mon profil");
 
     const activeItem = [...navigation, ...adminNavigation].find((item) => item.id === active);
     return activeItem ? t(activeItem.labelKey, activeItem.label) : t("nav.home", "Accueil");
@@ -2132,6 +2138,43 @@ function PortalShell({ session, onLogout }) {
     visibleNavigation,
     visiblePveNavigation,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfileCosmetics() {
+      const memberId = session?.memberId || session?.id;
+      if (!memberId) {
+        setProfileCosmeticsState(null);
+        setProfileCosmeticsLoading(false);
+        return;
+      }
+
+      setProfileCosmeticsLoading(true);
+      try {
+        const response = await fetch(`${getApiBase()}/api/portal-cosmetics`, {
+          method: "GET",
+          credentials: "include",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || "Chargement profil impossible.");
+        if (!cancelled) setProfileCosmeticsState(payload);
+      } catch (error) {
+        if (!cancelled) {
+          console.error("[profile-cosmetics]", error);
+          setProfileCosmeticsState(null);
+        }
+      } finally {
+        if (!cancelled) setProfileCosmeticsLoading(false);
+      }
+    }
+
+    void loadProfileCosmetics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.memberId, session?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2334,6 +2377,9 @@ function PortalShell({ session, onLogout }) {
     setAdminNavOpen(true);
     setMobileNavOpen(false);
   };
+
+  const profileCosmeticsSelection = profileCosmeticsState?.selection || null;
+  const profileDisplayName = session?.watcherName || session?.name || t("common.player", "Joueur");
 
   const toggleViewMode = () => {
     setViewMode((current) => (current === "mobile" ? "desktop" : "mobile"));
@@ -2577,6 +2623,19 @@ function PortalShell({ session, onLogout }) {
 
             <div className="flex-none rounded-xl border border-zinc-800 bg-zinc-900 p-3">
               <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => selectTab("profile")}
+                  className="rounded-full transition hover:scale-[1.04] focus:outline-none focus:ring-2 focus:ring-cyan-400/40"
+                  title={t("profile.title", "Mon profil")}
+                >
+                  <ProfileAvatar
+                    avatar={profileCosmeticsSelection?.avatar}
+                    frame={profileCosmeticsSelection?.frame}
+                    name={profileDisplayName}
+                    size={46}
+                  />
+                </button>
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium text-zinc-100">{session.name}</div>
                   <div className="truncate text-xs text-zinc-500">{session.role}</div>
@@ -2612,7 +2671,20 @@ function PortalShell({ session, onLogout }) {
 
         <div className="mt-4 flex-none rounded-lg border border-zinc-800 bg-zinc-900 p-3">
           <div className="flex items-center justify-between gap-3">
-            <div>
+            <button
+              type="button"
+              onClick={() => selectTab("profile")}
+              className="rounded-full transition hover:scale-[1.04] focus:outline-none focus:ring-2 focus:ring-cyan-400/40"
+              title={t("profile.title", "Mon profil")}
+            >
+              <ProfileAvatar
+                avatar={profileCosmeticsSelection?.avatar}
+                frame={profileCosmeticsSelection?.frame}
+                name={profileDisplayName}
+                size={48}
+              />
+            </button>
+            <div className="min-w-0 flex-1">
               <div className="text-sm font-medium text-zinc-100">{session.name}</div>
               <div className="text-xs text-zinc-500">{session.role}</div>
             </div>
@@ -2700,6 +2772,14 @@ function PortalShell({ session, onLogout }) {
 
         <main className={`${isMobileMode ? "portal-mobile-main space-y-5 px-3 py-4" : "space-y-6 px-4 py-6 md:px-6"}`}>
           {active === "home" ? <HomeView session={session} setActive={setActive} /> : null}
+          {active === "profile" ? (
+            <ProfileCosmeticsTab
+              session={session}
+              cosmeticsState={profileCosmeticsState}
+              loading={profileCosmeticsLoading}
+              onCosmeticsStateChange={setProfileCosmeticsState}
+            />
+          ) : null}
           {active === "hero-box" ? <HeroBoxView session={session} /> : null}
           {active === "soul-stones" ? <SoulStonesTab session={session} /> : null}
           {active === "demon-monsters" ? <DemonMonstersTab session={session} /> : null}

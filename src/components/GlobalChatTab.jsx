@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import ProfileAvatar from "@/components/ProfileAvatar";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const NativeEmojiPicker = lazy(() => import("emoji-picker-react"));
@@ -763,21 +764,13 @@ function GifPicker({ apiBase, language, config, onPick, onClose, t }) {
 }
 
 function ChatAvatar({ author }) {
-  if (author?.avatarUrl) {
-    return (
-      <img
-        src={author.avatarUrl}
-        alt=""
-        className="h-10 w-10 rounded-full border border-cyan-400/30 object-cover"
-        draggable="false"
-      />
-    );
-  }
-
   return (
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 text-sm font-bold text-cyan-100">
-      {author?.initial || "?"}
-    </div>
+    <ProfileAvatar
+      avatar={author?.cosmetics?.avatar}
+      frame={author?.cosmetics?.frame}
+      name={author?.displayName || author?.initial || "?"}
+      size={40}
+    />
   );
 }
 
@@ -917,13 +910,12 @@ function ChatMessage({
               title={t("chat.replyDeletedUnavailable")}
             >
               <span className="h-4 w-4 rounded-tl-md border-l-2 border-t-2 border-zinc-700" aria-hidden="true" />
-              {message.replyTo.author?.avatarUrl ? (
-                <img
-                  src={message.replyTo.author.avatarUrl}
-                  alt=""
-                  className="h-4 w-4 rounded-full object-cover"
-                  loading="lazy"
-                  decoding="async"
+              {message.replyTo.author?.cosmetics?.avatar ? (
+                <ProfileAvatar
+                  avatar={message.replyTo.author.cosmetics.avatar}
+                  frame={message.replyTo.author.cosmetics.frame}
+                  name={message.replyTo.author.displayName || message.replyTo.authorName}
+                  size={16}
                 />
               ) : null}
               <span className="min-w-0 truncate text-zinc-500">
