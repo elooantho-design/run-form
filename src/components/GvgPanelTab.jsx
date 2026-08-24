@@ -11,6 +11,7 @@ import {
   isPaladinSession,
 } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
 import { buildPublicDownloadUrl } from "@/lib/vpsAssets";
 
 function normalizeGuildInput(value) {
@@ -37,7 +38,7 @@ function getRunSessionPayload(session) {
     memberId: session?.memberId || session?.member_id || session?.id || "",
     discordId: session?.discordId || session?.discord_id || "",
     guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
-    role: session?.role || "",
+    role: getPortalSessionServerRole(session),
   };
 }
 

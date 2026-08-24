@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
 
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
 
@@ -228,7 +229,7 @@ export default function GvgAdminTab({ session } = {}) {
           actor: {
             memberId: session?.memberId || session?.id || null,
             name: session?.watcherName || session?.memberName || session?.name || session?.discordId || "Inconnu",
-            role: session?.role || null,
+            role: getPortalSessionServerRole(session) || null,
             guildCode: session?.guildCode || session?.guild_code || null,
           },
         }),

@@ -9,6 +9,7 @@ import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDi
 import { fetchPortalChampions } from "@/lib/portalChampions";
 import { HERO_DIRECTION_OPTIONS } from "@/lib/heroDirectionOverlay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
 import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import { getRunGridSpec } from "@/run-config/gridConfig";
 
@@ -79,7 +80,7 @@ function getRunSessionPayload(session) {
     memberId: session?.memberId || session?.member_id || session?.id || "",
     discordId: session?.discordId || session?.discord_id || "",
     guildCode: session?.guildCode || session?.guild_code || session?.guild || "G1",
-    role: session?.role || "",
+    role: getPortalSessionServerRole(session),
   };
 }
 

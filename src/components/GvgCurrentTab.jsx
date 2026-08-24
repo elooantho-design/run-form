@@ -16,6 +16,7 @@ import {
   isPaladinSession,
 } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
 import { resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
 
 function getApiBase() {
@@ -44,7 +45,7 @@ function getRunSessionParams(session) {
 function getRunSessionPayload(session) {
   return {
     ...getRunSessionParams(session),
-    role: session?.role || "",
+    role: getPortalSessionServerRole(session),
   };
 }
 

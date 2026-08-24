@@ -10,6 +10,7 @@ import {
   Compass,
   ClipboardPaste,
   Cpu,
+  Eye,
   FileJson,
   Gauge,
   Grid3X3,
@@ -112,6 +113,14 @@ import {
   isPortalCommunityRole,
   isPortalCommunitySession,
 } from "@/lib/portalPermissions";
+import {
+  PORTAL_REAL_VIEW_MODE,
+  PORTAL_ROLE_PREVIEW_OPTIONS,
+  buildPortalRolePreviewSession,
+  getPortalRolePreviewOption,
+  isPortalRolePreviewManagerSession,
+  normalizePortalRolePreviewMode,
+} from "@/lib/portalRolePreview";
 import { GUILD_BOSS_PLACEMENT_TOOL_ID } from "@/lib/guildBossPlacement";
 
 const navigation = [
@@ -1983,6 +1992,104 @@ function PortalLanguageSelector() {
   );
 }
 
+function PortalRolePreviewSelector({ mode, onChange }) {
+  const { t } = usePortalLanguage();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const normalizedMode = normalizePortalRolePreviewMode(mode);
+  const currentOption = getPortalRolePreviewOption(normalizedMode);
+  const currentLabel = t(currentOption.labelKey, currentOption.fallbackLabel);
+  const buttonLabel = t("rolePreview.button", "Vue : {role}").replace("{role}", currentLabel);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    function handlePointerDown(event) {
+      if (rootRef.current && !rootRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <Button
+        type="button"
+        variant="outline"
+        className="h-9 shrink-0 rounded-lg border-violet-500/35 bg-violet-500/10 px-3 text-violet-100 hover:border-violet-400/50 hover:bg-violet-500/15"
+        aria-label={t("rolePreview.menuLabel", "Prévisualiser le dashboard avec un autre rôle")}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Eye className="h-4 w-4" />
+        <span className="ml-2 max-w-[9rem] truncate text-xs font-semibold">{buttonLabel}</span>
+      </Button>
+
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-11 z-40 w-72 rounded-xl border border-violet-500/25 bg-zinc-950 p-2 shadow-2xl shadow-black/50"
+        >
+          <p className="px-3 pb-2 text-xs leading-relaxed text-zinc-500">
+            {t(
+              "rolePreview.notice",
+              "Seule l'interface est simulée. Les permissions serveur restent celles du compte réel.",
+            )}
+          </p>
+          <div className="space-y-1">
+            {PORTAL_ROLE_PREVIEW_OPTIONS.map((option) => {
+              const selected = normalizedMode === option.id;
+              const label = t(option.labelKey, option.fallbackLabel);
+
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition ${
+                    selected
+                      ? "bg-violet-500/15 text-violet-100"
+                      : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-50"
+                  }`}
+                  onClick={() => {
+                    onChange(option.id);
+                    setOpen(false);
+                  }}
+                >
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                      selected ? "border-violet-300 bg-violet-400/20" : "border-zinc-700"
+                    }`}
+                  >
+                    {selected ? <CheckCircle2 className="h-3.5 w-3.5 text-violet-100" /> : null}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PortalShell({ session, onLogout }) {
   const { t } = usePortalLanguage();
   const [active, setActive] = useState("home");
@@ -1999,14 +2106,22 @@ function PortalShell({ session, onLogout }) {
   const [profileCosmeticsState, setProfileCosmeticsState] = useState(null);
   const [profileCosmeticsLoading, setProfileCosmeticsLoading] = useState(false);
   const [editRunInitialId, setEditRunInitialId] = useState("");
+  const [rolePreviewMode, setRolePreviewMode] = useState(PORTAL_REAL_VIEW_MODE);
   const loggedTabViewsRef = useRef(new Set());
-  const isAdminUser = isAdminSession(session);
-  const isLeaderUser = isLeaderSession(session);
-  const isPaladinUser = isPaladinSession(session);
-  const isCommunityUser = isPortalCommunitySession(session);
+  const realIsPaladinUser = isPaladinSession(session);
+  const realIsCommunityUser = isPortalCommunitySession(session);
+  const canUseRolePreview = isPortalRolePreviewManagerSession(session);
+  const effectiveSession = useMemo(
+    () => (canUseRolePreview ? buildPortalRolePreviewSession(session, rolePreviewMode) : session),
+    [canUseRolePreview, rolePreviewMode, session],
+  );
+  const isAdminUser = isAdminSession(effectiveSession);
+  const isLeaderUser = isLeaderSession(effectiveSession);
+  const isPaladinUser = isPaladinSession(effectiveSession);
+  const isCommunityUser = isPortalCommunitySession(effectiveSession);
   const isMobileMode = viewMode === "mobile";
-  const controlBrand = getControlBrand(session);
-  const technicalGuildScopeDescription = getGuildScopeDescription(session);
+  const controlBrand = getControlBrand(effectiveSession);
+  const technicalGuildScopeDescription = getGuildScopeDescription(effectiveSession);
   const guildScopeDescription =
     isPaladinUser || isCommunityUser
       ? t("portal.communityDashboard", "Dashboard communautaire")
@@ -2024,17 +2139,17 @@ function PortalShell({ session, onLogout }) {
   );
   const visibleNavigation = useMemo(
     () =>
-      navigation.filter((item) => canShowPortalNavItem(item, session, portalAccess)),
-    [portalAccess, session],
+      navigation.filter((item) => canShowPortalNavItem(item, effectiveSession, portalAccess)),
+    [effectiveSession, portalAccess],
   );
   const visibleAdminNavigation = useMemo(
     () =>
       adminNavigation.filter((item) =>
-        canShowPortalAdminItem({ item, session, isAdminUser, isLeaderUser, isPaladinUser, portalAccess }),
+        canShowPortalAdminItem({ item, session: effectiveSession, isAdminUser, isLeaderUser, isPaladinUser, portalAccess }),
       ),
-    [isAdminUser, isLeaderUser, isPaladinUser, portalAccess, session],
+    [effectiveSession, isAdminUser, isLeaderUser, isPaladinUser, portalAccess],
   );
-  const canUsePve = canShowPortalPve(session, portalAccess);
+  const canUsePve = canShowPortalPve(effectiveSession, portalAccess);
   const visiblePveNavigation = useMemo(
     () =>
       pveContents
@@ -2105,6 +2220,11 @@ function PortalShell({ session, onLogout }) {
     return activeItem ? t(activeItem.labelKey, activeItem.label) : t("nav.home", "Accueil");
   }, [active, activePveItem, activePveTab, t]);
   const activeAdminItem = visibleAdminNavigation.some((item) => item.id === active);
+
+  useEffect(() => {
+    if (canUseRolePreview || rolePreviewMode === PORTAL_REAL_VIEW_MODE) return;
+    setRolePreviewMode(PORTAL_REAL_VIEW_MODE);
+  }, [canUseRolePreview, rolePreviewMode]);
 
   useEffect(() => {
     const isAdminTab = adminNavigation.some((item) => item.id === active);
@@ -2205,7 +2325,7 @@ function PortalShell({ session, onLogout }) {
     let cancelled = false;
 
     async function loadPortalLicense() {
-      if (isPaladinUser || isCommunityUser) {
+      if (realIsPaladinUser || realIsCommunityUser) {
         setPortalLicense(null);
         setPortalLicenseLoaded(true);
         return;
@@ -2255,7 +2375,7 @@ function PortalShell({ session, onLogout }) {
     return () => {
       cancelled = true;
     };
-  }, [isCommunityUser, isPaladinUser, session]);
+  }, [realIsCommunityUser, realIsPaladinUser, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2380,7 +2500,7 @@ function PortalShell({ session, onLogout }) {
   };
 
   const profileCosmeticsSelection = profileCosmeticsState?.selection || null;
-  const profileDisplayName = session?.watcherName || session?.name || t("common.player", "Joueur");
+  const profileDisplayName = effectiveSession?.watcherName || effectiveSession?.name || t("common.player", "Joueur");
 
   const toggleViewMode = () => {
     setViewMode((current) => (current === "mobile" ? "desktop" : "mobile"));
@@ -2638,8 +2758,8 @@ function PortalShell({ session, onLogout }) {
                   />
                 </button>
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-zinc-100">{session.name}</div>
-                  <div className="truncate text-xs text-zinc-500">{session.role}</div>
+                  <div className="truncate text-sm font-medium text-zinc-100">{effectiveSession.name}</div>
+                  <div className="truncate text-xs text-zinc-500">{effectiveSession.role}</div>
                 </div>
                 <button
                   type="button"
@@ -2686,8 +2806,8 @@ function PortalShell({ session, onLogout }) {
               />
             </button>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-zinc-100">{session.name}</div>
-              <div className="text-xs text-zinc-500">{session.role}</div>
+              <div className="text-sm font-medium text-zinc-100">{effectiveSession.name}</div>
+              <div className="text-xs text-zinc-500">{effectiveSession.role}</div>
             </div>
             <button
               type="button"
@@ -2724,6 +2844,9 @@ function PortalShell({ session, onLogout }) {
               <Badge className="shrink-0 rounded-lg border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
                 {t("portal.apiReady", "API VPS prete")}
               </Badge>
+              {canUseRolePreview ? (
+                <PortalRolePreviewSelector mode={rolePreviewMode} onChange={setRolePreviewMode} />
+              ) : null}
               <PortalLanguageSelector />
               <Button
                 type="button"
@@ -2772,57 +2895,57 @@ function PortalShell({ session, onLogout }) {
         ) : null}
 
         <main className={`${isMobileMode ? "portal-mobile-main space-y-5 px-3 py-4" : "space-y-6 px-4 py-6 md:px-6"}`}>
-          {active === "home" ? <HomeView session={session} setActive={setActive} /> : null}
+          {active === "home" ? <HomeView session={effectiveSession} setActive={setActive} /> : null}
           {active === "profile" ? (
             <ProfileCosmeticsTab
-              session={session}
+              session={effectiveSession}
               cosmeticsState={profileCosmeticsState}
               loading={profileCosmeticsLoading}
               onCosmeticsStateChange={setProfileCosmeticsState}
             />
           ) : null}
-          {active === "hero-box" ? <HeroBoxView session={session} /> : null}
-          {active === "soul-stones" ? <SoulStonesTab session={session} /> : null}
-          {active === "demon-monsters" ? <DemonMonstersTab session={session} /> : null}
-          {active === "personal-best" ? <PersonalBestTab session={session} /> : null}
-          {active === "defenses" ? <MyDefensesTab session={session} /> : null}
-          {active === "gvg" ? <GvgView session={session} onEditRun={openRunEditor} /> : null}
-          {active === "run-search" ? <RunSearchGrid session={session} /> : null}
-          {active === "support-project" ? <SupportProjectTab session={session} /> : null}
-          {active === "global-chat" && isLeaderUser ? <GlobalChatTab session={session} /> : null}
+          {active === "hero-box" ? <HeroBoxView session={effectiveSession} /> : null}
+          {active === "soul-stones" ? <SoulStonesTab session={effectiveSession} /> : null}
+          {active === "demon-monsters" ? <DemonMonstersTab session={effectiveSession} /> : null}
+          {active === "personal-best" ? <PersonalBestTab session={effectiveSession} /> : null}
+          {active === "defenses" ? <MyDefensesTab session={effectiveSession} /> : null}
+          {active === "gvg" ? <GvgView session={effectiveSession} onEditRun={openRunEditor} /> : null}
+          {active === "run-search" ? <RunSearchGrid session={effectiveSession} /> : null}
+          {active === "support-project" ? <SupportProjectTab session={effectiveSession} /> : null}
+          {active === "global-chat" && isLeaderUser ? <GlobalChatTab session={effectiveSession} /> : null}
           {activePveTab && canRenderPvePlacementTool ? (
-            <GuildBossPlacementTab session={session} />
+            <GuildBossPlacementTab session={effectiveSession} />
           ) : null}
           {activePveTab && !requestedPvePlacementTool && activePveLocalTool !== GUILD_BOSS_PLACEMENT_TOOL_ID ? (
             <PveLibraryTab
-              session={session}
+              session={effectiveSession}
               contents={visiblePveNavigation}
               selectedContentId={activePveContentId}
             />
           ) : null}
-          {active === "launcher" ? <LauncherView session={session} /> : null}
-          {active === "validation" ? <GvgValidationTab session={session} /> : null}
-          {active === "guild-management" ? <PortalGuildManagementTab session={session} /> : null}
-          {active === "admin-defenses" ? <PortalAdminDefensesView session={session} /> : null}
-          {active === "intersaison" ? <PortalIntersaisonTab session={session} /> : null}
-          {active === "run-add" ? <RunAddTab session={session} /> : null}
-          {active === "run-edit" ? <RunEditTab session={session} initialRunId={editRunInitialId} /> : null}
+          {active === "launcher" ? <LauncherView session={effectiveSession} /> : null}
+          {active === "validation" ? <GvgValidationTab session={effectiveSession} /> : null}
+          {active === "guild-management" ? <PortalGuildManagementTab session={effectiveSession} /> : null}
+          {active === "admin-defenses" ? <PortalAdminDefensesView session={effectiveSession} /> : null}
+          {active === "intersaison" ? <PortalIntersaisonTab session={effectiveSession} /> : null}
+          {active === "run-add" ? <RunAddTab session={effectiveSession} /> : null}
+          {active === "run-edit" ? <RunEditTab session={effectiveSession} initialRunId={editRunInitialId} /> : null}
           {active === "cosmetics" ? (
             <ProfileCosmeticsTab
-              session={session}
+              session={effectiveSession}
               cosmeticsState={profileCosmeticsState}
               loading={profileCosmeticsLoading}
               onCosmeticsStateChange={setProfileCosmeticsState}
               adminMode
             />
           ) : null}
-          {active === "player-access" ? <PlayerAccessView session={session} /> : null}
-          {active === "templates" ? <AddHeroView session={session} /> : null}
-          {active === "guilds" ? <GuildsView session={session} /> : null}
-          {active === "billing" ? <BillingView session={session} /> : null}
-          {active === "community-members" ? <CommunityMembersTab session={session} apiBase={getApiBase()} /> : null}
-          {active === "logs" ? <LogsView session={session} /> : null}
-          {active === "settings" ? <SettingsView session={session} onLogout={onLogout} /> : null}
+          {active === "player-access" ? <PlayerAccessView session={effectiveSession} /> : null}
+          {active === "templates" ? <AddHeroView session={effectiveSession} /> : null}
+          {active === "guilds" ? <GuildsView session={effectiveSession} /> : null}
+          {active === "billing" ? <BillingView session={effectiveSession} /> : null}
+          {active === "community-members" ? <CommunityMembersTab session={effectiveSession} apiBase={getApiBase()} /> : null}
+          {active === "logs" ? <LogsView session={effectiveSession} /> : null}
+          {active === "settings" ? <SettingsView session={effectiveSession} onLogout={onLogout} /> : null}
         </main>
       </div>
     </div>
