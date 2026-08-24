@@ -1,5 +1,6 @@
 export const PROFILE_COSMETIC_AVATAR = "avatar";
 export const PROFILE_COSMETIC_FRAME = "frame";
+export const PROFILE_FRAME_ANIMATION_SHARK_MOUTH = "shark-mouth";
 export const PROFILE_COSMETIC_ASSET_TYPES = new Set([PROFILE_COSMETIC_AVATAR, PROFILE_COSMETIC_FRAME]);
 export const DEFAULT_FRAME_CONTENT_INSET = 0.14;
 export const PROFILE_FRAME_VISUAL_INSET_SCALE = 0.72;
@@ -57,6 +58,14 @@ export function getProfileCosmeticNumberedDisplayNameInfo(displayName) {
     assetType: match[1] === "avatar" ? PROFILE_COSMETIC_AVATAR : PROFILE_COSMETIC_FRAME,
     number: Number(match[2]),
   };
+}
+
+export function getProfileFrameAnimationKey(frame) {
+  const info = getProfileCosmeticNumberedDisplayNameInfo(getProfileCosmeticDisplayName(frame));
+  if (info?.assetType === PROFILE_COSMETIC_FRAME && info.number === 33) {
+    return PROFILE_FRAME_ANIMATION_SHARK_MOUTH;
+  }
+  return "";
 }
 
 export function getNextProfileCosmeticDisplayName(assetType, existingAssets = [], reservedNames = []) {

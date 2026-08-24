@@ -1390,6 +1390,154 @@ body {
   object-fit: contain;
 }
 
+.profile-avatar-frame-layer--shark-mouth {
+  transform-origin: 50% 52%;
+  animation: profileSharkMouthBite 4.8s ease-in-out infinite;
+  will-change: transform, filter;
+}
+
+.profile-avatar-shark-shimmer {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  opacity: 0;
+  filter: brightness(1.8) contrast(1.12) saturate(0.72);
+  mix-blend-mode: screen;
+  animation: profileSharkTeethShimmer 5.6s ease-in-out infinite;
+  will-change: clip-path, opacity;
+}
+
+.profile-avatar-shark-eyes {
+  background:
+    radial-gradient(circle at 17.4% 18.7%, rgba(255, 244, 173, 0.98) 0 0.7%, rgba(255, 134, 24, 0.82) 1.1%, rgba(255, 65, 0, 0.35) 2.2%, transparent 4.6%),
+    radial-gradient(circle at 82.7% 18.7%, rgba(255, 244, 173, 0.98) 0 0.7%, rgba(255, 134, 24, 0.82) 1.1%, rgba(255, 65, 0, 0.35) 2.2%, transparent 4.6%);
+  mix-blend-mode: screen;
+  opacity: 0.42;
+  animation: profileSharkEyePulse 2.8s ease-in-out infinite;
+  will-change: opacity, filter;
+}
+
+.profile-avatar-shark-bubbles {
+  --profile-shark-bubble-scale-x: 1;
+  top: 8%;
+  bottom: 5%;
+  width: 17%;
+  opacity: 0;
+  background:
+    radial-gradient(circle at 34% 82%, rgba(200, 246, 255, 0.9) 0 1.4%, transparent 2.2%),
+    radial-gradient(circle at 68% 64%, rgba(139, 230, 255, 0.82) 0 1.1%, transparent 2%),
+    radial-gradient(circle at 28% 41%, rgba(218, 249, 255, 0.76) 0 0.9%, transparent 1.8%),
+    radial-gradient(circle at 72% 24%, rgba(112, 217, 255, 0.72) 0 1.2%, transparent 2.1%);
+  filter: drop-shadow(0 0 0.12em rgba(88, 211, 255, 0.7));
+  animation: profileSharkBubbleRise 4.2s ease-in infinite;
+  will-change: transform, opacity;
+}
+
+.profile-avatar-shark-bubbles--left {
+  left: 0;
+}
+
+.profile-avatar-shark-bubbles--right {
+  --profile-shark-bubble-scale-x: -1;
+  right: 0;
+  animation-delay: -2.1s;
+}
+
+@keyframes profileSharkMouthBite {
+  0%,
+  38%,
+  51%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(30, 198, 255, 0));
+  }
+
+  43% {
+    transform: scaleX(1.004) scaleY(0.984);
+    filter: drop-shadow(0 0 0.18em rgba(30, 198, 255, 0.42));
+  }
+
+  47% {
+    transform: scaleX(1.002) scaleY(0.994);
+    filter: drop-shadow(0 0 0.1em rgba(30, 198, 255, 0.24));
+  }
+}
+
+@keyframes profileSharkTeethShimmer {
+  0%,
+  48% {
+    clip-path: polygon(-22% 0, -8% 0, 20% 100%, 6% 100%);
+    opacity: 0;
+  }
+
+  56% {
+    opacity: 0.42;
+  }
+
+  72% {
+    clip-path: polygon(88% 0, 102% 0, 130% 100%, 116% 100%);
+    opacity: 0;
+  }
+
+  100% {
+    clip-path: polygon(88% 0, 102% 0, 130% 100%, 116% 100%);
+    opacity: 0;
+  }
+}
+
+@keyframes profileSharkEyePulse {
+  0%,
+  100% {
+    opacity: 0.32;
+    filter: brightness(0.9);
+  }
+
+  46% {
+    opacity: 0.9;
+    filter: brightness(1.42) drop-shadow(0 0 0.16em rgba(255, 65, 0, 0.82));
+  }
+
+  54% {
+    opacity: 0.56;
+    filter: brightness(1.05);
+  }
+}
+
+@keyframes profileSharkBubbleRise {
+  0% {
+    transform: translateY(7%) scaleX(var(--profile-shark-bubble-scale-x));
+    opacity: 0;
+  }
+
+  18% {
+    opacity: 0.68;
+  }
+
+  78% {
+    opacity: 0.38;
+  }
+
+  100% {
+    transform: translateY(-8%) scaleX(var(--profile-shark-bubble-scale-x));
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-avatar-frame-layer--shark-mouth,
+  .profile-avatar-shark-shimmer,
+  .profile-avatar-shark-eyes,
+  .profile-avatar-shark-bubbles {
+    animation: none !important;
+  }
+
+  .profile-avatar-shark-shimmer,
+  .profile-avatar-shark-bubbles {
+    display: none;
+  }
+}
+
 body.portal-mobile-active {
   overflow-x: hidden;
 }

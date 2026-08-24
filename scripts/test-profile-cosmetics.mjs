@@ -19,7 +19,9 @@ import {
   getFrameContentInset,
   getFrameRenderMetadata,
   getNextProfileCosmeticDisplayName,
+  getProfileFrameAnimationKey,
   normalizeFrameRenderMetadata,
+  PROFILE_FRAME_ANIMATION_SHARK_MOUTH,
   resolveProfileCosmeticSelection,
   summarizeProfileCosmeticPublishBatch,
   validateFrameRenderMetadataForStorage,
@@ -91,6 +93,13 @@ const allocateCosmeticDisplayName = createProfileCosmeticDisplayNameAllocator(pr
 assert.equal(allocateCosmeticDisplayName("frame"), "Cadre 27", "multi-drop first frame gets the next number");
 assert.equal(allocateCosmeticDisplayName("frame"), "Cadre 28", "multi-drop second frame gets the following number");
 assert.equal(allocateCosmeticDisplayName("avatar"), "Avatar 21", "multi-drop avatar numbering is independent from frames");
+assert.equal(
+  getProfileFrameAnimationKey({ asset_type: "frame", display_name: "Cadre 33" }),
+  PROFILE_FRAME_ANIMATION_SHARK_MOUTH,
+  "frame 33 enables the shark mouth animation",
+);
+assert.equal(getProfileFrameAnimationKey({ asset_type: "frame", display_name: "Cadre 32" }), "");
+assert.equal(getProfileFrameAnimationKey({ asset_type: "avatar", display_name: "Avatar 33" }), "");
 assert.deepEqual(
   summarizeProfileCosmeticPublishBatch([{ status: "published" }, { status: "already_published" }, { status: "failed" }]),
   { completed: 3, succeeded: 2, failed: 1 },

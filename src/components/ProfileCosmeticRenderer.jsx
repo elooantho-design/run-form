@@ -1,5 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { getFrameRenderMetadata } from "@/lib/profileCosmetics";
+import React, { useMemo, useState } from "react";
+import {
+  getFrameRenderMetadata,
+  getProfileFrameAnimationKey,
+  PROFILE_FRAME_ANIMATION_SHARK_MOUTH,
+} from "@/lib/profileCosmetics";
 
 function getInitial(name) {
   return String(name || "?").trim().slice(0, 1).toUpperCase() || "?";
@@ -23,19 +27,15 @@ export default function ProfileCosmeticRenderer({
 }) {
   const avatarUrl = getAssetUrl(avatar);
   const frameUrl = avatarUrl ? getAssetUrl(frame) : "";
-  const [avatarFailed, setAvatarFailed] = useState(false);
-  const [frameFailed, setFrameFailed] = useState(false);
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState("");
+  const [failedFrameUrl, setFailedFrameUrl] = useState("");
   const numericSize = Number(size) || 48;
   const frameMetadata = useMemo(() => getFrameRenderMetadata(frame), [frame]);
+  const frameAnimationKey = useMemo(() => getProfileFrameAnimationKey(frame), [frame]);
+  const avatarFailed = Boolean(avatarUrl && failedAvatarUrl === avatarUrl);
+  const frameFailed = Boolean(frameUrl && failedFrameUrl === frameUrl);
   const hasFrame = Boolean(frameUrl && !frameFailed);
-
-  useEffect(() => {
-    setAvatarFailed(false);
-  }, [avatarUrl]);
-
-  useEffect(() => {
-    setFrameFailed(false);
-  }, [frameUrl]);
+  const hasSharkMouthAnimation = hasFrame && frameAnimationKey === PROFILE_FRAME_ANIMATION_SHARK_MOUTH;
 
   if (!avatarUrl || avatarFailed) {
     return (
@@ -81,25 +81,47 @@ export default function ProfileCosmeticRenderer({
           draggable="false"
           loading="lazy"
           decoding="async"
-          onError={() => setAvatarFailed(true)}
+          onError={() => setFailedAvatarUrl(avatarUrl)}
         />
       </div>
       {hasFrame ? (
-        <img
-          src={frameUrl}
-          alt=""
-          className="profile-avatar-frame-img pointer-events-none absolute z-10 object-contain"
+        <div
+          className={`profile-avatar-frame-layer pointer-events-none absolute z-10 ${
+            hasSharkMouthAnimation ? "profile-avatar-frame-layer--shark-mouth" : ""
+          }`}
+          data-frame-animation={frameAnimationKey || undefined}
           style={{
             left: toPercent(frameBox.x),
             top: toPercent(frameBox.y),
             width: toPercent(frameBox.width),
             height: toPercent(frameBox.height),
           }}
-          draggable="false"
-          loading="eager"
-          decoding="async"
-          onError={() => setFrameFailed(true)}
-        />
+        >
+          <img
+            src={frameUrl}
+            alt=""
+            className="profile-avatar-frame-img absolute inset-0 object-contain"
+            draggable="false"
+            loading="eager"
+            decoding="async"
+            onError={() => setFailedFrameUrl(frameUrl)}
+          />
+          {hasSharkMouthAnimation ? (
+            <>
+              <img
+                src={frameUrl}
+                alt=""
+                className="profile-avatar-shark-shimmer absolute inset-0 object-contain"
+                draggable="false"
+                loading="eager"
+                decoding="async"
+              />
+              <span className="profile-avatar-shark-eyes absolute inset-0" />
+              <span className="profile-avatar-shark-bubbles profile-avatar-shark-bubbles--left absolute" />
+              <span className="profile-avatar-shark-bubbles profile-avatar-shark-bubbles--right absolute" />
+            </>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
