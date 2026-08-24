@@ -876,6 +876,8 @@ assert.match(studioSource, /onPointerDown=\{\(event\) => startPointer\("move", e
 assert.match(studioSource, /startPointer\(handle, event\)/, "studio exposes resize handles");
 assert.match(studioSource, /detectFrameMetadataFromUrl/, "studio has local alpha detection");
 assert.match(studioSource, /save-frame-render-metadata/, "studio saves only on explicit metadata action");
+assert.match(studioSource, /const framePreviewAvatar = previewAvatar \|\| catalogPreviewAvatar;/, "frame catalog previews keep a demo avatar when no avatar is selected");
+assert.match(studioSource, /<ProfileAvatar avatar=\{framePreviewAvatar\} frame=\{frame\}/, "frame catalog previews render the actual frame instead of the initial fallback");
 
 const uploadStudioSource = await readFile(new URL("../src/components/ProfileCosmeticUploadStudio.jsx", import.meta.url), "utf8");
 assert.match(uploadStudioSource, /normalizeFrameFile/, "upload studio normalizes frames locally");

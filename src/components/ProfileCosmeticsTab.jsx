@@ -276,8 +276,13 @@ export default function ProfileCosmeticsTab({
 
   const draftAvatar = draftAvatarId ? assetsById.get(draftAvatarId) || null : null;
   const studioAvatar = studioAvatarId ? assetsById.get(studioAvatarId) || null : null;
-  const previewAvatar = draftAvatar || (canManageCosmetics ? studioAvatar || catalog.avatars?.[0] || null : null);
-  const studioPreviewAvatar = studioAvatar || previewAvatar;
+  const catalogPreviewAvatar = useMemo(
+    () => (catalog.avatars || []).find((avatar) => getAssetUrl(avatar)) || null,
+    [catalog.avatars],
+  );
+  const previewAvatar = draftAvatar || (canManageCosmetics ? studioAvatar || catalogPreviewAvatar : null);
+  const framePreviewAvatar = previewAvatar || catalogPreviewAvatar;
+  const studioPreviewAvatar = studioAvatar || previewAvatar || catalogPreviewAvatar;
   const draftFrame = draftFrameId && previewAvatar ? assetsById.get(draftFrameId) || null : null;
   const frameWithDraftMetadata = draftFrame && frameMetadataDraft ? { ...draftFrame, metadata: frameMetadataDraft } : draftFrame;
   const hasChanges =
@@ -534,7 +539,7 @@ export default function ProfileCosmeticsTab({
                     setErrorMessage("");
                   }}
                 >
-                  <ProfileAvatar avatar={previewAvatar} frame={frame} name={displayName} size={88} />
+                  <ProfileAvatar avatar={framePreviewAvatar} frame={frame} name={displayName} size={88} />
                 </CosmeticChoice>
               ))}
             </div>
