@@ -87,7 +87,7 @@ assert.equal(normalizePortalRolePreviewRole("créateur de contenu"), "content_cr
 assert.equal(normalizePortalRolePreviewMode("unknown-role"), PORTAL_REAL_VIEW_MODE);
 
 assert.equal(isPortalRolePreviewManagerSession(leaderSession), true, "leaders can use role preview");
-assert.equal(isPortalRolePreviewManagerSession(adminSession), true, "admins can use role preview");
+assert.equal(isPortalRolePreviewManagerSession(adminSession), false, "admins cannot use role preview");
 assert.equal(isPortalRolePreviewManagerSession(memberSession), false, "members cannot use role preview");
 
 const memberPreview = buildPortalRolePreviewSession(leaderSession, "member");

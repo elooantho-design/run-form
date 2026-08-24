@@ -98,10 +98,7 @@ export function isPortalRolePreviewManagerSession(session) {
   return Boolean(
     session?.isLeader ||
       session?.leader ||
-      session?.isAdmin ||
-      session?.admin ||
-      role === "leader" ||
-      role === "admin",
+      role === "leader",
   );
 }
 
