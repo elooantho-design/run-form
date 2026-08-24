@@ -3,7 +3,10 @@ import {
   PROFILE_COSMETIC_FRAME,
   buildProfileCosmeticsCatalog,
   cleanProfileCosmeticText,
+  normalizeFrameRenderMetadataForStorage,
   normalizeProfileCosmeticAsset,
+  normalizeProfileCosmeticMetadata,
+  normalizeProfileCosmeticType,
   resolveProfileCosmeticSelection,
 } from "../src/lib/profileCosmetics.js";
 
@@ -184,6 +187,59 @@ export async function saveProfileCosmeticsSelection(supabase, member, body = {})
 
   if (error) throw error;
   return loadProfileCosmeticsState(supabase, member);
+}
+
+export async function saveProfileCosmeticFrameMetadata(supabase, member, body = {}) {
+  const allowedBodyKeys = new Set(["action", "assetId", "asset_id", "metadata", "renderMetadata"]);
+  for (const key of Object.keys(body || {})) {
+    if (!allowedBodyKeys.has(key)) {
+      const error = new Error(`Le champ ${key} n'est pas autorise pour cette action.`);
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+
+  const assetId = cleanProfileCosmeticText(body.assetId || body.asset_id, 120);
+  if (!assetId) {
+    const error = new Error("Cadre manquant.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { data: asset, error: assetError } = await supabase
+    .from("portal_cosmetic_assets")
+    .select(PROFILE_COSMETIC_ASSET_SELECT)
+    .eq("id", assetId)
+    .maybeSingle();
+
+  if (assetError) throw assetError;
+  if (!asset || normalizeProfileCosmeticType(asset.asset_type || asset.assetType) !== PROFILE_COSMETIC_FRAME) {
+    const error = new Error("Cadre introuvable.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const previousMetadata = normalizeProfileCosmeticMetadata(asset.metadata);
+  const renderMetadataPayload = body.metadata ?? body.renderMetadata;
+  const renderMetadata = normalizeFrameRenderMetadataForStorage(renderMetadataPayload);
+  const nextMetadata = {
+    ...previousMetadata,
+    ...renderMetadata,
+  };
+
+  const { data: updatedAsset, error } = await supabase
+    .from("portal_cosmetic_assets")
+    .update({ metadata: nextMetadata })
+    .eq("id", assetId)
+    .select(PROFILE_COSMETIC_ASSET_SELECT)
+    .single();
+
+  if (error) throw error;
+  const state = await loadProfileCosmeticsState(supabase, member);
+  return {
+    ...state,
+    savedAsset: serializeProfileCosmeticAsset(updatedAsset),
+  };
 }
 
 export async function loadCosmeticsForMemberIds(supabase, memberIds = []) {

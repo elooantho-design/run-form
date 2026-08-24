@@ -134,6 +134,7 @@ const adminNavigation = [
   { id: "intersaison", label: "Intersaison", labelKey: "nav.intersaison", icon: RefreshCw, adminOnly: true, paladinOnly: true },
   { id: "run-add", label: "Ajout de run", labelKey: "nav.runAdd", icon: PlusCircle, adminOnly: true },
   { id: "run-edit", label: "Modification de run", labelKey: "nav.runEdit", icon: FileJson, adminOnly: true },
+  { id: "cosmetics", label: "Cosmetiques", labelKey: "nav.cosmetics", icon: ImagePlus, adminOnly: true },
   { id: "templates", label: "Ajout heros", labelKey: "nav.templates", icon: PlusCircle, leaderOnly: true },
   { id: "guilds", label: "Guildes", labelKey: "nav.guilds", icon: Users, leaderOnly: true },
   { id: "billing", label: "Licences", labelKey: "nav.billing", icon: WalletCards, leaderOnly: true },
@@ -2806,6 +2807,15 @@ function PortalShell({ session, onLogout }) {
           {active === "intersaison" ? <PortalIntersaisonTab session={session} /> : null}
           {active === "run-add" ? <RunAddTab session={session} /> : null}
           {active === "run-edit" ? <RunEditTab session={session} initialRunId={editRunInitialId} /> : null}
+          {active === "cosmetics" ? (
+            <ProfileCosmeticsTab
+              session={session}
+              cosmeticsState={profileCosmeticsState}
+              loading={profileCosmeticsLoading}
+              onCosmeticsStateChange={setProfileCosmeticsState}
+              adminMode
+            />
+          ) : null}
           {active === "player-access" ? <PlayerAccessView session={session} /> : null}
           {active === "templates" ? <AddHeroView session={session} /> : null}
           {active === "guilds" ? <GuildsView session={session} /> : null}

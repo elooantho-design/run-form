@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
   readJsonBody,
+  requirePortalAdminSession,
   requirePortalSession,
   sendPortalJson,
   verifyPortalRequestOrigin,
@@ -10,6 +11,7 @@ import {
 import {
   isMissingProfileCosmeticsSchema,
   loadProfileCosmeticsState,
+  saveProfileCosmeticFrameMetadata,
   saveProfileCosmeticsSelection,
 } from "./_portal-cosmetics.js";
 
@@ -41,6 +43,31 @@ async function saveProfileCosmetics(req, res, member, body) {
 
     sendPortalJson(res, error.statusCode || error.status || 500, {
       error: error?.message || "Sauvegarde du profil impossible.",
+    }, req);
+  }
+}
+
+async function saveFrameMetadata(req, res, body) {
+  const adminSession = await requirePortalAdminSession(req, supabase);
+  if (adminSession.error) {
+    sendPortalJson(res, adminSession.status || 403, { error: adminSession.error }, req);
+    return;
+  }
+
+  try {
+    const state = await saveProfileCosmeticFrameMetadata(supabase, adminSession.member, body);
+    sendPortalJson(res, 200, state, req);
+  } catch (error) {
+    if (isMissingProfileCosmeticsSchema(error)) {
+      sendPortalJson(res, 409, {
+        error: "Tables des cosmetiques de profil manquantes. Execute scripts/profile_cosmetics.sql.",
+        schemaReady: false,
+      }, req);
+      return;
+    }
+
+    sendPortalJson(res, error.statusCode || error.status || 500, {
+      error: error?.message || "Sauvegarde du cadre impossible.",
     }, req);
   }
 }
@@ -81,6 +108,11 @@ export default async function handler(req, res) {
 
     if (action === "save" || action === "save-selection") {
       await saveProfileCosmetics(req, res, sessionResult.member, body);
+      return;
+    }
+
+    if (action === "save-frame-render-metadata" || action === "save-frame-metadata") {
+      await saveFrameMetadata(req, res, body);
       return;
     }
 
