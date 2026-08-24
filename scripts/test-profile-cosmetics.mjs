@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
+import zlib from "node:zlib";
 import {
   loadCosmeticsForMemberIds,
   saveProfileCosmeticFrameMetadata,
@@ -7,6 +9,10 @@ import {
   serializeProfileCosmeticsCatalog,
   validateProfileCosmeticSelection,
 } from "../api/_portal-cosmetics.js";
+import {
+  inspectPngBuffer,
+  publishProfileCosmeticAsset,
+} from "../api/_portal-cosmetics-publish.js";
 import {
   analyzeFrameAlphaGeometry,
   getFrameContentInset,
@@ -320,6 +326,156 @@ function createFakeSupabase() {
   return { calls, from };
 }
 
+function createPngChunk(type, data = Buffer.alloc(0)) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  return Buffer.concat([length, typeBuffer, data, Buffer.alloc(4)]);
+}
+
+function createTestPng({ width = 1024, height = 1024, frame = false, opaque = false } = {}) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  const rowBytes = width * 4;
+  const raw = Buffer.alloc((rowBytes + 1) * height);
+  const border = Math.max(1, Math.floor(Math.min(width, height) * 0.12));
+  for (let y = 0; y < height; y += 1) {
+    const rowOffset = y * (rowBytes + 1);
+    raw[rowOffset] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const pixel = rowOffset + 1 + x * 4;
+      const isBorder = x < border || y < border || x >= width - border || y >= height - border;
+      raw[pixel] = frame ? 40 : 120;
+      raw[pixel + 1] = frame ? 170 : 80;
+      raw[pixel + 2] = frame ? 250 : 190;
+      raw[pixel + 3] = opaque || !frame || isBorder ? 255 : 0;
+    }
+  }
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    createPngChunk("IHDR", ihdr),
+    createPngChunk("IDAT", zlib.deflateSync(raw)),
+    createPngChunk("IEND"),
+  ]);
+}
+
+function createPublishingFakeSupabase(options = {}) {
+  const assetRows = (options.assets || assets).map((asset) => ({ ...asset, metadata: { ...(asset.metadata || {}) } }));
+  const selections = new Map();
+  const inserts = [];
+  const collections = [basicCollection];
+
+  function applyQuery(state, rows) {
+    let result = [...rows];
+    for (const filter of state.eqFilters) {
+      result = result.filter((row) => row?.[filter.column] === filter.value);
+    }
+    if (state.inFilter) {
+      const allowed = new Set(state.inFilter.values.map(String));
+      result = result.filter((row) => allowed.has(String(row?.[state.inFilter.column])));
+    }
+    if (state.orderBy) {
+      result.sort((left, right) => {
+        const leftValue = left?.[state.orderBy.column] ?? 0;
+        const rightValue = right?.[state.orderBy.column] ?? 0;
+        return state.orderBy.ascending ? leftValue - rightValue : rightValue - leftValue;
+      });
+    }
+    if (Number.isInteger(state.limitCount)) result = result.slice(0, state.limitCount);
+    return result;
+  }
+
+  function resolveRows(state) {
+    if (state.table === "portal_cosmetic_collections") return applyQuery(state, collections);
+    if (state.table === "portal_cosmetic_assets") return applyQuery(state, assetRows);
+    if (state.table === "portal_member_cosmetics") return applyQuery(state, [...selections.values()]);
+    return [];
+  }
+
+  function from(table) {
+    const state = {
+      table,
+      eqFilters: [],
+      inFilter: null,
+      orderBy: null,
+      limitCount: null,
+      insertPayload: null,
+    };
+    const builder = {
+      select() {
+        return builder;
+      },
+      eq(column, value) {
+        state.eqFilters.push({ column, value });
+        return builder;
+      },
+      in(column, values) {
+        state.inFilter = { column, values };
+        return builder;
+      },
+      order(column, options = {}) {
+        state.orderBy = { column, ascending: options.ascending !== false };
+        return builder;
+      },
+      limit(count) {
+        state.limitCount = count;
+        return builder;
+      },
+      maybeSingle() {
+        const rows = resolveRows(state);
+        return Promise.resolve({ data: rows[0] || null, error: null });
+      },
+      single() {
+        if (state.table === "portal_cosmetic_assets" && state.insertPayload) {
+          if (options.insertError) return Promise.resolve({ data: null, error: new Error("insert failed") });
+          const row = {
+            id: `asset-upload-${assetRows.length + 1}`,
+            collection: basicCollection,
+            ...state.insertPayload,
+          };
+          assetRows.push(row);
+          inserts.push(row);
+          return Promise.resolve({ data: row, error: null });
+        }
+        const rows = resolveRows(state);
+        return Promise.resolve({ data: rows[0] || null, error: null });
+      },
+      insert(payload) {
+        state.insertPayload = payload;
+        return builder;
+      },
+      then(resolve, reject) {
+        return Promise.resolve({ data: resolveRows(state), error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  }
+
+  return { from, inserts, assetRows };
+}
+
+async function withMockedFetchAndEnv(fetchImplementation, callback) {
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.GVG_API_TOKEN;
+  process.env.GVG_API_TOKEN = "test-token";
+  globalThis.fetch = fetchImplementation;
+  try {
+    return await callback();
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.GVG_API_TOKEN;
+    else process.env.GVG_API_TOKEN = previousToken;
+  }
+}
+
 const fakeSupabase = createFakeSupabase();
 const savedState = await saveProfileCosmeticsSelection(
   fakeSupabase,
@@ -394,6 +550,266 @@ await assert.rejects(
   "admin metadata save refuses NaN before updating Supabase",
 );
 
+const validFramePng = createTestPng({ frame: true });
+const validFrameSha = crypto.createHash("sha256").update(validFramePng).digest("hex");
+const validFrameInfo = inspectPngBuffer(validFramePng, { requireAlpha: true });
+assert.equal(validFrameInfo.width, 1024, "server PNG inspection keeps normalized width");
+assert.equal(validFrameInfo.height, 1024, "server PNG inspection keeps normalized height");
+assert.equal(validFrameInfo.hasTransparentPixels, true, "frame inspection validates alpha transparency");
+assert.throws(() => inspectPngBuffer(Buffer.from("not-a-png")), /PNG valide/, "fake PNGs are refused");
+assert.throws(
+  () => inspectPngBuffer(createTestPng({ width: 1024, height: 1024, frame: true, opaque: true }), { requireAlpha: true }),
+  /canal alpha/,
+  "frames without transparency are refused",
+);
+
+const publishFakeSupabase = createPublishingFakeSupabase();
+let postCount = 0;
+await withMockedFetchAndEnv(
+  async (url, options = {}) => {
+    if (options.method === "POST") {
+      postCount += 1;
+      const request = JSON.parse(String(options.body || "{}"));
+      assert.equal(options.headers["X-GVG-Token"], "test-token", "VPS token stays server-side in a header");
+      assert.equal(request.asset_type, "frame", "VPS upload receives the frame type");
+      assert.ok(request.file_name.startsWith("basic_frame_"), "remote filename contains the stable hash key");
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          asset_type: request.asset_type,
+          file_name: request.file_name,
+          public_url: `https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/frames/${request.file_name}`,
+          sha256: validFrameSha,
+          width: 1024,
+          height: 1024,
+          size: validFramePng.length,
+          already_exists: false,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    assert.match(String(url), /\/assets\/profile-cosmetics\/frames\/basic_frame_/, "public verification uses the VPS asset URL");
+    return new Response(validFramePng, { status: 200, headers: { "content-type": "image/png" } });
+  },
+  async () => {
+    const state = await publishProfileCosmeticAsset(publishFakeSupabase, { id: "member-a", watcher_name: "Darius" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "frame",
+      collectionKey: "basic",
+      displayName: "Cadre Upload",
+      fileName: "source-frame.png",
+      metadata: validRenderMetadata,
+      pngBase64: validFramePng.toString("base64"),
+      sha256: validFrameSha,
+    });
+
+    assert.equal(state.publish.status, "published", "successful publish returns a published status");
+    assert.equal(publishFakeSupabase.inserts.length, 1, "publish inserts exactly one Supabase row");
+    assert.equal(publishFakeSupabase.inserts[0].metadata.source_sha256, validFrameSha, "source SHA is stored in metadata");
+    assert.equal(state.catalog.frames.some((frame) => frame.id === state.publishedAsset.id), true, "catalog reload includes the new frame");
+  },
+);
+assert.equal(postCount, 1, "successful publish uploads exactly once");
+
+const existingAssetKey = `basic_frame_${validFrameSha.slice(0, 16)}`;
+const alreadyPublishedSupabase = createPublishingFakeSupabase({
+  assets: [
+    ...assets,
+    createAsset(99, "frame", {
+      id: "existing-upload",
+      asset_key: existingAssetKey,
+      asset_url: `https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/frames/${existingAssetKey}.png`,
+      metadata: { ...validRenderMetadata, source_sha256: validFrameSha },
+    }),
+  ],
+});
+let duplicateUploadCount = 0;
+await withMockedFetchAndEnv(
+  async () => {
+    duplicateUploadCount += 1;
+    throw new Error("duplicate publish should not call the VPS");
+  },
+  async () => {
+    const state = await publishProfileCosmeticAsset(alreadyPublishedSupabase, { id: "member-a", watcher_name: "Darius" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "frame",
+      collectionKey: "basic",
+      displayName: "Cadre Upload",
+      fileName: "source-frame.png",
+      metadata: validRenderMetadata,
+      pngBase64: validFramePng.toString("base64"),
+      sha256: validFrameSha,
+    });
+    assert.equal(state.publish.status, "already_published", "same SHA returns the existing asset");
+  },
+);
+assert.equal(duplicateUploadCount, 0, "idempotent publish skips the VPS when Supabase already has the asset");
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "avatar",
+      collectionKey: "basic",
+      displayName: "Wrong size",
+      fileName: "small.png",
+      metadata: {},
+      pngBase64: createTestPng({ width: 512, height: 512 }).toString("base64"),
+    }),
+  /1024x1024/,
+  "publication refuses PNGs that were not normalized to 1024x1024",
+);
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "avatar",
+      collectionKey: "basic",
+      displayName: "Unexpected",
+      fileName: "avatar.png",
+      metadata: {},
+      assetKey: "client-forbidden",
+      pngBase64: createTestPng().toString("base64"),
+    }),
+  /pas autorise/,
+  "publication refuses unexpected payload fields such as client asset keys",
+);
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "avatar",
+      collectionKey: "basic",
+      displayName: "Bad metadata",
+      fileName: "avatar.png",
+      metadata: {
+        crop: { zoom: 99, offset_x: 0, offset_y: 0 },
+        avatar_fit: "cover",
+        avatar_position: { x: 0.5, y: 0.5 },
+      },
+      pngBase64: createTestPng().toString("base64"),
+    }),
+  /metadata.crop.zoom/,
+  "publication refuses out-of-bounds avatar crop metadata",
+);
+
+await assert.rejects(
+  () =>
+    withMockedFetchAndEnv(
+      async (url, options = {}) => {
+        if (options.method === "POST") {
+          const request = JSON.parse(String(options.body || "{}"));
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              asset_type: request.asset_type,
+              file_name: request.file_name,
+              public_url: `https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/frames/${request.file_name}`,
+              sha256: "0".repeat(64),
+              width: 1024,
+              height: 1024,
+              size: validFramePng.length,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(validFramePng, { status: 200, headers: { "content-type": "image/png" } });
+      },
+      () =>
+        publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+          action: "publish-cosmetic-asset",
+          assetType: "frame",
+          collectionKey: "basic",
+          displayName: "Bad VPS",
+          fileName: "frame.png",
+          metadata: validRenderMetadata,
+          pngBase64: validFramePng.toString("base64"),
+          sha256: validFrameSha,
+        }),
+    ),
+  /URL publique|reponse VPS/,
+  "publication refuses an incoherent VPS response",
+);
+
+await assert.rejects(
+  () =>
+    withMockedFetchAndEnv(
+      async (url, options = {}) => {
+        if (options.method === "POST") {
+          const request = JSON.parse(String(options.body || "{}"));
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              asset_type: request.asset_type,
+              file_name: request.file_name,
+              public_url: "https://evil.example/assets/profile-cosmetics/frames/bad.png",
+              sha256: validFrameSha,
+              width: 1024,
+              height: 1024,
+              size: validFramePng.length,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(validFramePng, { status: 200, headers: { "content-type": "image/png" } });
+      },
+      () =>
+        publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+          action: "publish-cosmetic-asset",
+          assetType: "frame",
+          collectionKey: "basic",
+          displayName: "Bad VPS URL",
+          fileName: "frame.png",
+          metadata: validRenderMetadata,
+          pngBase64: validFramePng.toString("base64"),
+          sha256: validFrameSha,
+        }),
+    ),
+  /URL publique|reponse VPS/,
+  "publication refuses a VPS response that points outside the allowed public URL",
+);
+
+await assert.rejects(
+  () =>
+    withMockedFetchAndEnv(
+      async (url, options = {}) => {
+        if (options.method === "POST") {
+          const request = JSON.parse(String(options.body || "{}"));
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              asset_type: request.asset_type,
+              file_name: request.file_name,
+              public_url: `https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/frames/${request.file_name}`,
+              sha256: validFrameSha,
+              width: 1024,
+              height: 1024,
+              size: validFramePng.length,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(validFramePng, { status: 200, headers: { "content-type": "image/png" } });
+      },
+      () =>
+        publishProfileCosmeticAsset(createPublishingFakeSupabase({ insertError: true }), { id: "member-a" }, {
+          action: "publish-cosmetic-asset",
+          assetType: "frame",
+          collectionKey: "basic",
+          displayName: "Insert fails",
+          fileName: "frame.png",
+          metadata: validRenderMetadata,
+          pngBase64: validFramePng.toString("base64"),
+          sha256: validFrameSha,
+        }),
+    ),
+  /insert failed/,
+  "publication surfaces Supabase insertion failures without false success",
+);
+
 const portalCosmeticsSource = await readFile(new URL("../api/portal-cosmetics.js", import.meta.url), "utf8");
 assert.match(
   portalCosmeticsSource,
@@ -405,11 +821,40 @@ assert.match(
   /save-frame-render-metadata/,
   "metadata endpoint exposes only the explicit frame metadata action",
 );
+assert.match(
+  portalCosmeticsSource,
+  /publish-cosmetic-asset/,
+  "publication endpoint exposes an explicit publish action",
+);
+assert.match(
+  portalCosmeticsSource,
+  /sizeLimit: "4mb"/,
+  "publication route declares a bounded JSON body size",
+);
+assert.match(
+  portalCosmeticsSource,
+  /MAX_PROFILE_COSMETICS_BODY_BYTES = 4_000_000/,
+  "publication route keeps a server-side safety margin under the platform payload limit",
+);
+
+const publishSource = await readFile(new URL("../api/_portal-cosmetics-publish.js", import.meta.url), "utf8");
+assert.match(publishSource, /public_url/, "publisher validates the public URL returned by the VPS");
+assert.match(publishSource, /assertAllowedPublicCosmeticUrl/, "publisher restricts VPS URLs to the expected public domain and folder");
 
 const studioSource = await readFile(new URL("../src/components/ProfileCosmeticsTab.jsx", import.meta.url), "utf8");
 assert.match(studioSource, /onPointerDown=\{\(event\) => startPointer\("move", event\)\}/, "studio exposes direct box dragging");
 assert.match(studioSource, /startPointer\(handle, event\)/, "studio exposes resize handles");
 assert.match(studioSource, /detectFrameMetadataFromUrl/, "studio has local alpha detection");
 assert.match(studioSource, /save-frame-render-metadata/, "studio saves only on explicit metadata action");
+
+const uploadStudioSource = await readFile(new URL("../src/components/ProfileCosmeticUploadStudio.jsx", import.meta.url), "utf8");
+assert.match(uploadStudioSource, /normalizeFrameFile/, "upload studio normalizes frames locally");
+assert.match(uploadStudioSource, /normalizeAvatarFile/, "upload studio normalizes avatars locally");
+assert.match(uploadStudioSource, /TARGET_COSMETIC_SIZE = 1024/, "upload studio targets 1024x1024 PNGs");
+assert.match(uploadStudioSource, /MAX_NORMALIZED_PNG_BYTES = 2_750_000/, "upload studio rejects oversized normalized PNGs before upload");
+assert.match(uploadStudioSource, /publishingDraftIdsRef/, "upload studio prevents duplicate publishes for the same draft");
+assert.match(uploadStudioSource, /existingDisplayNames/, "upload studio warns when a draft name resembles an existing catalog asset");
+assert.match(uploadStudioSource, /publish-cosmetic-asset/, "upload studio publishes only through the explicit server action");
+assert.match(uploadStudioSource, /Valider et publier/, "upload studio keeps an explicit publish button");
 
 console.log("profile cosmetics tests passed");

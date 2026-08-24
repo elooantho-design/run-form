@@ -3,6 +3,7 @@ import { Crosshair, Loader2, Lock, RefreshCw, Save, SlidersHorizontal, UserRound
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import ProfileAvatar from "@/components/ProfileAvatar";
+import ProfileCosmeticUploadStudio from "@/components/ProfileCosmeticUploadStudio";
 import {
   buildFrameRenderMetadataFromInset,
   buildFrameRenderMetadataFromImageData,
@@ -540,6 +541,24 @@ export default function ProfileCosmeticsTab({
           </div>
 
           {canManageCosmetics ? (
+            <>
+            <ProfileCosmeticUploadStudio
+              apiBase={apiBase}
+              canManageCosmetics={canManageCosmetics}
+              catalog={catalog}
+              displayName={displayName}
+              previewAvatar={studioPreviewAvatar}
+              t={t}
+              onCosmeticsStateChange={onCosmeticsStateChange}
+              onSelectAvatar={(assetId) => {
+                setDraftAvatarId(normalizeCosmeticId(assetId));
+                setStudioAvatarId(normalizeCosmeticId(assetId));
+              }}
+              onSelectFrame={(assetId) => setDraftFrameId(normalizeCosmeticId(assetId))}
+              onMessage={setMessage}
+              onError={setErrorMessage}
+            />
+
             <div className="rounded-lg border border-purple-400/20 bg-purple-950/10 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -744,6 +763,7 @@ export default function ProfileCosmeticsTab({
                 </div>
               )}
             </div>
+            </>
           ) : null}
         </div>
       </div>
