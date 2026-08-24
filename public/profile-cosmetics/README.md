@@ -1,33 +1,90 @@
-# Profile cosmetics staging
+# Profile Cosmetics Staging
 
-This directory is only a local staging area for new profile cosmetic PNG files.
-Production catalog rows must use the public VPS URL stored in Supabase
-`portal_cosmetic_assets.asset_url`.
+`public/profile-cosmetics/` is a temporary local staging area for new profile cosmetic PNG files.
 
-Current VPS layout:
+It is not the production storage location. The canonical production files live on the VPS:
 
 ```text
 /opt/gvg-paladin/storage/assets/profile-cosmetics/avatars/
 /opt/gvg-paladin/storage/assets/profile-cosmetics/frames/
 ```
 
-Public URL layout:
+Public URLs must use the VPS asset host:
 
 ```text
 https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/avatars/<file>.png
 https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/frames/<file>.png
 ```
 
-Workflow for new assets:
+Never use `/profile-cosmetics/...` or a Vercel-local path in `portal_cosmetic_assets.asset_url`.
 
-1. Drop the PNG in `public/profile-cosmetics/avatars/` or `public/profile-cosmetics/frames/`.
-2. Verify it is a PNG and keep the exact filename.
-3. Upload it to the matching VPS folder under `/opt/gvg-paladin/storage/assets/profile-cosmetics/`.
-4. Refuse overwrite if the remote file already exists unless the replacement is intentional.
-5. Verify the public HTTPS URL returns `200` with `Content-Type: image/png`.
-6. Add the asset to `scripts/profile_cosmetics.sql` with the final VPS URL.
-7. Run the Supabase preflight and migration only after the VPS URLs are verified.
-8. After production validation, the local staging PNG may be removed without breaking the dashboard.
+## Import Workflow
 
-Do not put profile cosmetics in `assets/calques` or `hero-calques`.
-Do not commit secrets or local `.env` files.
+1. Generate the avatar or frame PNG.
+2. Drop avatars in `public/profile-cosmetics/avatars/`.
+3. Drop frames in `public/profile-cosmetics/frames/`.
+4. Run a dry-run first:
+
+   ```powershell
+   .\scripts\upload-profile-cosmetics.ps1 -DryRun -KeepLocal
+   ```
+
+5. Review the report and manifest: filenames, type, dimensions, PNG mode, alpha, SHA-256, upload endpoint, and target URL.
+6. Run the real upload through the dedicated VPS profile-cosmetics endpoint:
+
+   ```powershell
+   .\scripts\upload-profile-cosmetics.ps1 -KeepLocal
+   ```
+
+   The script uses `X-GVG-Token` with the same token configuration as the existing hero-calques upload workflow. It does not copy files through SSH and does not send a destination path to the server.
+
+   After the SQL and application validation are complete, a cleanup run can be performed without `-KeepLocal` if the exact current-run manifest is still valid:
+
+   ```powershell
+   .\scripts\upload-profile-cosmetics.ps1
+   ```
+
+7. The script writes a manifest to `scripts/profile-cosmetics-upload-manifest.json` and verifies each uploaded file through the public HTTPS URL:
+
+   - HTTP `200`
+   - `Content-Type: image/png`
+   - same dimensions as local
+   - same SHA-256 as local
+   - alpha preserved for frames
+
+8. Only files uploaded and verified during the current run can be removed from local staging.
+9. Run the SQL preflight.
+10. Run the additive SQL insert.
+11. Run the SQL verify.
+12. The new cosmetics should appear automatically in `Mon profil`.
+
+## Safety Rules
+
+- Local missing file does not mean the asset should be removed from the catalog.
+- The workflow is additive only.
+- Never delete a VPS asset automatically from this staging workflow.
+- Never delete a Supabase `portal_cosmetic_assets` row automatically from this staging workflow.
+- Never modify player selections from this staging workflow.
+- Do not put profile cosmetics in `assets/calques` or `hero-calques`.
+- Do not commit secrets or local `.env` files.
+
+## Access Configuration
+
+The upload script reads the VPS URL and token from command-line arguments, environment variables, or `.env.local`:
+
+```text
+GVG_SERVER_URL
+GVG_VPS_URL
+GVG_API_TOKEN
+GVG_SERVER_TOKEN
+```
+
+The expected endpoint is:
+
+```text
+/api/v1/profile-cosmetics/{assetType}/base64
+```
+
+where `{assetType}` is exactly `avatar` or `frame`.
+
+The current deployed GvG HTTP upload API only supports hero calques. Profile cosmetics must not be uploaded through the hero-calques endpoint or any generic calques route.

@@ -1,0 +1,1676 @@
+{
+  "generated_at": "2026-08-24T10:47:37.093287+00:00",
+  "applied": true,
+  "local_root": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics",
+  "normalized_root": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54",
+  "backup_root": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730",
+  "summary": {
+    "total_assets": 35,
+    "avatars": 15,
+    "frames": 20,
+    "checks_ok": true,
+    "backup_files": 35,
+    "replaced_files": 35
+  },
+  "assets": [
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_17.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 10_57_17.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "22a1d8d42e611da5675c422ef1d11e5e56a9ce2747ef87eea74f386dced470e8"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 10_57_17.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "31d0f9350ec8afd72e7e6eaa4da756cd8c67d20cfc5fe1abb9ec22a3fb8dc052",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_31.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 10_57_31.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "451898e6a3b5479cecad046f458c15e8d25ad5f0b76fa33febf06332c83aa9b1"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 10_57_31.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "00fa73b8779f04ef33084166372cd1be0dd986123d8e2cf94243c8b89451bcfc",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_43.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 10_57_43.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "68a41a0b49a075abad8ead8401cc2866d26cb7a5aa768dbba2807853039cb893"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 10_57_43.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "f0dacfde15e663c0c33592d47655dd179b79df8cdd6dd5b45ae81879c9b7ede1",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_57.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 10_57_57.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "a91f3a57ab8556e572b3f30d4efa563d5e2df083c366625f291b8f5cd8dbd3d2"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 10_57_57.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "0a94081d203bd2eefc6ee16257183db3314cfa4ec86c370cf0fcc77888778bd2",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_59_05.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 10_59_05.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "3b91ae4ecef8845840dcd0256694682f60c79c63fe6594397cdebcd646caadf4"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 10_59_05.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "c0a0fb652838e148adb808f02369763a309e30fa08452deb01bbf239025f78e4",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_07_40.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_07_40.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "4eee942164ad32e8723be3290308562a627f8fac0ee2e1c476c816336f0d94b1"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_07_40.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "35436d0ff2d6b55b23473c9caeafb2639125ee992a69b60261f0ecefb74bdd92",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_08_03.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_08_03.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "9ea39f950b650dc46e34f30d1f18b184706eb4c4accfd6ad6ad8d44f6110c660"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_08_03.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "ac08fc0cd7022005d09f2e1e78fb3561fee66d8d174c288f885464986a60e9eb",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_08_23.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_08_23.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "4711b22824a7ea79503950e3f81dd52388b22680714fcf42d62f524a52daea19"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_08_23.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "e61ad49fe8f30a41c7341a11177ffc1908b4d0a5bd9b0101c7a7ae551dbdbc84",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_08_53.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_08_53.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "64493bd6cc11643150d9d2c4bc7700075f2b79148df82bbc9c2ddd62a6445908"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_08_53.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "a6c4e18a5496c9a2cb7a30ce18eeddb98a1f4ecaa777cbe31d560b3a88d4c6b6",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_11_40.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_11_40.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "9f90f8c6805d3014eb9f6de7ff0f6098163b2437a976620ce1655d9e3e425e3f"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_11_40.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "4bd6e4425c3707d028f914bb3e1c788e05449752a5f09a7efba8c91c4af7fec7",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 0,
+          "opaque_pixels": 0,
+          "center_alpha": 250,
+          "center_window_max_alpha": 251
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_33_22.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_33_22.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "bf08478e8f42f9bd2f41f478efc42606cce5ce602e79840c6169fbd35b6d0574"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_33_22.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "18175397294080379439a82abdf474143c5a993fe24f63d2374cf1d1d881d5a6",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_33_38.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_33_38.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "26ac3780bade3edd9b6c3016ef0a68d72c52d260a0f525efbe72f439ac099111"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_33_38.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "8c298dca5c61095c671a229178147b7782a826f222529a9b399a34734dd8f527",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_33_48.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_33_48.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "2709dde72c35a5bd7fb72fcf0fec6d7c529096d5e7c8eff47b2430e4af9552bb"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_33_48.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "7a7f92a8bbf9252cecfc67865be93ab2b3e46dbaa013cd22b9445102bb757855",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_34_05.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_34_05.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "f3dc704f33c1315ff84c9c8372c4982cb32b6fd608394b01628629f5dfea8570"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_34_05.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "c4018f92b31a2cf85191c02bb815ae4bf27b3f7301539a3749acfd95fe26928c",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_34_15.png",
+      "asset_type": "avatar",
+      "filename": "ChatGPT Image 24 août 2026, 11_34_15.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "visible_bbox": null,
+        "sha256": "446269805e0d60471c9827fe50da2d75b5f4f24761a7b7f19f8cfd8907446427"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\avatars\\ChatGPT Image 24 août 2026, 11_34_15.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGB",
+        "has_alpha": false,
+        "sha256": "c95ddaa5cd20ec526dc114d197f00a1d0300972b2d2c6b0188665726cff97364",
+        "alpha_stats": {
+          "has_alpha": false,
+          "transparent_pixels": 0,
+          "opaque_pixels": 1048576,
+          "center_alpha": null,
+          "center_window_max_alpha": null
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_50_55.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 10_50_55.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "fd6b9031c93ba069eaad08cfed2d69cc6e3ef85c0b4375558c385500d3681b06"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 10_50_55.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "d496f5f3a81fdaf072011f5edd987378e72ca61aee6440742fb32709294dfcea",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 692841,
+          "opaque_pixels": 365,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_06.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 10_51_06.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "87f5596ca27fcf5e3a89b9b3bd0602a14346fb0d8e9005b5f75f8a5b783d32e3"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 10_51_06.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "b817983dfc20d0d476d0d3735a6a420331a241119a633ca166d748243546a409",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 630207,
+          "opaque_pixels": 991,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_15.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 10_51_15.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "b53306e3c1cf3c8f51f71efc38d7dc2d3f3687a15455fea65475d2189527f251"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 10_51_15.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "ae8ca238728ac2afc3da3943a103f82886b83e388e9c4d6103ffe73bd850db54",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 768034,
+          "opaque_pixels": 1787,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_23.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 10_51_23.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          19,
+          1240,
+          1254
+        ],
+        "sha256": "c007e5d95c6a7e2c03cd596494388e2870aae909b95dfe939f22a1cb019b2dbf"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 10_51_23.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "70888353308d7645360f79ff4e09a3c9173296665550d031d9cc525618596200",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 753885,
+          "opaque_pixels": 886,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_37.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 10_51_37.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "d9bde9601b3b567e22718973f46257496df06cf826c1b2998b5f81550511b763"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 10_51_37.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "a4db5ebb76c236e2cf257170ee7fc71c1c57a1e72d8bdd7ef02d11943b3169a0",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 650865,
+          "opaque_pixels": 921,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_13_37.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_13_37.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "d126dbde089a8043a6413050bc65962ae5dbedffc0136645a5dd4e6a9eb7bc6b"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_13_37.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "9ced7781d391b3a056d7821fa6171875fbb8b81f4582da2acacde68e1959dca3",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 673944,
+          "opaque_pixels": 849,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_15_39.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_15_39.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "1405a841c5329f77f8488fa32664728450bc15d6e629a64d3aa3c2b06a4e25d2"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_15_39.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "953efc018cf5928c7bb72847d37e50d9c50625205ecc91a5f050f9c8bde4007b",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 760153,
+          "opaque_pixels": 803,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_15_48.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_15_48.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "e25230a001b9f9596910c8945f5e322a6911a2847de87e433a36b19698244194"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_15_48.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "2b6f996f2befa743437c057f9bab3ffffc5c51790290cff49b80b198af66687c",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 690399,
+          "opaque_pixels": 1557,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_15_59.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_15_59.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          15,
+          1238,
+          1254
+        ],
+        "sha256": "ae2f2375da4daf73532fb30e1f44a2f807c65c72fb6a5d3f8d63b831ab857448"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_15_59.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "3a7182cdbf6a96322357d6b076790315c34b0e146da5ac9bef94535482c7a58e",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 755977,
+          "opaque_pixels": 2308,
+          "center_alpha": 0,
+          "center_window_max_alpha": 0
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_16_09.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_16_09.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "b9d064ee5211f9384ffb2a7f4326804d91e063159258dca68040a609e939a01d"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_16_09.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "8cef8cc463a1de4b4f45614c64074229c321d7b11b05a731a04bc36d8131e598",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 592922,
+          "opaque_pixels": 241,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_39_46.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_39_46.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "9254c433c2b7311c16a74122a11f42ec82f2f920fdc24a3223b91319a092d472"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_39_46.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "ed977ab38a5c439e4a4783796c5527d4b2cc9b6612a78be040ae82b02bd66638",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 528545,
+          "opaque_pixels": 427,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_40_59.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_40_59.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "e0dcd372422a0679e5e13f7e8335c19d0398ac3639f9294b739f504fff295fb0"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_40_59.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "37a0854a01567fb174b755f3d8bf8edb1e61f74b29e211bb266583df7b240b36",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 593564,
+          "opaque_pixels": 752,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_41_48.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_41_48.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1239,
+          1238
+        ],
+        "sha256": "578450bcd2dcd8c26235d1faca72d9f0c23f6c819d7dcc71bc8903a955fe89b8"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_41_48.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "4839626ad9d3b939f5a131043982f8c032227caea904cc80d693bfdec2942a2b",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 666548,
+          "opaque_pixels": 958,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_43_20.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_43_20.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          11,
+          1254,
+          1254
+        ],
+        "sha256": "33d0b0d5df0ff2c810473fa291a7ed473b16117ea56b055dc4958e53541d2328"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_43_20.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "7668682af4799dd7140f665b971868e88c75a61deccbf08f441986c05c5fb574",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 588611,
+          "opaque_pixels": 768,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_52_53.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_52_53.png",
+      "method": "transparent-padding-and-resize",
+      "original": {
+        "width": 1312,
+        "height": 1199,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1312,
+          1199
+        ],
+        "sha256": "0823a4a4dc2f7a5c911471b27b6c1fe1eb14fe01c4c904fb184d49910ac052f5"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_52_53.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "3022bd567b4a566dac6df74a4cb254ad5a8c06130f48150fd880ed037ecee8c6",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 628175,
+          "opaque_pixels": 398,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": {
+        "side": 1312,
+        "offset_x": 0,
+        "offset_y": 56,
+        "visible_bbox": [
+          0,
+          0,
+          1312,
+          1199
+        ]
+      },
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_08.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_53_08.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          14,
+          1254,
+          1254
+        ],
+        "sha256": "656b17abfbce45829f38e0da614e7711072e5fadf48acc64e9e3f17c55f2176a"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_53_08.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "778148492054247346cd06fe944af2807a6e0398744f3aab6bb14946deb24fa1",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 612399,
+          "opaque_pixels": 1583,
+          "center_alpha": 0,
+          "center_window_max_alpha": 0
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_22.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_53_22.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1244,
+          1254
+        ],
+        "sha256": "cc4d0a2c5b65d057e20b6d65b632b160348f2442ce1d188655e2a590ca06970d"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_53_22.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "ad54932fbd505f7608e663c4bc528dbc3a104eb6fbc22d99352bfbc8f5c1c523",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 515842,
+          "opaque_pixels": 709,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_36.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_53_36.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          17,
+          0,
+          1218,
+          1254
+        ],
+        "sha256": "62b619562d9cc5bc9524cb78bb6363e8da5c6f1b913a22ed7c8ccb63ab494e3a"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_53_36.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "16cee05f4e8ec75f198610bf4b19979ec8eb2f17fe0f96263772327be4ab2b06",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 610583,
+          "opaque_pixels": 718,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_56.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_53_56.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "f03ac9362aa9497edf6b863308d7935db2b9720410c32896af8d07bf1f4dd966"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_53_56.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "768b9a295f77823faf985819595c0b24e1cf5265e8c57d198a2481e01792f8ca",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 515762,
+          "opaque_pixels": 67,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    },
+    {
+      "local_path": "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_54_14.png",
+      "asset_type": "frame",
+      "filename": "ChatGPT Image 24 août 2026, 11_54_14.png",
+      "method": "resize",
+      "original": {
+        "width": 1254,
+        "height": 1254,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "visible_bbox": [
+          0,
+          0,
+          1254,
+          1254
+        ],
+        "sha256": "8003b10766e5f859efbbbfae5d185a36f57f4a3a72a2feb9a4e7c3bdbb7902ec"
+      },
+      "normalized": {
+        "path": "C:\\Users\\athon\\AppData\\Local\\Temp\\profile-cosmetics-normalized-944e5228adac4632a9dea83a131dec54\\frames\\ChatGPT Image 24 août 2026, 11_54_14.png",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "mode": "RGBA",
+        "has_alpha": true,
+        "sha256": "c61e79927b16dd577f0e65f8be9b91f5ecd44a319efa5fc6060454187db35db1",
+        "alpha_stats": {
+          "has_alpha": true,
+          "transparent_pixels": 505213,
+          "opaque_pixels": 1008,
+          "center_alpha": 0,
+          "center_window_max_alpha": 1
+        }
+      },
+      "padding": null,
+      "checks": {
+        "png": true,
+        "dimensions_1024": true,
+        "readable": true,
+        "alpha_preserved_when_present": true,
+        "frame_has_alpha": true,
+        "frame_has_transparency": true,
+        "frame_center_transparent": true,
+        "all_ok": true
+      }
+    }
+  ],
+  "backup_files": [
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 10_57_17.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 10_57_31.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 10_57_43.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 10_57_57.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 10_59_05.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_07_40.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_08_03.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_08_23.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_08_53.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_11_40.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_33_22.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_33_38.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_33_48.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_34_05.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\avatars\\ChatGPT Image 24 août 2026, 11_34_15.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 10_50_55.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 10_51_06.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 10_51_15.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 10_51_23.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 10_51_37.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_13_37.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_15_39.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_15_48.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_15_59.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_16_09.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_39_46.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_40_59.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_41_48.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_43_20.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_52_53.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_53_08.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_53_22.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_53_36.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_53_56.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\profile-cosmetics-original-backup-20260824-124730\\frames\\ChatGPT Image 24 août 2026, 11_54_14.png"
+  ],
+  "replaced_files": [
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_17.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_31.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_43.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_57_57.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 10_59_05.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_07_40.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_08_03.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_08_23.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_08_53.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_11_40.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_33_22.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_33_38.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_33_48.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_34_05.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\avatars\\ChatGPT Image 24 août 2026, 11_34_15.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_50_55.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_06.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_15.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_23.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 10_51_37.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_13_37.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_15_39.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_15_48.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_15_59.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_16_09.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_39_46.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_40_59.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_41_48.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_43_20.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_52_53.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_08.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_22.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_36.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_53_56.png",
+    "C:\\Users\\athon\\OneDrive\\Bureau\\Bot Zizi\\run-form\\public\\profile-cosmetics\\frames\\ChatGPT Image 24 août 2026, 11_54_14.png"
+  ]
+}
