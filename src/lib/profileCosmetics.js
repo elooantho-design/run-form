@@ -32,6 +32,72 @@ export function normalizeProfileCosmeticType(value) {
   return PROFILE_COSMETIC_ASSET_TYPES.has(type) ? type : "";
 }
 
+function getProfileCosmeticDisplayBaseName(assetType) {
+  return normalizeProfileCosmeticType(assetType) === PROFILE_COSMETIC_FRAME ? "Cadre" : "Avatar";
+}
+
+function getProfileCosmeticDisplayName(asset) {
+  return cleanProfileCosmeticText(asset?.displayName || asset?.display_name || asset?.display_name_fr || asset?.name, 120);
+}
+
+function normalizeProfileCosmeticDisplayName(value) {
+  return cleanProfileCosmeticText(value, 120)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export function getProfileCosmeticNumberedDisplayNameInfo(displayName) {
+  const normalized = normalizeProfileCosmeticDisplayName(displayName);
+  const match = normalized.match(/^(avatar|cadre|frame) ([1-9]\d*)$/);
+  if (!match) return null;
+  return {
+    assetType: match[1] === "avatar" ? PROFILE_COSMETIC_AVATAR : PROFILE_COSMETIC_FRAME,
+    number: Number(match[2]),
+  };
+}
+
+export function getNextProfileCosmeticDisplayName(assetType, existingAssets = [], reservedNames = []) {
+  const type = normalizeProfileCosmeticType(assetType);
+  if (!type) return "Cosmetique";
+
+  const reserved = new Set(reservedNames.map(normalizeProfileCosmeticDisplayName).filter(Boolean));
+  let maxNumber = 0;
+  for (const asset of existingAssets || []) {
+    const assetMatchesType = normalizeProfileCosmeticType(asset?.assetType || asset?.asset_type) === type;
+    const info = getProfileCosmeticNumberedDisplayNameInfo(getProfileCosmeticDisplayName(asset));
+    if (assetMatchesType && info?.assetType === type) {
+      maxNumber = Math.max(maxNumber, info.number);
+    }
+  }
+
+  let candidateNumber = maxNumber + 1;
+  let candidate = `${getProfileCosmeticDisplayBaseName(type)} ${candidateNumber}`;
+  while (reserved.has(normalizeProfileCosmeticDisplayName(candidate))) {
+    candidateNumber += 1;
+    candidate = `${getProfileCosmeticDisplayBaseName(type)} ${candidateNumber}`;
+  }
+  return candidate;
+}
+
+export function createProfileCosmeticDisplayNameAllocator(existingAssets = []) {
+  const reservedNames = [];
+  return (assetType) => {
+    const name = getNextProfileCosmeticDisplayName(assetType, existingAssets, reservedNames);
+    reservedNames.push(name);
+    return name;
+  };
+}
+
+export function summarizeProfileCosmeticPublishBatch(results = []) {
+  const completed = results.length;
+  const succeeded = results.filter((result) => result?.status === "published" || result?.status === "already_published").length;
+  const failed = results.filter((result) => result?.status === "failed").length;
+  return { completed, succeeded, failed };
+}
+
 export function normalizeProfileCosmeticMetadata(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;

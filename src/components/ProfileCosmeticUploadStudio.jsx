@@ -13,7 +13,10 @@ import { Badge } from "@/components/ui/badge";
 import ProfileAvatar from "@/components/ProfileAvatar";
 import {
   buildFrameRenderMetadataFromImageData,
+  createProfileCosmeticDisplayNameAllocator,
+  getNextProfileCosmeticDisplayName,
   normalizeFrameRenderMetadata,
+  summarizeProfileCosmeticPublishBatch,
 } from "@/lib/profileCosmetics";
 
 const TARGET_COSMETIC_SIZE = 1024;
@@ -169,6 +172,13 @@ function buildDraftAsset(draft) {
   };
 }
 
+function buildDraftNameAsset(draft) {
+  return {
+    assetType: draft.assetType,
+    displayName: draft.displayName,
+  };
+}
+
 async function normalizeFrameFile(file, settings = {}) {
   if (!fileLooksLikePng(file)) {
     throw new Error("Un cadre doit etre un PNG.");
@@ -321,6 +331,59 @@ function RangeControl({ label, value, min, max, step, suffix = "", onChange }) {
   );
 }
 
+function DraftInfoGrid({ draft, t }) {
+  const confidence = draft.assetType === "frame" ? draft.analysis?.confidence || null : null;
+  const finalSize = draft.bytes ? formatBytes(draft.bytes) : "-";
+  return (
+    <div className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-xs text-zinc-400 sm:grid-cols-2 xl:grid-cols-4">
+      <div>
+        <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+          {t("profile.uploadInfoType", "Type")}
+        </span>
+        <span className="text-zinc-200">
+          {draft.assetType === "avatar" ? t("profile.uploadTypeAvatar", "Avatar") : t("profile.uploadTypeFrame", "Cadre")}
+        </span>
+      </div>
+      <div>
+        <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+          {t("profile.uploadInfoName", "Nom propose")}
+        </span>
+        <span className="text-zinc-200">{draft.serverAsset?.displayName || draft.displayName}</span>
+      </div>
+      <div>
+        <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+          {t("profile.uploadInfoFormat", "Format final")}
+        </span>
+        <span className="text-zinc-200">PNG 1024x1024</span>
+      </div>
+      <div>
+        <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+          {t("profile.uploadInfoWeight", "Poids final")}
+        </span>
+        <span className="text-zinc-200">{finalSize}</span>
+      </div>
+      {draft.source ? (
+        <div className="sm:col-span-2">
+          <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+            {t("profile.uploadInfoDimensions", "Dimensions")}
+          </span>
+          <span className="text-zinc-200">
+            {draft.source.width}x{draft.source.height} {"->"} {draft.normalized?.width || 1024}x{draft.normalized?.height || 1024}
+          </span>
+        </div>
+      ) : null}
+      {confidence ? (
+        <div>
+          <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+            {t("profile.uploadInfoConfidence", "Confiance")}
+          </span>
+          <span className="text-zinc-200">{confidence}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ProfileCosmeticUploadStudio({
   apiBase,
   canManageCosmetics,
@@ -335,15 +398,18 @@ export default function ProfileCosmeticUploadStudio({
   onError,
 }) {
   const inputRef = useRef(null);
+  const draftsRef = useRef([]);
   const publishingDraftIdsRef = useRef(new Set());
   const [assetType, setAssetType] = useState("avatar");
   const [drafts, setDrafts] = useState([]);
   const [dragging, setDragging] = useState(false);
+  const [batchStatus, setBatchStatus] = useState(null);
+  draftsRef.current = drafts;
   const framePreview = useMemo(() => (catalog.frames || [])[0] || null, [catalog.frames]);
+  const catalogAssets = useMemo(() => catalog.assets || [...(catalog.avatars || []), ...(catalog.frames || [])], [catalog.assets, catalog.avatars, catalog.frames]);
   const existingDisplayNames = useMemo(() => {
-    const sourceAssets = catalog.assets || [...(catalog.avatars || []), ...(catalog.frames || [])];
-    return new Set(sourceAssets.map((asset) => normalizeComparableName(asset.displayName || asset.display_name)).filter(Boolean));
-  }, [catalog.assets, catalog.avatars, catalog.frames]);
+    return new Set(catalogAssets.map((asset) => normalizeComparableName(asset.displayName || asset.display_name)).filter(Boolean));
+  }, [catalogAssets]);
 
   const readyDrafts = drafts.filter((draft) => draft.status === "ready" && (!draft.needsManualReview || draft.manualValidated));
 
@@ -379,12 +445,20 @@ export default function ProfileCosmeticUploadStudio({
       if (!files.length) return;
       onMessage?.("");
       onError?.("");
+      setBatchStatus(null);
+      const allocateDisplayName = createProfileCosmeticDisplayNameAllocator([
+        ...catalogAssets,
+        ...drafts.map(buildDraftNameAsset),
+      ]);
       for (const file of files) {
+        const displayName = allocateDisplayName(assetType);
         const draft = {
           id: createDraftId(),
           file,
           fileName: file.name,
-          displayName: cleanDisplayName(file.name, assetType === "frame" ? "Cadre" : "Avatar"),
+          displayName,
+          autoDisplayName: displayName,
+          displayNameEdited: false,
           assetType,
           settings: assetType === "frame" ? { margin: DEFAULT_FRAME_MARGIN } : { zoom: 1, offsetX: 0, offsetY: 0 },
           status: "normalizing",
@@ -395,23 +469,26 @@ export default function ProfileCosmeticUploadStudio({
         await normalizeAndStore(draft);
       }
     },
-    [assetType, normalizeAndStore, onError, onMessage],
+    [assetType, catalogAssets, drafts, normalizeAndStore, onError, onMessage],
   );
 
   async function publishDraft(draftId) {
-    if (publishingDraftIdsRef.current.has(draftId)) return;
-    const draft = drafts.find((item) => item.id === draftId);
+    if (publishingDraftIdsRef.current.has(draftId)) return { draftId, status: "skipped" };
+    const draft = draftsRef.current.find((item) => item.id === draftId);
     if (!draft) return;
+    if (draft.status === "published") return { draftId, status: "already_published" };
+    if (draft.status === "publishing") return { draftId, status: "skipped" };
     if (draft.needsManualReview && !draft.manualValidated) {
       updateDraft(draft.id, {
         status: "failed",
         error: t("profile.uploadManualReviewRequired", "Valide visuellement ce cadre avant publication."),
+        errorStep: t("profile.uploadManualReview", "Verification manuelle"),
       });
-      return;
+      return { draftId, status: "failed" };
     }
     if (!draft.pngDataUrl || !draft.metadata || !draft.sha256) {
       await normalizeAndStore(draft);
-      return;
+      return { draftId, status: "failed" };
     }
 
     publishingDraftIdsRef.current.add(draft.id);
@@ -449,32 +526,59 @@ export default function ProfileCosmeticUploadStudio({
         serverAsset: asset,
         publish: payload.publish,
         error: "",
+        errorStep: "",
       });
       onMessage?.(
         payload.publish?.status === "already_published"
           ? t("profile.uploadAlreadyPublished", "Ce cosmetique etait deja publie.")
           : t("profile.uploadPublishedMessage", "Cosmetique publie et catalogue rafraichi."),
       );
+      return { draftId, status: payload.publish?.status === "already_published" ? "already_published" : "published" };
     } catch (error) {
       updateDraft(draft.id, {
         status: "failed",
         error: error?.message || t("profile.uploadPublishError", "Publication impossible."),
+        errorStep: t("profile.uploadPublishError", "Publication impossible."),
       });
+      return { draftId, status: "failed" };
     } finally {
       publishingDraftIdsRef.current.delete(draft.id);
     }
   }
 
   async function publishAllReady() {
-    for (const draft of readyDrafts) {
-      await publishDraft(draft.id);
+    const targets = draftsRef.current.filter((draft) => draft.status === "ready" && (!draft.needsManualReview || draft.manualValidated));
+    if (!targets.length) return;
+    setBatchStatus({ status: "publishing", completed: 0, total: targets.length, succeeded: 0, failed: 0 });
+    const results = [];
+    for (const draft of targets) {
+      const result = await publishDraft(draft.id);
+      results.push(result || { draftId: draft.id, status: "failed" });
+      const summary = summarizeProfileCosmeticPublishBatch(results);
+      setBatchStatus({ status: "publishing", total: targets.length, ...summary });
     }
+    const summary = summarizeProfileCosmeticPublishBatch(results);
+    setBatchStatus({ status: "done", total: targets.length, ...summary });
+    onMessage?.(
+      t("profile.uploadBatchSummary", "{completed} publications terminees, {succeeded} reussies, {failed} en erreur.")
+        .replace("{completed}", String(summary.completed))
+        .replace("{succeeded}", String(summary.succeeded))
+        .replace("{failed}", String(summary.failed)),
+    );
   }
 
   function changeDraftAssetType(draft, nextType) {
+    const nextName = draft.displayNameEdited
+      ? draft.displayName
+      : getNextProfileCosmeticDisplayName(
+          nextType,
+          [...catalogAssets, ...drafts.filter((item) => item.id !== draft.id).map(buildDraftNameAsset)],
+        );
     const nextDraft = {
       ...draft,
       assetType: nextType,
+      displayName: nextName,
+      autoDisplayName: nextName,
       settings: nextType === "frame" ? { margin: DEFAULT_FRAME_MARGIN } : { zoom: 1, offsetX: 0, offsetY: 0 },
       manualValidated: false,
     };
@@ -483,7 +587,7 @@ export default function ProfileCosmeticUploadStudio({
   }
 
   function updateDraftDisplayName(draftId, value) {
-    updateDraft(draftId, { displayName: cleanDisplayName(value, "Cosmetique") });
+    updateDraft(draftId, { displayName: cleanDisplayName(value, "Cosmetique"), displayNameEdited: true });
   }
 
   function removeDraft(id) {
@@ -509,13 +613,27 @@ export default function ProfileCosmeticUploadStudio({
         <Button
           type="button"
           className="rounded-lg bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
-          disabled={!readyDrafts.length}
+          disabled={!readyDrafts.length || batchStatus?.status === "publishing"}
           onClick={publishAllReady}
         >
-          <UploadCloud className="mr-2 h-4 w-4" />
-          {t("profile.uploadPublishAll", "Publier les brouillons prets")}
+          {batchStatus?.status === "publishing" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
+          {readyDrafts.length
+            ? t("profile.uploadPublishReadyCount", "Publier {count} brouillons prets").replace("{count}", String(readyDrafts.length))
+            : t("profile.uploadPublishAll", "Publier les brouillons prets")}
         </Button>
       </div>
+      {batchStatus ? (
+        <div className="mt-4 rounded-lg border border-cyan-400/20 bg-cyan-400/10 p-3 text-sm text-cyan-50">
+          {batchStatus.status === "publishing"
+            ? t("profile.uploadBatchProgress", "{completed}/{total} publications terminees.")
+                .replace("{completed}", String(batchStatus.completed))
+                .replace("{total}", String(batchStatus.total))
+            : t("profile.uploadBatchSummary", "{completed} publications terminees, {succeeded} reussies, {failed} en erreur.")
+                .replace("{completed}", String(batchStatus.completed))
+                .replace("{succeeded}", String(batchStatus.succeeded))
+                .replace("{failed}", String(batchStatus.failed))}
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[320px_1fr]">
         <div
@@ -653,6 +771,8 @@ export default function ProfileCosmeticUploadStudio({
                       </div>
                     </div>
 
+                    <DraftInfoGrid draft={draft} t={t} />
+
                     {draft.assetType === "frame" ? (
                       <div className="grid gap-3 md:grid-cols-2">
                         <RangeControl
@@ -665,6 +785,7 @@ export default function ProfileCosmeticUploadStudio({
                         />
                         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-xs text-zinc-400">
                           {draft.source ? `${draft.source.width}x${draft.source.height} -> 1024x1024` : t("common.loading", "Chargement...")}
+                          {draft.bytes ? <span className="ml-2 text-zinc-500">{formatBytes(draft.bytes)}</span> : null}
                           {draft.analysis?.confidence ? (
                             <span className="ml-2 text-zinc-500">({draft.analysis.confidence})</span>
                           ) : null}
@@ -746,6 +867,7 @@ export default function ProfileCosmeticUploadStudio({
 
                     {draft.error ? (
                       <div className="rounded-lg border border-red-400/25 bg-red-400/10 p-3 text-sm text-red-100">
+                        {draft.errorStep ? <div className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-red-200">{draft.errorStep}</div> : null}
                         {draft.error}
                       </div>
                     ) : null}
@@ -760,25 +882,38 @@ export default function ProfileCosmeticUploadStudio({
                     ) : null}
 
                     <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        className="rounded-lg bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
-                        onClick={() => publishDraft(draft.id)}
-                        disabled={!canPublish || draft.status === "publishing"}
-                      >
-                        {draft.status === "publishing" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
-                        {t("profile.uploadPublish", "Valider et publier")}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
-                        onClick={() => void normalizeAndStore(draft)}
-                        disabled={draft.status === "publishing"}
-                      >
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        {t("profile.uploadRetry", "Nouvelle tentative")}
-                      </Button>
+                      {draft.status === "published" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-lg border-emerald-300/30 bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/15"
+                          onClick={() => inputRef.current?.click()}
+                        >
+                          <ImagePlus className="mr-2 h-4 w-4" />
+                          {t("profile.uploadAddAnother", "Ajouter un autre cosmetique")}
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          className="rounded-lg bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
+                          onClick={() => publishDraft(draft.id)}
+                          disabled={!canPublish || draft.status === "publishing"}
+                        >
+                          {draft.status === "publishing" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
+                          {t("profile.uploadPublish", "Valider et publier")}
+                        </Button>
+                      )}
+                      {draft.status === "failed" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                          onClick={() => void publishDraft(draft.id)}
+                        >
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          {t("profile.uploadRetry", "Nouvelle tentative")}
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 </div>

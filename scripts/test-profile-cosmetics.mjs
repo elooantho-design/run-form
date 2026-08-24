@@ -15,10 +15,13 @@ import {
 } from "../api/_portal-cosmetics-publish.js";
 import {
   analyzeFrameAlphaGeometry,
+  createProfileCosmeticDisplayNameAllocator,
   getFrameContentInset,
   getFrameRenderMetadata,
+  getNextProfileCosmeticDisplayName,
   normalizeFrameRenderMetadata,
   resolveProfileCosmeticSelection,
+  summarizeProfileCosmeticPublishBatch,
   validateFrameRenderMetadataForStorage,
 } from "../src/lib/profileCosmetics.js";
 
@@ -66,6 +69,33 @@ assert.equal(catalog.frames.length, 5, "Basic exposes five frames");
 assert.equal(catalog.avatars.every((asset) => asset.unlocked), true, "public Basic avatars are unlocked");
 assert.equal(catalog.frames.every((asset) => asset.unlocked), true, "public Basic frames are unlocked");
 assert.equal(getFrameContentInset(catalog.frames[0]), 0.14, "frame inset comes from metadata");
+const productionLikeAssets = [
+  { asset_type: "avatar", display_name: "Avatar 1" },
+  { asset_type: "avatar", display_name: "Avatar 20" },
+  { asset_type: "avatar", display_name: "ChatGPT Image 24 aout" },
+  { asset_type: "frame", display_name: "Cadre 1" },
+  { asset_type: "frame", display_name: "Cadre 26" },
+  { asset_type: "frame", display_name: "Received 675" },
+];
+assert.equal(
+  getNextProfileCosmeticDisplayName("avatar", productionLikeAssets),
+  "Avatar 21",
+  "automatic avatar names follow the highest numbered existing avatar",
+);
+assert.equal(
+  getNextProfileCosmeticDisplayName("frame", productionLikeAssets),
+  "Cadre 27",
+  "automatic frame names follow the highest numbered existing frame",
+);
+const allocateCosmeticDisplayName = createProfileCosmeticDisplayNameAllocator(productionLikeAssets);
+assert.equal(allocateCosmeticDisplayName("frame"), "Cadre 27", "multi-drop first frame gets the next number");
+assert.equal(allocateCosmeticDisplayName("frame"), "Cadre 28", "multi-drop second frame gets the following number");
+assert.equal(allocateCosmeticDisplayName("avatar"), "Avatar 21", "multi-drop avatar numbering is independent from frames");
+assert.deepEqual(
+  summarizeProfileCosmeticPublishBatch([{ status: "published" }, { status: "already_published" }, { status: "failed" }]),
+  { completed: 3, succeeded: 2, failed: 1 },
+  "batch summary counts published, idempotent and failed drafts",
+);
 assert.deepEqual(
   getFrameRenderMetadata(catalog.frames[0]).content_box,
   { x: 0.14, y: 0.14, width: 0.72, height: 0.72 },
@@ -854,6 +884,12 @@ assert.match(uploadStudioSource, /TARGET_COSMETIC_SIZE = 1024/, "upload studio t
 assert.match(uploadStudioSource, /MAX_NORMALIZED_PNG_BYTES = 2_750_000/, "upload studio rejects oversized normalized PNGs before upload");
 assert.match(uploadStudioSource, /publishingDraftIdsRef/, "upload studio prevents duplicate publishes for the same draft");
 assert.match(uploadStudioSource, /existingDisplayNames/, "upload studio warns when a draft name resembles an existing catalog asset");
+assert.match(uploadStudioSource, /createProfileCosmeticDisplayNameAllocator/, "upload studio allocates automatic names from existing numbered assets");
+assert.match(uploadStudioSource, /displayNameEdited: true/, "upload studio preserves custom names edited by the admin");
+assert.match(uploadStudioSource, /draft\.status === "failed" \? \(/, "upload studio shows retry only for failed drafts");
+assert.match(uploadStudioSource, /draft\.status === "published" \? \(/, "upload studio hides publish controls after success");
+assert.match(uploadStudioSource, /status === "ready"/, "batch publishing only targets ready drafts");
+assert.match(uploadStudioSource, /summarizeProfileCosmeticPublishBatch/, "upload studio renders a final batch summary");
 assert.match(uploadStudioSource, /publish-cosmetic-asset/, "upload studio publishes only through the explicit server action");
 assert.match(uploadStudioSource, /Valider et publier/, "upload studio keeps an explicit publish button");
 
