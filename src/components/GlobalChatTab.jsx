@@ -139,6 +139,12 @@ function eventPathHasChatPopoverRoot(event) {
   return Boolean(event?.target?.closest?.("[data-chat-popover-root='true']"));
 }
 
+function blurActiveElement() {
+  if (typeof document === "undefined") return;
+  const activeElement = document.activeElement;
+  if (typeof activeElement?.blur === "function") activeElement.blur();
+}
+
 function findGifAttachment(attachments) {
   return (attachments || []).find((attachment) => attachment?.attachmentType === "gif");
 }
@@ -408,6 +414,7 @@ function MessageContextMenu({
 
   useEffect(() => {
     if (!menu) return undefined;
+    if (menu.source === "touch") return undefined;
 
     function focusFirstItem() {
       const firstItem = menuRef.current?.querySelector("[role='menuitem']:not(:disabled)");
@@ -448,7 +455,7 @@ function MessageContextMenu({
     }
 
     function handleWindowClose() {
-      if (menu.source === "touch" && pickerOpen) return;
+      if (menu.source === "touch") return;
       onClose?.({ restoreFocus: false });
     }
 
@@ -525,6 +532,13 @@ function MessageContextMenu({
     />
   );
 
+  function openReactionPicker(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    blurActiveElement();
+    setPickerOpen(true);
+  }
+
   function runAction(action) {
     onClose?.({ restoreFocus: true });
     action?.();
@@ -559,11 +573,8 @@ function MessageContextMenu({
             type="button"
             role="menuitem"
             className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 transition hover:bg-zinc-900 focus:bg-cyan-400/15 focus:outline-none"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setPickerOpen((open) => !open);
-            }}
+            onPointerDown={openReactionPicker}
+            onClick={openReactionPicker}
           >
             <Smile className="h-4 w-4 text-zinc-400" />
             {t("chat.addReaction")}
@@ -1270,6 +1281,7 @@ export default function GlobalChatTab({ session }) {
   function openMessageMenu(message, point = {}) {
     if (!message?.id || message.deleted || message.deletedAt) return;
     const position = clampMessageMenuPosition(Number(point.x || 0), Number(point.y || 0));
+    if (point.source === "touch") blurActiveElement();
     messageMenuTriggerRef.current = point.triggerElement || null;
     setEmojiPickerOpen(false);
     setGifPickerOpen(false);

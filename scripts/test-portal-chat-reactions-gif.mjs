@@ -40,6 +40,8 @@ try {
   assert.match(chatSource, /autoFocusSearch=\{!isTouchMenu\}/);
   assert.match(chatSource, /searchDisabled=\{isTouchMenu\}/);
   assert.match(chatSource, /menu\.source === "touch" && pickerOpen/);
+  assert.match(chatSource, /if \(menu\.source === "touch"\) return undefined/);
+  assert.match(chatSource, /onPointerDown=\{openReactionPicker\}/);
 
   assert.equal(hasTranslatableChatText("😂🔥"), false);
   assert.equal(hasTranslatableChatText("Salut 👋"), true);
