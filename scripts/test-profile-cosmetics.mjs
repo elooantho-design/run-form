@@ -34,6 +34,7 @@ import {
   getProfileFrameAnimationKey,
   normalizeFrameAnimationLayers,
   normalizeFrameRenderMetadata,
+  shouldRefreshFrameMetadataDraft,
   MAX_PROFILE_FRAME_ANIMATION_LAYERS,
   PROFILE_COSMETIC_UI_ACCESS_BASIC,
   PROFILE_COSMETIC_UI_ACCESS_MANUAL,
@@ -502,6 +503,33 @@ assert.deepEqual(
   validateFrameRenderMetadataForStorage(animatedRenderMetadata).animation_layers,
   [animatedLayerLeft, animatedLayerRight],
   "storage validation preserves two WebP animation layers",
+);
+assert.equal(
+  shouldRefreshFrameMetadataDraft({
+    previousFrameId: "frame-1",
+    nextFrameId: "frame-1",
+    isDirty: true,
+  }),
+  false,
+  "dirty frame metadata draft survives same-frame catalog refresh",
+);
+assert.equal(
+  shouldRefreshFrameMetadataDraft({
+    previousFrameId: "frame-1",
+    nextFrameId: "frame-1",
+    isDirty: false,
+  }),
+  true,
+  "clean frame metadata draft can refresh from persisted catalog metadata",
+);
+assert.equal(
+  shouldRefreshFrameMetadataDraft({
+    previousFrameId: "frame-1",
+    nextFrameId: "frame-2",
+    isDirty: true,
+  }),
+  true,
+  "switching frames replaces the metadata draft even if the previous frame was dirty",
 );
 assert.equal(
   getFrameRenderMetadata(createAsset(7, "frame", { metadata: animatedRenderMetadata })).animation_layers[1].flipX,
@@ -1559,6 +1587,21 @@ assert.match(studioSource, /publish-cosmetic-effect/, "studio can upload an anim
 assert.match(studioSource, /Importer un WebP anime/, "studio renders the animated WebP import button");
 assert.match(studioSource, /Dupliquer l'URL/, "studio can copy an uploaded effect URL to the mirrored layer");
 assert.match(studioSource, /updateAnimationLayer\(current, index, \{ url: data\.url \}\)/, "studio injects the returned URL into the selected animation layer draft");
+assert.match(studioSource, /shouldRefreshFrameMetadataDraft/, "studio preserves dirty frame drafts across same-frame catalog refreshes");
+assert.match(studioSource, /frameMetadataDirtyRef\.current = true/, "studio marks local frame metadata changes as dirty");
+assert.match(studioSource, /frameMetadataDirtyRef\.current = false/, "studio clears dirty state only on explicit reset or saved metadata reload");
+assert.match(studioSource, /onMetadataChange=\{updateFrameMetadataDraft\}/, "animated layer editor writes into the protected local draft");
+assert.doesNotMatch(studioSource, /onMetadataChange=\{setFrameMetadataDraft\}/, "catalog refresh cannot bypass the protected draft updater");
+assert.match(studioSource, /<Button\s+type="button"[\s\S]{0,260}onClick=\{addSymmetricLayers\}/, "add mirrored animation layers button is non-submit");
+assert.match(studioSource, /<Button\s+type="button"[\s\S]{0,260}onClick=\{\(\) => addLayer\("left"\)\}/, "add single animation layer button is non-submit");
+assert.match(studioSource, /<Button\s+type="button"[\s\S]{0,260}onClick=\{\(\) => removeLayer\(index\)\}/, "remove animation layer button is non-submit");
+assert.match(
+  studioSource,
+  /<Button\s+type="button"[\s\S]{0,320}onClick=\{\(\) => effectInputRefs\.current\.get\(index\)\?\.click\(\)\}/,
+  "animated WebP file picker button is non-submit",
+);
+assert.match(studioSource, /<Button\s+type="button"[\s\S]{0,260}onClick=\{\(\) => void uploadSelectedEffect\(index\)\}/, "animated WebP import button is non-submit");
+assert.match(studioSource, /<Button\s+type="button"[\s\S]{0,260}onClick=\{\(\) => duplicateLayerUrl\(index\)\}/, "duplicate animation URL button is non-submit");
 assert.match(studioSource, /readEffectFilePayload/, "studio validates animated WebP files before upload");
 assert.match(studioSource, /MAX_ANIMATION_EFFECT_BYTES = 5 \* 1024 \* 1024/, "studio rejects oversized animated WebP files before upload");
 assert.match(studioSource, /url: ""/, "mirrored animation layers start without a fake demo URL");

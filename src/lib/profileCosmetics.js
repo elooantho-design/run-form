@@ -474,6 +474,14 @@ export function getFrameRenderMetadata(frame) {
   return normalizeFrameRenderMetadata(frame?.metadata, frame);
 }
 
+export function shouldRefreshFrameMetadataDraft({ previousFrameId, nextFrameId, isDirty }) {
+  const previous = cleanProfileCosmeticText(previousFrameId, 120);
+  const next = cleanProfileCosmeticText(nextFrameId, 120);
+  if (!next) return true;
+  if (previous !== next) return true;
+  return !isDirty;
+}
+
 export function normalizeFrameRenderMetadataForStorage(value) {
   return validateFrameRenderMetadataForStorage(value);
 }

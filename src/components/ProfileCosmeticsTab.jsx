@@ -38,6 +38,7 @@ import {
   MAX_PROFILE_FRAME_ANIMATION_LAYERS,
   normalizeFrameRenderMetadata,
   PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES,
+  shouldRefreshFrameMetadataDraft,
   sortProfileCosmeticAssetsNatural,
 } from "@/lib/profileCosmetics";
 import { usePortalLanguage } from "@/lib/portalLanguage";
@@ -1557,6 +1558,8 @@ export default function ProfileCosmeticsTab({
   const [detectingFrameMetadata, setDetectingFrameMetadata] = useState(false);
   const [studioAvatarId, setStudioAvatarId] = useState("");
   const [frameMetadataDraft, setFrameMetadataDraft] = useState(null);
+  const frameMetadataDraftFrameIdRef = useRef("");
+  const frameMetadataDirtyRef = useRef(false);
   const [adminTab, setAdminTab] = useState("collections");
   const [adminState, setAdminState] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -1597,13 +1600,39 @@ export default function ProfileCosmeticsTab({
     normalizeCosmeticId(selection.selectedFrameId) !== draftFrameId;
   const displayName = session?.watcherName || session?.name || t("common.player", "Joueur");
 
+  function replaceFrameMetadataDraft(metadata) {
+    frameMetadataDirtyRef.current = false;
+    setFrameMetadataDraft(metadata);
+  }
+
+  function updateFrameMetadataDraft(updater) {
+    frameMetadataDirtyRef.current = true;
+    setFrameMetadataDraft((current) => (typeof updater === "function" ? updater(current) : updater));
+  }
+
   useEffect(() => {
-    if (!canManageCosmetics || !draftFrame) {
+    const nextFrameId = canManageCosmetics && draftFrame ? normalizeCosmeticId(draftFrame.id) : "";
+    if (!nextFrameId) {
+      frameMetadataDraftFrameIdRef.current = "";
+      frameMetadataDirtyRef.current = false;
       setFrameMetadataDraft(null);
       return;
     }
+
+    if (
+      !shouldRefreshFrameMetadataDraft({
+        previousFrameId: frameMetadataDraftFrameIdRef.current,
+        nextFrameId,
+        isDirty: frameMetadataDirtyRef.current,
+      })
+    ) {
+      return;
+    }
+
+    frameMetadataDraftFrameIdRef.current = nextFrameId;
+    frameMetadataDirtyRef.current = false;
     setFrameMetadataDraft(getFrameRenderMetadata(draftFrame));
-  }, [canManageCosmetics, draftFrame?.id, draftFrame?.metadata]);
+  }, [canManageCosmetics, draftFrame]);
 
   useEffect(() => {
     if (!studioAvatarId && canManageCosmetics && catalog.avatars?.length) {
@@ -1698,6 +1727,12 @@ export default function ProfileCosmeticsTab({
       if (!response.ok) {
         throw new Error(payload?.error || t("profile.frameMetadataSaveError", "Reglage du cadre impossible."));
       }
+      if (payload?.savedAsset?.id) {
+        frameMetadataDraftFrameIdRef.current = normalizeCosmeticId(payload.savedAsset.id);
+        replaceFrameMetadataDraft(getFrameRenderMetadata(payload.savedAsset));
+      } else {
+        frameMetadataDirtyRef.current = false;
+      }
       onCosmeticsStateChange?.(payload);
       await onCosmeticsChanged?.();
       setMessage(t("profile.frameMetadataSaved", "Reglage du cadre enregistre."));
@@ -1716,7 +1751,7 @@ export default function ProfileCosmeticsTab({
 
     try {
       const result = await detectFrameMetadataFromUrl(draftFrame);
-      setFrameMetadataDraft(result.metadata);
+      updateFrameMetadataDraft(result.metadata);
       const confidence = result.analysis?.confidence || "unknown";
       const reason = result.analysis?.reason || "";
       setMessage(
@@ -1725,7 +1760,7 @@ export default function ProfileCosmeticsTab({
           .replace("{reason}", reason ? ` - ${reason}` : ""),
       );
     } catch (error) {
-      setFrameMetadataDraft(buildFrameRenderMetadataFromInset(draftFrame));
+      updateFrameMetadataDraft(buildFrameRenderMetadataFromInset(draftFrame));
       setErrorMessage(
         t("profile.frameDetectionFallback", "{error} Fallback content_inset applique localement, sans sauvegarde.").replace(
           "{error}",
@@ -2094,7 +2129,7 @@ export default function ProfileCosmeticsTab({
                     frame={draftFrame}
                     metadata={frameMetadataDraft}
                     name={displayName}
-                    onMetadataChange={setFrameMetadataDraft}
+                    onMetadataChange={updateFrameMetadataDraft}
                   />
 
                   <div className="space-y-4">
@@ -2103,28 +2138,28 @@ export default function ProfileCosmeticsTab({
                         label="Zone X"
                         value={frameMetadataDraft.content_box.x}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { x: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { x: value }))
                         }
                       />
                       <GeometryInput
                         label="Zone Y"
                         value={frameMetadataDraft.content_box.y}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { y: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { y: value }))
                         }
                       />
                       <GeometryInput
                         label="Zone L"
                         value={frameMetadataDraft.content_box.width}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { width: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { width: value }))
                         }
                       />
                       <GeometryInput
                         label="Zone H"
                         value={frameMetadataDraft.content_box.height}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { height: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "content_box", { height: value }))
                         }
                       />
                     </div>
@@ -2135,21 +2170,21 @@ export default function ProfileCosmeticsTab({
                         max={50}
                         value={frameMetadataDraft.content_radius}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => normalizeFrameRenderMetadata({ ...current, content_radius: value }))
+                          updateFrameMetadataDraft((current) => normalizeFrameRenderMetadata({ ...current, content_radius: value }))
                         }
                       />
                       <GeometryInput
                         label="Focal X"
                         value={frameMetadataDraft.avatar_position.x}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataPoint(current, "avatar_position", { x: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataPoint(current, "avatar_position", { x: value }))
                         }
                       />
                       <GeometryInput
                         label="Focal Y"
                         value={frameMetadataDraft.avatar_position.y}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataPoint(current, "avatar_position", { y: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataPoint(current, "avatar_position", { y: value }))
                         }
                       />
                     </div>
@@ -2159,35 +2194,35 @@ export default function ProfileCosmeticsTab({
                         label="Cadre X"
                         value={frameMetadataDraft.frame_box.x}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { x: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { x: value }))
                         }
                       />
                       <GeometryInput
                         label="Cadre Y"
                         value={frameMetadataDraft.frame_box.y}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { y: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { y: value }))
                         }
                       />
                       <GeometryInput
                         label="Cadre L"
                         value={frameMetadataDraft.frame_box.width}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { width: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { width: value }))
                         }
                       />
                       <GeometryInput
                         label="Cadre H"
                         value={frameMetadataDraft.frame_box.height}
                         onChange={(value) =>
-                          setFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { height: value }))
+                          updateFrameMetadataDraft((current) => updateMetadataBox(current, "frame_box", { height: value }))
                         }
                       />
                     </div>
 
                     <FrameAnimationLayersPanel
                       metadata={frameMetadataDraft}
-                      onMetadataChange={setFrameMetadataDraft}
+                      onMetadataChange={updateFrameMetadataDraft}
                       t={t}
                       apiBase={apiBase}
                       onMessage={setMessage}
@@ -2222,7 +2257,7 @@ export default function ProfileCosmeticsTab({
                         type="button"
                         variant="outline"
                         className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
-                        onClick={() => setFrameMetadataDraft(getFrameRenderMetadata(draftFrame))}
+                        onClick={() => replaceFrameMetadataDraft(getFrameRenderMetadata(draftFrame))}
                       >
                         <RefreshCw className="mr-2 h-4 w-4" />
                         {t("profile.frameStudioReset", "Reinitialiser")}
@@ -2242,7 +2277,7 @@ export default function ProfileCosmeticsTab({
                         variant="outline"
                         className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
                         onClick={() =>
-                          setFrameMetadataDraft((current) => {
+                          updateFrameMetadataDraft((current) => {
                             const box = current?.content_box || { width: 0.72, height: 0.72 };
                             return normalizeFrameRenderMetadata({
                               ...current,
