@@ -780,11 +780,25 @@ async function detectFrameMetadataFromUrl(frame) {
   return buildFrameRenderMetadataFromImageData(imageData);
 }
 
-function FrameGeometryPreview({ avatar, frame, metadata, name, onMetadataChange }) {
+function FrameGeometryPreview({ avatar, frame, metadata, name, onMetadataChange, t = (_key, fallback) => fallback }) {
   const previewRef = useRef(null);
   const pointerRef = useRef(null);
   const frameWithDraft = useMemo(() => (frame ? { ...frame, metadata } : null), [frame, metadata]);
   const box = metadata?.content_box || { x: 0.14, y: 0.14, width: 0.72, height: 0.72 };
+  const animationLayers = getAnimationLayers(metadata);
+  const animationLayerStatusKey = animationLayers.map((layer) => `${layer.id}:${layer.url || ""}`).join("|");
+  const [animationLayerStatuses, setAnimationLayerStatuses] = useState({});
+
+  useEffect(() => {
+    setAnimationLayerStatuses({});
+  }, [animationLayerStatusKey]);
+
+  function handleAnimationLayerStatusChange(layerId, status, details = {}) {
+    setAnimationLayerStatuses((current) => ({
+      ...current,
+      [String(layerId)]: { status, ...details },
+    }));
+  }
 
   function applyPointer(clientX, clientY) {
     const state = pointerRef.current;
@@ -845,7 +859,15 @@ function FrameGeometryPreview({ avatar, frame, metadata, name, onMetadataChange 
         className="relative mx-auto aspect-square w-full max-w-[260px] rounded-xl border border-zinc-800 bg-zinc-950"
       >
         <div className="absolute inset-5">
-          <ProfileAvatar avatar={avatar} frame={frameWithDraft} name={name} size={220} className="h-full w-full" />
+          <ProfileAvatar
+            avatar={avatar}
+            frame={frameWithDraft}
+            name={name}
+            size={220}
+            className="h-full w-full"
+            previewAnimations
+            onAnimationLayerStatusChange={handleAnimationLayerStatusChange}
+          />
         </div>
         <div
           className="absolute z-20 cursor-move border-2 border-cyan-300/90 bg-cyan-300/10 shadow-[0_0_0_1px_rgba(8,47,73,0.8)]"
@@ -872,11 +894,55 @@ function FrameGeometryPreview({ avatar, frame, metadata, name, onMetadataChange 
       <div className="grid grid-cols-3 items-end gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
         {[48, 60, 128].map((size) => (
           <div key={size} className="flex flex-col items-center gap-2 text-xs text-zinc-500">
-            <ProfileAvatar avatar={avatar} frame={frameWithDraft} name={name} size={size} />
+            <ProfileAvatar avatar={avatar} frame={frameWithDraft} name={name} size={size} previewAnimations />
             <span>{size}px</span>
           </div>
         ))}
       </div>
+      {animationLayers.length ? (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-400">
+          <div className="mb-2 font-semibold uppercase tracking-[0.16em] text-zinc-500">
+            {t("profile.animationLayerPreviewStatus", "Statut des calques")}
+          </div>
+          <div className="space-y-1">
+            {animationLayers.map((layer) => {
+              const status = animationLayerStatuses[String(layer.id)];
+              const hasUrl = Boolean(layer.url);
+              const isLoaded = status?.status === "loaded";
+              const isError = status?.status === "error";
+              const label = !hasUrl
+                ? t("profile.animationLayerMissingUrl", "URL manquante")
+                : isLoaded
+                  ? t("profile.animationLayerLoaded", "Effet charge")
+                  : isError
+                    ? t("profile.animationLayerLoadFailed", "Effet impossible a charger")
+                    : t("profile.animationLayerLoading", "Chargement...");
+              const details =
+                isLoaded && status.naturalWidth && status.naturalHeight
+                  ? ` (${status.naturalWidth}x${status.naturalHeight})`
+                  : "";
+
+              return (
+                <div key={layer.id} className="flex items-center justify-between gap-3">
+                  <span className="truncate text-zinc-300">{layer.label || layer.id}</span>
+                  <span
+                    className={`shrink-0 rounded-full border px-2 py-0.5 ${
+                      isError
+                        ? "border-red-400/40 bg-red-500/10 text-red-200"
+                        : isLoaded
+                          ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-200"
+                          : "border-zinc-700 bg-zinc-900 text-zinc-400"
+                    }`}
+                  >
+                    {label}
+                    {details}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2130,6 +2196,7 @@ export default function ProfileCosmeticsTab({
                     metadata={frameMetadataDraft}
                     name={displayName}
                     onMetadataChange={updateFrameMetadataDraft}
+                    t={t}
                   />
 
                   <div className="space-y-4">

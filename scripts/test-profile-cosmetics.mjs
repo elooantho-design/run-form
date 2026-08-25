@@ -1587,6 +1587,9 @@ assert.match(studioSource, /publish-cosmetic-effect/, "studio can upload an anim
 assert.match(studioSource, /Importer un WebP anime/, "studio renders the animated WebP import button");
 assert.match(studioSource, /Dupliquer l'URL/, "studio can copy an uploaded effect URL to the mirrored layer");
 assert.match(studioSource, /updateAnimationLayer\(current, index, \{ url: data\.url \}\)/, "studio injects the returned URL into the selected animation layer draft");
+assert.match(studioSource, /previewAnimations/, "studio preview explicitly renders animated layers from the draft");
+assert.match(studioSource, /onAnimationLayerStatusChange/, "studio preview observes animated layer load status");
+assert.match(studioSource, /animationLayerLoaded/, "studio surfaces loaded animated layer feedback");
 assert.match(studioSource, /shouldRefreshFrameMetadataDraft/, "studio preserves dirty frame drafts across same-frame catalog refreshes");
 assert.match(studioSource, /frameMetadataDirtyRef\.current = true/, "studio marks local frame metadata changes as dirty");
 assert.match(studioSource, /frameMetadataDirtyRef\.current = false/, "studio clears dirty state only on explicit reset or saved metadata reload");
@@ -1611,10 +1614,18 @@ const rendererSource = await readFile(new URL("../src/components/ProfileCosmetic
 assert.match(rendererSource, /animation_layers/, "profile renderer reads animation layer metadata");
 assert.match(rendererSource, /profile-avatar-animation-layer/, "profile renderer exposes the animation layer wrapper");
 assert.match(rendererSource, /data-animation-layer-id/, "profile renderer exposes stable animation layer ids for inspection");
+assert.match(rendererSource, /function AnimationLayer/, "profile renderer isolates animated layer visibility per layer");
+assert.match(rendererSource, /useState\(delayMs === 0\)/, "profile renderer makes zero-delay animated layers visible immediately");
+assert.match(rendererSource, /data-animation-layer-visible/, "profile renderer exposes actual animated layer visibility for inspection");
+assert.match(rendererSource, /onAnimationLayerStatusChange/, "profile renderer reports animated WebP load status to the studio");
+assert.doesNotMatch(rendererSource, /--profile-animation-layer-opacity/, "animated layer visibility no longer depends on a fragile CSS custom property reveal");
+assert.doesNotMatch(rendererSource, /animationDelay/, "animated layer visibility delays are handled by React state");
 
 const indexCssSource = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
 assert.match(indexCssSource, /profile-avatar-animation-layer/, "global styles contain animation layer rules");
 assert.match(indexCssSource, /prefers-reduced-motion/, "animation layer styles remain compatible with reduced motion");
+assert.match(indexCssSource, /profile-avatar-root--preview-animations/, "studio preview can show animated layers while regular users keep reduced-motion protection");
+assert.doesNotMatch(indexCssSource, /profileAnimationLayerReveal/, "animated WebP layer visibility no longer depends on a 1ms CSS reveal animation");
 
 assert.match(adminEndpointSource, /requestedTierType/, "admin endpoint validates the requested tier subtype");
 assert.match(adminEndpointSource, /tier\.tier_type !== requestedTierType/, "admin endpoint rejects mismatched tier subtypes");

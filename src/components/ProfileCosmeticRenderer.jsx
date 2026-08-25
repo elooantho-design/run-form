@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   getFrameRenderMetadata,
   getProfileFrameAnimationKey,
@@ -18,6 +18,63 @@ function toPercent(value) {
   return `${Number(value || 0) * 100}%`;
 }
 
+const EMPTY_ANIMATION_LAYERS = [];
+
+function getLayerDelayMs(layer) {
+  return Math.max(0, Number(layer?.delayMs) || 0);
+}
+
+function AnimationLayer({ layer, onStatusChange }) {
+  const delayMs = getLayerDelayMs(layer);
+  const [layerVisible, setLayerVisible] = useState(delayMs === 0);
+
+  useEffect(() => {
+    if (delayMs === 0) return undefined;
+
+    const timerId = window.setTimeout(() => {
+      setLayerVisible(true);
+    }, delayMs);
+
+    return () => window.clearTimeout(timerId);
+  }, [delayMs, layer.id, layer.url]);
+
+  return (
+    <span
+      className="profile-avatar-animation-layer absolute"
+      data-animation-layer-id={layer.id}
+      data-animation-layer-visible={layerVisible ? "true" : "false"}
+      style={{
+        left: toPercent(layer.x),
+        top: toPercent(layer.y),
+        width: toPercent(layer.width),
+        height: toPercent(layer.height),
+        zIndex: layer.zIndex,
+        pointerEvents: "none",
+        opacity: layerVisible ? layer.opacity : 0,
+        mixBlendMode: layer.blendMode === "normal" ? undefined : layer.blendMode,
+        transform: `${layer.flipX ? "scaleX(-1) " : ""}rotate(${layer.rotation}deg)`,
+      }}
+      title={layer.label || layer.id}
+    >
+      <img
+        src={layer.url}
+        alt=""
+        className="profile-avatar-animation-layer-img h-full w-full object-contain"
+        draggable="false"
+        loading="eager"
+        decoding="async"
+        onLoad={(event) =>
+          onStatusChange?.(layer.id, "loaded", {
+            naturalWidth: event.currentTarget.naturalWidth,
+            naturalHeight: event.currentTarget.naturalHeight,
+          })
+        }
+        onError={() => onStatusChange?.(layer.id, "error")}
+      />
+    </span>
+  );
+}
+
 export default function ProfileCosmeticRenderer({
   avatar = null,
   frame = null,
@@ -25,6 +82,8 @@ export default function ProfileCosmeticRenderer({
   size = 48,
   className = "",
   fallbackClassName = "",
+  previewAnimations = false,
+  onAnimationLayerStatusChange = null,
 }) {
   const avatarUrl = getAssetUrl(avatar);
   const frameUrl = avatarUrl ? getAssetUrl(frame) : "";
@@ -38,7 +97,8 @@ export default function ProfileCosmeticRenderer({
   const hasFrame = Boolean(frameUrl && !frameFailed);
   const hasSharkMouthAnimation = hasFrame && frameAnimationKey === PROFILE_FRAME_ANIMATION_SHARK_MOUTH;
   const hasInfernalHornsAnimation = hasFrame && frameAnimationKey === PROFILE_FRAME_ANIMATION_INFERNAL_HORNS;
-  const animationLayers = hasFrame ? frameMetadata.animation_layers || [] : [];
+  const animationLayers =
+    hasFrame && Array.isArray(frameMetadata.animation_layers) ? frameMetadata.animation_layers : EMPTY_ANIMATION_LAYERS;
 
   if (!avatarUrl || avatarFailed) {
     return (
@@ -59,7 +119,9 @@ export default function ProfileCosmeticRenderer({
 
   return (
     <div
-      className={`profile-avatar-root relative isolate shrink-0 overflow-visible ${className}`}
+      className={`profile-avatar-root relative isolate shrink-0 overflow-visible ${
+        previewAnimations ? "profile-avatar-root--preview-animations" : ""
+      } ${className}`}
       style={{ width: numericSize, height: numericSize }}
       aria-hidden="true"
     >
@@ -110,34 +172,11 @@ export default function ProfileCosmeticRenderer({
             onError={() => setFailedFrameUrl(frameUrl)}
           />
           {animationLayers.map((layer) => (
-            <span
-              key={layer.id}
-              className="profile-avatar-animation-layer absolute"
-              data-animation-layer-id={layer.id}
-              style={{
-                left: toPercent(layer.x),
-                top: toPercent(layer.y),
-                width: toPercent(layer.width),
-                height: toPercent(layer.height),
-                zIndex: layer.zIndex,
-                pointerEvents: "none",
-                opacity: 0,
-                "--profile-animation-layer-opacity": layer.opacity,
-                animationDelay: `${layer.delayMs}ms`,
-                mixBlendMode: layer.blendMode === "normal" ? undefined : layer.blendMode,
-                transform: `${layer.flipX ? "scaleX(-1) " : ""}rotate(${layer.rotation}deg)`,
-              }}
-              title={layer.label || layer.id}
-            >
-              <img
-                src={layer.url}
-                alt=""
-                className="profile-avatar-animation-layer-img h-full w-full object-contain"
-                draggable="false"
-                loading="eager"
-                decoding="async"
-              />
-            </span>
+            <AnimationLayer
+              key={`${layer.id}:${layer.url || ""}:${getLayerDelayMs(layer)}`}
+              layer={layer}
+              onStatusChange={onAnimationLayerStatusChange}
+            />
           ))}
           {hasSharkMouthAnimation ? (
             <>

@@ -1392,7 +1392,7 @@ body {
 
 .profile-avatar-animation-layer {
   transform-origin: center;
-  animation: profileAnimationLayerReveal 1ms linear forwards;
+  transition: opacity 120ms linear;
   will-change: opacity, transform;
 }
 
@@ -1496,12 +1496,6 @@ body {
   opacity: 0.28;
   animation: profileInfernalJewels 3.8s ease-in-out infinite;
   will-change: opacity, filter;
-}
-
-@keyframes profileAnimationLayerReveal {
-  to {
-    opacity: var(--profile-animation-layer-opacity, 1);
-  }
 }
 
 @keyframes profileSharkMouthBite {
@@ -1646,7 +1640,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .profile-avatar-animation-layer,
   .profile-avatar-frame-layer--shark-mouth,
   .profile-avatar-infernal-lava-scan,
   .profile-avatar-infernal-horn-tips,
@@ -1658,10 +1651,14 @@ body {
   }
 
   .profile-avatar-shark-shimmer,
-  .profile-avatar-animation-layer,
+  .profile-avatar-root:not(.profile-avatar-root--preview-animations) .profile-avatar-animation-layer,
   .profile-avatar-infernal-lava-scan,
   .profile-avatar-shark-bubbles {
     display: none;
+  }
+
+  .profile-avatar-root--preview-animations .profile-avatar-animation-layer {
+    display: block;
   }
 
   .profile-avatar-infernal-horn-tips,
