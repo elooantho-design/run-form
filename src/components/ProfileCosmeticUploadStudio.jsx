@@ -388,7 +388,6 @@ export default function ProfileCosmeticUploadStudio({
   apiBase,
   canManageCosmetics,
   catalog,
-  displayName,
   previewAvatar,
   t,
   onCosmeticsStateChange,
@@ -497,7 +496,7 @@ export default function ProfileCosmeticUploadStudio({
     onError?.("");
 
     try {
-      const response = await fetch(`${apiBase}/api/portal-cosmetics`, {
+      const response = await fetch(`${apiBase}/api/portal-cosmetics-admin`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

@@ -2,14 +2,17 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   CreditCard,
   ExternalLink,
+  Gift,
   HeartHandshake,
   LockKeyhole,
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Trophy,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import ProfileAvatar from "@/components/ProfileAvatar";
 import { PORTAL_SUPPORT_CONFIG } from "@/lib/portalSupportConfig";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -29,6 +32,30 @@ const DEFAULT_PUBLIC_CONFIG = {
   monthlyTargetEuros: PORTAL_SUPPORT_CONFIG.monthlyTargetEuros,
   publicEnabled: false,
   livemode: false,
+};
+
+const DEFAULT_PUBLIC_RANKINGS = {
+  cumulative: [],
+  monthly: [],
+};
+
+const DEFAULT_COSMETIC_REWARDS = {
+  schemaReady: false,
+  accessSchemaReady: false,
+  catalog: {
+    assets: [],
+    avatars: [],
+    frames: [],
+    collections: [],
+  },
+};
+
+const DEFAULT_COSMETIC_PROGRESS = {
+  supportTotalCents: 0,
+  monthlyConfirmedCount: 0,
+  tiers: [],
+  nextSupportTier: null,
+  nextMonthlyTier: null,
 };
 
 function getApiBase() {
@@ -82,6 +109,176 @@ function modeLabel(livemode, t) {
   return livemode ? t("support.modeLive", "Live") : t("support.modeTest", "Test");
 }
 
+function getRewardAssetsForTier(cosmeticRewards, tierId) {
+  if (!tierId) return [];
+  return (cosmeticRewards?.catalog?.assets || []).filter((asset) => String(asset?.access?.tierId || "") === String(tierId));
+}
+
+function getProgressValueForTier(progress, tier) {
+  if (tier?.tierType === "support_total") return Number(progress?.supportTotalCents || 0);
+  if (tier?.tierType === "monthly_loyalty") return Number(progress?.monthlyConfirmedCount || 0);
+  return 0;
+}
+
+function formatTierThreshold(tier, language) {
+  if (tier?.tierType === "support_total") return formatCurrency(tier.thresholdValue, language);
+  return `${tier?.thresholdValue || 0}`;
+}
+
+function SupportRewardPreview({ asset, cosmeticRewards, displayName, onInspect }) {
+  const demoAvatar =
+    asset?.assetType === "avatar"
+      ? asset
+      : (cosmeticRewards?.catalog?.avatars || []).find((avatar) => !avatar.locked) || cosmeticRewards?.catalog?.avatars?.[0] || null;
+  const previewFrame = asset?.assetType === "frame" ? asset : null;
+
+  return (
+    <button
+      type="button"
+      aria-disabled={asset?.locked ? "true" : "false"}
+      onClick={() => onInspect(asset)}
+      className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-left transition hover:border-zinc-600"
+      title={asset?.access?.title || asset?.displayName}
+    >
+      <div className={asset?.locked ? "opacity-45 grayscale" : ""}>
+        <ProfileAvatar avatar={demoAvatar} frame={previewFrame} name={displayName} size={52} />
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold text-zinc-100">{asset?.displayName}</div>
+        <div className="truncate text-xs text-zinc-500">{asset?.access?.title || ""}</div>
+      </div>
+    </button>
+  );
+}
+
+function SupportRewardsSection({ progress, cosmeticRewards, inspectedReward, onInspectReward, displayName, t, language }) {
+  const tiers = progress?.tiers || [];
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+            <Gift className="h-4 w-4 text-emerald-300" />
+            {t("support.rewardsTitle", "Recompenses de soutien")}
+          </div>
+          <p className="mt-2 text-xs leading-5 text-zinc-500">
+            {t(
+              "support.rewardsHelp",
+              "Tes soutiens ponctuels et mensuels s'additionnent. Les mensualites confirmees alimentent aussi la fidelite mensuelle.",
+            )}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge className="border border-emerald-400/30 bg-emerald-400/10 text-emerald-100">
+            {t("support.yourCumulative", "Cumul")} : {formatCurrency(progress?.supportTotalCents || 0, language)}
+          </Badge>
+          <Badge className="border border-cyan-400/30 bg-cyan-400/10 text-cyan-100">
+            {t("support.monthlyLoyalty", "Fidelite")} : {progress?.monthlyConfirmedCount || 0}
+          </Badge>
+        </div>
+      </div>
+
+      {inspectedReward ? (
+        <div className="mt-4 flex items-center gap-4 rounded-lg border border-cyan-400/20 bg-cyan-400/10 p-4">
+          <ProfileAvatar
+            avatar={
+              inspectedReward.assetType === "avatar"
+                ? inspectedReward
+                : (cosmeticRewards?.catalog?.avatars || []).find((avatar) => !avatar.locked) || cosmeticRewards?.catalog?.avatars?.[0] || null
+            }
+            frame={inspectedReward.assetType === "frame" ? inspectedReward : null}
+            name={displayName}
+            size={76}
+          />
+          <div className="min-w-0">
+            <div className="truncate font-semibold text-zinc-50">{inspectedReward.displayName}</div>
+            <p className="mt-1 text-xs leading-5 text-zinc-400">{inspectedReward.access?.description || inspectedReward.access?.title || ""}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {tiers.length ? (
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {tiers.map((tier) => {
+            const current = getProgressValueForTier(progress, tier);
+            const target = Math.max(1, Number(tier.thresholdValue || 0));
+            const percent = Math.max(0, Math.min(100, Math.round((current / target) * 100)));
+            const rewardAssets = getRewardAssetsForTier(cosmeticRewards, tier.id);
+            const unlocked = current >= target;
+
+            return (
+              <div key={tier.id} className="rounded-lg border border-zinc-800 bg-zinc-900/45 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-zinc-100">{tier.displayName}</div>
+                    <div className="mt-1 text-xs text-zinc-500">{formatTierThreshold(tier, language)}</div>
+                  </div>
+                  <Badge className={`border ${unlocked ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100" : "border-zinc-700 bg-zinc-800 text-zinc-400"}`}>
+                    {unlocked ? t("support.rewardUnlocked", "Debloque") : t("support.rewardLocked", "Verrouille")}
+                  </Badge>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
+                  <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-300" style={{ width: `${percent}%` }} />
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {rewardAssets.map((asset) => (
+                    <SupportRewardPreview
+                      key={asset.id}
+                      asset={asset}
+                      cosmeticRewards={cosmeticRewards}
+                      displayName={displayName}
+                      onInspect={onInspectReward}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-4 rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
+          {t("support.noRewardTiers", "Aucun palier de recompense configure pour le moment.")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function RankingList({ title, entries, t, language }) {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+        <Trophy className="h-4 w-4 text-amber-300" />
+        {title}
+      </div>
+      <div className="mt-4 space-y-3">
+        {entries.length ? (
+          entries.slice(0, 10).map((entry, index) => (
+            <div key={`${title}-${entry.memberId}`} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+              <span className="w-6 shrink-0 text-sm font-semibold text-zinc-500">#{index + 1}</span>
+              <ProfileAvatar
+                avatar={entry.cosmetics?.avatar || null}
+                frame={entry.cosmetics?.frame || null}
+                name={entry.publicName}
+                size={46}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-zinc-100">{entry.publicName}</div>
+                <div className="text-xs text-zinc-500">{formatCurrency(entry.amountCents, language)}</div>
+              </div>
+            </div>
+          ))
+        ) : (
+          <p className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
+            {t("support.noPublicRanking", "Aucun classement public pour le moment.")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function readSupportReturnState() {
   if (typeof window === "undefined") return null;
   const params = new URLSearchParams(window.location.search);
@@ -99,6 +296,10 @@ export default function SupportProjectTab({ session }) {
   const isLeader = isLeaderSession(session);
   const [summary, setSummary] = useState(DEFAULT_SUMMARY);
   const [publicSupporters, setPublicSupporters] = useState([]);
+  const [publicRankings, setPublicRankings] = useState(DEFAULT_PUBLIC_RANKINGS);
+  const [cosmeticRewards, setCosmeticRewards] = useState(DEFAULT_COSMETIC_REWARDS);
+  const [cosmeticProgress, setCosmeticProgress] = useState(DEFAULT_COSMETIC_PROGRESS);
+  const [inspectedReward, setInspectedReward] = useState(null);
   const [publicConfig, setPublicConfig] = useState(DEFAULT_PUBLIC_CONFIG);
   const [schemaReady, setSchemaReady] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -140,6 +341,9 @@ export default function SupportProjectTab({ session }) {
           : DEFAULT_PUBLIC_CONFIG.suggestedAmountsEuros,
       });
       setPublicSupporters(payload.publicSupporters || []);
+      setPublicRankings(payload.publicRankings || DEFAULT_PUBLIC_RANKINGS);
+      setCosmeticRewards(payload.cosmeticRewards || DEFAULT_COSMETIC_REWARDS);
+      setCosmeticProgress(payload.cosmeticProgress || DEFAULT_COSMETIC_PROGRESS);
     } catch (error) {
       setErrorMessage(error?.message || t("support.loadError", "Chargement du soutien impossible."));
     } finally {
@@ -323,6 +527,33 @@ export default function SupportProjectTab({ session }) {
             {errorMessage}
           </div>
         ) : null}
+
+        <div className="space-y-5 px-5 pt-5 lg:px-7">
+          <SupportRewardsSection
+            progress={cosmeticProgress}
+            cosmeticRewards={cosmeticRewards}
+            inspectedReward={inspectedReward}
+            onInspectReward={setInspectedReward}
+            displayName={session?.watcherName || session?.name || t("common.player", "Joueur")}
+            t={t}
+            language={language}
+          />
+
+          <div className="grid gap-5 lg:grid-cols-2">
+            <RankingList
+              title={t("support.cumulativeRanking", "Classement soutien cumule")}
+              entries={publicRankings.cumulative || []}
+              t={t}
+              language={language}
+            />
+            <RankingList
+              title={t("support.monthlyRanking", "Classement soutien mensuel actif")}
+              entries={publicRankings.monthly || []}
+              t={t}
+              language={language}
+            />
+          </div>
+        </div>
 
         <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:p-7">
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4">

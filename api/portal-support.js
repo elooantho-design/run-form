@@ -19,6 +19,17 @@ import {
   sendPortalJson,
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
+import {
+  buildMemberCosmeticProgress,
+  buildProfileCosmeticAccessCatalog,
+  buildPublicSupportRankings,
+  loadCosmeticAccessContext,
+} from "./_portal-cosmetic-access.js";
+import {
+  isMissingProfileCosmeticsSchema,
+  loadCosmeticsForMemberIds,
+  loadProfileCosmeticAssetRows,
+} from "./_portal-cosmetics.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -121,6 +132,29 @@ function serializePayment(row) {
   };
 }
 
+function buildEmptyCosmeticRewards() {
+  return {
+    schemaReady: false,
+    accessSchemaReady: false,
+    catalog: {
+      assets: [],
+      avatars: [],
+      frames: [],
+      collections: [],
+    },
+  };
+}
+
+function buildEmptyCosmeticProgress() {
+  return {
+    supportTotalCents: 0,
+    monthlyConfirmedCount: 0,
+    tiers: [],
+    nextSupportTier: null,
+    nextMonthlyTier: null,
+  };
+}
+
 async function requireSupportAccess(req, res) {
   const sessionResult = await requirePortalSession(req, supabase);
   if (sessionResult.error) {
@@ -157,12 +191,16 @@ async function readSupportAccess(req, res) {
 async function readSupportSummary(req, res) {
   const supportAccess = await requireSupportAccess(req, res);
   if (!supportAccess) return;
+  const member = supportAccess.member;
 
   const { start, end } = getCurrentMonthRange();
   const targetCents = getMonthlyTargetCents();
   const livemode = isPortalSupportLiveMode(process.env);
 
-  const [monthlyResult, publicResult] = await Promise.all([
+  const supportSelect =
+    "id, member_id, support_type, amount_cents, amount_refunded_cents, currency, status, paid_at, donor_public_name, donor_message, display_publicly, anonymous, livemode, created_at";
+
+  const [monthlyResult, supportResult] = await Promise.all([
     supabase
       .from("portal_support_payments")
       .select("amount_cents, amount_refunded_cents, support_type, paid_at")
@@ -172,17 +210,14 @@ async function readSupportSummary(req, res) {
       .lt("paid_at", end.toISOString()),
     supabase
       .from("portal_support_payments")
-      .select("id, support_type, amount_cents, amount_refunded_cents, currency, status, paid_at, donor_public_name, donor_message, display_publicly, anonymous, livemode")
-      .eq("status", "confirmed")
+      .select(supportSelect)
       .eq("livemode", livemode)
-      .eq("display_publicly", true)
-      .eq("anonymous", false)
       .order("paid_at", { ascending: false })
-      .limit(12),
+      .limit(500),
   ]);
 
-  if (monthlyResult.error || publicResult.error) {
-    const error = monthlyResult.error || publicResult.error;
+  if (monthlyResult.error || supportResult.error) {
+    const error = monthlyResult.error || supportResult.error;
     if (isMissingSupportTable(error)) {
       sendPortalJson(res, 200, {
         schemaReady: false,
@@ -190,6 +225,9 @@ async function readSupportSummary(req, res) {
         config: buildPublicConfig(targetCents),
         summary: buildEmptySummary(targetCents),
         publicSupporters: [],
+        publicRankings: { cumulative: [], monthly: [] },
+        cosmeticProgress: buildEmptyCosmeticProgress(),
+        cosmeticRewards: buildEmptyCosmeticRewards(),
       }, req);
       return;
     }
@@ -206,6 +244,48 @@ async function readSupportSummary(req, res) {
   const monthlyRecurringCents = monthlyRows
     .filter((row) => row.support_type === "monthly")
     .reduce((total, row) => total + Math.max(0, Number(row.amount_cents || 0) - Number(row.amount_refunded_cents || 0)), 0);
+  const supportRows = supportResult.data || [];
+  const publicSupporters = supportRows
+    .filter((row) => row.status === "confirmed" && row.display_publicly && !row.anonymous)
+    .slice(0, 12)
+    .map(serializePayment);
+
+  let publicRankings = { cumulative: [], monthly: [] };
+  let cosmeticRewards = buildEmptyCosmeticRewards();
+  let cosmeticProgress = buildEmptyCosmeticProgress();
+
+  try {
+    const publicMemberIds = [
+      ...new Set(
+        supportRows
+          .filter((row) => row.display_publicly && !row.anonymous && row.member_id)
+          .map((row) => String(row.member_id)),
+      ),
+    ];
+    const [assetRows, accessContext, cosmeticsByMemberId] = await Promise.all([
+      loadProfileCosmeticAssetRows(supabase),
+      loadCosmeticAccessContext(supabase, [member.id]),
+      loadCosmeticsForMemberIds(supabase, publicMemberIds),
+    ]);
+
+    cosmeticProgress = buildMemberCosmeticProgress({ member, accessContext });
+    cosmeticRewards = {
+      schemaReady: true,
+      accessSchemaReady: accessContext.accessSchemaReady,
+      catalog: buildProfileCosmeticAccessCatalog({
+        assetRows,
+        member,
+        ...accessContext,
+      }),
+    };
+    publicRankings = buildPublicSupportRankings({
+      payments: supportRows,
+      cosmeticsByMemberId,
+      env: process.env,
+    });
+  } catch (error) {
+    if (!isMissingProfileCosmeticsSchema(error)) throw error;
+  }
 
   sendPortalJson(res, 200, {
     schemaReady: true,
@@ -219,7 +299,10 @@ async function readSupportSummary(req, res) {
       monthStartsAt: start.toISOString(),
       monthEndsAt: end.toISOString(),
     },
-    publicSupporters: (publicResult.data || []).map(serializePayment),
+    publicSupporters,
+    publicRankings,
+    cosmeticProgress,
+    cosmeticRewards,
   }, req);
 }
 

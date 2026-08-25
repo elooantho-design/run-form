@@ -10,6 +10,12 @@ import {
   validateProfileCosmeticSelection,
 } from "../api/_portal-cosmetics.js";
 import {
+  buildProfileCosmeticAccessCatalog,
+  buildPublicSupportRankings,
+  buildSupportStatsByMember,
+  decorateCosmeticAssetsForMember,
+} from "../api/_portal-cosmetic-access.js";
+import {
   inspectPngBuffer,
   publishProfileCosmeticAsset,
 } from "../api/_portal-cosmetics-publish.js";
@@ -71,6 +77,179 @@ assert.equal(catalog.frames.length, 5, "Basic exposes five frames");
 assert.equal(catalog.avatars.every((asset) => asset.unlocked), true, "public Basic avatars are unlocked");
 assert.equal(catalog.frames.every((asset) => asset.unlocked), true, "public Basic frames are unlocked");
 assert.equal(getFrameContentInset(catalog.frames[0]), 0.14, "frame inset comes from metadata");
+
+const supportTier = {
+  id: "tier-support-50",
+  tier_type: "support_total",
+  threshold_value: 5000,
+  display_name: "Support 50",
+  public_description: "Unlocks at 50 EUR cumulative support.",
+  sort_order: 10,
+  is_active: true,
+};
+const monthlyTier = {
+  id: "tier-monthly-3",
+  tier_type: "monthly_loyalty",
+  threshold_value: 3,
+  display_name: "Loyalty 3",
+  public_description: "Unlocks after three confirmed monthly payments.",
+  sort_order: 20,
+  is_active: true,
+};
+const manualAsset = createAsset(90, "frame", { id: "manual-frame", display_name: "Manual frame" });
+const supportAsset = createAsset(91, "frame", { id: "support-frame", display_name: "Support frame" });
+const monthlyAsset = createAsset(92, "frame", { id: "monthly-frame", display_name: "Monthly frame" });
+const accessTestAssets = [...assets, manualAsset, supportAsset, monthlyAsset];
+const accessRules = [
+  {
+    asset_id: "manual-frame",
+    access_type: "manual",
+    tier_id: null,
+    public_unlock_title: "Top soutien - Saison 13",
+    public_unlock_description: "Attribution speciale.",
+  },
+  {
+    asset_id: "support-frame",
+    access_type: "tier",
+    tier_id: supportTier.id,
+    public_unlock_title: "Palier 50 EUR",
+    public_unlock_description: "",
+  },
+  {
+    asset_id: "monthly-frame",
+    access_type: "tier",
+    tier_id: monthlyTier.id,
+    public_unlock_title: "Trois mensualites",
+    public_unlock_description: "",
+  },
+];
+const confirmedMonthlyPayments = Array.from({ length: 5 }, (_, index) => ({
+  id: `monthly-${index}`,
+  member_id: "member-support",
+  support_type: "monthly",
+  amount_cents: 1000,
+  amount_refunded_cents: 0,
+  status: "confirmed",
+  livemode: true,
+}));
+const supportStats = buildSupportStatsByMember(confirmedMonthlyPayments, { STRIPE_SECRET_KEY: "sk_live_test" }).get("member-support");
+assert.equal(supportStats.supportTotalCents, 5000, "five confirmed 10 EUR monthly payments count as 50 EUR cumulative support");
+assert.equal(supportStats.monthlyConfirmedCount, 5, "confirmed monthly payments count toward monthly loyalty");
+
+const mixedSupportStats = buildSupportStatsByMember(
+  [
+    { member_id: "member-mixed", support_type: "one_time", amount_cents: 2000, amount_refunded_cents: 0, status: "confirmed", livemode: true },
+    { member_id: "member-mixed", support_type: "monthly", amount_cents: 1000, amount_refunded_cents: 0, status: "confirmed", livemode: true },
+    { member_id: "member-mixed", support_type: "monthly", amount_cents: 1000, amount_refunded_cents: 0, status: "confirmed", livemode: true },
+    { member_id: "member-mixed", support_type: "monthly", amount_cents: 1000, amount_refunded_cents: 0, status: "confirmed", livemode: true },
+    { member_id: "member-mixed", support_type: "monthly", amount_cents: 1000, amount_refunded_cents: 1000, status: "confirmed", livemode: true },
+    { member_id: "member-mixed", support_type: "monthly", amount_cents: 9999, amount_refunded_cents: 0, status: "active", livemode: true },
+    { member_id: "member-mixed", support_type: "one_time", amount_cents: 9999, amount_refunded_cents: 0, status: "confirmed", livemode: false },
+  ],
+  { STRIPE_SECRET_KEY: "sk_live_test" },
+).get("member-mixed");
+assert.equal(mixedSupportStats.supportTotalCents, 5000, "one-time and confirmed monthly support add up while refunds are deducted");
+assert.equal(mixedSupportStats.monthlyConfirmedCount, 3, "active monthly rows without a confirmed invoice do not count as loyalty");
+
+const normalAccessCatalog = buildProfileCosmeticAccessCatalog({
+  assetRows: accessTestAssets,
+  member: { id: "member-normal", role: "member" },
+  accessRules,
+  unlockTiers: [supportTier, monthlyTier],
+  grants: [],
+  supportPayments: [],
+  accessSchemaReady: true,
+  env: { STRIPE_SECRET_KEY: "sk_live_test" },
+});
+assert.equal(normalAccessCatalog.assets.find((asset) => asset.id === "avatar-1").unlocked, true, "normal members unlock basic assets");
+assert.equal(normalAccessCatalog.assets.find((asset) => asset.id === "manual-frame").locked, true, "manual assets stay locked without a grant");
+assert.equal(normalAccessCatalog.assets.find((asset) => asset.id === "support-frame").locked, true, "unreached support tiers stay locked");
+
+const grantedAssets = decorateCosmeticAssetsForMember({
+  assetRows: accessTestAssets,
+  member: { id: "member-granted", role: "member" },
+  accessRules,
+  unlockTiers: [supportTier, monthlyTier],
+  grants: [
+    {
+      id: "grant-active",
+      member_id: "member-granted",
+      asset_id: "manual-frame",
+      grant_title: "Top soutien - Saison 13",
+      grant_description: "",
+      revoked_at: null,
+    },
+    {
+      id: "grant-revoked",
+      member_id: "member-granted",
+      asset_id: "support-frame",
+      grant_title: "Old reward",
+      revoked_at: "2026-08-24T00:00:00.000Z",
+    },
+  ],
+  supportPayments: [],
+  accessSchemaReady: true,
+});
+assert.equal(grantedAssets.find((asset) => asset.id === "manual-frame").unlocked, true, "active manual grants unlock their asset");
+assert.equal(grantedAssets.find((asset) => asset.id === "support-frame").locked, true, "revoked grants no longer unlock their asset");
+
+const supportUnlockedCatalog = buildProfileCosmeticAccessCatalog({
+  assetRows: accessTestAssets,
+  member: { id: "member-support", role: "member" },
+  accessRules,
+  unlockTiers: [supportTier, monthlyTier],
+  grants: [],
+  supportPayments: confirmedMonthlyPayments,
+  accessSchemaReady: true,
+  env: { STRIPE_SECRET_KEY: "sk_live_test" },
+});
+assert.equal(supportUnlockedCatalog.assets.find((asset) => asset.id === "support-frame").unlocked, true, "reached support tiers unlock their rewards");
+assert.equal(supportUnlockedCatalog.assets.find((asset) => asset.id === "monthly-frame").unlocked, true, "reached monthly loyalty tiers unlock their rewards");
+
+const leaderAccessCatalog = buildProfileCosmeticAccessCatalog({
+  assetRows: accessTestAssets,
+  member: { id: "leader", role: "leader" },
+  accessRules,
+  unlockTiers: [supportTier, monthlyTier],
+  grants: [],
+  supportPayments: [],
+  accessSchemaReady: true,
+});
+assert.equal(leaderAccessCatalog.assets.every((asset) => asset.unlocked), true, "leader bypass unlocks every active asset");
+
+const adminAccessCatalog = buildProfileCosmeticAccessCatalog({
+  assetRows: accessTestAssets,
+  member: { id: "admin", role: "admin" },
+  accessRules,
+  unlockTiers: [supportTier, monthlyTier],
+  grants: [],
+  supportPayments: [],
+  accessSchemaReady: true,
+});
+assert.equal(adminAccessCatalog.assets.find((asset) => asset.id === "manual-frame").locked, true, "admin non-leaders do not get the leader bypass");
+assert.throws(
+  () =>
+    validateProfileCosmeticSelection({
+      assets: normalAccessCatalog.assets,
+      selectedAvatarId: "avatar-1",
+      selectedFrameId: "manual-frame",
+    }),
+  /Cadre indisponible/,
+  "server validation refuses locked frames even when the client sends their ids",
+);
+
+const publicRankings = buildPublicSupportRankings({
+  payments: [
+    { member_id: "member-a", donor_public_name: "Darius", display_publicly: true, anonymous: false, status: "confirmed", amount_cents: 2000, amount_refunded_cents: 0, support_type: "one_time", livemode: true },
+    { member_id: "member-a", donor_public_name: "Darius", display_publicly: true, anonymous: false, status: "confirmed", amount_cents: 1000, amount_refunded_cents: 0, support_type: "monthly", livemode: true },
+    { member_id: "member-b", donor_public_name: "Private", display_publicly: false, anonymous: false, status: "confirmed", amount_cents: 9999, amount_refunded_cents: 0, support_type: "one_time", livemode: true },
+  ],
+  cosmeticsByMemberId: new Map([["member-a", { avatar: catalog.avatars[0], frame: catalog.frames[0] }]]),
+  env: { STRIPE_SECRET_KEY: "sk_live_test" },
+});
+assert.equal(publicRankings.cumulative.length, 1, "public rankings exclude private payments");
+assert.equal(publicRankings.cumulative[0].amountCents, 3000, "public cumulative ranking adds confirmed one-time and monthly support");
+assert.equal(publicRankings.cumulative[0].cosmetics.avatar.id, "avatar-1", "public rankings include selected cosmetics without extra per-member queries");
 const productionLikeAssets = [
   { asset_type: "avatar", display_name: "Avatar 1" },
   { asset_type: "avatar", display_name: "Avatar 20" },
@@ -256,45 +435,54 @@ const resolved = resolveProfileCosmeticSelection(
 assert.equal(resolved.avatar.id, "avatar-2");
 assert.equal(resolved.frame.id, "frame-2");
 
-function createFakeSupabase() {
-  const assetRows = assets.map((asset) => ({ ...asset, metadata: { ...(asset.metadata || {}) } }));
-  const selections = new Map([
-    [
-      "member-a",
-      {
-        member_id: "member-a",
-        selected_avatar_id: "avatar-2",
-        selected_frame_id: "frame-2",
-        updated_at: "2026-08-23T00:00:00.000Z",
-      },
+function createFakeSupabase(options = {}) {
+  const assetRows = (options.assets || assets).map((asset) => ({ ...asset, metadata: { ...(asset.metadata || {}) } }));
+  const selections = new Map(
+    options.selections || [
+      [
+        "member-a",
+        {
+          member_id: "member-a",
+          selected_avatar_id: "avatar-2",
+          selected_frame_id: "frame-2",
+          updated_at: "2026-08-23T00:00:00.000Z",
+        },
+      ],
     ],
-  ]);
+  );
+  const members = options.members || [{ id: "member-a", watcher_name: "Darius", role: "member" }];
+  const accessRuleRows = options.accessRules || [];
+  const tierRows = options.unlockTiers || [];
+  const grantRows = options.grants || [];
+  const supportRows = options.supportPayments || [];
   const calls = [];
+
+  function applyFilters(rows, state) {
+    let filtered = rows;
+    if (state.eqFilter) {
+      filtered = filtered.filter((row) => row?.[state.eqFilter.column] === state.eqFilter.value);
+    }
+    if (state.inFilter) {
+      const allowed = new Set(state.inFilter.values.map(String));
+      filtered = filtered.filter((row) => allowed.has(String(row?.[state.inFilter.column])));
+    }
+    return filtered;
+  }
 
   function resolveQuery(state) {
     if (state.table === "portal_cosmetic_assets") {
-      let rows = assetRows;
-      if (state.inFilter?.column === "id") {
-        const allowed = new Set(state.inFilter.values.map(String));
-        rows = rows.filter((row) => allowed.has(String(row.id)));
-      }
-      if (state.eqFilter?.column === "id") {
-        rows = rows.filter((row) => String(row.id) === String(state.eqFilter.value));
-      }
-      return { data: rows, error: null };
+      return { data: applyFilters(assetRows, state), error: null };
     }
 
     if (state.table === "portal_member_cosmetics") {
-      let rows = [...selections.values()];
-      if (state.eqFilter?.column === "member_id") {
-        rows = rows.filter((row) => String(row.member_id) === String(state.eqFilter.value));
-      }
-      if (state.inFilter?.column === "member_id") {
-        const allowed = new Set(state.inFilter.values.map(String));
-        rows = rows.filter((row) => allowed.has(String(row.member_id)));
-      }
-      return { data: rows, error: null };
+      return { data: applyFilters([...selections.values()], state), error: null };
     }
+
+    if (state.table === "guild_members") return { data: applyFilters(members, state), error: null };
+    if (state.table === "portal_cosmetic_access_rules") return { data: applyFilters(accessRuleRows, state), error: null };
+    if (state.table === "portal_cosmetic_unlock_tiers") return { data: applyFilters(tierRows, state), error: null };
+    if (state.table === "portal_member_cosmetic_grants") return { data: applyFilters(grantRows, state), error: null };
+    if (state.table === "portal_support_payments") return { data: applyFilters(supportRows, state), error: null };
 
     return { data: [], error: null };
   }
@@ -533,6 +721,27 @@ const cosmeticsByMember = await loadCosmeticsForMemberIds(fakeSupabase, ["member
 assert.equal(cosmeticsByMember.size, 1, "cosmetics are loaded in batch by unique member id");
 assert.equal(cosmeticsByMember.get("member-a").avatar.id, "avatar-1");
 assert.equal(cosmeticsByMember.get("member-a").frame.id, "frame-1");
+
+const lockedSelectionSupabase = createFakeSupabase({
+  assets: accessTestAssets,
+  members: [{ id: "member-normal", watcher_name: "Normal", role: "member" }],
+  accessRules,
+  unlockTiers: [supportTier, monthlyTier],
+  selections: [
+    [
+      "member-normal",
+      {
+        member_id: "member-normal",
+        selected_avatar_id: "avatar-1",
+        selected_frame_id: "manual-frame",
+        updated_at: "2026-08-24T00:00:00.000Z",
+      },
+    ],
+  ],
+});
+const lockedSelectionState = await loadCosmeticsForMemberIds(lockedSelectionSupabase, ["member-normal"]);
+assert.equal(lockedSelectionState.get("member-normal").avatar.id, "avatar-1", "unlocked parts of an old selection still render");
+assert.equal(lockedSelectionState.get("member-normal").frame, null, "locked old selections are not rendered in chat/profile batches");
 
 const frameMetadataState = await saveProfileCosmeticFrameMetadata(
   fakeSupabase,
@@ -852,8 +1061,8 @@ await assert.rejects(
 const portalCosmeticsSource = await readFile(new URL("../api/portal-cosmetics.js", import.meta.url), "utf8");
 assert.match(
   portalCosmeticsSource,
-  /requirePortalAdminSession\(req, supabase\)/,
-  "metadata endpoint rechecks the admin session server-side",
+  /requirePortalLeaderSession\(req, supabase\)/,
+  "legacy metadata endpoint rechecks the leader session server-side",
 );
 assert.match(
   portalCosmeticsSource,
@@ -876,6 +1085,10 @@ assert.match(
   "publication route keeps a server-side safety margin under the platform payload limit",
 );
 
+const adminEndpointSource = await readFile(new URL("../api/portal-cosmetics-admin.js", import.meta.url), "utf8");
+assert.match(adminEndpointSource, /requirePortalLeaderSession\(req, supabase\)/, "cosmetic admin endpoint is leader-only");
+assert.doesNotMatch(adminEndpointSource, /requirePortalAdminSession/, "cosmetic admin endpoint does not allow generic admins");
+
 const publishSource = await readFile(new URL("../api/_portal-cosmetics-publish.js", import.meta.url), "utf8");
 assert.match(publishSource, /public_url/, "publisher validates the public URL returned by the VPS");
 assert.match(publishSource, /assertAllowedPublicCosmeticUrl/, "publisher restricts VPS URLs to the expected public domain and folder");
@@ -884,6 +1097,10 @@ const studioSource = await readFile(new URL("../src/components/ProfileCosmeticsT
 assert.match(studioSource, /onPointerDown=\{\(event\) => startPointer\("move", event\)\}/, "studio exposes direct box dragging");
 assert.match(studioSource, /startPointer\(handle, event\)/, "studio exposes resize handles");
 assert.match(studioSource, /detectFrameMetadataFromUrl/, "studio has local alpha detection");
+assert.match(studioSource, /aria-disabled=\{locked \? "true" : "false"\}/, "locked cosmetics stay focusable and inspectable");
+assert.match(studioSource, /setInspectedAssetId\(String\(avatar\.id\)\)/, "locked avatars can be inspected without changing the draft");
+assert.match(studioSource, /AdminClassificationPanel/, "cosmetic admin exposes classification tools");
+assert.match(studioSource, /AdminGrantsPanel/, "cosmetic admin exposes manual grant tools");
 assert.match(studioSource, /save-frame-render-metadata/, "studio saves only on explicit metadata action");
 assert.match(studioSource, /const framePreviewAvatar = previewAvatar \|\| catalogPreviewAvatar;/, "frame catalog previews keep a demo avatar when no avatar is selected");
 assert.match(studioSource, /<ProfileAvatar avatar=\{framePreviewAvatar\} frame=\{frame\}/, "frame catalog previews render the actual frame instead of the initial fallback");
@@ -903,5 +1120,10 @@ assert.match(uploadStudioSource, /status === "ready"/, "batch publishing only ta
 assert.match(uploadStudioSource, /summarizeProfileCosmeticPublishBatch/, "upload studio renders a final batch summary");
 assert.match(uploadStudioSource, /publish-cosmetic-asset/, "upload studio publishes only through the explicit server action");
 assert.match(uploadStudioSource, /Valider et publier/, "upload studio keeps an explicit publish button");
+
+const supportTabSource = await readFile(new URL("../src/components/SupportProjectTab.jsx", import.meta.url), "utf8");
+assert.match(supportTabSource, /\{isLeader \? \(/, "leader support tracking block is absent from the DOM for non-leaders");
+assert.match(supportTabSource, /SupportRewardsSection/, "support tab renders reward progress before payment");
+assert.match(supportTabSource, /RankingList/, "support tab renders public cosmetic rankings");
 
 console.log("profile cosmetics tests passed");

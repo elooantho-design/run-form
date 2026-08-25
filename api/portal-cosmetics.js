@@ -2,7 +2,7 @@
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
-  requirePortalAdminSession,
+  requirePortalLeaderSession,
   requirePortalSession,
   sendPortalJson,
   verifyPortalRequestOrigin,
@@ -100,7 +100,7 @@ async function saveProfileCosmetics(req, res, member, body) {
 }
 
 async function saveFrameMetadata(req, res, body) {
-  const adminSession = await requirePortalAdminSession(req, supabase);
+  const adminSession = await requirePortalLeaderSession(req, supabase);
   if (adminSession.error) {
     sendPortalJson(res, adminSession.status || 403, { error: adminSession.error }, req);
     return;
@@ -125,7 +125,7 @@ async function saveFrameMetadata(req, res, body) {
 }
 
 async function publishCosmeticAsset(req, res, body) {
-  const adminSession = await requirePortalAdminSession(req, supabase);
+  const adminSession = await requirePortalLeaderSession(req, supabase);
   if (adminSession.error) {
     sendPortalJson(res, adminSession.status || 403, { error: adminSession.error }, req);
     return;

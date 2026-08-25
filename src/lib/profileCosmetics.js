@@ -494,8 +494,11 @@ export function normalizeProfileCosmeticAsset(row) {
   const collectionIsActive = row.collectionIsActive ?? row.collection_is_active ?? collection.isActive ?? collection.is_active;
   const collectionIsPublic = row.collectionIsPublic ?? row.collection_is_public ?? collection.isPublic ?? collection.is_public;
   const isActive = row.isActive ?? row.is_active;
+  const access = row.access && typeof row.access === "object" && !Array.isArray(row.access) ? row.access : null;
   const unlocked =
-    typeof row.unlocked === "boolean"
+    typeof access?.unlocked === "boolean"
+      ? access.unlocked
+      : typeof row.unlocked === "boolean"
       ? row.unlocked
       : typeof row.locked === "boolean"
         ? !row.locked
@@ -514,6 +517,7 @@ export function normalizeProfileCosmeticAsset(row) {
     isActive: Boolean(isActive),
     sortOrder: Number(row.sortOrder ?? row.sort_order ?? 0),
     metadata: normalizeProfileCosmeticMetadata(row.metadata),
+    access,
     unlocked,
     locked: !unlocked,
   };

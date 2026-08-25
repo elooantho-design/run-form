@@ -9,6 +9,12 @@ import {
   normalizeProfileCosmeticType,
   resolveProfileCosmeticSelection,
 } from "../src/lib/profileCosmetics.js";
+import {
+  buildMemberCosmeticProgress,
+  buildProfileCosmeticAccessCatalog,
+  decorateCosmeticAssetsForMember,
+  loadCosmeticAccessContext,
+} from "./_portal-cosmetic-access.js";
 
 export const PROFILE_COSMETIC_ASSET_SELECT = `
   id,
@@ -62,6 +68,7 @@ function buildEmptyProfileCosmeticsState(member) {
   return {
     ok: true,
     schemaReady: false,
+    accessSchemaReady: false,
     member: {
       id: member?.id || null,
       displayName: member?.watcher_name || member?.discord_id || "Joueur",
@@ -79,7 +86,18 @@ function buildEmptyProfileCosmeticsState(member) {
       selectedFrameId: null,
       updatedAt: null,
     },
+    progress: {
+      supportTotalCents: 0,
+      monthlyConfirmedCount: 0,
+      tiers: [],
+      nextSupportTier: null,
+      nextMonthlyTier: null,
+    },
   };
+}
+
+function getUnlockedCosmeticAssets(assets = []) {
+  return (assets || []).filter((asset) => asset?.isActive && asset?.unlocked && !asset?.locked);
 }
 
 export function validateProfileCosmeticSelection({ assets = [], selectedAvatarId = "", selectedFrameId = "" }) {
@@ -116,7 +134,7 @@ export function validateProfileCosmeticSelection({ assets = [], selectedAvatarId
   };
 }
 
-async function loadProfileCosmeticAssetRows(supabase) {
+export async function loadProfileCosmeticAssetRows(supabase) {
   const { data, error } = await supabase
     .from("portal_cosmetic_assets")
     .select(PROFILE_COSMETIC_ASSET_SELECT)
@@ -144,18 +162,25 @@ export async function loadProfileCosmeticsState(supabase, member) {
       loadProfileCosmeticAssetRows(supabase),
       loadProfileCosmeticSelectionRow(supabase, member.id),
     ]);
-    const catalog = serializeProfileCosmeticsCatalog(assetRows);
-    const selection = resolveProfileCosmeticSelection(selectionRow, catalog.assets);
+    const accessContext = await loadCosmeticAccessContext(supabase, [member.id]);
+    const catalog = buildProfileCosmeticAccessCatalog({
+      assetRows,
+      member,
+      ...accessContext,
+    });
+    const selection = resolveProfileCosmeticSelection(selectionRow, getUnlockedCosmeticAssets(catalog.assets));
 
     return {
       ok: true,
       schemaReady: true,
+      accessSchemaReady: accessContext.accessSchemaReady,
       member: {
         id: member?.id || null,
         displayName: member?.watcher_name || member?.discord_id || "Joueur",
       },
       catalog,
       selection,
+      progress: buildMemberCosmeticProgress({ member, accessContext }),
     };
   } catch (error) {
     if (isMissingProfileCosmeticsSchema(error)) {
@@ -167,8 +192,14 @@ export async function loadProfileCosmeticsState(supabase, member) {
 
 export async function saveProfileCosmeticsSelection(supabase, member, body = {}) {
   const assetRows = await loadProfileCosmeticAssetRows(supabase);
+  const accessContext = await loadCosmeticAccessContext(supabase, [member.id]);
+  const decoratedAssets = decorateCosmeticAssetsForMember({
+    assetRows,
+    member,
+    ...accessContext,
+  });
   const selection = validateProfileCosmeticSelection({
-    assets: assetRows,
+    assets: decoratedAssets,
     selectedAvatarId: body.selectedAvatarId || body.selected_avatar_id,
     selectedFrameId: body.selectedFrameId || body.selected_frame_id,
   });
@@ -268,24 +299,41 @@ export async function loadCosmeticsForMemberIds(supabase, memberIds = []) {
 
   if (!assetIds.length) return new Map();
 
-  const assetsResult = await supabase
-    .from("portal_cosmetic_assets")
-    .select(PROFILE_COSMETIC_ASSET_SELECT)
-    .in("id", assetIds);
+  const [assetsResult, membersResult, accessContext] = await Promise.all([
+    supabase
+      .from("portal_cosmetic_assets")
+      .select(PROFILE_COSMETIC_ASSET_SELECT)
+      .in("id", assetIds),
+    supabase
+      .from("guild_members")
+      .select("id, watcher_name, role")
+      .in("id", ids),
+    loadCosmeticAccessContext(supabase, ids),
+  ]);
 
   if (assetsResult.error) {
     if (isMissingProfileCosmeticsSchema(assetsResult.error)) return new Map();
     throw assetsResult.error;
   }
+  if (membersResult.error) throw membersResult.error;
 
-  const catalog = serializeProfileCosmeticsCatalog(assetsResult.data || []);
+  const assetRows = assetsResult.data || [];
+  const memberById = new Map((membersResult.data || []).map((member) => [String(member.id), member]));
   const cosmeticsByMemberId = new Map();
   for (const row of selectionRows) {
-    const selection = resolveProfileCosmeticSelection(row, catalog.assets);
-    cosmeticsByMemberId.set(String(row.member_id), {
-      avatar: selection.avatar,
-      frame: selection.frame,
+    const member = memberById.get(String(row.member_id)) || { id: row.member_id };
+    const catalog = buildProfileCosmeticAccessCatalog({
+      assetRows,
+      member,
+      ...accessContext,
     });
+    const selection = resolveProfileCosmeticSelection(row, getUnlockedCosmeticAssets(catalog.assets));
+    if (selection.avatar || selection.frame) {
+      cosmeticsByMemberId.set(String(row.member_id), {
+        avatar: selection.avatar,
+        frame: selection.frame,
+      });
+    }
   }
 
   return cosmeticsByMemberId;
