@@ -10,6 +10,7 @@ export const PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL = "support_total";
 export const PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY = "monthly_loyalty";
 export const PROFILE_COSMETIC_UI_ACCESS_MANUAL = "manual";
 export const PROFILE_FRAME_ANIMATION_SHARK_MOUTH = "shark-mouth";
+export const PROFILE_FRAME_ANIMATION_INFERNAL_HORNS = "infernal-horns";
 export const PROFILE_COSMETIC_ASSET_TYPES = new Set([PROFILE_COSMETIC_AVATAR, PROFILE_COSMETIC_FRAME]);
 export const PROFILE_COSMETIC_UI_ACCESS_MODES = new Set([
   PROFILE_COSMETIC_UI_ACCESS_BASIC,
@@ -240,6 +241,11 @@ export function getProfileCosmeticNumberedDisplayNameInfo(displayName) {
 }
 
 export function getProfileFrameAnimationKey(frame) {
+  const normalizedDisplayName = normalizeProfileCosmeticDisplayName(getProfileCosmeticDisplayName(frame));
+  if (normalizedDisplayName === "cadre 35 anime") {
+    return PROFILE_FRAME_ANIMATION_INFERNAL_HORNS;
+  }
+
   const info = getProfileCosmeticNumberedDisplayNameInfo(getProfileCosmeticDisplayName(frame));
   if (info?.assetType === PROFILE_COSMETIC_FRAME && info.number === 33) {
     return PROFILE_FRAME_ANIMATION_SHARK_MOUTH;

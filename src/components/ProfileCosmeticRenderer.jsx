@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import {
   getFrameRenderMetadata,
   getProfileFrameAnimationKey,
+  PROFILE_FRAME_ANIMATION_INFERNAL_HORNS,
   PROFILE_FRAME_ANIMATION_SHARK_MOUTH,
 } from "@/lib/profileCosmetics";
 
@@ -36,6 +37,7 @@ export default function ProfileCosmeticRenderer({
   const frameFailed = Boolean(frameUrl && failedFrameUrl === frameUrl);
   const hasFrame = Boolean(frameUrl && !frameFailed);
   const hasSharkMouthAnimation = hasFrame && frameAnimationKey === PROFILE_FRAME_ANIMATION_SHARK_MOUTH;
+  const hasInfernalHornsAnimation = hasFrame && frameAnimationKey === PROFILE_FRAME_ANIMATION_INFERNAL_HORNS;
 
   if (!avatarUrl || avatarFailed) {
     return (
@@ -88,7 +90,7 @@ export default function ProfileCosmeticRenderer({
         <div
           className={`profile-avatar-frame-layer pointer-events-none absolute z-10 ${
             hasSharkMouthAnimation ? "profile-avatar-frame-layer--shark-mouth" : ""
-          }`}
+          } ${hasInfernalHornsAnimation ? "profile-avatar-frame-layer--infernal-horns" : ""}`}
           data-frame-animation={frameAnimationKey || undefined}
           style={{
             left: toPercent(frameBox.x),
@@ -119,6 +121,29 @@ export default function ProfileCosmeticRenderer({
               <span className="profile-avatar-shark-eyes absolute inset-0" />
               <span className="profile-avatar-shark-bubbles profile-avatar-shark-bubbles--left absolute" />
               <span className="profile-avatar-shark-bubbles profile-avatar-shark-bubbles--right absolute" />
+            </>
+          ) : null}
+          {hasInfernalHornsAnimation ? (
+            <>
+              <span className="profile-avatar-infernal-lava-zone absolute inset-0">
+                <img
+                  src={frameUrl}
+                  alt=""
+                  className="profile-avatar-infernal-lava-scan absolute inset-0 object-contain"
+                  draggable="false"
+                  loading="eager"
+                  decoding="async"
+                />
+              </span>
+              <img
+                src={frameUrl}
+                alt=""
+                className="profile-avatar-infernal-horn-tips absolute inset-0 object-contain"
+                draggable="false"
+                loading="eager"
+                decoding="async"
+              />
+              <span className="profile-avatar-infernal-jewels absolute inset-0" />
             </>
           ) : null}
         </div>

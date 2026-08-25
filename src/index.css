@@ -1444,6 +1444,47 @@ body {
   animation-delay: -2.1s;
 }
 
+.profile-avatar-infernal-lava-zone {
+  clip-path: polygon(18% 0, 82% 0, 82% 39%, 18% 39%);
+  mix-blend-mode: screen;
+}
+
+.profile-avatar-infernal-lava-scan,
+.profile-avatar-infernal-horn-tips {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  filter: sepia(1) saturate(7.5) hue-rotate(-14deg) brightness(1.55) contrast(1.2);
+  mix-blend-mode: screen;
+}
+
+.profile-avatar-infernal-lava-scan {
+  opacity: 0;
+  animation: profileInfernalLavaRise 3.4s cubic-bezier(0.3, 0, 0.24, 1) infinite;
+  will-change: clip-path, opacity, filter;
+}
+
+.profile-avatar-infernal-horn-tips {
+  clip-path: inset(0 16% 74% 16%);
+  opacity: 0.2;
+  animation: profileInfernalHornTips 2.7s ease-in-out infinite;
+  will-change: opacity, filter;
+}
+
+.profile-avatar-infernal-jewels {
+  background:
+    radial-gradient(circle at 11.4% 44.2%, rgba(255, 250, 206, 0.96) 0 0.45%, rgba(255, 180, 35, 0.7) 0.9%, transparent 2.7%),
+    radial-gradient(circle at 88.7% 44.2%, rgba(255, 250, 206, 0.96) 0 0.45%, rgba(255, 180, 35, 0.7) 0.9%, transparent 2.7%),
+    radial-gradient(circle at 50% 95.3%, rgba(255, 248, 198, 0.98) 0 0.55%, rgba(255, 112, 18, 0.76) 1.2%, transparent 3.2%),
+    radial-gradient(circle at 5.8% 74%, rgba(255, 236, 174, 0.88) 0 0.35%, rgba(255, 146, 27, 0.58) 0.8%, transparent 2.2%),
+    radial-gradient(circle at 94.2% 74%, rgba(255, 236, 174, 0.88) 0 0.35%, rgba(255, 146, 27, 0.58) 0.8%, transparent 2.2%);
+  mix-blend-mode: screen;
+  opacity: 0.28;
+  animation: profileInfernalJewels 3.8s ease-in-out infinite;
+  will-change: opacity, filter;
+}
+
 @keyframes profileSharkMouthBite {
   0%,
   38%,
@@ -1524,8 +1565,72 @@ body {
   }
 }
 
+@keyframes profileInfernalLavaRise {
+  0% {
+    clip-path: polygon(0 40%, 100% 40%, 100% 52%, 0 52%);
+    opacity: 0;
+    filter: sepia(1) saturate(6) hue-rotate(-10deg) brightness(1.2) contrast(1.15);
+  }
+
+  14% {
+    opacity: 0.38;
+  }
+
+  58% {
+    clip-path: polygon(0 14%, 100% 14%, 100% 30%, 0 30%);
+    opacity: 0.66;
+    filter: sepia(1) saturate(8) hue-rotate(-18deg) brightness(1.72) contrast(1.24);
+  }
+
+  86% {
+    clip-path: polygon(0 -2%, 100% -2%, 100% 14%, 0 14%);
+    opacity: 0.78;
+  }
+
+  100% {
+    clip-path: polygon(0 -10%, 100% -10%, 100% 5%, 0 5%);
+    opacity: 0;
+    filter: sepia(1) saturate(9) hue-rotate(-22deg) brightness(1.9) contrast(1.28);
+  }
+}
+
+@keyframes profileInfernalHornTips {
+  0%,
+  100% {
+    opacity: 0.16;
+    filter: sepia(1) saturate(6.5) hue-rotate(-8deg) brightness(1.25) contrast(1.16);
+  }
+
+  50% {
+    opacity: 0.46;
+    filter: sepia(1) saturate(9) hue-rotate(-22deg) brightness(1.78) contrast(1.24) drop-shadow(0 0 0.12em rgba(255, 72, 8, 0.48));
+  }
+}
+
+@keyframes profileInfernalJewels {
+  0%,
+  34%,
+  100% {
+    opacity: 0.22;
+    filter: brightness(0.9);
+  }
+
+  46% {
+    opacity: 0.82;
+    filter: brightness(1.45) drop-shadow(0 0 0.1em rgba(255, 172, 34, 0.62));
+  }
+
+  58% {
+    opacity: 0.34;
+    filter: brightness(1.02);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .profile-avatar-frame-layer--shark-mouth,
+  .profile-avatar-infernal-lava-scan,
+  .profile-avatar-infernal-horn-tips,
+  .profile-avatar-infernal-jewels,
   .profile-avatar-shark-shimmer,
   .profile-avatar-shark-eyes,
   .profile-avatar-shark-bubbles {
@@ -1533,8 +1638,14 @@ body {
   }
 
   .profile-avatar-shark-shimmer,
+  .profile-avatar-infernal-lava-scan,
   .profile-avatar-shark-bubbles {
     display: none;
+  }
+
+  .profile-avatar-infernal-horn-tips,
+  .profile-avatar-infernal-jewels {
+    opacity: 0.24;
   }
 }
 

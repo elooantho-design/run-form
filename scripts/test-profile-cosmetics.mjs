@@ -35,6 +35,7 @@ import {
   PROFILE_COSMETIC_UI_ACCESS_MANUAL,
   PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
   PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL,
+  PROFILE_FRAME_ANIMATION_INFERNAL_HORNS,
   PROFILE_FRAME_ANIMATION_SHARK_MOUTH,
   resolveProfileCosmeticSelection,
   sortProfileCosmeticAssetsNatural,
@@ -410,6 +411,14 @@ assert.equal(
 );
 assert.equal(getProfileFrameAnimationKey({ asset_type: "frame", display_name: "Cadre 32" }), "");
 assert.equal(getProfileFrameAnimationKey({ asset_type: "avatar", display_name: "Avatar 33" }), "");
+assert.equal(getProfileFrameAnimationKey({ asset_type: "frame", display_name: "Cadre 35" }), "");
+assert.equal(
+  getProfileFrameAnimationKey({ asset_type: "frame", display_name: "Cadre 35 animé" }),
+  PROFILE_FRAME_ANIMATION_INFERNAL_HORNS,
+  "only the explicit animated copy of frame 35 enables the infernal horns animation",
+);
+assert.equal(getProfileFrameAnimationKey({ asset_type: "frame", display_name: "Cadre 35 anime" }), PROFILE_FRAME_ANIMATION_INFERNAL_HORNS);
+assert.equal(getProfileFrameAnimationKey({ asset_type: "avatar", display_name: "Avatar 35 animé" }), "");
 assert.deepEqual(
   summarizeProfileCosmeticPublishBatch([{ status: "published" }, { status: "already_published" }, { status: "failed" }]),
   { completed: 3, succeeded: 2, failed: 1 },
