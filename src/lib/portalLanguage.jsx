@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { PORTAL_LANGUAGES } from "./portalSupportedLanguages.js";
 
@@ -276,6 +277,14 @@ const PORTAL_TRANSLATIONS = {
   "profile.frameMetadataSaving": "Saving...",
   "profile.frameMetadataSaved": "Frame tuning saved.",
   "profile.frameMetadataSaveError": "Unable to save frame tuning.",
+  "profile.animationLayerUploadSelect": "Import animated WebP",
+  "profile.animationLayerUploadChange": "Change WebP",
+  "profile.animationLayerUploadAction": "Import",
+  "profile.animationLayerDuplicateUrl": "Duplicate URL",
+  "profile.animationLayerUploadInvalidFormat": "Unsupported format. Use an animated WebP file.",
+  "profile.animationLayerUploadTooLarge": "File too large. Maximum 5 MB.",
+  "profile.animationLayerUploadError": "Unable to upload WebP.",
+  "profile.animationLayerUploadSuccess": "Animated WebP imported. Remember to save the frame tuning.",
   "profile.uploadStudioEyebrow": "Admin studio",
   "profile.uploadStudioTitle": "Add cosmetics",
   "profile.uploadStudioHelp": "Drop images, normalize them locally, then publish them one by one to the VPS.",
@@ -1543,6 +1552,14 @@ const PORTAL_FRENCH_TRANSLATIONS = {
   "profile.frameMetadataSaving": "Enregistrement...",
   "profile.frameMetadataSaved": "Reglage du cadre enregistre.",
   "profile.frameMetadataSaveError": "Reglage du cadre impossible.",
+  "profile.animationLayerUploadSelect": "Importer un WebP anime",
+  "profile.animationLayerUploadChange": "Changer le WebP",
+  "profile.animationLayerUploadAction": "Importer",
+  "profile.animationLayerDuplicateUrl": "Dupliquer l'URL",
+  "profile.animationLayerUploadInvalidFormat": "Format non supporte. Utilise un fichier WebP anime.",
+  "profile.animationLayerUploadTooLarge": "Fichier trop lourd. Maximum 5 Mo.",
+  "profile.animationLayerUploadError": "Upload WebP impossible.",
+  "profile.animationLayerUploadSuccess": "WebP anime importe. Pense a enregistrer le reglage du cadre.",
   "profile.uploadStudioEyebrow": "Studio admin",
   "profile.uploadStudioTitle": "Ajouter des cosmetiques",
   "profile.uploadStudioHelp": "Depose des images, normalise-les localement, puis publie-les une par une vers le VPS.",

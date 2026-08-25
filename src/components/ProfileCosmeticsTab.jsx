@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  UploadCloud,
   UserRound,
   XCircle,
 } from "lucide-react";
@@ -106,7 +107,8 @@ function fromPercent(value) {
   return clampUnit(Number(value) / 100);
 }
 
-const DEFAULT_ANIMATION_LAYER_URL = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/firework.webp";
+const ANIMATION_LAYER_URL_PLACEHOLDER = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/effet.webp";
+const MAX_ANIMATION_EFFECT_BYTES = 5 * 1024 * 1024;
 const ANIMATION_LAYER_BLEND_MODES = Array.from(PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES);
 
 function clampNumber(value, fallback = 0, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) {
@@ -134,7 +136,7 @@ function buildAnimationLayerDraft(side = "left", existingLayers = []) {
     id: getNextAnimationLayerId(existingLayers, baseId),
     label: isRight ? "Feu droite" : "Feu gauche",
     type: "webp",
-    url: DEFAULT_ANIMATION_LAYER_URL,
+    url: "",
     x: isRight ? 0.77 : 0,
     y: 0.15,
     width: 0.23,
@@ -146,6 +148,58 @@ function buildAnimationLayerDraft(side = "left", existingLayers = []) {
     delayMs: isRight ? 450 : 0,
     pointerEvents: false,
     blendMode: "screen",
+  };
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} Mo`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} Ko`;
+  return `${bytes} o`;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function sha256Hex(bytes) {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error("SHA-256 navigateur indisponible.");
+  }
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function inspectAnimatedWebpBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 20) return false;
+  const decoder = new TextDecoder("ascii");
+  if (decoder.decode(bytes.subarray(0, 4)) !== "RIFF" || decoder.decode(bytes.subarray(8, 12)) !== "WEBP") return false;
+  const text = decoder.decode(bytes);
+  return text.includes("ANIM") || text.includes("ANMF");
+}
+
+async function readEffectFilePayload(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "");
+  if (!file || type !== "image/webp" || !/\.webp$/i.test(name)) {
+    throw new Error("Format non supporte. Utilise un fichier WebP anime.");
+  }
+  if (file.size > MAX_ANIMATION_EFFECT_BYTES) {
+    throw new Error(`Fichier trop lourd (${formatBytes(file.size)}). Maximum 5 Mo.`);
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!inspectAnimatedWebpBytes(bytes)) {
+    throw new Error("Le WebP doit contenir une animation.");
+  }
+  return {
+    webpBase64: bytesToBase64(bytes),
+    sha256: await sha256Hex(bytes),
+    size: bytes.length,
   };
 }
 
@@ -322,9 +376,112 @@ function LayerNumberInput({ label, value, min, max, step = 1, onChange }) {
   );
 }
 
-function FrameAnimationLayersPanel({ metadata, onMetadataChange, t }) {
+function FrameAnimationLayersPanel({ metadata, onMetadataChange, t, apiBase, onMessage, onError }) {
   const layers = getAnimationLayers(metadata);
   const canAddLayer = layers.length < MAX_PROFILE_FRAME_ANIMATION_LAYERS;
+  const effectInputRefs = useRef(new Map());
+  const [effectUploads, setEffectUploads] = useState({});
+
+  function getUploadState(index) {
+    return effectUploads[index] || {};
+  }
+
+  function updateUploadState(index, patch) {
+    setEffectUploads((current) => ({
+      ...current,
+      [index]: {
+        ...(current[index] || {}),
+        ...patch,
+      },
+    }));
+  }
+
+  function selectEffectFile(index, file) {
+    if (!file) return;
+    const type = String(file.type || "").toLowerCase();
+    if (type !== "image/webp" || !/\.webp$/i.test(file.name || "")) {
+      updateUploadState(index, {
+        file: null,
+        name: "",
+        size: 0,
+        status: "failed",
+        error: t("profile.animationLayerUploadInvalidFormat", "Format non supporte. Utilise un fichier WebP anime."),
+      });
+      return;
+    }
+    if (file.size > MAX_ANIMATION_EFFECT_BYTES) {
+      updateUploadState(index, {
+        file: null,
+        name: "",
+        size: 0,
+        status: "failed",
+        error: t("profile.animationLayerUploadTooLarge", "Fichier trop lourd. Maximum 5 Mo."),
+      });
+      return;
+    }
+    updateUploadState(index, {
+      file,
+      name: file.name,
+      size: file.size,
+      status: "selected",
+      error: "",
+    });
+  }
+
+  async function uploadSelectedEffect(index) {
+    const uploadState = getUploadState(index);
+    const file = uploadState.file;
+    if (!file || uploadState.status === "uploading") return;
+    updateUploadState(index, { status: "uploading", error: "" });
+    onMessage?.("");
+    onError?.("");
+
+    try {
+      const payload = await readEffectFilePayload(file);
+      const response = await fetch(`${apiBase}/api/portal-cosmetics-admin`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "publish-cosmetic-effect",
+          fileName: file.name,
+          mimeType: "image/webp",
+          size: payload.size,
+          webpBase64: payload.webpBase64,
+          sha256: payload.sha256,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.url) {
+        throw new Error(data?.error || t("profile.animationLayerUploadError", "Upload WebP impossible."));
+      }
+
+      onMetadataChange((current) => updateAnimationLayer(current, index, { url: data.url }));
+      updateUploadState(index, {
+        status: "published",
+        error: "",
+        url: data.url,
+        filename: data.filename || "",
+      });
+      onMessage?.(t("profile.animationLayerUploadSuccess", "WebP anime importe. Pense a enregistrer le reglage du cadre."));
+    } catch (error) {
+      const message = error?.message || t("profile.animationLayerUploadError", "Upload WebP impossible.");
+      updateUploadState(index, { status: "failed", error: message });
+      onError?.(message);
+    }
+  }
+
+  function duplicateLayerUrl(index) {
+    const sourceLayer = layers[index];
+    if (!sourceLayer?.url) return;
+    const mirroredIndex = layers.findIndex((layer, layerIndex) => {
+      if (layerIndex === index) return false;
+      if (Boolean(layer?.flipX) !== Boolean(sourceLayer.flipX)) return true;
+      return /right/i.test(String(layer?.id || "")) && !/right/i.test(String(sourceLayer?.id || ""));
+    });
+    if (mirroredIndex < 0) return;
+    onMetadataChange((current) => updateAnimationLayer(current, mirroredIndex, { url: sourceLayer.url }));
+  }
 
   function addLayer(side = "left") {
     onMetadataChange((current) => {
@@ -392,6 +549,14 @@ function FrameAnimationLayersPanel({ metadata, onMetadataChange, t }) {
         <div className="mt-3 space-y-3">
           {layers.map((layer, index) => (
             <div key={`${layer.id || "layer"}-${index}`} className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+              {(() => {
+                const uploadState = getUploadState(index);
+                const canDuplicateUrl = Boolean(
+                  layer.url &&
+                    layers.some((candidate, candidateIndex) => candidateIndex !== index && Boolean(candidate?.flipX) !== Boolean(layer.flipX)),
+                );
+                return (
+                  <>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-zinc-100">{layer.label || layer.id || `Calque ${index + 1}`}</div>
@@ -425,9 +590,72 @@ function FrameAnimationLayersPanel({ metadata, onMetadataChange, t }) {
                 <LayerTextInput
                   label="URL WebP"
                   value={layer.url}
-                  placeholder={DEFAULT_ANIMATION_LAYER_URL}
+                  placeholder={ANIMATION_LAYER_URL_PLACEHOLDER}
                   onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { url: value }))}
                 />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    ref={(node) => {
+                      if (node) effectInputRefs.current.set(index, node);
+                      else effectInputRefs.current.delete(index);
+                    }}
+                    type="file"
+                    accept="image/webp"
+                    className="hidden"
+                    onChange={(event) => {
+                      selectEffectFile(index, event.target.files?.[0] || null);
+                      event.target.value = "";
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-lg border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-800"
+                    onClick={() => effectInputRefs.current.get(index)?.click()}
+                    disabled={uploadState.status === "uploading"}
+                  >
+                    <UploadCloud className="mr-2 h-4 w-4" />
+                    {uploadState.file
+                      ? t("profile.animationLayerUploadChange", "Changer le WebP")
+                      : t("profile.animationLayerUploadSelect", "Importer un WebP anime")}
+                  </Button>
+                  {uploadState.file ? (
+                    <Button
+                      type="button"
+                      className="rounded-lg bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
+                      onClick={() => void uploadSelectedEffect(index)}
+                      disabled={uploadState.status === "uploading"}
+                    >
+                      {uploadState.status === "uploading" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
+                      {t("profile.animationLayerUploadAction", "Importer")}
+                    </Button>
+                  ) : null}
+                  {canDuplicateUrl ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-lg border-zinc-700 bg-zinc-950 text-zinc-100 hover:bg-zinc-800"
+                      onClick={() => duplicateLayerUrl(index)}
+                    >
+                      {t("profile.animationLayerDuplicateUrl", "Dupliquer l'URL")}
+                    </Button>
+                  ) : null}
+                </div>
+                {uploadState.name ? (
+                  <div className="mt-2 text-xs text-zinc-500">
+                    {uploadState.name} · {formatBytes(uploadState.size)}
+                  </div>
+                ) : null}
+                {uploadState.status === "published" && uploadState.url ? (
+                  <div className="mt-2 truncate rounded-lg border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">
+                    {uploadState.url}
+                  </div>
+                ) : null}
+                {uploadState.error ? (
+                  <div className="mt-2 rounded-lg border border-red-400/25 bg-red-400/10 px-3 py-2 text-xs text-red-100">
+                    {uploadState.error}
+                  </div>
+                ) : null}
               </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-4">
@@ -512,6 +740,9 @@ function FrameAnimationLayersPanel({ metadata, onMetadataChange, t }) {
                 />
                 {t("profile.animationLayerFlipX", "Miroir horizontal")}
               </label>
+                  </>
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -1958,6 +2189,9 @@ export default function ProfileCosmeticsTab({
                       metadata={frameMetadataDraft}
                       onMetadataChange={setFrameMetadataDraft}
                       t={t}
+                      apiBase={apiBase}
+                      onMessage={setMessage}
+                      onError={setErrorMessage}
                     />
 
                     <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">

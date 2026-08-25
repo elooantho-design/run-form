@@ -18,9 +18,14 @@ import {
 const TARGET_COSMETIC_SIZE = 1024;
 const MAX_NORMALIZED_PNG_BYTES = 2_750_000;
 const MAX_BASE64_CHARS = 3_750_000;
+const PROFILE_COSMETIC_EFFECT = "effect";
+const PROFILE_COSMETIC_EFFECTS_FOLDER = "effects";
+const MAX_ANIMATED_WEBP_BYTES = 5 * 1024 * 1024;
+const MAX_WEBP_BASE64_CHARS = 7_000_000;
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
 const DEFAULT_PUBLIC_COSMETICS_BASE_URL = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics";
 const DEFAULT_UPLOAD_ENDPOINT_TEMPLATE = "/api/v1/profile-cosmetics/{assetType}/base64";
+const DEFAULT_EFFECT_UPLOAD_ENDPOINT_TEMPLATE = "/api/v1/profile-cosmetics/effects/base64";
 const SAFE_COLLECTION_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]{1,63}$/;
 
 function createPublishError(step, message, statusCode = 400) {
@@ -60,6 +65,45 @@ function decodePngPayload(body = {}) {
   if (!buffer.length || buffer.length > MAX_NORMALIZED_PNG_BYTES) {
     throw createPublishError("validation", "PNG normalise absent ou trop volumineux.");
   }
+  return buffer;
+}
+
+function decodeWebpPayload(body = {}) {
+  const rawDataUrl = String(body.webpDataUrl || body.webp_data_url || "").trim();
+  const rawBase64 = String(body.webpBase64 || body.webp_base64 || body.contentBase64 || body.content_base64 || "").trim();
+  const mimeType = cleanProfileCosmeticText(body.mimeType || body.mime_type || body.contentType || body.content_type, 80).toLowerCase();
+  let base64 = rawBase64;
+
+  if (mimeType && mimeType !== "image/webp") {
+    throw createPublishError("validation", "Le fichier doit etre un WebP anime.");
+  }
+
+  if (rawDataUrl) {
+    const match = rawDataUrl.match(/^data:(image\/webp);base64,([A-Za-z0-9+/=]+)$/);
+    if (!match) {
+      throw createPublishError("validation", "Le fichier doit etre un WebP anime en base64.");
+    }
+    base64 = match[2];
+  }
+
+  if (!mimeType && !rawDataUrl) {
+    throw createPublishError("validation", "Le type MIME image/webp est obligatoire.");
+  }
+
+  if (!base64 || base64.length > MAX_WEBP_BASE64_CHARS || !/^[A-Za-z0-9+/=]+$/.test(base64)) {
+    throw createPublishError("validation", "Payload WebP absent ou trop volumineux.");
+  }
+
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length || buffer.length > MAX_ANIMATED_WEBP_BYTES) {
+    throw createPublishError("validation", "WebP absent ou trop volumineux.");
+  }
+
+  const expectedSize = Number(body.size || body.bytes || body.fileSize || body.file_size || 0);
+  if (expectedSize && expectedSize !== buffer.length) {
+    throw createPublishError("validation", "Taille WebP incoherente.");
+  }
+
   return buffer;
 }
 
@@ -208,6 +252,52 @@ export function inspectPngBuffer(buffer, options = {}) {
   return info;
 }
 
+export function inspectWebpBuffer(buffer, options = {}) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 20) {
+    throw createPublishError("validation", "Le fichier n'est pas un WebP valide.");
+  }
+  if (buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WEBP") {
+    throw createPublishError("validation", "Le fichier n'est pas un WebP valide.");
+  }
+
+  const riffSize = buffer.readUInt32LE(4);
+  const riffEnd = riffSize + 8;
+  if (riffEnd > buffer.length) {
+    throw createPublishError("validation", "WebP tronque.");
+  }
+
+  const chunks = [];
+  let offset = 12;
+  while (offset + 8 <= riffEnd) {
+    const type = buffer.toString("ascii", offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + size;
+    const nextOffset = dataEnd + (size % 2);
+    if (dataEnd > riffEnd || nextOffset > buffer.length) {
+      throw createPublishError("validation", "Chunk WebP tronque.");
+    }
+    chunks.push(type);
+    offset = nextOffset;
+  }
+
+  const hasImageChunk = chunks.some((chunk) => ["VP8 ", "VP8L", "VP8X"].includes(chunk));
+  if (!hasImageChunk) {
+    throw createPublishError("validation", "WebP incomplet.");
+  }
+
+  const hasAnimation = chunks.includes("ANIM") || chunks.includes("ANMF");
+  if (options.requireAnimation && !hasAnimation) {
+    throw createPublishError("validation", "Le WebP doit contenir une animation.");
+  }
+
+  return {
+    bytes: buffer.length,
+    chunks,
+    hasAnimation,
+  };
+}
+
 function getServerConfig() {
   const serverUrl = String(process.env.GVG_SERVER_URL || process.env.GVG_VPS_URL || DEFAULT_GVG_SERVER_URL).replace(/\/$/, "");
   const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
@@ -292,6 +382,94 @@ async function uploadCosmeticToVps({ assetType, fileName, buffer, sha256 }) {
   };
 }
 
+function buildUploadEndpoint(endpointTemplate, assetType) {
+  const { serverUrl } = getServerConfig();
+  return new URL(
+    endpointTemplate.replace("{assetType}", encodeURIComponent(assetType)).replace(/^\/+/, ""),
+    `${serverUrl}/`,
+  ).toString();
+}
+
+function getEffectUploadEndpoints() {
+  const { endpointTemplate } = getServerConfig();
+  return [
+    buildUploadEndpoint(DEFAULT_EFFECT_UPLOAD_ENDPOINT_TEMPLATE, PROFILE_COSMETIC_EFFECTS_FOLDER),
+    buildUploadEndpoint(endpointTemplate, PROFILE_COSMETIC_EFFECTS_FOLDER),
+    buildUploadEndpoint(endpointTemplate, PROFILE_COSMETIC_EFFECT),
+  ].filter((endpoint, index, endpoints) => endpoints.indexOf(endpoint) === index);
+}
+
+async function uploadEffectToVps({ fileName, buffer, sha256 }) {
+  const { token } = getServerConfig();
+  if (!token) {
+    throw createPublishError("upload VPS", "Token VPS manquant cote serveur.", 500);
+  }
+
+  const attempts = [];
+  for (const endpoint of getEffectUploadEndpoints()) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-GVG-Token": token,
+      },
+      body: JSON.stringify({
+        asset_type: PROFILE_COSMETIC_EFFECT,
+        assetType: PROFILE_COSMETIC_EFFECT,
+        folder: PROFILE_COSMETIC_EFFECTS_FOLDER,
+        fileName,
+        file_name: fileName,
+        content_type: "image/webp",
+        mime_type: "image/webp",
+        content_base64: buffer.toString("base64"),
+      }),
+    });
+    const text = await response.text();
+    const data = parseJsonMaybe(text);
+
+    if (!response.ok) {
+      attempts.push({
+        endpoint,
+        status: response.status,
+        error: data?.detail || data?.error || data?.raw || `Erreur VPS ${response.status}`,
+      });
+      if ([404, 405, 501].includes(response.status)) continue;
+      throw createPublishError("upload VPS", data?.detail || data?.error || `Upload VPS refuse (${response.status}).`, response.status);
+    }
+
+    const responseType = cleanProfileCosmeticText(getResponseValue(data, ["asset_type", "assetType"], PROFILE_COSMETIC_EFFECT));
+    const responseFileName = cleanProfileCosmeticText(getResponseValue(data, ["filename", "file_name", "fileName"]));
+    const responsePublicUrl = cleanProfileCosmeticText(getResponseValue(data, ["public_url", "publicUrl", "url", "asset_url", "assetUrl"], ""), 500);
+    const expectedPublicUrl = buildPublicCosmeticUrl(PROFILE_COSMETIC_EFFECT, fileName);
+    const normalizedResponsePublicUrl = assertAllowedPublicCosmeticUrl(responsePublicUrl, {
+      assetType: PROFILE_COSMETIC_EFFECT,
+      fileName,
+    });
+    const responseSha = cleanProfileCosmeticText(getResponseValue(data, ["sha256"])).toLowerCase();
+    const responseSize = Number(getResponseValue(data, ["size"], 0));
+    const responseOk = Boolean(getResponseValue(data, ["success", "ok"], false));
+    const alreadyExists = Boolean(getResponseValue(data, ["already_exists", "alreadyExists"], false));
+
+    if (
+      !responseOk ||
+      ![PROFILE_COSMETIC_EFFECT, PROFILE_COSMETIC_EFFECTS_FOLDER].includes(responseType) ||
+      responseFileName !== fileName ||
+      normalizedResponsePublicUrl !== expectedPublicUrl ||
+      responseSha !== sha256 ||
+      responseSize !== buffer.length ||
+      alreadyExists
+    ) {
+      throw createPublishError("verification VPS", "La reponse VPS ne correspond pas au WebP envoye.", alreadyExists ? 409 : 502);
+    }
+
+    return { endpoint, response: data };
+  }
+
+  const error = createPublishError("upload VPS", "Upload WebP indisponible cote VPS : aucune route effects n'a repondu.", 501);
+  error.data = { attempts };
+  throw error;
+}
+
 async function verifyPublicCosmeticUrl({ publicUrl, buffer, sha256, assetType }) {
   const response = await fetch(publicUrl, {
     method: "GET",
@@ -324,15 +502,23 @@ async function verifyPublicCosmeticUrl({ publicUrl, buffer, sha256, assetType })
 
 function buildPublicCosmeticUrl(assetType, fileName) {
   const { publicBaseUrl } = getServerConfig();
-  const folder = assetType === PROFILE_COSMETIC_AVATAR ? "avatars" : "frames";
+  const folder = getPublicCosmeticFolder(assetType);
   const publicUrl = `${publicBaseUrl}/${folder}/${encodeURIComponent(fileName)}`;
   assertAllowedPublicCosmeticUrl(publicUrl, { assetType, fileName });
   return publicUrl;
 }
 
+function getPublicCosmeticFolder(assetType) {
+  if (assetType === PROFILE_COSMETIC_AVATAR) return "avatars";
+  if (assetType === PROFILE_COSMETIC_FRAME) return "frames";
+  if (assetType === PROFILE_COSMETIC_EFFECT) return PROFILE_COSMETIC_EFFECTS_FOLDER;
+  throw createPublishError("verification VPS", "Type de dossier cosmetique invalide.", 500);
+}
+
 function assertAllowedPublicCosmeticUrl(publicUrl, { assetType, fileName }) {
   const { publicBaseUrl } = getServerConfig();
-  const expectedFolder = assetType === PROFILE_COSMETIC_AVATAR ? "avatars" : "frames";
+  const expectedFolder = getPublicCosmeticFolder(assetType);
+  const expectedExtension = assetType === PROFILE_COSMETIC_EFFECT ? ".webp" : ".png";
   let expectedUrl;
   let actualUrl;
   try {
@@ -348,7 +534,8 @@ function assertAllowedPublicCosmeticUrl(publicUrl, { assetType, fileName }) {
     actualUrl.origin !== expectedUrl.origin ||
     actualUrl.pathname !== expectedUrl.pathname ||
     actualUrl.search ||
-    actualUrl.hash
+    actualUrl.hash ||
+    !actualUrl.pathname.toLowerCase().endsWith(expectedExtension)
   ) {
     throw createPublishError("verification VPS", "URL publique VPS hors domaine ou dossier autorise.", 502);
   }
@@ -356,10 +543,41 @@ function assertAllowedPublicCosmeticUrl(publicUrl, { assetType, fileName }) {
   return actualUrl.toString();
 }
 
+function buildSafeEffectFileSlug(value, fallback = "effect") {
+  const withoutQuery = cleanProfileCosmeticText(value, 180).split(/[?#]/)[0];
+  const fileName = withoutQuery.split(/[\\/]/).filter(Boolean).pop() || withoutQuery;
+  const baseName = fileName.replace(/\.[a-z0-9]+$/i, "");
+  const slug = baseName
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || fallback;
+}
+
+function buildEffectFileName(body, sha256) {
+  const sourceName = body.fileName || body.file_name || body.displayName || body.display_name || "effect";
+  const slug = buildSafeEffectFileSlug(sourceName);
+  const suffix = crypto.randomBytes(6).toString("hex");
+  const hashHint = sha256.slice(0, 8);
+  return `${slug}-${hashHint}-${suffix}.webp`;
+}
+
+function hasUnsafeDisplayNameCharacter(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    const code = value.charCodeAt(index);
+    if (code < 32 || character === "<" || character === ">") return true;
+  }
+  return false;
+}
+
 function sanitizeDisplayName(value, fallback) {
   const name = cleanProfileCosmeticText(value, 80).replace(/\s+/g, " ");
   if (!name) return fallback;
-  if (/[\x00-\x1f<>]/.test(name)) {
+  if (hasUnsafeDisplayNameCharacter(name)) {
     throw createPublishError("validation", "Nom affiche invalide.");
   }
   return name;
@@ -631,4 +849,87 @@ export async function publishProfileCosmeticAsset(supabase, member, body = {}) {
       height: info.height,
     },
   };
+}
+
+export async function publishProfileCosmeticEffect(body = {}) {
+  assertAllowedKeys(
+    body,
+    new Set([
+      "action",
+      "displayName",
+      "display_name",
+      "fileName",
+      "file_name",
+      "mimeType",
+      "mime_type",
+      "contentType",
+      "content_type",
+      "size",
+      "bytes",
+      "fileSize",
+      "file_size",
+      "webpBase64",
+      "webp_base64",
+      "webpDataUrl",
+      "webp_data_url",
+      "contentBase64",
+      "content_base64",
+      "sha256",
+      "clientSha256",
+      "client_sha256",
+    ]),
+  );
+
+  const buffer = decodeWebpPayload(body);
+  const info = inspectWebpBuffer(buffer, { requireAnimation: true });
+  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+  const expectedSha = cleanProfileCosmeticText(body.sha256 || body.clientSha256 || body.client_sha256, 128).toLowerCase();
+  if (expectedSha && expectedSha !== sha256) {
+    throw createPublishError("validation", "SHA-256 client incoherent.");
+  }
+
+  const fileName = buildEffectFileName(body, sha256);
+  const publicUrl = buildPublicCosmeticUrl(PROFILE_COSMETIC_EFFECT, fileName);
+  await uploadEffectToVps({ fileName, buffer, sha256 });
+  const remoteInfo = await verifyPublicCosmeticEffectUrl({ publicUrl, buffer, sha256 });
+
+  return {
+    ok: true,
+    url: publicUrl,
+    filename: fileName,
+    publish: {
+      status: "published",
+      step: "verification VPS",
+      sha256,
+      size: buffer.length,
+      animated: Boolean(info.hasAnimation && remoteInfo.hasAnimation),
+    },
+  };
+}
+
+async function verifyPublicCosmeticEffectUrl({ publicUrl, buffer, sha256 }) {
+  const response = await fetch(publicUrl, {
+    method: "GET",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw createPublishError("verification VPS", `Verification HTTP impossible (${response.status}).`, 502);
+  }
+
+  const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
+  if (!contentType.includes("image/webp")) {
+    throw createPublishError("verification VPS", "Le VPS ne sert pas un WebP.", 502);
+  }
+
+  const remoteBuffer = Buffer.from(await response.arrayBuffer());
+  if (remoteBuffer.length > MAX_ANIMATED_WEBP_BYTES) {
+    throw createPublishError("verification VPS", "Le WebP servi par le VPS est trop volumineux.", 502);
+  }
+
+  const remoteSha = crypto.createHash("sha256").update(remoteBuffer).digest("hex");
+  const remoteInfo = inspectWebpBuffer(remoteBuffer, { requireAnimation: true });
+  if (remoteSha !== sha256 || !remoteBuffer.equals(buffer)) {
+    throw createPublishError("verification VPS", "Le fichier public VPS ne correspond pas au WebP envoye.", 502);
+  }
+  return remoteInfo;
 }

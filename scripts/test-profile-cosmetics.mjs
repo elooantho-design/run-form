@@ -16,8 +16,10 @@ import {
   decorateCosmeticAssetsForMember,
 } from "../api/_portal-cosmetic-access.js";
 import {
+  inspectWebpBuffer,
   inspectPngBuffer,
   publishProfileCosmeticAsset,
+  publishProfileCosmeticEffect,
 } from "../api/_portal-cosmetics-publish.js";
 import {
   analyzeFrameAlphaGeometry,
@@ -826,6 +828,30 @@ function createTestPng({ width = 1024, height = 1024, frame = false, opaque = fa
   ]);
 }
 
+function createWebpChunk(type, data = Buffer.alloc(0)) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(data.length, 0);
+  const padding = data.length % 2 ? Buffer.from([0]) : Buffer.alloc(0);
+  return Buffer.concat([typeBuffer, length, data, padding]);
+}
+
+function createTestWebp({ animated = true } = {}) {
+  const chunks = [
+    createWebpChunk("VP8X", Buffer.from([animated ? 0x02 : 0x00, 0, 0, 0, 1, 0, 0, 1, 0, 0])),
+  ];
+  if (animated) {
+    chunks.push(createWebpChunk("ANIM", Buffer.alloc(6)));
+    chunks.push(createWebpChunk("ANMF", Buffer.alloc(16)));
+  } else {
+    chunks.push(createWebpChunk("VP8 ", Buffer.alloc(10)));
+  }
+  const payload = Buffer.concat(chunks);
+  const riffSize = Buffer.alloc(4);
+  riffSize.writeUInt32LE(4 + payload.length, 0);
+  return Buffer.concat([Buffer.from("RIFF"), riffSize, Buffer.from("WEBP"), payload]);
+}
+
 function createPublishingFakeSupabase(options = {}) {
   const assetRows = (options.assets || assets).map((asset) => ({ ...asset, metadata: { ...(asset.metadata || {}) } }));
   const selections = new Map();
@@ -1065,6 +1091,18 @@ assert.throws(
   "frames without transparency are refused",
 );
 
+const validEffectWebp = createTestWebp({ animated: true });
+const staticEffectWebp = createTestWebp({ animated: false });
+const validEffectSha = crypto.createHash("sha256").update(validEffectWebp).digest("hex");
+const validEffectInfo = inspectWebpBuffer(validEffectWebp, { requireAnimation: true });
+assert.equal(validEffectInfo.hasAnimation, true, "server WebP inspection detects animated effects");
+assert.throws(() => inspectWebpBuffer(Buffer.from("not-a-webp")), /WebP valide/, "fake WebPs are refused");
+assert.throws(
+  () => inspectWebpBuffer(staticEffectWebp, { requireAnimation: true }),
+  /animation/,
+  "static WebP files are refused for animated cosmetic effects",
+);
+
 const publishFakeSupabase = createPublishingFakeSupabase();
 let postCount = 0;
 await withMockedFetchAndEnv(
@@ -1113,6 +1151,146 @@ await withMockedFetchAndEnv(
   },
 );
 assert.equal(postCount, 1, "successful publish uploads exactly once");
+
+let effectPostCount = 0;
+await withMockedFetchAndEnv(
+  async (url, options = {}) => {
+    if (options.method === "POST") {
+      effectPostCount += 1;
+      const request = JSON.parse(String(options.body || "{}"));
+      assert.match(String(url), /\/api\/v1\/profile-cosmetics\/effects\/base64$/, "effect upload targets the dedicated VPS effects route");
+      assert.equal(options.headers["X-GVG-Token"], "test-token", "effect upload keeps the VPS token server-side in a header");
+      assert.equal(request.asset_type, "effect", "effect upload uses the effect asset type");
+      assert.equal(request.folder, "effects", "effect upload cannot choose another VPS folder");
+      assert.equal(request.content_type, "image/webp", "effect upload declares only image/webp");
+      assert.equal(request.mime_type, "image/webp", "effect upload sends the expected MIME");
+      assert.match(
+        request.file_name,
+        /^fireworks-evil-name-[a-f0-9]{8}-[a-f0-9]{12}\.webp$/,
+        "effect upload builds a traversal-safe unique filename",
+      );
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          asset_type: request.asset_type,
+          file_name: request.file_name,
+          public_url: `https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/${request.file_name}`,
+          sha256: validEffectSha,
+          size: validEffectWebp.length,
+          already_exists: false,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    assert.match(String(url), /\/assets\/profile-cosmetics\/effects\/fireworks-evil-name-/, "public verification uses the effects asset URL");
+    return new Response(validEffectWebp, { status: 200, headers: { "content-type": "image/webp" } });
+  },
+  async () => {
+    const result = await publishProfileCosmeticEffect({
+      action: "publish-cosmetic-effect",
+      fileName: "../Fireworks Evil Name!!.webp",
+      mimeType: "image/webp",
+      size: validEffectWebp.length,
+      webpBase64: validEffectWebp.toString("base64"),
+      sha256: validEffectSha,
+    });
+
+    assert.equal(result.ok, true, "effect publish returns a simple success payload");
+    assert.match(result.url, /^https:\/\/vps-aad12be0\.vps\.ovh\.net\/assets\/profile-cosmetics\/effects\//);
+    assert.match(result.filename, /^fireworks-evil-name-[a-f0-9]{8}-[a-f0-9]{12}\.webp$/);
+    assert.equal(result.publish.animated, true, "effect publish confirms the WebP stayed animated after public verification");
+  },
+);
+assert.equal(effectPostCount, 1, "successful effect publish uploads exactly once");
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticEffect({
+      action: "publish-cosmetic-effect",
+      fileName: "bad.png",
+      mimeType: "image/png",
+      size: validEffectWebp.length,
+      webpBase64: validEffectWebp.toString("base64"),
+    }),
+  /WebP anime/,
+  "effect publish refuses a non-WebP MIME even if the payload bytes are WebP",
+);
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticEffect({
+      action: "publish-cosmetic-effect",
+      fileName: "static.webp",
+      mimeType: "image/webp",
+      size: staticEffectWebp.length,
+      webpBase64: staticEffectWebp.toString("base64"),
+    }),
+  /animation/,
+  "effect publish refuses valid but non-animated WebP files",
+);
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticEffect({
+      action: "publish-cosmetic-effect",
+      fileName: "too-large.webp",
+      mimeType: "image/webp",
+      size: 5 * 1024 * 1024 + 1,
+      webpBase64: Buffer.alloc(5 * 1024 * 1024 + 1).toString("base64"),
+    }),
+  /trop volumineux/,
+  "effect publish refuses WebP payloads above 5 MiB",
+);
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticEffect({
+      action: "publish-cosmetic-effect",
+      fileName: "client-path.webp",
+      mimeType: "image/webp",
+      size: validEffectWebp.length,
+      webpBase64: validEffectWebp.toString("base64"),
+      targetPath: "/assets/profile-cosmetics/effects/evil.webp",
+    }),
+  /pas autorise/,
+  "effect publish refuses client-provided VPS paths",
+);
+
+await assert.rejects(
+  () =>
+    withMockedFetchAndEnv(
+      async (url, options = {}) => {
+        if (options.method === "POST") {
+          const request = JSON.parse(String(options.body || "{}"));
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              asset_type: "effect",
+              file_name: request.file_name,
+              public_url: `https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/${request.file_name}`,
+              sha256: validEffectSha,
+              size: validEffectWebp.length,
+              already_exists: true,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(validEffectWebp, { status: 200, headers: { "content-type": "image/webp" } });
+      },
+      () =>
+        publishProfileCosmeticEffect({
+          action: "publish-cosmetic-effect",
+          fileName: "duplicate.webp",
+          mimeType: "image/webp",
+          size: validEffectWebp.length,
+          webpBase64: validEffectWebp.toString("base64"),
+          sha256: validEffectSha,
+        }),
+    ),
+  /WebP envoye/,
+  "effect publish refuses an existing VPS filename instead of silently overwriting",
+);
 
 const existingAssetKey = `basic_frame_${validFrameSha.slice(0, 16)}`;
 const alreadyPublishedSupabase = createPublishingFakeSupabase({
@@ -1342,10 +1520,19 @@ assert.match(
 const adminEndpointSource = await readFile(new URL("../api/portal-cosmetics-admin.js", import.meta.url), "utf8");
 assert.match(adminEndpointSource, /requirePortalLeaderSession\(req, supabase\)/, "cosmetic admin endpoint is leader-only");
 assert.doesNotMatch(adminEndpointSource, /requirePortalAdminSession/, "cosmetic admin endpoint does not allow generic admins");
+assert.match(adminEndpointSource, /publish-cosmetic-effect/, "cosmetic admin endpoint exposes an explicit animated effect publish action");
+assert.match(adminEndpointSource, /publishProfileCosmeticEffect\(body\)/, "animated effect upload does not require or modify Supabase metadata");
+assert.match(adminEndpointSource, /sizeLimit: "7mb"/, "cosmetic admin endpoint allows a bounded 5 MiB WebP base64 payload");
 
 const publishSource = await readFile(new URL("../api/_portal-cosmetics-publish.js", import.meta.url), "utf8");
 assert.match(publishSource, /public_url/, "publisher validates the public URL returned by the VPS");
 assert.match(publishSource, /assertAllowedPublicCosmeticUrl/, "publisher restricts VPS URLs to the expected public domain and folder");
+assert.match(publishSource, /MAX_ANIMATED_WEBP_BYTES = 5 \* 1024 \* 1024/, "effect publisher caps animated WebP files at 5 MiB");
+assert.match(publishSource, /inspectWebpBuffer/, "effect publisher inspects RIFF/WEBP structure server-side");
+assert.match(publishSource, /requireAnimation: true/, "effect publisher requires animated WebP chunks");
+assert.match(publishSource, /PROFILE_COSMETIC_EFFECTS_FOLDER = "effects"/, "effect publisher pins the VPS folder to effects");
+assert.match(publishSource, /randomBytes\(6\)/, "effect publisher builds a unique server-side filename suffix");
+assert.doesNotMatch(publishSource, /targetPath/, "effect publisher does not accept client-provided VPS paths");
 
 const studioSource = await readFile(new URL("../src/components/ProfileCosmeticsTab.jsx", import.meta.url), "utf8");
 assert.match(studioSource, /onPointerDown=\{\(event\) => startPointer\("move", event\)\}/, "studio exposes direct box dragging");
@@ -1368,6 +1555,14 @@ assert.match(studioSource, /const framePreviewAvatar = previewAvatar \|\| catalo
 assert.match(studioSource, /<ProfileAvatar avatar=\{framePreviewAvatar\} frame=\{frame\}/, "frame catalog previews render the actual frame instead of the initial fallback");
 assert.match(studioSource, /FrameAnimationLayersPanel/, "studio exposes the animated layer editor");
 assert.match(studioSource, /Ajouter gauche\/droite/, "studio can add mirrored left and right animation layers");
+assert.match(studioSource, /publish-cosmetic-effect/, "studio can upload an animated WebP effect through the admin API");
+assert.match(studioSource, /Importer un WebP anime/, "studio renders the animated WebP import button");
+assert.match(studioSource, /Dupliquer l'URL/, "studio can copy an uploaded effect URL to the mirrored layer");
+assert.match(studioSource, /updateAnimationLayer\(current, index, \{ url: data\.url \}\)/, "studio injects the returned URL into the selected animation layer draft");
+assert.match(studioSource, /readEffectFilePayload/, "studio validates animated WebP files before upload");
+assert.match(studioSource, /MAX_ANIMATION_EFFECT_BYTES = 5 \* 1024 \* 1024/, "studio rejects oversized animated WebP files before upload");
+assert.match(studioSource, /url: ""/, "mirrored animation layers start without a fake demo URL");
+assert.doesNotMatch(studioSource, /firework\.webp/, "studio no longer references the old hardcoded demo effect URL");
 
 const rendererSource = await readFile(new URL("../src/components/ProfileCosmeticRenderer.jsx", import.meta.url), "utf8");
 assert.match(rendererSource, /animation_layers/, "profile renderer reads animation layer metadata");

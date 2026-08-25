@@ -15,12 +15,12 @@ import {
   serializeProfileCosmeticsCatalog,
 } from "./_portal-cosmetics.js";
 import { isMissingCosmeticAccessSchema } from "./_portal-cosmetic-access.js";
-import { publishProfileCosmeticAsset } from "./_portal-cosmetics-publish.js";
+import { publishProfileCosmeticAsset, publishProfileCosmeticEffect } from "./_portal-cosmetics-publish.js";
 
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: "4mb",
+      sizeLimit: "7mb",
     },
   },
 };
@@ -449,6 +449,11 @@ export default async function handler(req, res) {
     if (action === "publish-cosmetic-asset") {
       const state = await publishProfileCosmeticAsset(supabase, leader.member, body);
       sendPortalJson(res, 200, state, req);
+      return;
+    }
+    if (action === "publish-cosmetic-effect") {
+      const result = await publishProfileCosmeticEffect(body);
+      sendPortalJson(res, 200, result, req);
       return;
     }
     if (action === "save-frame-render-metadata" || action === "save-frame-metadata") {
