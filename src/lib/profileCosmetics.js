@@ -28,6 +28,7 @@ export const MAX_FRAME_CONTENT_RADIUS = 0.5;
 export const DEFAULT_FRAME_AVATAR_FIT = "cover";
 export const DEFAULT_FRAME_AVATAR_POSITION = { x: 0.5, y: 0.5 };
 export const DEFAULT_FRAME_BOX = { x: 0, y: 0, width: 1, height: 1 };
+export const MAX_PROFILE_FRAME_ANIMATION_LAYERS = 8;
 export const PROFILE_FRAME_ALLOWED_RENDER_METADATA_KEYS = new Set([
   "render_version",
   "content_box",
@@ -35,10 +36,30 @@ export const PROFILE_FRAME_ALLOWED_RENDER_METADATA_KEYS = new Set([
   "avatar_fit",
   "avatar_position",
   "frame_box",
+  "animation_layers",
 ]);
 export const PROFILE_FRAME_ALLOWED_BOX_KEYS = new Set(["x", "y", "width", "height"]);
 export const PROFILE_FRAME_ALLOWED_POINT_KEYS = new Set(["x", "y"]);
 export const PROFILE_FRAME_ALLOWED_AVATAR_FITS = new Set(["cover", "contain"]);
+export const PROFILE_FRAME_ALLOWED_ANIMATION_LAYER_KEYS = new Set([
+  "id",
+  "label",
+  "type",
+  "url",
+  "x",
+  "y",
+  "width",
+  "height",
+  "rotation",
+  "flipX",
+  "opacity",
+  "zIndex",
+  "delayMs",
+  "pointerEvents",
+  "blendMode",
+]);
+export const PROFILE_FRAME_ALLOWED_ANIMATION_LAYER_TYPES = new Set(["webp"]);
+export const PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES = new Set(["normal", "screen", "lighten", "plus-lighter"]);
 
 export function cleanProfileCosmeticText(value, maxLength = 240) {
   return String(value || "").trim().slice(0, maxLength);
@@ -319,6 +340,73 @@ function clampBox(value, fallback = DEFAULT_FRAME_BOX, minSize = 0.04) {
   return { x, y, width, height };
 }
 
+function clampSignedNumber(value, fallback = 0, min = -360, max = 360) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function clampInteger(value, fallback = 0, min = -20, max = 80) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+function normalizeFrameAnimationLayerUrl(value) {
+  const url = cleanProfileCosmeticText(value, 600);
+  if (!url) return "";
+  if (url.startsWith("/")) return /\.webp(?:[?#].*)?$/i.test(url) ? url : "";
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return "";
+    return /\.webp$/i.test(parsed.pathname) ? url : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeFrameAnimationLayer(layer, index = 0) {
+  const source = layer && typeof layer === "object" && !Array.isArray(layer) ? layer : {};
+  const url = normalizeFrameAnimationLayerUrl(source.url);
+  if (!url) return null;
+
+  const type = cleanProfileCosmeticText(source.type || "webp", 16).toLowerCase();
+  if (!PROFILE_FRAME_ALLOWED_ANIMATION_LAYER_TYPES.has(type)) return null;
+
+  const width = Math.min(1, Math.max(0.01, Number.isFinite(Number(source.width)) ? Number(source.width) : 0.22));
+  const height = Math.min(1, Math.max(0.01, Number.isFinite(Number(source.height)) ? Number(source.height) : 0.22));
+  const x = Math.min(1 - width, Math.max(0, Number.isFinite(Number(source.x)) ? Number(source.x) : 0));
+  const y = Math.min(1 - height, Math.max(0, Number.isFinite(Number(source.y)) ? Number(source.y) : 0));
+  const blendMode = cleanProfileCosmeticText(source.blendMode || source.blend_mode || "normal", 32);
+
+  return {
+    id: cleanProfileCosmeticText(source.id, 80) || `layer-${index + 1}`,
+    label: cleanProfileCosmeticText(source.label, 120),
+    type,
+    url,
+    x,
+    y,
+    width,
+    height,
+    rotation: clampSignedNumber(source.rotation, 0, -360, 360),
+    flipX: Boolean(source.flipX ?? source.flip_x),
+    opacity: clampUnit(source.opacity, 1),
+    zIndex: clampInteger(source.zIndex ?? source.z_index, 20, -20, 80),
+    delayMs: clampInteger(source.delayMs ?? source.delay_ms, 0, 0, 60000),
+    pointerEvents: false,
+    blendMode: PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES.has(blendMode) ? blendMode : "normal",
+  };
+}
+
+export function normalizeFrameAnimationLayers(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, MAX_PROFILE_FRAME_ANIMATION_LAYERS)
+    .map((layer, index) => normalizeFrameAnimationLayer(layer, index))
+    .filter(Boolean);
+}
+
 function buildContentBoxFromInset(inset) {
   const safeInset = Math.min(0.45, Math.max(0, Number.isFinite(Number(inset)) ? Number(inset) : DEFAULT_FRAME_CONTENT_INSET));
   return {
@@ -361,8 +449,9 @@ export function normalizeFrameRenderMetadata(value, fallbackFrame = null) {
   const frameBox = hasRenderV2 && metadata.frame_box ? metadata.frame_box : fallback.frame_box;
   const avatarPosition = hasRenderV2 && metadata.avatar_position ? metadata.avatar_position : fallback.avatar_position;
   const avatarFit = cleanProfileCosmeticText(metadata.avatar_fit || metadata.avatarFit, 16).toLowerCase();
+  const hasAnimationLayerMetadata = hasRenderV2 && Object.prototype.hasOwnProperty.call(metadata, "animation_layers");
 
-  return {
+  const normalized = {
     render_version: DEFAULT_FRAME_RENDER_VERSION,
     content_box: clampBox(contentBox, fallback.content_box),
     content_radius: clampContentRadius(metadata.content_radius ?? metadata.contentRadius, fallback.content_radius),
@@ -373,6 +462,12 @@ export function normalizeFrameRenderMetadata(value, fallbackFrame = null) {
     },
     frame_box: clampBox(frameBox, fallback.frame_box),
   };
+
+  if (hasAnimationLayerMetadata) {
+    normalized.animation_layers = normalizeFrameAnimationLayers(metadata.animation_layers);
+  }
+
+  return normalized;
 }
 
 export function getFrameRenderMetadata(frame) {
@@ -449,6 +544,118 @@ function validatePointForStorage(value, path) {
   };
 }
 
+function validateOptionalBoolean(value, path) {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw createMetadataValidationError(`${path} doit etre un booleen.`);
+  }
+  return value;
+}
+
+function validateOptionalInteger(value, path, fallback, min, max) {
+  if (value === undefined) return fallback;
+  const numeric = readStrictNumber(value, path);
+  if (!Number.isInteger(numeric) || numeric < min || numeric > max) {
+    throw createMetadataValidationError(`${path} doit etre un entier compris entre ${min} et ${max}.`);
+  }
+  return numeric;
+}
+
+function validateOptionalNumber(value, path, fallback, min, max) {
+  if (value === undefined) return fallback;
+  const numeric = readStrictNumber(value, path);
+  if (numeric < min || numeric > max) {
+    throw createMetadataValidationError(`${path} doit etre compris entre ${min} et ${max}.`);
+  }
+  return numeric;
+}
+
+function validateFrameAnimationLayerUrl(value, path) {
+  if (typeof value !== "string") {
+    throw createMetadataValidationError(`${path} doit etre une URL WebP.`);
+  }
+  const url = normalizeFrameAnimationLayerUrl(value);
+  if (!url) {
+    throw createMetadataValidationError(`${path} doit etre une URL https ou relative vers un fichier .webp.`);
+  }
+  return url;
+}
+
+function validateFrameAnimationLayerForStorage(value, index) {
+  const path = `metadata.animation_layers[${index}]`;
+  const layer = ensurePlainObject(value, path);
+  rejectUnexpectedKeys(layer, PROFILE_FRAME_ALLOWED_ANIMATION_LAYER_KEYS, path);
+
+  const id = cleanProfileCosmeticText(layer.id, 80);
+  if (!id || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id)) {
+    throw createMetadataValidationError(`${path}.id doit contenir uniquement lettres, chiffres, tirets ou underscores.`);
+  }
+
+  const type = cleanProfileCosmeticText(layer.type || "webp", 16).toLowerCase();
+  if (!PROFILE_FRAME_ALLOWED_ANIMATION_LAYER_TYPES.has(type)) {
+    throw createMetadataValidationError(`${path}.type doit etre webp.`);
+  }
+
+  const width = validateOptionalNumber(layer.width, `${path}.width`, 0.22, 0.01, 1);
+  const height = validateOptionalNumber(layer.height, `${path}.height`, 0.22, 0.01, 1);
+  const x = validateOptionalNumber(layer.x, `${path}.x`, 0, 0, 1);
+  const y = validateOptionalNumber(layer.y, `${path}.y`, 0, 0, 1);
+  if (x + width > 1 + Number.EPSILON) {
+    throw createMetadataValidationError(`${path}.x + ${path}.width doit rester inferieur ou egal a 1.`);
+  }
+  if (y + height > 1 + Number.EPSILON) {
+    throw createMetadataValidationError(`${path}.y + ${path}.height doit rester inferieur ou egal a 1.`);
+  }
+
+  const pointerEvents = validateOptionalBoolean(layer.pointerEvents, `${path}.pointerEvents`);
+  if (pointerEvents) {
+    throw createMetadataValidationError(`${path}.pointerEvents doit rester false.`);
+  }
+
+  const blendMode = cleanProfileCosmeticText(layer.blendMode || "normal", 32);
+  if (!PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES.has(blendMode)) {
+    throw createMetadataValidationError(`${path}.blendMode n'est pas supporte.`);
+  }
+
+  return {
+    id,
+    label: cleanProfileCosmeticText(layer.label, 120),
+    type,
+    url: validateFrameAnimationLayerUrl(layer.url, `${path}.url`),
+    x,
+    y,
+    width,
+    height,
+    rotation: validateOptionalNumber(layer.rotation, `${path}.rotation`, 0, -360, 360),
+    flipX: validateOptionalBoolean(layer.flipX, `${path}.flipX`),
+    opacity: validateOptionalNumber(layer.opacity, `${path}.opacity`, 1, 0, 1),
+    zIndex: validateOptionalInteger(layer.zIndex, `${path}.zIndex`, 20, -20, 80),
+    delayMs: validateOptionalInteger(layer.delayMs, `${path}.delayMs`, 0, 0, 60000),
+    pointerEvents: false,
+    blendMode,
+  };
+}
+
+function validateFrameAnimationLayersForStorage(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw createMetadataValidationError("metadata.animation_layers doit etre un tableau.");
+  }
+  if (value.length > MAX_PROFILE_FRAME_ANIMATION_LAYERS) {
+    throw createMetadataValidationError(`metadata.animation_layers ne peut pas depasser ${MAX_PROFILE_FRAME_ANIMATION_LAYERS} calques.`);
+  }
+
+  const ids = new Set();
+  return value.map((layer, index) => {
+    const normalized = validateFrameAnimationLayerForStorage(layer, index);
+    if (ids.has(normalized.id)) {
+      throw createMetadataValidationError(`metadata.animation_layers[${index}].id est en doublon.`);
+    }
+    ids.add(normalized.id);
+    return normalized;
+  });
+}
+
 export function validateFrameRenderMetadataForStorage(value) {
   const metadata = ensurePlainObject(value, "metadata");
   rejectUnexpectedKeys(metadata, PROFILE_FRAME_ALLOWED_RENDER_METADATA_KEYS, "metadata");
@@ -465,7 +672,7 @@ export function validateFrameRenderMetadataForStorage(value) {
     throw createMetadataValidationError(`metadata.content_radius doit etre compris entre 0 et ${MAX_FRAME_CONTENT_RADIUS}.`);
   }
 
-  return {
+  const normalized = {
     render_version: DEFAULT_FRAME_RENDER_VERSION,
     content_box: validateBoxForStorage(metadata.content_box, "metadata.content_box"),
     content_radius: contentRadius,
@@ -473,6 +680,13 @@ export function validateFrameRenderMetadataForStorage(value) {
     avatar_position: validatePointForStorage(metadata.avatar_position, "metadata.avatar_position"),
     frame_box: validateBoxForStorage(metadata.frame_box, "metadata.frame_box"),
   };
+
+  const animationLayers = validateFrameAnimationLayersForStorage(metadata.animation_layers);
+  if (animationLayers !== undefined) {
+    normalized.animation_layers = animationLayers;
+  }
+
+  return normalized;
 }
 
 function getAlphaAt({ rgbaData, alphaData, width }, x, y) {

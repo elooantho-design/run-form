@@ -7,11 +7,13 @@ import {
   Gift,
   Loader2,
   Lock,
+  Plus,
   RefreshCw,
   Save,
   Search,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   UserRound,
   XCircle,
 } from "lucide-react";
@@ -32,7 +34,9 @@ import {
   buildFrameRenderMetadataFromImageData,
   getProfileCosmeticAdminAccessBadge,
   getFrameRenderMetadata,
+  MAX_PROFILE_FRAME_ANIMATION_LAYERS,
   normalizeFrameRenderMetadata,
+  PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES,
   sortProfileCosmeticAssetsNatural,
 } from "@/lib/profileCosmetics";
 import { usePortalLanguage } from "@/lib/portalLanguage";
@@ -100,6 +104,70 @@ function toPercent(value) {
 
 function fromPercent(value) {
   return clampUnit(Number(value) / 100);
+}
+
+const DEFAULT_ANIMATION_LAYER_URL = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/firework.webp";
+const ANIMATION_LAYER_BLEND_MODES = Array.from(PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES);
+
+function clampNumber(value, fallback = 0, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function getAnimationLayers(metadata) {
+  return Array.isArray(metadata?.animation_layers) ? metadata.animation_layers : [];
+}
+
+function getNextAnimationLayerId(layers, baseId) {
+  const existingIds = new Set(layers.map((layer) => String(layer?.id || "")));
+  if (!existingIds.has(baseId)) return baseId;
+  let index = 2;
+  while (existingIds.has(`${baseId}_${index}`)) index += 1;
+  return `${baseId}_${index}`;
+}
+
+function buildAnimationLayerDraft(side = "left", existingLayers = []) {
+  const isRight = side === "right";
+  const baseId = isRight ? "firework_right" : "firework_left";
+  return {
+    id: getNextAnimationLayerId(existingLayers, baseId),
+    label: isRight ? "Feu droite" : "Feu gauche",
+    type: "webp",
+    url: DEFAULT_ANIMATION_LAYER_URL,
+    x: isRight ? 0.77 : 0,
+    y: 0.15,
+    width: 0.23,
+    height: 0.23,
+    rotation: 0,
+    flipX: isRight,
+    opacity: 1,
+    zIndex: 20,
+    delayMs: isRight ? 450 : 0,
+    pointerEvents: false,
+    blendMode: "screen",
+  };
+}
+
+function setAnimationLayers(metadata, nextLayers) {
+  const base = normalizeFrameRenderMetadata(metadata || {});
+  return {
+    ...base,
+    animation_layers: nextLayers.slice(0, MAX_PROFILE_FRAME_ANIMATION_LAYERS),
+  };
+}
+
+function updateAnimationLayer(metadata, index, patch) {
+  const layers = getAnimationLayers(metadata).map((layer, layerIndex) =>
+    layerIndex === index
+      ? {
+          ...layer,
+          ...patch,
+          pointerEvents: false,
+        }
+      : layer,
+  );
+  return setAnimationLayers(metadata, layers);
 }
 
 function formatCurrency(cents, language = "fr") {
@@ -219,6 +287,236 @@ function GeometryInput({ label, value, min = 0, max = 100, step = 1, onChange })
         className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-400"
       />
     </label>
+  );
+}
+
+function LayerTextInput({ label, value, placeholder = "", onChange }) {
+  return (
+    <label className="space-y-1">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</span>
+      <input
+        type="text"
+        value={value || ""}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-cyan-400"
+      />
+    </label>
+  );
+}
+
+function LayerNumberInput({ label, value, min, max, step = 1, onChange }) {
+  return (
+    <label className="space-y-1">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={Number.isFinite(Number(value)) ? value : 0}
+        onChange={(event) => onChange(clampNumber(event.target.value, value || 0, min, max))}
+        className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-400"
+      />
+    </label>
+  );
+}
+
+function FrameAnimationLayersPanel({ metadata, onMetadataChange, t }) {
+  const layers = getAnimationLayers(metadata);
+  const canAddLayer = layers.length < MAX_PROFILE_FRAME_ANIMATION_LAYERS;
+
+  function addLayer(side = "left") {
+    onMetadataChange((current) => {
+      const currentLayers = getAnimationLayers(current);
+      return setAnimationLayers(current, [...currentLayers, buildAnimationLayerDraft(side, currentLayers)]);
+    });
+  }
+
+  function addSymmetricLayers() {
+    onMetadataChange((current) => {
+      const currentLayers = getAnimationLayers(current);
+      const left = buildAnimationLayerDraft("left", currentLayers);
+      const right = buildAnimationLayerDraft("right", [...currentLayers, left]);
+      return setAnimationLayers(current, [...currentLayers, left, right]);
+    });
+  }
+
+  function removeLayer(index) {
+    onMetadataChange((current) => setAnimationLayers(current, getAnimationLayers(current).filter((_, layerIndex) => layerIndex !== index)));
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+            {t("profile.animationLayers", "Calques animes")}
+          </div>
+          <p className="mt-1 text-xs text-zinc-500">
+            {t(
+              "profile.animationLayersHelp",
+              "Ajoute des WebP animes positionnes en ratios sur le cadre. Les clics restent ignores.",
+            )}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+            onClick={addSymmetricLayers}
+            disabled={!canAddLayer || layers.length > MAX_PROFILE_FRAME_ANIMATION_LAYERS - 2}
+          >
+            <Sparkles className="mr-2 h-4 w-4" />
+            {t("profile.animationLayersAddPair", "Ajouter gauche/droite")}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+            onClick={() => addLayer("left")}
+            disabled={!canAddLayer}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            {t("profile.animationLayersAdd", "Ajouter un calque")}
+          </Button>
+        </div>
+      </div>
+
+      {layers.length === 0 ? (
+        <div className="mt-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/50 px-3 py-4 text-sm text-zinc-500">
+          {t("profile.animationLayersEmpty", "Aucun calque anime pour ce cadre.")}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {layers.map((layer, index) => (
+            <div key={`${layer.id || "layer"}-${index}`} className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-zinc-100">{layer.label || layer.id || `Calque ${index + 1}`}</div>
+                  <div className="text-xs text-zinc-500">WebP · pointer-events: none</div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 rounded-lg border-red-400/25 bg-red-500/10 px-3 text-red-100 hover:bg-red-500/20"
+                  onClick={() => removeLayer(index)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <LayerTextInput
+                  label="ID"
+                  value={layer.id}
+                  placeholder="firework_left"
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { id: value }))}
+                />
+                <LayerTextInput
+                  label="Label"
+                  value={layer.label}
+                  placeholder="Feu gauche"
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { label: value }))}
+                />
+              </div>
+              <div className="mt-3">
+                <LayerTextInput
+                  label="URL WebP"
+                  value={layer.url}
+                  placeholder={DEFAULT_ANIMATION_LAYER_URL}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { url: value }))}
+                />
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-4">
+                <GeometryInput
+                  label="X"
+                  step={0.5}
+                  value={layer.x}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { x: value }))}
+                />
+                <GeometryInput
+                  label="Y"
+                  step={0.5}
+                  value={layer.y}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { y: value }))}
+                />
+                <GeometryInput
+                  label="Largeur"
+                  min={1}
+                  step={0.5}
+                  value={layer.width}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { width: value }))}
+                />
+                <GeometryInput
+                  label="Hauteur"
+                  min={1}
+                  step={0.5}
+                  value={layer.height}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { height: value }))}
+                />
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-5">
+                <LayerNumberInput
+                  label="Rotation"
+                  min={-360}
+                  max={360}
+                  value={layer.rotation}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { rotation: value }))}
+                />
+                <GeometryInput
+                  label="Opacite"
+                  step={1}
+                  value={layer.opacity}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { opacity: value }))}
+                />
+                <LayerNumberInput
+                  label="Z"
+                  min={-20}
+                  max={80}
+                  value={layer.zIndex}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { zIndex: Math.round(value) }))}
+                />
+                <LayerNumberInput
+                  label="Delai ms"
+                  min={0}
+                  max={60000}
+                  value={layer.delayMs}
+                  onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { delayMs: Math.round(value) }))}
+                />
+                <label className="space-y-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Fusion</span>
+                  <select
+                    value={layer.blendMode || "normal"}
+                    onChange={(event) => onMetadataChange((current) => updateAnimationLayer(current, index, { blendMode: event.target.value }))}
+                    className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-400"
+                  >
+                    {ANIMATION_LAYER_BLEND_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="mt-3 inline-flex items-center gap-2 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={Boolean(layer.flipX)}
+                  onChange={(event) => onMetadataChange((current) => updateAnimationLayer(current, index, { flipX: event.target.checked }))}
+                  className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-cyan-400"
+                />
+                {t("profile.animationLayerFlipX", "Miroir horizontal")}
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1162,7 +1460,7 @@ export default function ProfileCosmeticsTab({
         body: JSON.stringify({
           action: "save-frame-render-metadata",
           assetId: draftFrame.id,
-          metadata: normalizeFrameRenderMetadata(frameMetadataDraft),
+          metadata: frameMetadataDraft,
         }),
       });
       const payload = await response.json().catch(() => ({}));
@@ -1655,6 +1953,12 @@ export default function ProfileCosmeticsTab({
                         }
                       />
                     </div>
+
+                    <FrameAnimationLayersPanel
+                      metadata={frameMetadataDraft}
+                      onMetadataChange={setFrameMetadataDraft}
+                      t={t}
+                    />
 
                     <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
                       <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">

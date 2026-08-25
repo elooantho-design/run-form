@@ -38,6 +38,7 @@ export default function ProfileCosmeticRenderer({
   const hasFrame = Boolean(frameUrl && !frameFailed);
   const hasSharkMouthAnimation = hasFrame && frameAnimationKey === PROFILE_FRAME_ANIMATION_SHARK_MOUTH;
   const hasInfernalHornsAnimation = hasFrame && frameAnimationKey === PROFILE_FRAME_ANIMATION_INFERNAL_HORNS;
+  const animationLayers = hasFrame ? frameMetadata.animation_layers || [] : [];
 
   if (!avatarUrl || avatarFailed) {
     return (
@@ -108,6 +109,36 @@ export default function ProfileCosmeticRenderer({
             decoding="async"
             onError={() => setFailedFrameUrl(frameUrl)}
           />
+          {animationLayers.map((layer) => (
+            <span
+              key={layer.id}
+              className="profile-avatar-animation-layer absolute"
+              data-animation-layer-id={layer.id}
+              style={{
+                left: toPercent(layer.x),
+                top: toPercent(layer.y),
+                width: toPercent(layer.width),
+                height: toPercent(layer.height),
+                zIndex: layer.zIndex,
+                pointerEvents: "none",
+                opacity: 0,
+                "--profile-animation-layer-opacity": layer.opacity,
+                animationDelay: `${layer.delayMs}ms`,
+                mixBlendMode: layer.blendMode === "normal" ? undefined : layer.blendMode,
+                transform: `${layer.flipX ? "scaleX(-1) " : ""}rotate(${layer.rotation}deg)`,
+              }}
+              title={layer.label || layer.id}
+            >
+              <img
+                src={layer.url}
+                alt=""
+                className="profile-avatar-animation-layer-img h-full w-full object-contain"
+                draggable="false"
+                loading="eager"
+                decoding="async"
+              />
+            </span>
+          ))}
           {hasSharkMouthAnimation ? (
             <>
               <img

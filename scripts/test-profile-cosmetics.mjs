@@ -30,7 +30,9 @@ import {
   getFrameRenderMetadata,
   getNextProfileCosmeticDisplayName,
   getProfileFrameAnimationKey,
+  normalizeFrameAnimationLayers,
   normalizeFrameRenderMetadata,
+  MAX_PROFILE_FRAME_ANIMATION_LAYERS,
   PROFILE_COSMETIC_UI_ACCESS_BASIC,
   PROFILE_COSMETIC_UI_ACCESS_MANUAL,
   PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
@@ -463,6 +465,96 @@ const validRenderMetadata = {
   frame_box: { x: 0, y: 0, width: 1, height: 1 },
 };
 assert.deepEqual(validateFrameRenderMetadataForStorage(validRenderMetadata), validRenderMetadata);
+
+const fireworkLayerUrl = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/firework.webp";
+const animatedLayerLeft = {
+  id: "firework_left",
+  label: "Feu gauche",
+  type: "webp",
+  url: fireworkLayerUrl,
+  x: 0,
+  y: 0.15,
+  width: 0.23,
+  height: 0.23,
+  rotation: 0,
+  flipX: false,
+  opacity: 1,
+  zIndex: 20,
+  delayMs: 0,
+  pointerEvents: false,
+  blendMode: "screen",
+};
+const animatedLayerRight = {
+  ...animatedLayerLeft,
+  id: "firework_right",
+  label: "Feu droite",
+  x: 0.77,
+  flipX: true,
+  delayMs: 450,
+};
+const animatedRenderMetadata = {
+  ...validRenderMetadata,
+  animation_layers: [animatedLayerLeft, animatedLayerRight],
+};
+assert.deepEqual(
+  validateFrameRenderMetadataForStorage(animatedRenderMetadata).animation_layers,
+  [animatedLayerLeft, animatedLayerRight],
+  "storage validation preserves two WebP animation layers",
+);
+assert.equal(
+  getFrameRenderMetadata(createAsset(7, "frame", { metadata: animatedRenderMetadata })).animation_layers[1].flipX,
+  true,
+  "frame metadata keeps the mirrored right animation layer",
+);
+assert.equal(
+  normalizeFrameAnimationLayers([{ ...animatedLayerLeft, rotation: 720, opacity: 2 }])[0].rotation,
+  360,
+  "runtime animation layer normalization clamps rotation safely",
+);
+assert.deepEqual(
+  normalizeFrameRenderMetadata(validRenderMetadata).animation_layers,
+  undefined,
+  "frames without animation_layers keep the previous metadata shape",
+);
+assert.throws(
+  () =>
+    validateFrameRenderMetadataForStorage({
+      ...validRenderMetadata,
+      animation_layers: [{ ...animatedLayerLeft, url: "https://example.com/effect.gif" }],
+    }),
+  /fichier \.webp/,
+  "storage validation refuses non-WebP animation assets",
+);
+assert.throws(
+  () =>
+    validateFrameRenderMetadataForStorage({
+      ...validRenderMetadata,
+      animation_layers: [{ ...animatedLayerLeft, pointerEvents: true }],
+    }),
+  /pointerEvents/,
+  "animation layers never intercept pointer events",
+);
+assert.throws(
+  () =>
+    validateFrameRenderMetadataForStorage({
+      ...validRenderMetadata,
+      animation_layers: [animatedLayerLeft, { ...animatedLayerRight, id: animatedLayerLeft.id }],
+    }),
+  /doublon/,
+  "animation layer ids must be unique",
+);
+assert.throws(
+  () =>
+    validateFrameRenderMetadataForStorage({
+      ...validRenderMetadata,
+      animation_layers: Array.from({ length: MAX_PROFILE_FRAME_ANIMATION_LAYERS + 1 }, (_, index) => ({
+        ...animatedLayerLeft,
+        id: `layer_${index}`,
+      })),
+    }),
+  /depasser/,
+  "animation layers have a bounded count",
+);
 assert.throws(
   () =>
     validateFrameRenderMetadataForStorage({
@@ -904,6 +996,28 @@ assert.deepEqual(frameUpdateCall.payload.metadata.content_box, { x: 0.09, y: 0.1
 assert.equal(frameMetadataState.catalog.frames.find((frame) => frame.id === "frame-1").metadata.render_version, 2);
 assert.equal(frameMetadataState.savedAsset.id, "frame-1", "admin frame save returns the reloaded saved asset");
 
+const animatedFrameMetadataState = await saveProfileCosmeticFrameMetadata(
+  fakeSupabase,
+  { id: "member-a", watcher_name: "Darius" },
+  {
+    assetId: "frame-1",
+    metadata: animatedRenderMetadata,
+  },
+);
+const animatedFrameUpdateCall = fakeSupabase.calls
+  .filter((call) => call.operation === "update" && call.table === "portal_cosmetic_assets")
+  .at(-1);
+assert.deepEqual(
+  animatedFrameUpdateCall.payload.metadata.animation_layers,
+  [animatedLayerLeft, animatedLayerRight],
+  "admin frame save stores animated overlay layers in metadata",
+);
+assert.equal(
+  animatedFrameMetadataState.savedAsset.metadata.animation_layers[1].delayMs,
+  450,
+  "admin frame save returns the saved animation layer timing",
+);
+
 await assert.rejects(
   () =>
     saveProfileCosmeticFrameMetadata(fakeSupabase, { id: "member-a", watcher_name: "Darius" }, {
@@ -1252,6 +1366,17 @@ assert.match(studioSource, /AdminAccessBadge/, "admin collection badges use clas
 assert.match(studioSource, /save-frame-render-metadata/, "studio saves only on explicit metadata action");
 assert.match(studioSource, /const framePreviewAvatar = previewAvatar \|\| catalogPreviewAvatar;/, "frame catalog previews keep a demo avatar when no avatar is selected");
 assert.match(studioSource, /<ProfileAvatar avatar=\{framePreviewAvatar\} frame=\{frame\}/, "frame catalog previews render the actual frame instead of the initial fallback");
+assert.match(studioSource, /FrameAnimationLayersPanel/, "studio exposes the animated layer editor");
+assert.match(studioSource, /Ajouter gauche\/droite/, "studio can add mirrored left and right animation layers");
+
+const rendererSource = await readFile(new URL("../src/components/ProfileCosmeticRenderer.jsx", import.meta.url), "utf8");
+assert.match(rendererSource, /animation_layers/, "profile renderer reads animation layer metadata");
+assert.match(rendererSource, /profile-avatar-animation-layer/, "profile renderer exposes the animation layer wrapper");
+assert.match(rendererSource, /data-animation-layer-id/, "profile renderer exposes stable animation layer ids for inspection");
+
+const indexCssSource = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
+assert.match(indexCssSource, /profile-avatar-animation-layer/, "global styles contain animation layer rules");
+assert.match(indexCssSource, /prefers-reduced-motion/, "animation layer styles remain compatible with reduced motion");
 
 assert.match(adminEndpointSource, /requestedTierType/, "admin endpoint validates the requested tier subtype");
 assert.match(adminEndpointSource, /tier\.tier_type !== requestedTierType/, "admin endpoint rejects mismatched tier subtypes");
