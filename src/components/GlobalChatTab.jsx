@@ -161,7 +161,7 @@ function buildEmojiPickerCategories(t) {
   }));
 }
 
-function EmojiPicker({ onPick, onClose, compact = false, language = "fr", t }) {
+function EmojiPicker({ onPick, onClose, compact = false, autoFocusSearch = true, language = "fr", t }) {
   const rootRef = useRef(null);
   const [emojiData, setEmojiData] = useState(null);
   const [localeLoading, setLocaleLoading] = useState(false);
@@ -305,6 +305,7 @@ function EmojiPicker({ onPick, onClose, compact = false, language = "fr", t }) {
             suggestedEmojisMode="recent"
             searchPlaceholder={t("chat.emojiSearch", "Chercher...")}
             searchClearButtonLabel={t("chat.emojiClearSearch", "Effacer la recherche")}
+            autoFocusSearch={autoFocusSearch}
             categories={categories}
             emojiData={emojiData || undefined}
             previewConfig={{ showPreview: false }}
@@ -437,6 +438,7 @@ function MessageContextMenu({
     }
 
     function handleWindowClose() {
+      if (menu.source === "touch" && pickerOpen) return;
       onClose?.({ restoreFocus: false });
     }
 
@@ -531,7 +533,11 @@ function MessageContextMenu({
             type="button"
             role="menuitem"
             className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 transition hover:bg-zinc-900 focus:bg-cyan-400/15 focus:outline-none"
-            onClick={() => setPickerOpen((open) => !open)}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setPickerOpen((open) => !open);
+            }}
           >
             <Smile className="h-4 w-4 text-zinc-400" />
             {t("chat.addReaction")}
@@ -582,6 +588,7 @@ function MessageContextMenu({
             compact
             t={t}
             language={language}
+            autoFocusSearch={!isTouchMenu}
             onClose={() => setPickerOpen(false)}
             onPick={(emoji) => {
               onToggleReaction(message, emoji);

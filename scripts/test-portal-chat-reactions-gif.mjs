@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createChatBodyHash,
   hasTranslatableChatText,
@@ -27,6 +30,14 @@ const previousGifKey = process.env.PORTAL_CHAT_GIF_API_KEY;
 const previousGifMax = process.env.PORTAL_CHAT_GIF_MAX_RESULTS;
 
 try {
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  const chatSource = readFileSync(join(scriptDir, "../src/components/GlobalChatTab.jsx"), "utf8");
+
+  assert.match(chatSource, /function EmojiPicker\(\{[^}]*autoFocusSearch = true/s);
+  assert.match(chatSource, /autoFocusSearch=\{autoFocusSearch\}/);
+  assert.match(chatSource, /autoFocusSearch=\{!isTouchMenu\}/);
+  assert.match(chatSource, /menu\.source === "touch" && pickerOpen/);
+
   assert.equal(hasTranslatableChatText("😂🔥"), false);
   assert.equal(hasTranslatableChatText("Salut 👋"), true);
   assert.equal(isEmojiOnlyChatBody("😂🔥"), true);
