@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownCircle,
+  ChevronLeft,
   ImageIcon,
   Languages,
   Loader2,
@@ -161,7 +162,15 @@ function buildEmojiPickerCategories(t) {
   }));
 }
 
-function EmojiPicker({ onPick, onClose, compact = false, autoFocusSearch = true, language = "fr", t }) {
+function EmojiPicker({
+  onPick,
+  onClose,
+  compact = false,
+  autoFocusSearch = true,
+  searchDisabled = false,
+  language = "fr",
+  t,
+}) {
   const rootRef = useRef(null);
   const [emojiData, setEmojiData] = useState(null);
   const [localeLoading, setLocaleLoading] = useState(false);
@@ -305,7 +314,8 @@ function EmojiPicker({ onPick, onClose, compact = false, autoFocusSearch = true,
             suggestedEmojisMode="recent"
             searchPlaceholder={t("chat.emojiSearch", "Chercher...")}
             searchClearButtonLabel={t("chat.emojiClearSearch", "Effacer la recherche")}
-            autoFocusSearch={autoFocusSearch}
+            autoFocusSearch={!searchDisabled && autoFocusSearch}
+            searchDisabled={searchDisabled}
             categories={categories}
             emojiData={emojiData || undefined}
             previewConfig={{ showPreview: false }}
@@ -443,6 +453,7 @@ function MessageContextMenu({
     }
 
     function handleWindowScroll(event) {
+      if (menu.source === "touch" && pickerOpen) return;
       if (eventPathHasChatPopoverRoot(event)) return;
       onClose?.({ restoreFocus: false });
     }
@@ -498,6 +509,21 @@ function MessageContextMenu({
   const isTouchMenu = menu.source === "touch";
   const pickerPositionClass = isTouchMenu ? "mt-3" : "absolute top-0";
   const defaultPickerStyle = isTouchMenu ? undefined : { left: `${CONTEXT_MENU_WIDTH + 8}px`, top: "0px" };
+
+  const reactionPicker = (
+    <EmojiPicker
+      compact
+      t={t}
+      language={language}
+      autoFocusSearch={!isTouchMenu}
+      searchDisabled={isTouchMenu}
+      onClose={() => setPickerOpen(false)}
+      onPick={(emoji) => {
+        onToggleReaction(message, emoji);
+        onClose?.({ restoreFocus: true });
+      }}
+    />
+  );
 
   function runAction(action) {
     onClose?.({ restoreFocus: true });
@@ -584,23 +610,55 @@ function MessageContextMenu({
           data-chat-popover-root="true"
           data-chat-context-exclude="true"
         >
-          <EmojiPicker
-            compact
-            t={t}
-            language={language}
-            autoFocusSearch={!isTouchMenu}
-            onClose={() => setPickerOpen(false)}
-            onPick={(emoji) => {
-              onToggleReaction(message, emoji);
-              onClose?.({ restoreFocus: true });
-            }}
-          />
+          {reactionPicker}
         </div>
       ) : null}
     </>
   );
 
   if (isTouchMenu) {
+    if (pickerOpen) {
+      return (
+        <div
+          ref={menuRef}
+          className="fixed inset-x-3 bottom-3 z-50 max-h-[calc(100dvh-24px)] overflow-y-auto overscroll-contain rounded-2xl border border-zinc-700 bg-zinc-950 p-2 shadow-2xl shadow-black/70"
+          role="dialog"
+          aria-label={t("chat.addReaction")}
+          data-chat-popover-root="true"
+          data-chat-context-exclude="true"
+        >
+          <div className="mb-2 flex items-center justify-between gap-2 px-1">
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded-xl px-2 py-2 text-sm text-zinc-300 transition hover:bg-zinc-900 focus:bg-cyan-400/15 focus:outline-none"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setPickerOpen(false);
+              }}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              {t("common.back", "Retour")}
+            </button>
+            <div className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-zinc-100">{t("chat.addReaction")}</div>
+            <button
+              type="button"
+              className="rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-900 focus:bg-cyan-400/15 focus:outline-none"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onClose?.({ restoreFocus: false });
+              }}
+              aria-label={t("common.close", "Fermer")}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {reactionPicker}
+        </div>
+      );
+    }
+
     return (
       <div
         ref={menuRef}

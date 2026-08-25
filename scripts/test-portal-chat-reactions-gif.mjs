@@ -34,8 +34,11 @@ try {
   const chatSource = readFileSync(join(scriptDir, "../src/components/GlobalChatTab.jsx"), "utf8");
 
   assert.match(chatSource, /function EmojiPicker\(\{[^}]*autoFocusSearch = true/s);
-  assert.match(chatSource, /autoFocusSearch=\{autoFocusSearch\}/);
+  assert.match(chatSource, /searchDisabled = false/s);
+  assert.match(chatSource, /autoFocusSearch=\{!searchDisabled && autoFocusSearch\}/);
+  assert.match(chatSource, /searchDisabled=\{searchDisabled\}/);
   assert.match(chatSource, /autoFocusSearch=\{!isTouchMenu\}/);
+  assert.match(chatSource, /searchDisabled=\{isTouchMenu\}/);
   assert.match(chatSource, /menu\.source === "touch" && pickerOpen/);
 
   assert.equal(hasTranslatableChatText("😂🔥"), false);
