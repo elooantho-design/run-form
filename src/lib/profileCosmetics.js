@@ -1,7 +1,22 @@
 export const PROFILE_COSMETIC_AVATAR = "avatar";
 export const PROFILE_COSMETIC_FRAME = "frame";
+export const PROFILE_COSMETIC_ACCESS_BASIC = "basic";
+export const PROFILE_COSMETIC_ACCESS_TIER = "tier";
+export const PROFILE_COSMETIC_ACCESS_MANUAL = "manual";
+export const PROFILE_COSMETIC_TIER_SUPPORT_TOTAL = "support_total";
+export const PROFILE_COSMETIC_TIER_MONTHLY_LOYALTY = "monthly_loyalty";
+export const PROFILE_COSMETIC_UI_ACCESS_BASIC = "basic";
+export const PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL = "support_total";
+export const PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY = "monthly_loyalty";
+export const PROFILE_COSMETIC_UI_ACCESS_MANUAL = "manual";
 export const PROFILE_FRAME_ANIMATION_SHARK_MOUTH = "shark-mouth";
 export const PROFILE_COSMETIC_ASSET_TYPES = new Set([PROFILE_COSMETIC_AVATAR, PROFILE_COSMETIC_FRAME]);
+export const PROFILE_COSMETIC_UI_ACCESS_MODES = new Set([
+  PROFILE_COSMETIC_UI_ACCESS_BASIC,
+  PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL,
+  PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+  PROFILE_COSMETIC_UI_ACCESS_MANUAL,
+]);
 export const DEFAULT_FRAME_CONTENT_INSET = 0.14;
 export const PROFILE_FRAME_VISUAL_INSET_SCALE = 0.72;
 export const MIN_PROFILE_FRAME_VISUAL_INSET = 0.06;
@@ -31,6 +46,170 @@ export function cleanProfileCosmeticText(value, maxLength = 240) {
 export function normalizeProfileCosmeticType(value) {
   const type = cleanProfileCosmeticText(value).toLowerCase();
   return PROFILE_COSMETIC_ASSET_TYPES.has(type) ? type : "";
+}
+
+function normalizeProfileCosmeticAccessType(value) {
+  const type = cleanProfileCosmeticText(value).toLowerCase();
+  return [PROFILE_COSMETIC_ACCESS_BASIC, PROFILE_COSMETIC_ACCESS_TIER, PROFILE_COSMETIC_ACCESS_MANUAL].includes(type)
+    ? type
+    : PROFILE_COSMETIC_ACCESS_BASIC;
+}
+
+function normalizeProfileCosmeticTierType(value) {
+  const type = cleanProfileCosmeticText(value).toLowerCase();
+  return [PROFILE_COSMETIC_TIER_SUPPORT_TOTAL, PROFILE_COSMETIC_TIER_MONTHLY_LOYALTY].includes(type) ? type : "";
+}
+
+function getProfileCosmeticTierId(tier) {
+  return cleanProfileCosmeticText(tier?.id || tier?.tierId || tier?.tier_id, 120);
+}
+
+function getProfileCosmeticTierType(tier) {
+  return normalizeProfileCosmeticTierType(tier?.tierType || tier?.tier_type);
+}
+
+export function createProfileCosmeticNaturalSorter(locale = "fr") {
+  const collator = new Intl.Collator(locale || "fr", {
+    numeric: true,
+    sensitivity: "base",
+  });
+
+  return (left, right) => {
+    const leftName = getProfileCosmeticDisplayName(left);
+    const rightName = getProfileCosmeticDisplayName(right);
+    const byName = collator.compare(leftName, rightName);
+    if (byName !== 0) return byName;
+    return cleanProfileCosmeticText(left?.id || left?.asset_key).localeCompare(
+      cleanProfileCosmeticText(right?.id || right?.asset_key),
+      locale || "fr",
+      { sensitivity: "base" },
+    );
+  };
+}
+
+export function sortProfileCosmeticAssetsNatural(assets = [], locale = "fr") {
+  return [...(assets || [])].sort(createProfileCosmeticNaturalSorter(locale));
+}
+
+export function findProfileCosmeticTier(tiers = [], tierId = "") {
+  const normalizedTierId = cleanProfileCosmeticText(tierId, 120);
+  if (!normalizedTierId) return null;
+  return (tiers || []).find((tier) => getProfileCosmeticTierId(tier) === normalizedTierId) || null;
+}
+
+export function deriveProfileCosmeticUiAccessMode(rule, tiers = []) {
+  const accessType = normalizeProfileCosmeticAccessType(rule?.accessType || rule?.access_type);
+  if (accessType === PROFILE_COSMETIC_ACCESS_BASIC) return PROFILE_COSMETIC_UI_ACCESS_BASIC;
+  if (accessType === PROFILE_COSMETIC_ACCESS_MANUAL) return PROFILE_COSMETIC_UI_ACCESS_MANUAL;
+
+  const tier = findProfileCosmeticTier(tiers, rule?.tierId || rule?.tier_id);
+  const tierType = getProfileCosmeticTierType(tier);
+  if (tierType === PROFILE_COSMETIC_TIER_MONTHLY_LOYALTY) return PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY;
+  return PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL;
+}
+
+export function buildProfileCosmeticRuleDraft(rule = {}, tiers = []) {
+  return {
+    assetId: cleanProfileCosmeticText(rule.assetId || rule.asset_id, 120),
+    uiMode: deriveProfileCosmeticUiAccessMode(rule, tiers),
+    accessType: normalizeProfileCosmeticAccessType(rule.accessType || rule.access_type),
+    tierId: cleanProfileCosmeticText(rule.tierId || rule.tier_id, 120),
+    publicUnlockTitle: cleanProfileCosmeticText(rule.publicUnlockTitle || rule.public_unlock_title, 160),
+    publicUnlockDescription: cleanProfileCosmeticText(rule.publicUnlockDescription || rule.public_unlock_description, 500),
+  };
+}
+
+export function buildProfileCosmeticAccessRulePayload({ assetId, uiMode, tierId, publicUnlockTitle, publicUnlockDescription, tiers = [] } = {}) {
+  const normalizedAssetId = cleanProfileCosmeticText(assetId, 120);
+  const mode = PROFILE_COSMETIC_UI_ACCESS_MODES.has(uiMode) ? uiMode : "";
+  const title = cleanProfileCosmeticText(publicUnlockTitle, 160);
+  const description = cleanProfileCosmeticText(publicUnlockDescription, 500);
+
+  if (!normalizedAssetId) {
+    throw new Error("Cosmetique manquant.");
+  }
+
+  if (mode === PROFILE_COSMETIC_UI_ACCESS_BASIC) {
+    return {
+      assetId: normalizedAssetId,
+      accessType: PROFILE_COSMETIC_ACCESS_BASIC,
+      tierId: null,
+      tierType: null,
+      publicUnlockTitle: title || null,
+      publicUnlockDescription: description || null,
+    };
+  }
+
+  if (mode === PROFILE_COSMETIC_UI_ACCESS_MANUAL) {
+    if (!title) {
+      throw new Error("Un titre public est requis pour une recompense speciale.");
+    }
+    return {
+      assetId: normalizedAssetId,
+      accessType: PROFILE_COSMETIC_ACCESS_MANUAL,
+      tierId: null,
+      tierType: null,
+      publicUnlockTitle: title,
+      publicUnlockDescription: description || null,
+    };
+  }
+
+  const expectedTierType =
+    mode === PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL
+      ? PROFILE_COSMETIC_TIER_SUPPORT_TOTAL
+      : mode === PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY
+        ? PROFILE_COSMETIC_TIER_MONTHLY_LOYALTY
+        : "";
+  const tier = findProfileCosmeticTier(tiers, tierId);
+  if (!tier || getProfileCosmeticTierType(tier) !== expectedTierType) {
+    throw new Error("Selectionne un palier valide pour cette classification.");
+  }
+
+  return {
+    assetId: normalizedAssetId,
+    accessType: PROFILE_COSMETIC_ACCESS_TIER,
+    tierId: getProfileCosmeticTierId(tier),
+    tierType: expectedTierType,
+    publicUnlockTitle: title || null,
+    publicUnlockDescription: description || null,
+  };
+}
+
+export function getProfileCosmeticAdminAccessBadge(rule = {}, tiers = [], locale = "fr") {
+  const accessType = normalizeProfileCosmeticAccessType(rule.accessType || rule.access_type);
+  if (accessType === PROFILE_COSMETIC_ACCESS_BASIC) {
+    return { mode: PROFILE_COSMETIC_UI_ACCESS_BASIC, labelKey: "profile.accessBasic", fallbackLabel: "Accessible a tous", tone: "basic", tier: null };
+  }
+
+  if (accessType === PROFILE_COSMETIC_ACCESS_MANUAL) {
+    return { mode: PROFILE_COSMETIC_UI_ACCESS_MANUAL, labelKey: "profile.accessManual", fallbackLabel: "Recompense speciale", tone: "manual", tier: null };
+  }
+
+  const tier = findProfileCosmeticTier(tiers, rule.tierId || rule.tier_id);
+  const tierType = getProfileCosmeticTierType(tier);
+  if (tierType === PROFILE_COSMETIC_TIER_MONTHLY_LOYALTY) {
+    return {
+      mode: PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+      labelKey: "profile.adminBadgeMonthlyLoyalty",
+      fallbackLabel: `Fidelite mensuelle · ${Number(tier?.thresholdValue ?? tier?.threshold_value ?? 0)} mois`,
+      tone: "monthly",
+      tier,
+    };
+  }
+
+  const cents = Number(tier?.thresholdValue ?? tier?.threshold_value ?? 0);
+  const amount = new Intl.NumberFormat(locale === "en" ? "en-US" : "fr-FR", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: cents % 100 === 0 ? 0 : 2,
+  }).format(cents / 100);
+  return {
+    mode: PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL,
+    labelKey: "profile.adminBadgeSupportTotal",
+    fallbackLabel: `Soutien cumule · ${amount}`,
+    tone: "support",
+    tier,
+  };
 }
 
 function getProfileCosmeticDisplayBaseName(assetType) {

@@ -21,14 +21,23 @@ import {
 } from "../api/_portal-cosmetics-publish.js";
 import {
   analyzeFrameAlphaGeometry,
+  buildProfileCosmeticAccessRulePayload,
+  buildProfileCosmeticRuleDraft,
   createProfileCosmeticDisplayNameAllocator,
+  deriveProfileCosmeticUiAccessMode,
+  getProfileCosmeticAdminAccessBadge,
   getFrameContentInset,
   getFrameRenderMetadata,
   getNextProfileCosmeticDisplayName,
   getProfileFrameAnimationKey,
   normalizeFrameRenderMetadata,
+  PROFILE_COSMETIC_UI_ACCESS_BASIC,
+  PROFILE_COSMETIC_UI_ACCESS_MANUAL,
+  PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+  PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL,
   PROFILE_FRAME_ANIMATION_SHARK_MOUTH,
   resolveProfileCosmeticSelection,
+  sortProfileCosmeticAssetsNatural,
   summarizeProfileCosmeticPublishBatch,
   validateFrameRenderMetadataForStorage,
 } from "../src/lib/profileCosmetics.js";
@@ -123,6 +132,128 @@ const accessRules = [
     public_unlock_description: "",
   },
 ];
+
+const naturalSortedFrames = sortProfileCosmeticAssetsNatural(
+  [
+    createAsset(10, "frame", { id: "frame-10", display_name: "Cadre 10", displayName: "Cadre 10" }),
+    createAsset(2, "frame", { id: "frame-2", display_name: "Cadre 2", displayName: "Cadre 2" }),
+    createAsset(1, "frame", { id: "frame-1-natural", display_name: "Cadre 1", displayName: "Cadre 1" }),
+  ],
+  "fr",
+);
+assert.deepEqual(
+  naturalSortedFrames.map((asset) => asset.displayName),
+  ["Cadre 1", "Cadre 2", "Cadre 10"],
+  "cosmetic admin lists use natural numeric sorting",
+);
+assert.equal(
+  deriveProfileCosmeticUiAccessMode({ access_type: "basic" }, [supportTier, monthlyTier]),
+  PROFILE_COSMETIC_UI_ACCESS_BASIC,
+  "basic access maps to the basic UI mode",
+);
+assert.equal(
+  deriveProfileCosmeticUiAccessMode({ access_type: "tier", tier_id: supportTier.id }, [supportTier, monthlyTier]),
+  PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL,
+  "support tiers map to the cumulative support UI mode",
+);
+assert.equal(
+  deriveProfileCosmeticUiAccessMode({ access_type: "tier", tier_id: monthlyTier.id }, [supportTier, monthlyTier]),
+  PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+  "monthly tiers map to the monthly loyalty UI mode",
+);
+assert.equal(
+  deriveProfileCosmeticUiAccessMode({ access_type: "manual" }, [supportTier, monthlyTier]),
+  PROFILE_COSMETIC_UI_ACCESS_MANUAL,
+  "manual access maps to the special reward UI mode",
+);
+assert.deepEqual(
+  buildProfileCosmeticRuleDraft({ asset_id: "frame-1", access_type: "tier", tier_id: monthlyTier.id }, [supportTier, monthlyTier]),
+  {
+    assetId: "frame-1",
+    uiMode: PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+    accessType: "tier",
+    tierId: monthlyTier.id,
+    publicUnlockTitle: "",
+    publicUnlockDescription: "",
+  },
+  "loading an existing monthly tier rule selects the monthly UI mode",
+);
+assert.deepEqual(
+  buildProfileCosmeticAccessRulePayload({
+    assetId: "frame-1",
+    uiMode: PROFILE_COSMETIC_UI_ACCESS_BASIC,
+    publicUnlockTitle: "",
+    publicUnlockDescription: "",
+    tiers: [supportTier, monthlyTier],
+  }),
+  {
+    assetId: "frame-1",
+    accessType: "basic",
+    tierId: null,
+    tierType: null,
+    publicUnlockTitle: null,
+    publicUnlockDescription: null,
+  },
+  "basic classification sends no tier",
+);
+assert.equal(
+  buildProfileCosmeticAccessRulePayload({
+    assetId: "frame-1",
+    uiMode: PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL,
+    tierId: supportTier.id,
+    tiers: [supportTier, monthlyTier],
+  }).tierType,
+  "support_total",
+  "support classification only accepts support_total tiers",
+);
+assert.equal(
+  buildProfileCosmeticAccessRulePayload({
+    assetId: "frame-1",
+    uiMode: PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+    tierId: monthlyTier.id,
+    tiers: [supportTier, monthlyTier],
+  }).tierType,
+  "monthly_loyalty",
+  "monthly classification only accepts monthly_loyalty tiers",
+);
+assert.throws(
+  () =>
+    buildProfileCosmeticAccessRulePayload({
+      assetId: "frame-1",
+      uiMode: PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+      tierId: supportTier.id,
+      tiers: [supportTier, monthlyTier],
+    }),
+  /palier valide/,
+  "monthly classification refuses support_total tiers",
+);
+assert.throws(
+  () =>
+    buildProfileCosmeticAccessRulePayload({
+      assetId: "frame-1",
+      uiMode: PROFILE_COSMETIC_UI_ACCESS_MANUAL,
+      publicUnlockTitle: "",
+      tiers: [supportTier, monthlyTier],
+    }),
+  /titre public/,
+  "manual classification requires a public title",
+);
+assert.equal(
+  buildProfileCosmeticAccessRulePayload({
+    assetId: "frame-1",
+    uiMode: PROFILE_COSMETIC_UI_ACCESS_MANUAL,
+    publicUnlockTitle: "Ultime",
+    publicUnlockDescription: "Cadre ultime",
+    tiers: [supportTier, monthlyTier],
+  }).accessType,
+  "manual",
+  "manual classification sends the existing manual access type",
+);
+assert.equal(getProfileCosmeticAdminAccessBadge({ access_type: "basic" }, [supportTier, monthlyTier]).tone, "basic");
+assert.equal(getProfileCosmeticAdminAccessBadge({ access_type: "tier", tier_id: supportTier.id }, [supportTier, monthlyTier]).tone, "support");
+assert.equal(getProfileCosmeticAdminAccessBadge({ access_type: "tier", tier_id: monthlyTier.id }, [supportTier, monthlyTier]).tone, "monthly");
+assert.equal(getProfileCosmeticAdminAccessBadge({ access_type: "manual", public_unlock_title: "Ultime" }, [supportTier, monthlyTier]).tone, "manual");
+
 const confirmedMonthlyPayments = Array.from({ length: 5 }, (_, index) => ({
   id: `monthly-${index}`,
   member_id: "member-support",
@@ -1101,9 +1232,20 @@ assert.match(studioSource, /aria-disabled=\{locked \? "true" : "false"\}/, "lock
 assert.match(studioSource, /setInspectedAssetId\(String\(avatar\.id\)\)/, "locked avatars can be inspected without changing the draft");
 assert.match(studioSource, /AdminClassificationPanel/, "cosmetic admin exposes classification tools");
 assert.match(studioSource, /AdminGrantsPanel/, "cosmetic admin exposes manual grant tools");
+assert.match(studioSource, /selectedAssetType/, "classification starts with an explicit cosmetic type selector");
+assert.doesNotMatch(studioSource, /firstAssetId/, "classification no longer auto-selects the first asset");
+assert.match(studioSource, /sortProfileCosmeticAssetsNatural/, "admin collections and classification use natural numeric sorting");
+assert.match(studioSource, /PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL/, "classification exposes cumulative support as a distinct UI mode");
+assert.match(studioSource, /PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY/, "classification exposes monthly loyalty as a distinct UI mode");
+assert.match(studioSource, /onCosmeticsChanged/, "cosmetic mutations trigger a fresh profile cosmetics reload");
+assert.match(studioSource, /cache: "no-store"/, "admin cosmetics reloads bypass browser caches");
+assert.match(studioSource, /AdminAccessBadge/, "admin collection badges use classification rules instead of personal unlock state");
 assert.match(studioSource, /save-frame-render-metadata/, "studio saves only on explicit metadata action");
 assert.match(studioSource, /const framePreviewAvatar = previewAvatar \|\| catalogPreviewAvatar;/, "frame catalog previews keep a demo avatar when no avatar is selected");
 assert.match(studioSource, /<ProfileAvatar avatar=\{framePreviewAvatar\} frame=\{frame\}/, "frame catalog previews render the actual frame instead of the initial fallback");
+
+assert.match(adminEndpointSource, /requestedTierType/, "admin endpoint validates the requested tier subtype");
+assert.match(adminEndpointSource, /tier\.tier_type !== requestedTierType/, "admin endpoint rejects mismatched tier subtypes");
 
 const uploadStudioSource = await readFile(new URL("../src/components/ProfileCosmeticUploadStudio.jsx", import.meta.url), "utf8");
 assert.match(uploadStudioSource, /normalizeFrameFile/, "upload studio normalizes frames locally");

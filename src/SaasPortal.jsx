@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bell,
@@ -121,6 +121,17 @@ import {
   isPortalRolePreviewManagerSession,
   normalizePortalRolePreviewMode,
 } from "@/lib/portalRolePreview";
+import {
+  PORTAL_COSMETICS_SYNC_CHANNEL,
+  PORTAL_COSMETICS_SYNC_STORAGE_KEY,
+  PORTAL_SESSION_SYNC_CHANNEL,
+  PORTAL_SESSION_SYNC_STORAGE_KEY,
+  createPortalSyncMessage,
+  getPortalSessionMemberId,
+  getPortalSessionSignature,
+  reconcilePortalSession,
+  shouldHandlePortalSyncMessage,
+} from "@/lib/portalSession";
 import { GUILD_BOSS_PLACEMENT_TOOL_ID } from "@/lib/guildBossPlacement";
 
 const navigation = [
@@ -858,11 +869,6 @@ function buildPortalSession(member) {
   };
 }
 
-function refreshPortalSessionStorage(nextSession) {
-  replaceStoredPortalSession(nextSession);
-  return nextSession;
-}
-
 function isForcedPortalPassword(password) {
   const cleanPassword = String(password || "").trim();
   return portalDefaultPasswords.includes(cleanPassword) || cleanPassword.startsWith(portalTemporaryPasswordPrefix);
@@ -914,6 +920,27 @@ function clearPortalSession() {
   window.sessionStorage.removeItem(PORTAL_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(PORTAL_SESSION_STORAGE_KEY);
   window.localStorage.removeItem(DASHBOARD_SESSION_STORAGE_KEY);
+}
+
+function createPortalSyncSourceId(prefix = "portal") {
+  if (typeof window === "undefined") return `${prefix}-server`;
+  if (globalThis.crypto?.randomUUID) return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function emitPortalSyncEvent(channelName, storageKey, channelRef, sourceId, reason) {
+  if (typeof window === "undefined") return;
+  const message = { ...createPortalSyncMessage(sourceId, reason), channelName };
+  try {
+    channelRef?.current?.postMessage(message);
+  } catch {
+    // BroadcastChannel is best-effort; storage keeps older browsers in sync.
+  }
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(message));
+  } catch {
+    // A storage failure must not break the user action that caused the sync.
+  }
 }
 
 const heroRarityOrder = ["legendary", "epic", "rare", "ordinary", "basic"];
@@ -2090,7 +2117,7 @@ function PortalRolePreviewSelector({ mode, onChange }) {
   );
 }
 
-function PortalShell({ session, onLogout }) {
+function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogout }) {
   const { t } = usePortalLanguage();
   const [active, setActive] = useState("home");
   const [adminNavOpen, setAdminNavOpen] = useState(false);
@@ -2107,7 +2134,11 @@ function PortalShell({ session, onLogout }) {
   const [profileCosmeticsLoading, setProfileCosmeticsLoading] = useState(false);
   const [editRunInitialId, setEditRunInitialId] = useState("");
   const [rolePreviewMode, setRolePreviewMode] = useState(PORTAL_REAL_VIEW_MODE);
+  const profileCosmeticsRequestRef = useRef(0);
+  const cosmeticsSyncSourceIdRef = useRef(createPortalSyncSourceId("cosmetics"));
+  const cosmeticsSyncChannelRef = useRef(null);
   const loggedTabViewsRef = useRef(new Set());
+  const realSessionSignature = useMemo(() => getPortalSessionSignature(session), [session]);
   const realIsPaladinUser = isPaladinSession(session);
   const realIsCommunityUser = isPortalCommunitySession(session);
   const canUseRolePreview = isPortalRolePreviewManagerSession(session);
@@ -2260,42 +2291,121 @@ function PortalShell({ session, onLogout }) {
     visiblePveNavigation,
   ]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const reloadProfileCosmetics = useCallback(async () => {
+    const memberId = getPortalSessionMemberId(session);
+    const requestId = profileCosmeticsRequestRef.current + 1;
+    profileCosmeticsRequestRef.current = requestId;
 
-    async function loadProfileCosmetics() {
-      const memberId = session?.memberId || session?.id;
-      if (!memberId) {
-        setProfileCosmeticsState(null);
-        setProfileCosmeticsLoading(false);
-        return;
-      }
-
-      setProfileCosmeticsLoading(true);
-      try {
-        const response = await fetch(`${getApiBase()}/api/portal-cosmetics`, {
-          method: "GET",
-          credentials: "include",
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload?.error || "Chargement profil impossible.");
-        if (!cancelled) setProfileCosmeticsState(payload);
-      } catch (error) {
-        if (!cancelled) {
-          console.error("[profile-cosmetics]", error);
-          setProfileCosmeticsState(null);
-        }
-      } finally {
-        if (!cancelled) setProfileCosmeticsLoading(false);
-      }
+    if (!memberId) {
+      setProfileCosmeticsState(null);
+      setProfileCosmeticsLoading(false);
+      return null;
     }
 
-    void loadProfileCosmetics();
+    setProfileCosmeticsLoading(true);
+    try {
+      const response = await fetch(`${getApiBase()}/api/portal-cosmetics`, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || "Chargement profil impossible.");
+      if (profileCosmeticsRequestRef.current === requestId) {
+        setProfileCosmeticsState(payload);
+      }
+      return payload;
+    } catch (error) {
+      if (profileCosmeticsRequestRef.current === requestId) {
+        console.error("[profile-cosmetics]", error);
+        setProfileCosmeticsState(null);
+      }
+      return null;
+    } finally {
+      if (profileCosmeticsRequestRef.current === requestId) {
+        setProfileCosmeticsLoading(false);
+      }
+    }
+  }, [session]);
+
+  const handleProfileCosmeticsChanged = useCallback(async () => {
+    const payload = await reloadProfileCosmetics();
+    emitPortalSyncEvent(
+      PORTAL_COSMETICS_SYNC_CHANNEL,
+      PORTAL_COSMETICS_SYNC_STORAGE_KEY,
+      cosmeticsSyncChannelRef,
+      cosmeticsSyncSourceIdRef.current,
+      "cosmetics-changed",
+    );
+    return payload;
+  }, [reloadProfileCosmetics]);
+
+  useEffect(() => {
+    void reloadProfileCosmetics();
+  }, [reloadProfileCosmetics, realSessionSignature]);
+
+  useEffect(() => {
+    if (active === "profile" || active === "cosmetics") {
+      void reloadProfileCosmetics();
+    }
+  }, [active, reloadProfileCosmetics]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const handleFocus = () => {
+      void reloadProfileCosmetics();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void reloadProfileCosmetics();
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [reloadProfileCosmetics]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const sourceId = cosmeticsSyncSourceIdRef.current;
+    const handleMessage = (event) => {
+      if (shouldHandlePortalSyncMessage(event.data, sourceId)) {
+        void reloadProfileCosmetics();
+      }
+    };
+    const handleStorage = (event) => {
+      if (event.key !== PORTAL_COSMETICS_SYNC_STORAGE_KEY || !event.newValue) return;
+      try {
+        const message = JSON.parse(event.newValue);
+        if (shouldHandlePortalSyncMessage(message, sourceId)) {
+          void reloadProfileCosmetics();
+        }
+      } catch {
+        // Ignore malformed cross-tab notifications.
+      }
+    };
+
+    if ("BroadcastChannel" in window) {
+      cosmeticsSyncChannelRef.current = new BroadcastChannel(PORTAL_COSMETICS_SYNC_CHANNEL);
+      cosmeticsSyncChannelRef.current.addEventListener("message", handleMessage);
+    }
+    window.addEventListener("storage", handleStorage);
 
     return () => {
-      cancelled = true;
+      window.removeEventListener("storage", handleStorage);
+      if (cosmeticsSyncChannelRef.current) {
+        cosmeticsSyncChannelRef.current.removeEventListener("message", handleMessage);
+        cosmeticsSyncChannelRef.current.close();
+        cosmeticsSyncChannelRef.current = null;
+      }
     };
-  }, [session?.memberId, session?.id]);
+  }, [reloadProfileCosmetics]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2895,6 +3005,19 @@ function PortalShell({ session, onLogout }) {
         ) : null}
 
         <main className={`${isMobileMode ? "portal-mobile-main space-y-5 px-3 py-4" : "space-y-6 px-4 py-6 md:px-6"}`}>
+          {sessionNotice ? (
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">
+              <span>{sessionNotice}</span>
+              <button
+                type="button"
+                onClick={onClearSessionNotice}
+                className="rounded-md p-1 text-cyan-100/70 hover:bg-cyan-400/10 hover:text-cyan-50"
+                aria-label={t("common.close", "Fermer")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : null}
           {active === "home" ? <HomeView session={effectiveSession} setActive={setActive} /> : null}
           {active === "profile" ? (
             <ProfileCosmeticsTab
@@ -2902,6 +3025,7 @@ function PortalShell({ session, onLogout }) {
               cosmeticsState={profileCosmeticsState}
               loading={profileCosmeticsLoading}
               onCosmeticsStateChange={setProfileCosmeticsState}
+              onCosmeticsChanged={handleProfileCosmeticsChanged}
             />
           ) : null}
           {active === "hero-box" ? <HeroBoxView session={effectiveSession} /> : null}
@@ -2936,6 +3060,7 @@ function PortalShell({ session, onLogout }) {
               cosmeticsState={profileCosmeticsState}
               loading={profileCosmeticsLoading}
               onCosmeticsStateChange={setProfileCosmeticsState}
+              onCosmeticsChanged={handleProfileCosmeticsChanged}
               adminMode
             />
           ) : null}
@@ -7542,60 +7667,219 @@ export default function SaasPortal() {
   );
 }
 
+function PortalSessionCheckView({ errorMessage = "", onRetry }) {
+  const { t } = usePortalLanguage();
+  return (
+    <div className="min-h-screen bg-[#11100d] px-4 py-10 text-zinc-100">
+      <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-cyan-400/25 bg-cyan-400/10 text-cyan-200">
+          {errorMessage ? <XCircle className="h-6 w-6" /> : <RefreshCw className="h-6 w-6 animate-spin" />}
+        </div>
+        <h1 className="mt-5 text-2xl font-semibold">
+          {errorMessage ? t("portal.sessionCheckErrorTitle", "Verification de session impossible") : t("portal.sessionChecking", "Verification de session")}
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-zinc-400">
+          {errorMessage || t("portal.sessionCheckingHelp", "Le portail verifie le compte reel connecte avant d'afficher le dashboard.")}
+        </p>
+        {errorMessage ? (
+          <Button
+            type="button"
+            onClick={onRetry}
+            className="mt-5 rounded-lg bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {t("common.retry", "Reessayer")}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function SaasPortalContent() {
+  const { t } = usePortalLanguage();
   const [session, setSession] = useState(() => readStoredPortalSession());
+  const [sessionCheckStatus, setSessionCheckStatus] = useState("checking");
+  const [sessionCheckError, setSessionCheckError] = useState("");
+  const [sessionNotice, setSessionNotice] = useState("");
+  const sessionRef = useRef(session);
+  const sessionVerifiedRef = useRef(false);
+  const sessionRequestRef = useRef(0);
+  const sessionSyncSourceIdRef = useRef(createPortalSyncSourceId("auth"));
+  const sessionSyncChannelRef = useRef(null);
 
   useEffect(() => {
-    if (!session?.memberId && !session?.id) return undefined;
+    sessionRef.current = session;
+  }, [session]);
 
-    let cancelled = false;
+  const broadcastSessionSync = useCallback((reason) => {
+    emitPortalSyncEvent(
+      PORTAL_SESSION_SYNC_CHANNEL,
+      PORTAL_SESSION_SYNC_STORAGE_KEY,
+      sessionSyncChannelRef,
+      sessionSyncSourceIdRef.current,
+      reason,
+    );
+  }, []);
 
-    async function refreshStoredSessionRole() {
-      try {
-        const apiBase = getApiBase();
-        const response = await fetch(`${apiBase}/api/portal-auth?action=session`, {
-          method: "GET",
-          credentials: "include",
-        });
-        const payload = await response.json().catch(() => ({}));
+  const verifyServerSession = useCallback(async (options = {}) => {
+    const reason = options.reason || "manual";
+    const broadcastOnChange = options.broadcastOnChange !== false;
+    const requestId = sessionRequestRef.current + 1;
+    sessionRequestRef.current = requestId;
 
-        if (cancelled) return;
-
-        if (!response.ok || !payload?.session) {
-          clearPortalSession();
-          setSession(null);
-          return;
-        }
-
-        setSession((current) => {
-          const currentMemberId = current?.memberId || current?.id || null;
-          const nextMemberId = payload.session?.memberId || payload.session?.id || null;
-          if (String(currentMemberId || "") !== String(nextMemberId || "")) return current;
-          return refreshPortalSessionStorage(payload.session);
-        });
-      } catch (error) {
-        if (!cancelled) console.warn("[portal-session-refresh]", error);
-      }
+    if (!sessionVerifiedRef.current) {
+      setSessionCheckStatus("checking");
     }
+    setSessionCheckError("");
 
-    void refreshStoredSessionRole();
+    try {
+      const apiBase = getApiBase();
+      const response = await fetch(`${apiBase}/api/portal-auth?action=session`, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (sessionRequestRef.current !== requestId) return null;
+
+      if (!response.ok || !payload?.session) {
+        const hadSession = Boolean(sessionRef.current);
+        clearPortalSession();
+        sessionRef.current = null;
+        sessionVerifiedRef.current = true;
+        setSession(null);
+        setSessionCheckStatus("unauthenticated");
+        setSessionCheckError("");
+        if (hadSession && broadcastOnChange) broadcastSessionSync("session-cleared");
+        return null;
+      }
+
+      const reconciliation = reconcilePortalSession(sessionRef.current, payload.session);
+      replaceStoredPortalSession(reconciliation.session);
+      sessionRef.current = reconciliation.session;
+      sessionVerifiedRef.current = true;
+      setSession(reconciliation.session);
+      setSessionCheckStatus("authenticated");
+      setSessionCheckError("");
+
+      if (reconciliation.identityChanged && reason !== "initial") {
+        setSessionNotice(
+          t(
+            "portal.sessionChangedNotice",
+            "La session active a change dans un autre onglet. Le portail a ete synchronise avec le compte actuellement connecte.",
+          ),
+        );
+      }
+
+      if (reconciliation.changed && broadcastOnChange) {
+        broadcastSessionSync("session-revalidated");
+      }
+      return reconciliation.session;
+    } catch (error) {
+      if (sessionRequestRef.current !== requestId) return null;
+      console.warn("[portal-session-refresh]", error);
+      if (!sessionVerifiedRef.current) {
+        setSessionCheckStatus("error");
+        setSessionCheckError(
+          t(
+            "portal.sessionCheckNetworkError",
+            "Impossible de verifier la session serveur. Verifie ta connexion puis reessaie.",
+          ),
+        );
+      }
+      return null;
+    }
+  }, [broadcastSessionSync, t]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void verifyServerSession({ reason: "initial", broadcastOnChange: false });
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [verifyServerSession]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const sourceId = sessionSyncSourceIdRef.current;
+    const handleMessage = (event) => {
+      if (shouldHandlePortalSyncMessage(event.data, sourceId)) {
+        void verifyServerSession({ reason: "external-sync", broadcastOnChange: false });
+      }
+    };
+    const handleStorage = (event) => {
+      if (event.key !== PORTAL_SESSION_SYNC_STORAGE_KEY || !event.newValue) return;
+      try {
+        const message = JSON.parse(event.newValue);
+        if (shouldHandlePortalSyncMessage(message, sourceId)) {
+          void verifyServerSession({ reason: "external-sync", broadcastOnChange: false });
+        }
+      } catch {
+        // Ignore malformed cross-tab notifications.
+      }
+    };
+
+    if ("BroadcastChannel" in window) {
+      sessionSyncChannelRef.current = new BroadcastChannel(PORTAL_SESSION_SYNC_CHANNEL);
+      sessionSyncChannelRef.current.addEventListener("message", handleMessage);
+    }
+    window.addEventListener("storage", handleStorage);
 
     return () => {
-      cancelled = true;
+      window.removeEventListener("storage", handleStorage);
+      if (sessionSyncChannelRef.current) {
+        sessionSyncChannelRef.current.removeEventListener("message", handleMessage);
+        sessionSyncChannelRef.current.close();
+        sessionSyncChannelRef.current = null;
+      }
     };
-  }, [session?.memberId, session?.id]);
+  }, [verifyServerSession]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const handleFocus = () => {
+      void verifyServerSession({ reason: "focus" });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void verifyServerSession({ reason: "visible" });
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [verifyServerSession]);
+
+  useEffect(() => {
+    if (!sessionNotice) return undefined;
+    const timeout = window.setTimeout(() => setSessionNotice(""), 6500);
+    return () => window.clearTimeout(timeout);
+  }, [sessionNotice]);
 
   function handleLogin(nextSession, options = {}) {
     persistPortalSession(nextSession, Boolean(options.remember));
+    sessionRef.current = nextSession;
+    sessionVerifiedRef.current = true;
+    setSessionCheckStatus("authenticated");
+    setSessionCheckError("");
     setSession(nextSession);
+    broadcastSessionSync("login");
   }
 
   function handlePasswordChanged(nextSession = null) {
-    setSession((current) => {
-      const resolvedSession = nextSession || { ...(current || {}), passwordChangeRequired: false };
-      replaceStoredPortalSession(resolvedSession);
-      return resolvedSession;
-    });
+    const resolvedSession = nextSession || { ...(sessionRef.current || {}), passwordChangeRequired: false };
+    replaceStoredPortalSession(resolvedSession);
+    sessionRef.current = resolvedSession;
+    sessionVerifiedRef.current = true;
+    setSessionCheckStatus("authenticated");
+    setSession(resolvedSession);
+    broadcastSessionSync("password-changed");
   }
 
   function handleLogout() {
@@ -7607,7 +7891,20 @@ function SaasPortalContent() {
       body: JSON.stringify({ action: "logout" }),
     }).catch(() => {});
     clearPortalSession();
+    sessionRef.current = null;
+    sessionVerifiedRef.current = true;
+    setSessionCheckStatus("unauthenticated");
+    setSessionCheckError("");
     setSession(null);
+    broadcastSessionSync("logout");
+  }
+
+  if (sessionCheckStatus === "checking") {
+    return <PortalSessionCheckView />;
+  }
+
+  if (sessionCheckStatus === "error") {
+    return <PortalSessionCheckView errorMessage={sessionCheckError} onRetry={() => verifyServerSession({ reason: "retry" })} />;
   }
 
   if (!session) {
@@ -7624,5 +7921,13 @@ function SaasPortalContent() {
     );
   }
 
-  return <PortalShell session={session} onLogout={handleLogout} />;
+  return (
+    <PortalShell
+      key={getPortalSessionSignature(session)}
+      session={session}
+      sessionNotice={sessionNotice}
+      onClearSessionNotice={() => setSessionNotice("")}
+      onLogout={handleLogout}
+    />
+  );
 }

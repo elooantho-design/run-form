@@ -20,10 +20,20 @@ import { Badge } from "@/components/ui/badge";
 import ProfileAvatar from "@/components/ProfileAvatar";
 import ProfileCosmeticUploadStudio from "@/components/ProfileCosmeticUploadStudio";
 import {
+  PROFILE_COSMETIC_AVATAR,
+  PROFILE_COSMETIC_FRAME,
+  PROFILE_COSMETIC_UI_ACCESS_BASIC,
+  PROFILE_COSMETIC_UI_ACCESS_MANUAL,
+  PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
+  PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL,
+  buildProfileCosmeticAccessRulePayload,
+  buildProfileCosmeticRuleDraft,
   buildFrameRenderMetadataFromInset,
   buildFrameRenderMetadataFromImageData,
+  getProfileCosmeticAdminAccessBadge,
   getFrameRenderMetadata,
   normalizeFrameRenderMetadata,
+  sortProfileCosmeticAssetsNatural,
 } from "@/lib/profileCosmetics";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -149,6 +159,50 @@ function getAccessRuleForAsset(adminState, assetId) {
     publicUnlockTitle: "",
     publicUnlockDescription: "",
   };
+}
+
+function getTierThresholdLabel(tier, language, t) {
+  if (!tier) return "";
+  if (tier.tierType === "support_total") return formatCurrency(tier.thresholdValue, language);
+  return `${tier.thresholdValue} ${t("profile.months", "mois")}`;
+}
+
+function getAdminBadgeClass(tone) {
+  if (tone === "support") return "border-amber-400/35 bg-amber-400/10 text-amber-100";
+  if (tone === "monthly") return "border-indigo-400/35 bg-indigo-400/10 text-indigo-100";
+  if (tone === "manual") return "border-red-400/35 bg-red-400/10 text-red-100";
+  return "border-emerald-400/35 bg-emerald-400/10 text-emerald-100";
+}
+
+function getAdminBadgeLabel(rule, tiers, t, language) {
+  const badge = getProfileCosmeticAdminAccessBadge(rule, tiers, language);
+  if (badge.mode === PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL) {
+    return t("profile.adminBadgeSupportTotal", "Soutien cumule · {value}").replace(
+      "{value}",
+      getTierThresholdLabel(badge.tier, language, t) || "-",
+    );
+  }
+  if (badge.mode === PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY) {
+    return t("profile.adminBadgeMonthlyLoyalty", "Fidelite mensuelle · {value}").replace(
+      "{value}",
+      getTierThresholdLabel(badge.tier, language, t) || "-",
+    );
+  }
+  return t(badge.labelKey, badge.fallbackLabel);
+}
+
+function filterTiersByUiMode(tiers = [], uiMode = "") {
+  if (uiMode === PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL) {
+    return tiers.filter((tier) => tier.tierType === "support_total");
+  }
+  if (uiMode === PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY) {
+    return tiers.filter((tier) => tier.tierType === "monthly_loyalty");
+  }
+  return [];
+}
+
+function getRuleDraftForAsset(adminState, assetId) {
+  return buildProfileCosmeticRuleDraft(getAccessRuleForAsset(adminState, assetId), adminState?.tiers || []);
 }
 
 function GeometryInput({ label, value, min = 0, max = 100, step = 1, onChange }) {
@@ -342,26 +396,21 @@ function AdminTabButton({ active, icon, label, onClick }) {
   );
 }
 
-function AccessBadge({ asset, t, language }) {
+function AdminAccessBadge({ rule, adminState, t, language }) {
+  const badge = getProfileCosmeticAdminAccessBadge(rule, adminState?.tiers || [], language);
   return (
-    <Badge className={`mt-2 rounded-full border ${getAccessBadgeClass(asset)}`}>
-      {formatAccessType(asset, t, language)}
+    <Badge className={`mt-2 rounded-full border ${getAdminBadgeClass(badge.tone)}`}>
+      {getAdminBadgeLabel(rule, adminState?.tiers || [], t, language)}
     </Badge>
   );
 }
 
 function AdminCollectionsPanel({ catalog, adminState, t, language }) {
+  const sortedAvatars = useMemo(() => sortProfileCosmeticAssetsNatural(catalog.avatars || [], "fr"), [catalog.avatars]);
+  const sortedFrames = useMemo(() => sortProfileCosmeticAssetsNatural(catalog.frames || [], "fr"), [catalog.frames]);
   const renderAsset = (asset) => {
     const rule = getAccessRuleForAsset(adminState, asset.id);
-    const displayAsset = {
-      ...asset,
-      access: {
-        ...(asset.access || {}),
-        source: rule.accessType,
-        accessType: rule.accessType,
-        title: rule.publicUnlockTitle || formatAccessType({ access: { accessType: rule.accessType } }, t, language),
-      },
-    };
+    const tier = rule.tierId ? (adminState?.tiers || []).find((item) => String(item.id) === String(rule.tierId)) : null;
     return (
       <div key={`admin-asset-${asset.id}`} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
         <div className="flex items-center gap-3">
@@ -374,7 +423,10 @@ function AdminCollectionsPanel({ catalog, adminState, t, language }) {
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-zinc-100">{asset.displayName}</div>
             <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">{asset.assetType}</div>
-            <AccessBadge asset={displayAsset} t={t} language={language} />
+            <AdminAccessBadge rule={rule} adminState={adminState} t={t} language={language} />
+            {tier?.displayName ? <div className="mt-2 truncate text-xs text-zinc-400">{tier.displayName}</div> : null}
+            {rule.publicUnlockTitle ? <div className="mt-1 truncate text-xs font-semibold text-zinc-200">{rule.publicUnlockTitle}</div> : null}
+            {rule.publicUnlockDescription ? <div className="mt-1 line-clamp-2 text-xs text-zinc-500">{rule.publicUnlockDescription}</div> : null}
           </div>
         </div>
       </div>
@@ -390,18 +442,17 @@ function AdminCollectionsPanel({ catalog, adminState, t, language }) {
       ) : null}
       <div>
         <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">{t("profile.avatars", "Avatars")}</h4>
-        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{(catalog.avatars || []).map(renderAsset)}</div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{sortedAvatars.map(renderAsset)}</div>
       </div>
       <div>
         <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">{t("profile.frames", "Cadres")}</h4>
-        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{(catalog.frames || []).map(renderAsset)}</div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{sortedFrames.map(renderAsset)}</div>
       </div>
     </div>
   );
 }
 
-function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminState, t, language, onMessage, onError }) {
-  const firstAssetId = catalog.assets?.[0]?.id || "";
+function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminState, t, language, onMessage, onError, onCosmeticsChanged }) {
   const [tierDraft, setTierDraft] = useState({
     tierType: "support_total",
     thresholdEuros: 50,
@@ -410,19 +461,44 @@ function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminSt
     publicDescription: "",
     sortOrder: 0,
   });
-  const [selectedAssetId, setSelectedAssetId] = useState(firstAssetId);
-  const selectedAsset = (catalog.assets || []).find((asset) => String(asset.id) === String(selectedAssetId)) || null;
-  const selectedRule = getAccessRuleForAsset(adminState, selectedAssetId);
-  const [ruleDraft, setRuleDraft] = useState(selectedRule);
+  const [selectedAssetType, setSelectedAssetType] = useState("");
+  const [selectedAssetId, setSelectedAssetId] = useState("");
+  const sortedAvatars = useMemo(() => sortProfileCosmeticAssetsNatural(catalog.avatars || [], "fr"), [catalog.avatars]);
+  const sortedFrames = useMemo(() => sortProfileCosmeticAssetsNatural(catalog.frames || [], "fr"), [catalog.frames]);
+  const assetOptions =
+    selectedAssetType === PROFILE_COSMETIC_AVATAR
+      ? sortedAvatars
+      : selectedAssetType === PROFILE_COSMETIC_FRAME
+        ? sortedFrames
+        : [];
+  const selectedAsset = (assetOptions || []).find((asset) => String(asset.id) === String(selectedAssetId)) || null;
+  const [ruleDraft, setRuleDraft] = useState(() => buildProfileCosmeticRuleDraft({}, adminState?.tiers || []));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setSelectedAssetId((current) => current || firstAssetId);
-  }, [firstAssetId]);
-
-  useEffect(() => {
-    setRuleDraft(getAccessRuleForAsset(adminState, selectedAssetId));
+    if (!selectedAssetId) {
+      setRuleDraft(buildProfileCosmeticRuleDraft({}, adminState?.tiers || []));
+      return;
+    }
+    setRuleDraft(getRuleDraftForAsset(adminState, selectedAssetId));
   }, [adminState, selectedAssetId]);
+
+  const tierOptions = useMemo(
+    () => filterTiersByUiMode(adminState?.tiers || [], ruleDraft.uiMode),
+    [adminState?.tiers, ruleDraft.uiMode],
+  );
+  const needsTier =
+    ruleDraft.uiMode === PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL ||
+    ruleDraft.uiMode === PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY;
+  const canSaveRule =
+    Boolean(adminState?.accessSchemaReady && selectedAsset) &&
+    (!needsTier || Boolean(ruleDraft.tierId)) &&
+    (ruleDraft.uiMode !== PROFILE_COSMETIC_UI_ACCESS_MANUAL || Boolean(String(ruleDraft.publicUnlockTitle || "").trim()));
+  const previewAvatar =
+    selectedAsset?.assetType === PROFILE_COSMETIC_AVATAR
+      ? selectedAsset
+      : (catalog.avatars || []).find((avatar) => getAssetUrl(avatar)) || null;
+  const previewFrame = selectedAsset?.assetType === PROFILE_COSMETIC_FRAME ? selectedAsset : null;
 
   async function postAdmin(body) {
     const response = await fetch(`${apiBase}/api/portal-cosmetics-admin`, {
@@ -443,6 +519,7 @@ function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminSt
     try {
       await postAdmin({ action: "upsert-tier", ...tierDraft });
       await refreshAdminState();
+      await onCosmeticsChanged?.();
       onMessage(t("profile.tierSaved", "Palier enregistre."));
       setTierDraft({ ...tierDraft, displayName: "", publicDescription: "" });
     } catch (error) {
@@ -460,6 +537,7 @@ function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminSt
     try {
       await postAdmin({ action: "delete-tier", tierId });
       await refreshAdminState();
+      await onCosmeticsChanged?.();
       onMessage(t("profile.tierDeleted", "Palier supprime."));
     } catch (error) {
       onError(error?.message || t("profile.tierDeleteError", "Suppression du palier impossible."));
@@ -474,15 +552,20 @@ function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminSt
     onError("");
     onMessage("");
     try {
-      await postAdmin({
-        action: "set-access-rule",
+      const payload = buildProfileCosmeticAccessRulePayload({
         assetId: selectedAsset.id,
-        accessType: ruleDraft.accessType,
-        tierId: ruleDraft.accessType === "tier" ? ruleDraft.tierId : null,
+        uiMode: ruleDraft.uiMode,
+        tierId: ruleDraft.tierId,
         publicUnlockTitle: ruleDraft.publicUnlockTitle,
         publicUnlockDescription: ruleDraft.publicUnlockDescription,
+        tiers: adminState?.tiers || [],
+      });
+      await postAdmin({
+        action: "set-access-rule",
+        ...payload,
       });
       await refreshAdminState();
+      await onCosmeticsChanged?.();
       onMessage(t("profile.ruleSaved", "Classification enregistree."));
     } catch (error) {
       onError(error?.message || t("profile.ruleSaveError", "Classification impossible a enregistrer."));
@@ -491,8 +574,25 @@ function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminSt
     }
   }
 
-  const supportTiers = (adminState?.tiers || []).filter((tier) => tier.tierType === "support_total");
-  const monthlyTiers = (adminState?.tiers || []).filter((tier) => tier.tierType === "monthly_loyalty");
+  function handleAssetTypeChange(nextType) {
+    setSelectedAssetType(nextType);
+    setSelectedAssetId("");
+    setRuleDraft(buildProfileCosmeticRuleDraft({}, adminState?.tiers || []));
+  }
+
+  function handleUiModeChange(nextMode) {
+    setRuleDraft((current) => ({
+      ...current,
+      uiMode: nextMode,
+      accessType:
+        nextMode === PROFILE_COSMETIC_UI_ACCESS_BASIC
+          ? "basic"
+          : nextMode === PROFILE_COSMETIC_UI_ACCESS_MANUAL
+            ? "manual"
+            : "tier",
+      tierId: "",
+    }));
+  }
 
   return (
     <div className="space-y-5">
@@ -562,61 +662,118 @@ function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminSt
           </div>
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <select
-              value={selectedAssetId}
-              onChange={(event) => setSelectedAssetId(event.target.value)}
+              value={selectedAssetType}
+              onChange={(event) => handleAssetTypeChange(event.target.value)}
               className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
             >
-              {(catalog.assets || []).map((asset) => (
+              <option value="">{t("profile.selectCosmeticType", "Selectionne un type")}</option>
+              <option value={PROFILE_COSMETIC_AVATAR}>{t("profile.avatar", "Avatar")}</option>
+              <option value={PROFILE_COSMETIC_FRAME}>{t("profile.frame", "Cadre")}</option>
+            </select>
+            <select
+              value={selectedAssetId}
+              onChange={(event) => setSelectedAssetId(event.target.value)}
+              disabled={!selectedAssetType}
+              className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
+            >
+              <option value="">
+                {selectedAssetType === PROFILE_COSMETIC_AVATAR
+                  ? t("profile.selectAvatar", "Selectionne un avatar")
+                  : selectedAssetType === PROFILE_COSMETIC_FRAME
+                    ? t("profile.selectFrame", "Selectionne un cadre")
+                    : t("profile.chooseCosmeticTypeHelp", "Choisis d'abord Avatar ou Cadre")}
+              </option>
+              {assetOptions.map((asset) => (
                 <option key={`rule-asset-${asset.id}`} value={asset.id}>
                   {asset.displayName}
                 </option>
               ))}
             </select>
-            <select
-              value={ruleDraft.accessType || "basic"}
-              onChange={(event) => setRuleDraft((current) => ({ ...current, accessType: event.target.value }))}
-              className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
-            >
-              <option value="basic">{t("profile.accessBasic", "Accessible a tous")}</option>
-              <option value="tier">{t("profile.accessTier", "Palier de soutien")}</option>
-              <option value="manual">{t("profile.accessManual", "Recompense speciale")}</option>
-            </select>
-            {ruleDraft.accessType === "tier" ? (
-              <select
-                value={ruleDraft.tierId || ""}
-                onChange={(event) => setRuleDraft((current) => ({ ...current, tierId: event.target.value }))}
-                className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
-              >
-                <option value="">{t("profile.noTier", "Aucun palier")}</option>
-                {[...supportTiers, ...monthlyTiers].map((tier) => (
-                  <option key={`tier-option-${tier.id}`} value={tier.id}>
-                    {tier.displayName} - {tier.tierType === "support_total" ? formatCurrency(tier.thresholdValue, language) : `${tier.thresholdValue} ${t("profile.months", "mois")}`}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            <input
-              value={ruleDraft.publicUnlockTitle || ""}
-              onChange={(event) => setRuleDraft((current) => ({ ...current, publicUnlockTitle: event.target.value }))}
-              className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
-              placeholder={t("profile.unlockTitlePlaceholder", "Titre public d'obtention")}
-            />
-            <textarea
-              value={ruleDraft.publicUnlockDescription || ""}
-              onChange={(event) => setRuleDraft((current) => ({ ...current, publicUnlockDescription: event.target.value }))}
-              className="min-h-20 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 lg:col-span-2"
-              placeholder={t("profile.unlockDescriptionPlaceholder", "Description publique facultative")}
-            />
           </div>
-          <Button type="button" onClick={saveRule} disabled={saving || !adminState?.accessSchemaReady || !selectedAsset} className="mt-4 rounded-lg bg-purple-500 text-zinc-950 hover:bg-purple-400">
-            <Save className="h-4 w-4" />
-            {t("profile.ruleSave", "Enregistrer la classification")}
-          </Button>
+
+          {!selectedAsset ? (
+            <div className="mt-4 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 p-4 text-sm text-zinc-500">
+              {selectedAssetType
+                ? t("profile.chooseCosmeticHelp", "Selectionne un cosmetique pour modifier sa classification.")
+                : t("profile.chooseCosmeticTypeHelp", "Choisis d'abord Avatar ou Cadre")}
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-4 xl:grid-cols-[220px_1fr]">
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-center">
+                <div className="text-xs font-bold uppercase tracking-[0.16em] text-zinc-500">
+                  {t("profile.classificationPreview", "Apercu")}
+                </div>
+                <div className="mt-4 flex justify-center">
+                  <ProfileAvatar avatar={previewAvatar} frame={previewFrame} name={selectedAsset.displayName} size={118} />
+                </div>
+                <div className="mt-3 text-sm font-semibold text-zinc-100">{selectedAsset.displayName}</div>
+                <div className="mt-1 text-xs uppercase tracking-[0.14em] text-zinc-500">{selectedAsset.assetType}</div>
+              </div>
+              <div className="grid gap-3">
+                <select
+                  value={ruleDraft.uiMode || PROFILE_COSMETIC_UI_ACCESS_BASIC}
+                  onChange={(event) => handleUiModeChange(event.target.value)}
+                  className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
+                >
+                  <option value={PROFILE_COSMETIC_UI_ACCESS_BASIC}>{t("profile.accessBasic", "Accessible a tous")}</option>
+                  <option value={PROFILE_COSMETIC_UI_ACCESS_SUPPORT_TOTAL}>
+                    {t("profile.accessSupportTier", "Palier de soutien cumule")}
+                  </option>
+                  <option value={PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY}>
+                    {t("profile.accessMonthlyTier", "Palier de fidelite mensuelle")}
+                  </option>
+                  <option value={PROFILE_COSMETIC_UI_ACCESS_MANUAL}>{t("profile.accessManual", "Recompense speciale")}</option>
+                </select>
+                {needsTier ? (
+                  <>
+                    <select
+                      value={ruleDraft.tierId || ""}
+                      onChange={(event) => setRuleDraft((current) => ({ ...current, tierId: event.target.value }))}
+                      className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
+                    >
+                      <option value="">{t("profile.noTier", "Aucun palier")}</option>
+                      {tierOptions.map((tier) => (
+                        <option key={`tier-option-${tier.id}`} value={tier.id}>
+                          {tier.displayName} - {getTierThresholdLabel(tier, language, t)}
+                        </option>
+                      ))}
+                    </select>
+                    {!tierOptions.length ? (
+                      <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
+                        {t("profile.noTierForMode", "Aucun palier de ce type. Cree d'abord le palier dans le panneau Paliers.")}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+                <input
+                  value={ruleDraft.publicUnlockTitle || ""}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, publicUnlockTitle: event.target.value }))}
+                  className="h-10 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100"
+                  placeholder={t("profile.unlockTitlePlaceholder", "Titre public d'obtention")}
+                />
+                <textarea
+                  value={ruleDraft.publicUnlockDescription || ""}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, publicUnlockDescription: event.target.value }))}
+                  className="min-h-20 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100"
+                  placeholder={t("profile.unlockDescriptionPlaceholder", "Description publique facultative")}
+                />
+                {ruleDraft.uiMode === PROFILE_COSMETIC_UI_ACCESS_MANUAL && !String(ruleDraft.publicUnlockTitle || "").trim() ? (
+                  <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
+                    {t("profile.manualTitleRequired", "Un titre public est requis pour une recompense speciale.")}
+                  </div>
+                ) : null}
+                <Button type="button" onClick={saveRule} disabled={saving || !canSaveRule} className="rounded-lg bg-purple-500 text-zinc-950 hover:bg-purple-400">
+                  <Save className="h-4 w-4" />
+                  {t("profile.ruleSave", "Enregistrer la classification")}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {[...supportTiers, ...monthlyTiers].map((tier) => (
+        {(adminState?.tiers || []).map((tier) => (
           <div key={`tier-${tier.id}`} className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -636,7 +793,7 @@ function AdminClassificationPanel({ apiBase, catalog, adminState, refreshAdminSt
   );
 }
 
-function AdminGrantsPanel({ apiBase, catalog, t, onMessage, onError }) {
+function AdminGrantsPanel({ apiBase, catalog, t, onMessage, onError, onCosmeticsChanged }) {
   const [query, setQuery] = useState("");
   const [members, setMembers] = useState([]);
   const [selectedMember, setSelectedMember] = useState(null);
@@ -709,6 +866,7 @@ function AdminGrantsPanel({ apiBase, catalog, t, onMessage, onError }) {
         }),
       });
       await loadGrants(selectedMember);
+      await onCosmeticsChanged?.();
       setGrantTitle("");
       setGrantDescription("");
       onMessage(t("profile.grantSaved", "Attribution enregistree."));
@@ -731,6 +889,7 @@ function AdminGrantsPanel({ apiBase, catalog, t, onMessage, onError }) {
         body: JSON.stringify({ action: "revoke-grant", grantId: grant.id }),
       });
       if (selectedMember) await loadGrants(selectedMember);
+      await onCosmeticsChanged?.();
       onMessage(t("profile.grantRevoked", "Attribution revoquee."));
     } catch (error) {
       onError(error?.message || t("profile.revokeError", "Revocation impossible."));
@@ -850,6 +1009,7 @@ export default function ProfileCosmeticsTab({
   cosmeticsState,
   loading = false,
   onCosmeticsStateChange,
+  onCosmeticsChanged,
   adminMode = false,
 }) {
   const { t, language } = usePortalLanguage();
@@ -936,6 +1096,7 @@ export default function ProfileCosmeticsTab({
       const response = await fetch(`${apiBase}/api/portal-cosmetics-admin`, {
         method: "GET",
         credentials: "include",
+        cache: "no-store",
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -978,6 +1139,7 @@ export default function ProfileCosmeticsTab({
         throw new Error(payload?.error || t("profile.saveError", "Sauvegarde impossible."));
       }
       onCosmeticsStateChange?.(payload);
+      await onCosmeticsChanged?.();
       setMessage(t("profile.saved", "Profil enregistre."));
     } catch (error) {
       setErrorMessage(error?.message || t("profile.saveError", "Sauvegarde impossible."));
@@ -1008,6 +1170,7 @@ export default function ProfileCosmeticsTab({
         throw new Error(payload?.error || t("profile.frameMetadataSaveError", "Reglage du cadre impossible."));
       }
       onCosmeticsStateChange?.(payload);
+      await onCosmeticsChanged?.();
       setMessage(t("profile.frameMetadataSaved", "Reglage du cadre enregistre."));
     } catch (error) {
       setErrorMessage(error?.message || t("profile.frameMetadataSaveError", "Reglage du cadre impossible."));
@@ -1335,6 +1498,7 @@ export default function ProfileCosmeticsTab({
                     language={language}
                     onMessage={setMessage}
                     onError={setErrorMessage}
+                    onCosmeticsChanged={onCosmeticsChanged}
                   />
                 ) : null}
 
@@ -1345,6 +1509,7 @@ export default function ProfileCosmeticsTab({
                     t={t}
                     onMessage={setMessage}
                     onError={setErrorMessage}
+                    onCosmeticsChanged={onCosmeticsChanged}
                   />
                 ) : null}
 
@@ -1356,7 +1521,10 @@ export default function ProfileCosmeticsTab({
               catalog={catalog}
               previewAvatar={studioPreviewAvatar}
               t={t}
-              onCosmeticsStateChange={onCosmeticsStateChange}
+              onCosmeticsStateChange={(nextState) => {
+                onCosmeticsStateChange?.(nextState);
+                void onCosmeticsChanged?.();
+              }}
               onSelectAvatar={(assetId) => {
                 setDraftAvatarId(normalizeCosmeticId(assetId));
                 setStudioAvatarId(normalizeCosmeticId(assetId));

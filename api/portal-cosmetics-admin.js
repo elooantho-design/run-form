@@ -221,6 +221,7 @@ async function setAccessRule(req, res, leader, body) {
   const assetId = cleanText(body.assetId || body.asset_id, 120);
   const accessType = normalizeAccessType(body.accessType || body.access_type);
   const tierId = cleanText(body.tierId || body.tier_id, 120) || null;
+  const requestedTierType = normalizeTierType(body.tierType || body.tier_type);
   const title = cleanText(body.publicUnlockTitle || body.public_unlock_title, 160);
   const description = cleanLongText(body.publicUnlockDescription || body.public_unlock_description, 500);
 
@@ -246,6 +247,23 @@ async function setAccessRule(req, res, leader, body) {
   if (!asset) {
     sendPortalJson(res, 404, { error: "Cosmetique introuvable." }, req);
     return;
+  }
+
+  if (accessType === "tier") {
+    const { data: tier, error: tierError } = await supabase
+      .from("portal_cosmetic_unlock_tiers")
+      .select("id, tier_type, is_active")
+      .eq("id", tierId)
+      .maybeSingle();
+    if (tierError) throw tierError;
+    if (!tier || tier.is_active === false) {
+      sendPortalJson(res, 400, { error: "Palier cosmetique invalide." }, req);
+      return;
+    }
+    if (requestedTierType && tier.tier_type !== requestedTierType) {
+      sendPortalJson(res, 400, { error: "Le palier ne correspond pas a cette classification." }, req);
+      return;
+    }
   }
 
   const payload = {
