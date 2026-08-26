@@ -9,6 +9,7 @@ import {
 } from "./_portal-auth.js";
 import {
   PROFILE_COSMETIC_ASSET_SELECT,
+  isProfileCosmeticAssetUrlConstraintViolation,
   isMissingProfileCosmeticsSchema,
   loadProfileCosmeticAssetRows,
   saveProfileCosmeticFrameMetadata,
@@ -484,6 +485,14 @@ export default async function handler(req, res) {
 
     sendPortalJson(res, 400, { error: "Action admin cosmetiques inconnue." }, req);
   } catch (error) {
+    if (isProfileCosmeticAssetUrlConstraintViolation(error)) {
+      sendPortalJson(res, 400, {
+        error: "URL du cosmetique incompatible avec les formats autorises.",
+        step: error?.step || "publication",
+      }, req);
+      return;
+    }
+
     const missingSchema = isMissingProfileCosmeticsSchema(error) || isMissingCosmeticAccessSchema(error);
     sendPortalJson(res, missingSchema ? 409 : error.status || error.statusCode || 500, {
       error: missingSchema

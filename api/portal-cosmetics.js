@@ -8,6 +8,7 @@ import {
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
 import {
+  isProfileCosmeticAssetUrlConstraintViolation,
   isMissingProfileCosmeticsSchema,
   loadProfileCosmeticsState,
   saveProfileCosmeticFrameMetadata,
@@ -139,6 +140,13 @@ async function publishCosmeticAsset(req, res, body) {
       sendPortalJson(res, 409, {
         error: "Tables des cosmetiques de profil manquantes. Execute scripts/profile_cosmetics.sql.",
         schemaReady: false,
+      }, req);
+      return;
+    }
+    if (isProfileCosmeticAssetUrlConstraintViolation(error)) {
+      sendPortalJson(res, 400, {
+        error: "URL du cosmetique incompatible avec les formats autorises.",
+        step: error?.step || "publication",
       }, req);
       return;
     }

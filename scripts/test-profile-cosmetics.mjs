@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
 import zlib from "node:zlib";
 import {
+  isProfileCosmeticAssetUrlConstraintViolation,
+  isMissingProfileCosmeticsSchema,
   loadCosmeticsForMemberIds,
   saveProfileCosmeticFrameMetadata,
   saveProfileCosmeticsSelection,
@@ -99,6 +101,24 @@ assert.equal(catalog.frames.length, 5, "Basic exposes five frames");
 assert.equal(catalog.avatars.every((asset) => asset.unlocked), true, "public Basic avatars are unlocked");
 assert.equal(catalog.frames.every((asset) => asset.unlocked), true, "public Basic frames are unlocked");
 assert.equal(getFrameContentInset(catalog.frames[0]), 0.14, "frame inset comes from metadata");
+assert.equal(
+  isMissingProfileCosmeticsSchema({
+    code: "23514",
+    message: 'new row for relation "portal_cosmetic_assets" violates check constraint "portal_cosmetic_assets_url_check"',
+  }),
+  false,
+  "cosmetic asset CHECK violations are not reported as missing schema",
+);
+assert.equal(isMissingProfileCosmeticsSchema({ code: "42P01" }), true, "missing relation remains a missing schema error");
+assert.equal(isMissingProfileCosmeticsSchema({ code: "42703" }), true, "missing column remains a missing schema error");
+assert.equal(
+  isProfileCosmeticAssetUrlConstraintViolation({
+    code: "23514",
+    message: 'new row for relation "portal_cosmetic_assets" violates check constraint "portal_cosmetic_assets_url_check"',
+  }),
+  true,
+  "cosmetic asset URL CHECK violations receive a targeted public error",
+);
 
 const supportTier = {
   id: "tier-support-50",
@@ -1755,6 +1775,11 @@ assert.match(
   /MAX_PROFILE_COSMETICS_BODY_BYTES = 4_000_000/,
   "publication route keeps a server-side safety margin under the platform payload limit",
 );
+assert.match(
+  portalCosmeticsSource,
+  /isProfileCosmeticAssetUrlConstraintViolation/,
+  "publication route reports URL CHECK violations without a false migration warning",
+);
 
 const adminEndpointSource = await readFile(new URL("../api/portal-cosmetics-admin.js", import.meta.url), "utf8");
 assert.match(adminEndpointSource, /requirePortalLeaderSession\(req, supabase\)/, "cosmetic admin endpoint is leader-only");
@@ -1762,6 +1787,11 @@ assert.doesNotMatch(adminEndpointSource, /requirePortalAdminSession/, "cosmetic 
 assert.match(adminEndpointSource, /publish-cosmetic-effect/, "cosmetic admin endpoint exposes an explicit animated effect publish action");
 assert.match(adminEndpointSource, /publishProfileCosmeticEffect\(body\)/, "animated effect upload does not require or modify Supabase metadata");
 assert.match(adminEndpointSource, /sizeLimit: "7mb"/, "cosmetic admin endpoint allows a bounded 5 MiB WebP base64 payload");
+assert.match(
+  adminEndpointSource,
+  /isProfileCosmeticAssetUrlConstraintViolation/,
+  "admin cosmetics endpoint reports URL CHECK violations without a false migration warning",
+);
 
 const publishSource = await readFile(new URL("../api/_portal-cosmetics-publish.js", import.meta.url), "utf8");
 assert.match(publishSource, /public_url/, "publisher validates the public URL returned by the VPS");
@@ -1779,6 +1809,66 @@ assert.match(publishSource, /inspectMp4Buffer/, "avatar video publisher validate
 assert.match(publishSource, /inspectWebmBuffer/, "avatar video publisher validates WebM signatures server-side");
 assert.match(publishSource, /asset_type: assetType/, "publisher still sends the technical VPS asset type");
 assert.match(publishSource, /asset_type: assetType,[\s\S]*content_type: mimeType,[\s\S]*mime_type: mimeType/, "VPS upload receives an explicit MIME for non-PNG assets");
+
+const avatarVideoUrlMigrationSource = await readFile(
+  new URL("../scripts/profile_cosmetics_avatar_video_urls.sql", import.meta.url),
+  "utf8",
+);
+const avatarVideoPreflightSource = await readFile(
+  new URL("../scripts/profile_cosmetics_avatar_video_urls_preflight.sql", import.meta.url),
+  "utf8",
+);
+const avatarVideoVerifySource = await readFile(
+  new URL("../scripts/profile_cosmetics_avatar_video_urls_verify.sql", import.meta.url),
+  "utf8",
+);
+assert.match(
+  avatarVideoUrlMigrationSource,
+  /portal_cosmetic_assets_url_check/,
+  "avatar video URL migration replaces only the cosmetic asset URL check",
+);
+assert.match(
+  avatarVideoUrlMigrationSource,
+  /assets\/profile-cosmetics\/avatars\/\[\^\/\]\+\\\.png/,
+  "avatar video URL migration keeps historical avatar PNG URLs allowed",
+);
+assert.match(
+  avatarVideoUrlMigrationSource,
+  /assets\/profile-cosmetics\/frames\/\[\^\/\]\+\\\.png/,
+  "avatar video URL migration keeps historical frame PNG URLs allowed",
+);
+assert.match(
+  avatarVideoUrlMigrationSource,
+  /assets\/profile-cosmetics\/avatar-videos\/\[\^\/\]\+\\\.\(mp4\|webm\)/,
+  "avatar video URL migration allows only MP4/WebM avatar video URLs",
+);
+assert.doesNotMatch(avatarVideoUrlMigrationSource, /mov/i, "avatar video URL migration does not allow MOV URLs");
+assert.match(avatarVideoUrlMigrationSource, /begin;/i, "avatar video URL migration is transactional");
+assert.match(avatarVideoUrlMigrationSource, /commit;/i, "avatar video URL migration commits explicitly");
+assert.match(avatarVideoUrlMigrationSource, /drop constraint if exists portal_cosmetic_assets_url_check/i, "avatar video URL migration replaces the targeted check constraint");
+assert.match(avatarVideoPreflightSource, /begin transaction read only;/i, "avatar video URL preflight is read-only");
+assert.match(avatarVideoVerifySource, /begin transaction read only;/i, "avatar video URL verify is read-only");
+const avatarVideoUrlRegex = /^https:\/\/vps-aad12be0\.vps\.ovh\.net\/assets\/profile-cosmetics\/avatar-videos\/[^/]+\.(mp4|webm)$/;
+assert.equal(
+  avatarVideoUrlRegex.test("https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/avatar-videos/test.mp4"),
+  true,
+  "avatar-videos MP4 URLs satisfy the intended check expression",
+);
+assert.equal(
+  avatarVideoUrlRegex.test("https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/avatar-videos/test.webm"),
+  true,
+  "avatar-videos WebM URLs satisfy the intended check expression",
+);
+assert.equal(
+  avatarVideoUrlRegex.test("https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/avatar-videos/test.mov"),
+  false,
+  "avatar-videos MOV URLs stay forbidden",
+);
+assert.equal(
+  avatarVideoUrlRegex.test("https://evil.example/assets/profile-cosmetics/avatar-videos/test.mp4"),
+  false,
+  "external avatar video URLs stay forbidden",
+);
 
 const studioSource = await readFile(new URL("../src/components/ProfileCosmeticsTab.jsx", import.meta.url), "utf8");
 assert.match(studioSource, /onPointerDown=\{\(event\) => startPointer\("move", event\)\}/, "studio exposes direct box dragging");

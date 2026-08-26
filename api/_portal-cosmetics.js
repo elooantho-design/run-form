@@ -43,16 +43,34 @@ export const PROFILE_COSMETIC_SELECTION_SELECT = `
   updated_at
 `;
 
+const MISSING_PROFILE_COSMETICS_SCHEMA_CODES = new Set(["42P01", "42703", "PGRST204", "PGRST205"]);
+const PROFILE_COSMETICS_TABLES = [
+  "portal_cosmetic_collections",
+  "portal_cosmetic_assets",
+  "portal_member_cosmetics",
+];
+
 export function isMissingProfileCosmeticsSchema(error) {
+  if (MISSING_PROFILE_COSMETICS_SCHEMA_CODES.has(error?.code)) return true;
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return PROFILE_COSMETICS_TABLES.some((tableName) => {
+    const escapedTable = tableName.replaceAll("_", "[_]");
+    return (
+      new RegExp(`relation\\s+"?(public\\.)?${escapedTable}"?\\s+does\\s+not\\s+exist`).test(message) ||
+      new RegExp(`table\\s+"?(public\\.)?${escapedTable}"?\\s+does\\s+not\\s+exist`).test(message) ||
+      new RegExp(`column\\s+"?[^"]+"?\\s+of\\s+relation\\s+"?(public\\.)?${escapedTable}"?\\s+does\\s+not\\s+exist`).test(message)
+    );
+  });
+}
+
+export function isProfileCosmeticAssetUrlConstraintViolation(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return (
-    error?.code === "42P01" ||
-    error?.code === "42703" ||
-    error?.code === "PGRST204" ||
-    error?.code === "PGRST205" ||
-    message.includes("portal_cosmetic_collections") ||
-    message.includes("portal_cosmetic_assets") ||
-    message.includes("portal_member_cosmetics")
+    error?.code === "23514" &&
+    (
+      error?.constraint === "portal_cosmetic_assets_url_check" ||
+      message.includes("portal_cosmetic_assets_url_check")
+    )
   );
 }
 
