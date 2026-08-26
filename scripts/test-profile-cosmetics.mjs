@@ -16,7 +16,9 @@ import {
   decorateCosmeticAssetsForMember,
 } from "../api/_portal-cosmetic-access.js";
 import {
+  inspectMp4Buffer,
   inspectWebpBuffer,
+  inspectWebmBuffer,
   inspectPngBuffer,
   publishProfileCosmeticAsset,
   publishProfileCosmeticEffect,
@@ -30,6 +32,7 @@ import {
   getProfileCosmeticAdminAccessBadge,
   getFrameContentInset,
   getFrameRenderMetadata,
+  getProfileAvatarMediaInfo,
   getNextProfileCosmeticDisplayName,
   getProfileFrameAnimationKey,
   normalizeFrameAnimationLayers,
@@ -937,6 +940,22 @@ function createTestWebp({ animated = true } = {}) {
   return Buffer.concat([Buffer.from("RIFF"), riffSize, Buffer.from("WEBP"), payload]);
 }
 
+function createTestMp4() {
+  const ftypPayload = Buffer.concat([Buffer.from("isom", "ascii"), Buffer.from([0, 0, 0, 1]), Buffer.from("isomiso2mp41", "ascii")]);
+  const ftypSize = Buffer.alloc(4);
+  ftypSize.writeUInt32BE(8 + ftypPayload.length, 0);
+  return Buffer.concat([ftypSize, Buffer.from("ftyp", "ascii"), ftypPayload, Buffer.from([0, 0, 0, 8]), Buffer.from("free", "ascii")]);
+}
+
+function createTestWebm() {
+  return Buffer.concat([
+    Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81, 0x01, 0x42, 0xf2, 0x81, 0x04]),
+    Buffer.from([0x42, 0x82, 0x84]),
+    Buffer.from("webm", "ascii"),
+    Buffer.from([0x18, 0x53, 0x80, 0x67, 0x01, 0x00]),
+  ]);
+}
+
 function createPublishingFakeSupabase(options = {}) {
   const assetRows = (options.assets || assets).map((asset) => ({ ...asset, metadata: { ...(asset.metadata || {}) } }));
   const selections = new Map();
@@ -1188,6 +1207,24 @@ assert.throws(
   "static WebP files are refused for animated cosmetic effects",
 );
 
+const validAvatarMp4 = createTestMp4();
+const validAvatarWebm = createTestWebm();
+const validAvatarMp4Sha = crypto.createHash("sha256").update(validAvatarMp4).digest("hex");
+const validAvatarMp4Info = inspectMp4Buffer(validAvatarMp4);
+assert.equal(validAvatarMp4Info.mimeType, "video/mp4", "server MP4 inspection validates the ftyp signature");
+assert.equal(inspectWebmBuffer(validAvatarWebm).mimeType, "video/webm", "server WebM inspection validates the EBML/WebM signature");
+assert.throws(() => inspectMp4Buffer(Buffer.from("not-a-mp4")), /MP4 valide|Signature MP4/, "fake MP4 files are refused");
+assert.throws(() => inspectWebmBuffer(Buffer.from("not-a-webm")), /WebM valide|Signature WebM/, "fake WebM files are refused");
+assert.deepEqual(
+  getProfileAvatarMediaInfo({
+    asset_type: "avatar",
+    asset_url: "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/avatar-videos/basic_avatar_video_test.mp4",
+    metadata: { media_type: "video", media_mime: "video/mp4" },
+  }),
+  { mediaType: "video", mimeType: "video/mp4", isVideo: true },
+  "avatar media metadata marks video avatars without changing the asset type",
+);
+
 const publishFakeSupabase = createPublishingFakeSupabase();
 let postCount = 0;
 await withMockedFetchAndEnv(
@@ -1236,6 +1273,70 @@ await withMockedFetchAndEnv(
   },
 );
 assert.equal(postCount, 1, "successful publish uploads exactly once");
+
+const publishVideoSupabase = createPublishingFakeSupabase();
+let videoPostCount = 0;
+await withMockedFetchAndEnv(
+  async (url, options = {}) => {
+    if (options.method === "POST") {
+      videoPostCount += 1;
+      const request = JSON.parse(String(options.body || "{}"));
+      assert.match(String(url), /\/api\/v1\/profile-cosmetics\/avatar-videos\/base64$/, "avatar video upload targets the dedicated VPS route");
+      assert.equal(options.headers["X-GVG-Token"], "test-token", "avatar video upload keeps the VPS token server-side in a header");
+      assert.equal(request.asset_type, "avatar_video", "VPS upload receives the technical avatar video type");
+      assert.equal(request.content_type, "video/mp4", "avatar video upload declares the MP4 MIME");
+      assert.equal(request.mime_type, "video/mp4", "avatar video upload sends a MIME field for the VPS");
+      assert.ok(request.file_name.startsWith("basic_avatar_video_"), "avatar video filename contains the stable hash key");
+      assert.ok(request.file_name.endsWith(".mp4"), "avatar video filename keeps the MP4 extension");
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          asset_type: request.asset_type,
+          file_name: request.file_name,
+          public_url: `https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/avatar-videos/${request.file_name}`,
+          sha256: validAvatarMp4Sha,
+          size: validAvatarMp4.length,
+          already_exists: false,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    assert.match(String(url), /\/assets\/profile-cosmetics\/avatar-videos\/basic_avatar_video_/, "public video verification uses the VPS avatar-videos URL");
+    return new Response(validAvatarMp4, { status: 200, headers: { "content-type": "video/mp4" } });
+  },
+  async () => {
+    const state = await publishProfileCosmeticAsset(publishVideoSupabase, { id: "member-a", watcher_name: "Darius" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "avatar",
+      collectionKey: "basic",
+      displayName: "Avatar Video Upload",
+      fileName: "source-avatar.mp4",
+      mediaKind: "video",
+      mimeType: "video/mp4",
+      metadata: {
+        media_type: "video",
+        media_mime: "video/mp4",
+        media_extension: ".mp4",
+        avatar_fit: "cover",
+        avatar_position: { x: 0.5, y: 0.5 },
+      },
+      contentBase64: validAvatarMp4.toString("base64"),
+      size: validAvatarMp4.length,
+      sha256: validAvatarMp4Sha,
+    });
+
+    assert.equal(state.publish.status, "published", "successful avatar video publish returns a published status");
+    assert.equal(publishVideoSupabase.inserts.length, 1, "avatar video publish inserts exactly one Supabase row");
+    assert.equal(publishVideoSupabase.inserts[0].asset_type, "avatar", "avatar video remains an avatar catalog asset");
+    assert.match(publishVideoSupabase.inserts[0].asset_url, /\/avatar-videos\/basic_avatar_video_.*\.mp4$/, "avatar video URL uses the VPS avatar-videos folder");
+    assert.equal(publishVideoSupabase.inserts[0].metadata.media_type, "video", "avatar video metadata records the media type");
+    assert.equal(publishVideoSupabase.inserts[0].metadata.media_mime, "video/mp4", "avatar video metadata records the MIME type");
+    assert.equal(state.publish.mimeType, "video/mp4", "publish response exposes the video MIME type");
+    assert.equal(state.catalog.avatars.some((avatar) => avatar.id === state.publishedAsset.id), true, "catalog reload includes the new video avatar");
+  },
+);
+assert.equal(videoPostCount, 1, "successful avatar video publish uploads exactly once");
 
 let effectPostCount = 0;
 await withMockedFetchAndEnv(
@@ -1463,6 +1564,59 @@ await assert.rejects(
 
 await assert.rejects(
   () =>
+    publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "frame",
+      collectionKey: "basic",
+      displayName: "Bad video frame",
+      fileName: "bad-frame.mp4",
+      mediaKind: "video",
+      mimeType: "video/mp4",
+      metadata: { media_type: "video", media_mime: "video/mp4", media_extension: ".mp4" },
+      contentBase64: validAvatarMp4.toString("base64"),
+      sha256: validAvatarMp4Sha,
+    }),
+  /cadres video/,
+  "frames cannot be uploaded as MP4/WebM videos",
+);
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "avatar",
+      collectionKey: "basic",
+      displayName: "Fake MP4",
+      fileName: "fake.mp4",
+      mediaKind: "video",
+      mimeType: "video/mp4",
+      metadata: { media_type: "video", media_mime: "video/mp4", media_extension: ".mp4" },
+      contentBase64: Buffer.from("not-a-video").toString("base64"),
+    }),
+  /MP4 valide|Signature MP4/,
+  "avatar video upload refuses fake MP4 payloads",
+);
+
+await assert.rejects(
+  () =>
+    publishProfileCosmeticAsset(createPublishingFakeSupabase(), { id: "member-a" }, {
+      action: "publish-cosmetic-asset",
+      assetType: "avatar",
+      collectionKey: "basic",
+      displayName: "Movie",
+      fileName: "movie.mov",
+      mediaKind: "video",
+      mimeType: "video/mp4",
+      metadata: { media_type: "video", media_mime: "video/mp4", media_extension: ".mp4" },
+      contentBase64: validAvatarMp4.toString("base64"),
+      sha256: validAvatarMp4Sha,
+    }),
+  /Extension video avatar interdite/,
+  "avatar video upload refuses MOV/AVI/GIF source names even with a video MIME",
+);
+
+await assert.rejects(
+  () =>
     withMockedFetchAndEnv(
       async (url, options = {}) => {
         if (options.method === "POST") {
@@ -1618,6 +1772,13 @@ assert.match(publishSource, /requireAnimation: true/, "effect publisher requires
 assert.match(publishSource, /PROFILE_COSMETIC_EFFECTS_FOLDER = "effects"/, "effect publisher pins the VPS folder to effects");
 assert.match(publishSource, /randomBytes\(6\)/, "effect publisher builds a unique server-side filename suffix");
 assert.doesNotMatch(publishSource, /targetPath/, "effect publisher does not accept client-provided VPS paths");
+assert.match(publishSource, /PROFILE_COSMETIC_AVATAR_VIDEO_FOLDER = "avatar-videos"/, "avatar video publisher pins the VPS folder to avatar-videos");
+assert.match(publishSource, /DEFAULT_AVATAR_VIDEO_UPLOAD_ENDPOINT_TEMPLATE/, "avatar video publisher uses a dedicated VPS endpoint template");
+assert.match(publishSource, /decodeAvatarVideoPayload/, "avatar video payloads bypass PNG decoding");
+assert.match(publishSource, /inspectMp4Buffer/, "avatar video publisher validates MP4 signatures server-side");
+assert.match(publishSource, /inspectWebmBuffer/, "avatar video publisher validates WebM signatures server-side");
+assert.match(publishSource, /asset_type: assetType/, "publisher still sends the technical VPS asset type");
+assert.match(publishSource, /asset_type: assetType,[\s\S]*content_type: mimeType,[\s\S]*mime_type: mimeType/, "VPS upload receives an explicit MIME for non-PNG assets");
 
 const studioSource = await readFile(new URL("../src/components/ProfileCosmeticsTab.jsx", import.meta.url), "utf8");
 assert.match(studioSource, /onPointerDown=\{\(event\) => startPointer\("move", event\)\}/, "studio exposes direct box dragging");
@@ -1692,6 +1853,12 @@ assert.match(rendererSource, /data-animation-layer-visible/, "profile renderer e
 assert.match(rendererSource, /onAnimationLayerStatusChange/, "profile renderer reports animated WebP load status to the studio");
 assert.doesNotMatch(rendererSource, /--profile-animation-layer-opacity/, "animated layer visibility no longer depends on a fragile CSS custom property reveal");
 assert.doesNotMatch(rendererSource, /animationDelay/, "animated layer visibility delays are handled by React state");
+assert.match(rendererSource, /getProfileAvatarMediaInfo/, "profile renderer detects image versus video avatar assets centrally");
+assert.match(rendererSource, /<video/, "profile renderer can render avatar videos without routing them through images");
+assert.match(rendererSource, /playsInline/, "avatar videos are mobile-safe muted inline media");
+assert.match(rendererSource, /disablePictureInPicture/, "avatar videos do not expose player chrome");
+assert.match(rendererSource, /IntersectionObserver/, "avatar videos pause when the renderer leaves the viewport");
+assert.match(rendererSource, /prefers-reduced-motion/, "avatar videos respect reduced-motion unless explicitly previewed");
 
 const indexCssSource = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
 assert.match(indexCssSource, /profile-avatar-animation-layer/, "global styles contain animation layer rules");
@@ -1708,6 +1875,12 @@ assert.match(uploadStudioSource, /normalizeFrameFile/, "upload studio normalizes
 assert.match(uploadStudioSource, /normalizeAvatarFile/, "upload studio normalizes avatars locally");
 assert.match(uploadStudioSource, /TARGET_COSMETIC_SIZE = 1024/, "upload studio targets 1024x1024 PNGs");
 assert.match(uploadStudioSource, /MAX_NORMALIZED_PNG_BYTES = 2_750_000/, "upload studio rejects oversized normalized PNGs before upload");
+assert.match(uploadStudioSource, /MAX_AVATAR_VIDEO_BYTES = Math\.floor\(2\.5 \* 1024 \* 1024\)/, "upload studio rejects oversized avatar videos before upload");
+assert.match(uploadStudioSource, /AVATAR_UPLOAD_ACCEPT/, "upload studio exposes MP4/WebM only for avatar uploads");
+assert.match(uploadStudioSource, /inspectMp4Bytes/, "upload studio validates MP4 signatures client-side");
+assert.match(uploadStudioSource, /inspectWebmBytes/, "upload studio validates WebM signatures client-side");
+assert.match(uploadStudioSource, /contentBase64/, "upload studio sends avatar videos as bounded base64 payloads");
+assert.match(uploadStudioSource, /mediaKind: PROFILE_AVATAR_MEDIA_VIDEO/, "upload studio tags video avatars in draft metadata");
 assert.match(uploadStudioSource, /publishingDraftIdsRef/, "upload studio prevents duplicate publishes for the same draft");
 assert.match(uploadStudioSource, /existingDisplayNames/, "upload studio warns when a draft name resembles an existing catalog asset");
 assert.match(uploadStudioSource, /createProfileCosmeticDisplayNameAllocator/, "upload studio allocates automatic names from existing numbered assets");

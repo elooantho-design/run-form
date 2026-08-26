@@ -1386,6 +1386,11 @@ body {
   object-fit: cover;
 }
 
+.profile-avatar-root .profile-avatar-avatar-video {
+  display: block;
+  background: rgba(6, 182, 212, 0.08);
+}
+
 .profile-avatar-root .profile-avatar-frame-img {
   object-fit: contain;
 }

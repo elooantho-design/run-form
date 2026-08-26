@@ -15,16 +15,28 @@ import {
   buildFrameRenderMetadataFromImageData,
   createProfileCosmeticDisplayNameAllocator,
   getNextProfileCosmeticDisplayName,
+  getProfileAvatarVideoExtension,
   normalizeFrameRenderMetadata,
+  normalizeProfileAvatarVideoMimeType,
+  PROFILE_AVATAR_MEDIA_VIDEO,
+  PROFILE_AVATAR_VIDEO_MIME_MP4,
+  PROFILE_AVATAR_VIDEO_MIME_WEBM,
   summarizeProfileCosmeticPublishBatch,
 } from "@/lib/profileCosmetics";
 
 const TARGET_COSMETIC_SIZE = 1024;
 const MAX_SOURCE_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_NORMALIZED_PNG_BYTES = 2_750_000;
+const MAX_AVATAR_VIDEO_BYTES = Math.floor(2.5 * 1024 * 1024);
 const DEFAULT_FRAME_MARGIN = 0.04;
 const FRAME_ALPHA_THRESHOLD = 8;
-const AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const AVATAR_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const AVATAR_VIDEO_TYPES = new Set([PROFILE_AVATAR_VIDEO_MIME_MP4, PROFILE_AVATAR_VIDEO_MIME_WEBM]);
+const AVATAR_VIDEO_MIME_BY_EXTENSION = new Map([
+  [".mp4", PROFILE_AVATAR_VIDEO_MIME_MP4],
+  [".webm", PROFILE_AVATAR_VIDEO_MIME_WEBM],
+]);
+const AVATAR_UPLOAD_ACCEPT = "image/png,image/jpeg,image/webp,video/mp4,video/webm,.png,.jpg,.jpeg,.webp,.mp4,.webm";
 
 function createDraftId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -62,10 +74,34 @@ function fileLooksLikePng(file) {
   return String(file?.type || "").toLowerCase() === "image/png" || String(file?.name || "").toLowerCase().endsWith(".png");
 }
 
-function fileLooksLikeAvatar(file) {
+function getFileExtension(file) {
+  const match = String(file?.name || "")
+    .toLowerCase()
+    .match(/\.[a-z0-9]+$/);
+  return match ? match[0] : "";
+}
+
+function fileLooksLikeAvatarImage(file) {
   const type = String(file?.type || "").toLowerCase();
   const name = String(file?.name || "").toLowerCase();
-  return AVATAR_TYPES.has(type) || /\.(png|jpe?g|webp)$/.test(name);
+  return AVATAR_IMAGE_TYPES.has(type) || /\.(png|jpe?g|webp)$/.test(name);
+}
+
+function getAvatarVideoMimeFromFile(file) {
+  const mimeByType = normalizeProfileAvatarVideoMimeType(file?.type);
+  const extension = getFileExtension(file);
+  const mimeByExtension = AVATAR_VIDEO_MIME_BY_EXTENSION.get(extension) || "";
+  if (mimeByType && !mimeByExtension) return "";
+  if (mimeByType && mimeByExtension && mimeByType !== mimeByExtension) return "";
+  return mimeByType || mimeByExtension;
+}
+
+function fileLooksLikeAvatarVideo(file) {
+  return Boolean(getAvatarVideoMimeFromFile(file));
+}
+
+function fileLooksLikeAvatar(file) {
+  return fileLooksLikeAvatarImage(file) || fileLooksLikeAvatarVideo(file);
 }
 
 function readFileAsDataUrl(file) {
@@ -101,6 +137,44 @@ function bytesToBase64(bytes) {
     binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
   return btoa(binary);
+}
+
+async function readFileBytes(file) {
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+function readAscii(bytes, start, length) {
+  let text = "";
+  for (let index = start; index < start + length && index < bytes.length; index += 1) {
+    text += String.fromCharCode(bytes[index]);
+  }
+  return text;
+}
+
+function bytesContainAscii(bytes, needle, limit = 4096) {
+  const haystack = readAscii(bytes, 0, Math.min(bytes.length, limit));
+  return haystack.includes(needle);
+}
+
+function inspectMp4Bytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 12) {
+    throw new Error("Video MP4 invalide.");
+  }
+  const boxSize = ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+  const boxType = readAscii(bytes, 4, 4);
+  if (boxType !== "ftyp" || boxSize < 8 || boxSize > bytes.length) {
+    throw new Error("Signature MP4 invalide.");
+  }
+}
+
+function inspectWebmBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 8) {
+    throw new Error("Video WebM invalide.");
+  }
+  const hasEbmlSignature = bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
+  if (!hasEbmlSignature || !bytesContainAscii(bytes, "webm")) {
+    throw new Error("Signature WebM invalide.");
+  }
 }
 
 async function sha256Hex(bytes) {
@@ -158,13 +232,14 @@ function findVisibleAlphaBox(imageData) {
 }
 
 function buildDraftAsset(draft) {
-  if (!draft?.pngDataUrl) return null;
+  const url = draft?.previewUrl || draft?.pngDataUrl || draft?.videoDataUrl || "";
+  if (!url) return null;
   return {
     id: draft.id,
     displayName: draft.displayName,
     assetType: draft.assetType,
-    url: draft.pngDataUrl,
-    assetUrl: draft.pngDataUrl,
+    url,
+    assetUrl: url,
     isActive: true,
     unlocked: true,
     locked: false,
@@ -235,6 +310,48 @@ async function normalizeFrameFile(file, settings = {}) {
 
 async function normalizeAvatarFile(file, settings = {}) {
   if (!fileLooksLikeAvatar(file)) {
+    throw new Error("Format avatar non supporte. Utilise PNG, JPEG, WebP, MP4 ou WebM.");
+  }
+
+  if (fileLooksLikeAvatarVideo(file)) {
+    const mimeType = getAvatarVideoMimeFromFile(file);
+    if (!AVATAR_VIDEO_TYPES.has(mimeType)) {
+      throw new Error("Format video avatar non supporte. Utilise MP4 ou WebM.");
+    }
+    if (file.size > MAX_AVATAR_VIDEO_BYTES) {
+      throw new Error(`Video avatar trop volumineuse (${formatBytes(file.size)}). Max ${formatBytes(MAX_AVATAR_VIDEO_BYTES)}.`);
+    }
+    const bytes = await readFileBytes(file);
+    if (mimeType === PROFILE_AVATAR_VIDEO_MIME_MP4) inspectMp4Bytes(bytes);
+    else inspectWebmBytes(bytes);
+    const base64 = bytesToBase64(bytes);
+    const videoDataUrl = `data:${mimeType};base64,${base64}`;
+    return {
+      contentBase64: base64,
+      videoDataUrl,
+      previewUrl: videoDataUrl,
+      mediaKind: PROFILE_AVATAR_MEDIA_VIDEO,
+      mimeType,
+      metadata: {
+        media_type: PROFILE_AVATAR_MEDIA_VIDEO,
+        media_mime: mimeType,
+        media_extension: getProfileAvatarVideoExtension(mimeType),
+        avatar_fit: "cover",
+        avatar_position: {
+          x: 0.5,
+          y: 0.5,
+        },
+      },
+      source: null,
+      normalized: null,
+      settings: {},
+      bytes: file.size,
+      sha256: await sha256Hex(bytes),
+      needsManualReview: false,
+    };
+  }
+
+  if (!fileLooksLikeAvatarImage(file)) {
     throw new Error("Format avatar non supporte. Utilise PNG, JPEG ou WebP.");
   }
   const dataUrl = await readFileAsDataUrl(file);
@@ -274,6 +391,8 @@ async function normalizeAvatarFile(file, settings = {}) {
     source: { width: sourceWidth, height: sourceHeight },
     normalized: { width: TARGET_COSMETIC_SIZE, height: TARGET_COSMETIC_SIZE },
     settings: { zoom, offsetX, offsetY },
+    mediaKind: "image",
+    previewUrl: payload.pngDataUrl,
     needsManualReview: false,
   };
 }
@@ -282,8 +401,12 @@ async function normalizeDraftFile(file, assetType, settings) {
   if (typeof document === "undefined") {
     throw new Error("Normalisation locale indisponible hors navigateur.");
   }
-  if (!file || file.size > MAX_SOURCE_IMAGE_BYTES) {
-    throw new Error(`Fichier source trop volumineux (${formatBytes(file?.size || 0)}).`);
+  if (!file) {
+    throw new Error("Fichier source manquant.");
+  }
+  const maxSourceBytes = assetType === "avatar" && fileLooksLikeAvatarVideo(file) ? MAX_AVATAR_VIDEO_BYTES : MAX_SOURCE_IMAGE_BYTES;
+  if (file.size > maxSourceBytes) {
+    throw new Error(`Fichier source trop volumineux (${formatBytes(file.size)}).`);
   }
   return assetType === "frame" ? normalizeFrameFile(file, settings) : normalizeAvatarFile(file, settings);
 }
@@ -334,6 +457,8 @@ function RangeControl({ label, value, min, max, step, suffix = "", onChange }) {
 function DraftInfoGrid({ draft, t }) {
   const confidence = draft.assetType === "frame" ? draft.analysis?.confidence || null : null;
   const finalSize = draft.bytes ? formatBytes(draft.bytes) : "-";
+  const isVideo = draft.mediaKind === PROFILE_AVATAR_MEDIA_VIDEO;
+  const finalFormat = isVideo ? (draft.mimeType === PROFILE_AVATAR_VIDEO_MIME_WEBM ? "WebM video" : "MP4 video") : "PNG 1024x1024";
   return (
     <div className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-xs text-zinc-400 sm:grid-cols-2 xl:grid-cols-4">
       <div>
@@ -354,7 +479,7 @@ function DraftInfoGrid({ draft, t }) {
         <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
           {t("profile.uploadInfoFormat", "Format final")}
         </span>
-        <span className="text-zinc-200">PNG 1024x1024</span>
+        <span className="text-zinc-200">{finalFormat}</span>
       </div>
       <div>
         <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
@@ -362,13 +487,15 @@ function DraftInfoGrid({ draft, t }) {
         </span>
         <span className="text-zinc-200">{finalSize}</span>
       </div>
-      {draft.source ? (
+      {draft.source || isVideo ? (
         <div className="sm:col-span-2">
           <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
             {t("profile.uploadInfoDimensions", "Dimensions")}
           </span>
           <span className="text-zinc-200">
-            {draft.source.width}x{draft.source.height} {"->"} {draft.normalized?.width || 1024}x{draft.normalized?.height || 1024}
+            {isVideo
+              ? t("profile.uploadVideoKeptOriginal", "Video conservee telle quelle")
+              : `${draft.source.width}x${draft.source.height} -> ${draft.normalized?.width || 1024}x${draft.normalized?.height || 1024}`}
           </span>
         </div>
       ) : null}
@@ -419,7 +546,23 @@ export default function ProfileCosmeticUploadStudio({
   const normalizeAndStore = useCallback(
     async (draft, settingsPatch = {}) => {
       const settings = { ...(draft.settings || {}), ...settingsPatch };
-      updateDraft(draft.id, { status: "normalizing", error: "", settings });
+      updateDraft(draft.id, {
+        status: "normalizing",
+        error: "",
+        settings,
+        pngDataUrl: "",
+        videoDataUrl: "",
+        previewUrl: "",
+        contentBase64: "",
+        mediaKind: "",
+        mimeType: "",
+        metadata: null,
+        sha256: "",
+        bytes: 0,
+        source: null,
+        normalized: null,
+        analysis: null,
+      });
       try {
         const normalized = await normalizeDraftFile(draft.file, draft.assetType, settings);
         updateDraft(draft.id, {
@@ -485,7 +628,8 @@ export default function ProfileCosmeticUploadStudio({
       });
       return { draftId, status: "failed" };
     }
-    if (!draft.pngDataUrl || !draft.metadata || !draft.sha256) {
+    const isVideoDraft = draft.assetType === "avatar" && draft.mediaKind === PROFILE_AVATAR_MEDIA_VIDEO;
+    if ((isVideoDraft ? !draft.contentBase64 || !draft.mimeType : !draft.pngDataUrl) || !draft.metadata || !draft.sha256) {
       await normalizeAndStore(draft);
       return { draftId, status: "failed" };
     }
@@ -496,20 +640,29 @@ export default function ProfileCosmeticUploadStudio({
     onError?.("");
 
     try {
+      const publishPayload = {
+        action: "publish-cosmetic-asset",
+        assetType: draft.assetType,
+        collectionKey: "basic",
+        displayName: draft.displayName,
+        fileName: draft.fileName,
+        metadata: draft.metadata,
+        sha256: draft.sha256,
+      };
+      if (isVideoDraft) {
+        publishPayload.mediaKind = PROFILE_AVATAR_MEDIA_VIDEO;
+        publishPayload.mimeType = draft.mimeType;
+        publishPayload.contentBase64 = draft.contentBase64;
+        publishPayload.size = draft.bytes;
+      } else {
+        publishPayload.pngDataUrl = draft.pngDataUrl;
+      }
+
       const response = await fetch(`${apiBase}/api/portal-cosmetics-admin`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "publish-cosmetic-asset",
-          assetType: draft.assetType,
-          collectionKey: "basic",
-          displayName: draft.displayName,
-          fileName: draft.fileName,
-          metadata: draft.metadata,
-          pngDataUrl: draft.pngDataUrl,
-          sha256: draft.sha256,
-        }),
+        body: JSON.stringify(publishPayload),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -606,7 +759,7 @@ export default function ProfileCosmeticUploadStudio({
             {t("profile.uploadStudioTitle", "Ajouter des cosmetiques")}
           </h3>
           <p className="mt-1 max-w-2xl text-sm text-zinc-500">
-            {t("profile.uploadStudioHelp", "Depose des images, normalise-les localement, puis publie-les une par une vers le VPS.")}
+            {t("profile.uploadStudioHelp", "Depose tes assets, normalise les images localement, puis publie-les une par une vers le VPS.")}
           </p>
         </div>
         <Button
@@ -655,7 +808,7 @@ export default function ProfileCosmeticUploadStudio({
               <ImagePlus className="h-7 w-7" />
             </div>
             <p className="mt-4 text-sm font-semibold text-zinc-100">
-              {t("profile.uploadDropTitle", "Glisse tes images ici")}
+              {t("profile.uploadDropTitle", "Glisse tes fichiers ici")}
             </p>
             <p className="mt-2 max-w-[250px] text-sm text-zinc-500">
               {t("profile.uploadDropHelp", "Aucun upload n'est lance avant le bouton Valider et publier.")}
@@ -678,7 +831,7 @@ export default function ProfileCosmeticUploadStudio({
               ref={inputRef}
               type="file"
               multiple
-              accept={assetType === "frame" ? "image/png" : "image/png,image/jpeg,image/webp"}
+              accept={assetType === "frame" ? "image/png" : AVATAR_UPLOAD_ACCEPT}
               className="hidden"
               onChange={(event) => {
                 void addFiles(event.target.files);
@@ -695,7 +848,7 @@ export default function ProfileCosmeticUploadStudio({
               {t("profile.uploadBrowse", "Choisir des fichiers")}
             </Button>
             <p className="mt-3 text-xs text-zinc-600">
-              {t("profile.uploadLimits", "Source max 12 Mo, sortie PNG 1024x1024 max 2.75 Mo.")}
+              {t("profile.uploadLimits", "Images max 12 Mo, sortie PNG max 2.75 Mo. Videos avatar MP4/WebM max 2.5 Mo.")}
             </p>
           </div>
         </div>
@@ -791,7 +944,15 @@ export default function ProfileCosmeticUploadStudio({
                         </div>
                       </div>
                     ) : (
-                      <div className="grid gap-3 md:grid-cols-3">
+                      draft.mediaKind === PROFILE_AVATAR_MEDIA_VIDEO ? (
+                        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-xs text-zinc-400">
+                          {t(
+                            "profile.uploadAvatarVideoNoCrop",
+                            "Avatar video conserve tel quel : pas de crop navigateur, lecture muette en boucle, max 2.5 Mo.",
+                          )}
+                        </div>
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-3">
                         <RangeControl
                           label={t("profile.uploadAvatarZoom", "Zoom")}
                           value={draft.settings?.zoom ?? 1}
@@ -817,6 +978,7 @@ export default function ProfileCosmeticUploadStudio({
                           onChange={(value) => void normalizeAndStore(draft, { offsetY: value })}
                         />
                       </div>
+                      )
                     )}
 
                     {draft.assetType === "frame" && draft.metadata ? (
@@ -875,7 +1037,9 @@ export default function ProfileCosmeticUploadStudio({
                       <div className="rounded-lg border border-emerald-400/25 bg-emerald-400/10 p-3 text-xs text-emerald-100">
                         <div>{draft.publish.url}</div>
                         <div className="mt-1">
-                          SHA-256 {draft.publish.sha256} - {draft.publish.width}x{draft.publish.height}
+                          SHA-256 {draft.publish.sha256}
+                          {draft.publish.width && draft.publish.height ? ` - ${draft.publish.width}x${draft.publish.height}` : ""}
+                          {draft.publish.mimeType ? ` - ${draft.publish.mimeType}` : ""}
                         </div>
                       </div>
                     ) : null}

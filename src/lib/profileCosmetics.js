@@ -11,6 +11,18 @@ export const PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY = "monthly_loyalty";
 export const PROFILE_COSMETIC_UI_ACCESS_MANUAL = "manual";
 export const PROFILE_FRAME_ANIMATION_SHARK_MOUTH = "shark-mouth";
 export const PROFILE_FRAME_ANIMATION_INFERNAL_HORNS = "infernal-horns";
+export const PROFILE_AVATAR_MEDIA_IMAGE = "image";
+export const PROFILE_AVATAR_MEDIA_VIDEO = "video";
+export const PROFILE_AVATAR_VIDEO_MIME_MP4 = "video/mp4";
+export const PROFILE_AVATAR_VIDEO_MIME_WEBM = "video/webm";
+export const PROFILE_AVATAR_VIDEO_MIME_TYPES = new Set([
+  PROFILE_AVATAR_VIDEO_MIME_MP4,
+  PROFILE_AVATAR_VIDEO_MIME_WEBM,
+]);
+export const PROFILE_AVATAR_VIDEO_EXTENSIONS_BY_MIME = new Map([
+  [PROFILE_AVATAR_VIDEO_MIME_MP4, ".mp4"],
+  [PROFILE_AVATAR_VIDEO_MIME_WEBM, ".webm"],
+]);
 export const PROFILE_COSMETIC_ASSET_TYPES = new Set([PROFILE_COSMETIC_AVATAR, PROFILE_COSMETIC_FRAME]);
 export const PROFILE_COSMETIC_UI_ACCESS_MODES = new Set([
   PROFILE_COSMETIC_UI_ACCESS_BASIC,
@@ -72,6 +84,23 @@ export function cleanProfileCosmeticText(value, maxLength = 240) {
 export function normalizeProfileCosmeticType(value) {
   const type = cleanProfileCosmeticText(value).toLowerCase();
   return PROFILE_COSMETIC_ASSET_TYPES.has(type) ? type : "";
+}
+
+export function normalizeProfileAvatarMediaType(value) {
+  const mediaType = cleanProfileCosmeticText(value, 40).toLowerCase();
+  if (mediaType === PROFILE_AVATAR_MEDIA_VIDEO) {
+    return PROFILE_AVATAR_MEDIA_VIDEO;
+  }
+  return PROFILE_AVATAR_MEDIA_IMAGE;
+}
+
+export function normalizeProfileAvatarVideoMimeType(value) {
+  const mimeType = cleanProfileCosmeticText(value, 80).toLowerCase();
+  return PROFILE_AVATAR_VIDEO_MIME_TYPES.has(mimeType) ? mimeType : "";
+}
+
+export function getProfileAvatarVideoExtension(mimeType) {
+  return PROFILE_AVATAR_VIDEO_EXTENSIONS_BY_MIME.get(normalizeProfileAvatarVideoMimeType(mimeType)) || "";
 }
 
 function normalizeProfileCosmeticAccessType(value) {
@@ -320,6 +349,48 @@ export function summarizeProfileCosmeticPublishBatch(results = []) {
 export function normalizeProfileCosmeticMetadata(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value;
+}
+
+export function getProfileAvatarMediaInfo(asset) {
+  const metadata = normalizeProfileCosmeticMetadata(asset?.metadata);
+  const metadataMediaType = normalizeProfileAvatarMediaType(metadata.media_type ?? metadata.mediaType);
+  const metadataMimeType = normalizeProfileAvatarVideoMimeType(
+    metadata.media_mime ?? metadata.mediaMime ?? metadata.mime_type ?? metadata.mimeType ?? metadata.content_type ?? metadata.contentType,
+  );
+
+  if (metadataMediaType === PROFILE_AVATAR_MEDIA_VIDEO && metadataMimeType) {
+    return {
+      mediaType: PROFILE_AVATAR_MEDIA_VIDEO,
+      mimeType: metadataMimeType,
+      isVideo: true,
+    };
+  }
+
+  const url = cleanProfileCosmeticText(asset?.url ?? asset?.assetUrl ?? asset?.asset_url, 700)
+    .split(/[?#]/)[0]
+    .toLowerCase();
+
+  if (url.endsWith(".mp4")) {
+    return {
+      mediaType: PROFILE_AVATAR_MEDIA_VIDEO,
+      mimeType: PROFILE_AVATAR_VIDEO_MIME_MP4,
+      isVideo: true,
+    };
+  }
+
+  if (url.endsWith(".webm")) {
+    return {
+      mediaType: PROFILE_AVATAR_MEDIA_VIDEO,
+      mimeType: PROFILE_AVATAR_VIDEO_MIME_WEBM,
+      isVideo: true,
+    };
+  }
+
+  return {
+    mediaType: PROFILE_AVATAR_MEDIA_IMAGE,
+    mimeType: "",
+    isVideo: false,
+  };
 }
 
 function clampUnit(value, fallback = 0) {

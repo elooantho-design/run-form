@@ -2,10 +2,15 @@
 import crypto from "node:crypto";
 import zlib from "node:zlib";
 import {
+  PROFILE_AVATAR_MEDIA_VIDEO,
+  PROFILE_AVATAR_VIDEO_MIME_MP4,
+  PROFILE_AVATAR_VIDEO_MIME_WEBM,
   PROFILE_COSMETIC_AVATAR,
   PROFILE_COSMETIC_FRAME,
   cleanProfileCosmeticText,
+  getProfileAvatarVideoExtension,
   normalizeFrameRenderMetadataForStorage,
+  normalizeProfileAvatarVideoMimeType,
   normalizeProfileCosmeticMetadata,
   normalizeProfileCosmeticType,
 } from "../src/lib/profileCosmetics.js";
@@ -18,13 +23,18 @@ import {
 const TARGET_COSMETIC_SIZE = 1024;
 const MAX_NORMALIZED_PNG_BYTES = 2_750_000;
 const MAX_BASE64_CHARS = 3_750_000;
+const PROFILE_COSMETIC_AVATAR_VIDEO = "avatar_video";
+const PROFILE_COSMETIC_AVATAR_VIDEO_FOLDER = "avatar-videos";
 const PROFILE_COSMETIC_EFFECT = "effect";
 const PROFILE_COSMETIC_EFFECTS_FOLDER = "effects";
+const MAX_AVATAR_VIDEO_BYTES = Math.floor(2.5 * 1024 * 1024);
+const MAX_AVATAR_VIDEO_BASE64_CHARS = 3_600_000;
 const MAX_ANIMATED_WEBP_BYTES = 5 * 1024 * 1024;
 const MAX_WEBP_BASE64_CHARS = 7_000_000;
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
 const DEFAULT_PUBLIC_COSMETICS_BASE_URL = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics";
 const DEFAULT_UPLOAD_ENDPOINT_TEMPLATE = "/api/v1/profile-cosmetics/{assetType}/base64";
+const DEFAULT_AVATAR_VIDEO_UPLOAD_ENDPOINT_TEMPLATE = "/api/v1/profile-cosmetics/avatar-videos/base64";
 const DEFAULT_EFFECT_UPLOAD_ENDPOINT_TEMPLATE = "/api/v1/profile-cosmetics/effects/base64";
 const SAFE_COLLECTION_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]{1,63}$/;
 
@@ -105,6 +115,134 @@ function decodeWebpPayload(body = {}) {
   }
 
   return buffer;
+}
+
+function getSourceFileExtension(body = {}) {
+  const sourceName = cleanProfileCosmeticText(body.fileName || body.file_name || "", 180);
+  const fileName = sourceName.split(/[\\/]/).filter(Boolean).pop() || sourceName;
+  const match = fileName.toLowerCase().match(/\.[a-z0-9]+$/);
+  return match ? match[0] : "";
+}
+
+function assertSafeAvatarVideoSourceName(body = {}) {
+  const sourceName = String(body.fileName || body.file_name || "").trim();
+  if (!sourceName) return;
+  const hasControlCharacter = Array.from(sourceName).some((character) => character.charCodeAt(0) < 32);
+  if (hasControlCharacter || /[\\/]/.test(sourceName)) {
+    throw createPublishError("validation", "Nom source video avatar invalide.");
+  }
+  if (!/\.(mp4|webm)$/i.test(sourceName)) {
+    throw createPublishError("validation", "Extension video avatar interdite.");
+  }
+}
+
+function getAvatarVideoPayloadMimeType(body = {}, dataUrlMimeType = "") {
+  const rawMimeType = normalizeProfileAvatarVideoMimeType(
+    body.mimeType || body.mime_type || body.contentType || body.content_type || body.mediaMime || body.media_mime,
+  );
+  const mimeType = rawMimeType || normalizeProfileAvatarVideoMimeType(dataUrlMimeType);
+  const extension = getSourceFileExtension(body);
+  const expectedExtension = getProfileAvatarVideoExtension(mimeType);
+
+  if (!mimeType || ![PROFILE_AVATAR_VIDEO_MIME_MP4, PROFILE_AVATAR_VIDEO_MIME_WEBM].includes(mimeType)) {
+    throw createPublishError("validation", "Type MIME video avatar invalide.");
+  }
+  if (dataUrlMimeType && normalizeProfileAvatarVideoMimeType(dataUrlMimeType) !== mimeType) {
+    throw createPublishError("validation", "Type MIME video avatar incoherent.");
+  }
+  if (extension && extension !== expectedExtension) {
+    throw createPublishError("validation", "Extension video avatar incoherente.");
+  }
+
+  return mimeType;
+}
+
+function payloadLooksLikeAvatarVideo(body = {}) {
+  const metadata = normalizeProfileCosmeticMetadata(body.metadata);
+  const mediaType = cleanProfileCosmeticText(
+    body.mediaKind || body.media_kind || body.mediaType || body.media_type || metadata.media_type || metadata.mediaType,
+    40,
+  ).toLowerCase();
+  const mimeType = normalizeProfileAvatarVideoMimeType(
+    body.mimeType ||
+      body.mime_type ||
+      body.contentType ||
+      body.content_type ||
+      body.mediaMime ||
+      body.media_mime ||
+      metadata.media_mime ||
+      metadata.mediaMime,
+  );
+  const dataUrl = cleanProfileCosmeticText(body.videoDataUrl || body.video_data_url || "", 120);
+  return mediaType === PROFILE_AVATAR_MEDIA_VIDEO || Boolean(mimeType) || dataUrl.startsWith("data:video/");
+}
+
+export function inspectMp4Buffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) {
+    throw createPublishError("validation", "Le fichier n'est pas un MP4 valide.");
+  }
+  const boxSize = buffer.readUInt32BE(0);
+  const boxType = buffer.toString("ascii", 4, 8);
+  if (boxType !== "ftyp" || boxSize < 8 || boxSize > buffer.length) {
+    throw createPublishError("validation", "Signature MP4 invalide.");
+  }
+  return {
+    bytes: buffer.length,
+    mimeType: PROFILE_AVATAR_VIDEO_MIME_MP4,
+    extension: ".mp4",
+    majorBrand: buffer.toString("ascii", 8, 12),
+  };
+}
+
+export function inspectWebmBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 8) {
+    throw createPublishError("validation", "Le fichier n'est pas un WebM valide.");
+  }
+  const hasEbmlSignature = buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3;
+  const hasWebmDocType = buffer.subarray(0, Math.min(buffer.length, 4096)).includes(Buffer.from("webm", "ascii"));
+  if (!hasEbmlSignature || !hasWebmDocType) {
+    throw createPublishError("validation", "Signature WebM invalide.");
+  }
+  return {
+    bytes: buffer.length,
+    mimeType: PROFILE_AVATAR_VIDEO_MIME_WEBM,
+    extension: ".webm",
+  };
+}
+
+function decodeAvatarVideoPayload(body = {}) {
+  assertSafeAvatarVideoSourceName(body);
+  const rawDataUrl = String(body.videoDataUrl || body.video_data_url || "").trim();
+  const rawBase64 = String(body.videoBase64 || body.video_base64 || body.contentBase64 || body.content_base64 || "").trim();
+  let base64 = rawBase64;
+  let dataUrlMimeType = "";
+
+  if (rawDataUrl) {
+    const match = rawDataUrl.match(/^data:(video\/(?:mp4|webm));base64,([A-Za-z0-9+/=]+)$/);
+    if (!match) {
+      throw createPublishError("validation", "La video avatar doit etre un MP4 ou WebM en base64.");
+    }
+    dataUrlMimeType = match[1];
+    base64 = match[2];
+  }
+
+  const mimeType = getAvatarVideoPayloadMimeType(body, dataUrlMimeType);
+  if (!base64 || base64.length > MAX_AVATAR_VIDEO_BASE64_CHARS || !/^[A-Za-z0-9+/=]+$/.test(base64)) {
+    throw createPublishError("validation", "Payload video avatar absent ou trop volumineux.");
+  }
+
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length || buffer.length > MAX_AVATAR_VIDEO_BYTES) {
+    throw createPublishError("validation", "Video avatar absente ou trop volumineuse.");
+  }
+
+  const expectedSize = Number(body.size || body.bytes || body.fileSize || body.file_size || 0);
+  if (expectedSize && expectedSize !== buffer.length) {
+    throw createPublishError("validation", "Taille video avatar incoherente.");
+  }
+
+  const info = mimeType === PROFILE_AVATAR_VIDEO_MIME_MP4 ? inspectMp4Buffer(buffer) : inspectWebmBuffer(buffer);
+  return { buffer, mimeType, extension: info.extension, info };
 }
 
 function readPngChunks(buffer) {
@@ -302,8 +440,10 @@ function getServerConfig() {
   const serverUrl = String(process.env.GVG_SERVER_URL || process.env.GVG_VPS_URL || DEFAULT_GVG_SERVER_URL).replace(/\/$/, "");
   const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
   const endpointTemplate = process.env.PROFILE_COSMETICS_UPLOAD_ENDPOINT_TEMPLATE || DEFAULT_UPLOAD_ENDPOINT_TEMPLATE;
+  const avatarVideoEndpointTemplate =
+    process.env.PROFILE_COSMETICS_AVATAR_VIDEO_UPLOAD_ENDPOINT_TEMPLATE || DEFAULT_AVATAR_VIDEO_UPLOAD_ENDPOINT_TEMPLATE;
   const publicBaseUrl = String(process.env.PROFILE_COSMETICS_PUBLIC_BASE_URL || DEFAULT_PUBLIC_COSMETICS_BASE_URL).replace(/\/$/, "");
-  return { serverUrl, token, endpointTemplate, publicBaseUrl };
+  return { serverUrl, token, endpointTemplate, avatarVideoEndpointTemplate, publicBaseUrl };
 }
 
 function parseJsonMaybe(text) {
@@ -321,14 +461,15 @@ function getResponseValue(object, names, fallback = null) {
   return fallback;
 }
 
-async function uploadCosmeticToVps({ assetType, fileName, buffer, sha256 }) {
-  const { serverUrl, token, endpointTemplate } = getServerConfig();
+async function uploadCosmeticToVps({ assetType, fileName, buffer, sha256, mimeType = "image/png", expectedWidth = TARGET_COSMETIC_SIZE, expectedHeight = TARGET_COSMETIC_SIZE }) {
+  const { serverUrl, token, endpointTemplate, avatarVideoEndpointTemplate } = getServerConfig();
   if (!token) {
     throw createPublishError("upload VPS", "Token VPS manquant cote serveur.", 500);
   }
 
+  const template = assetType === PROFILE_COSMETIC_AVATAR_VIDEO ? avatarVideoEndpointTemplate : endpointTemplate;
   const endpoint = new URL(
-    endpointTemplate.replace("{assetType}", encodeURIComponent(assetType)).replace(/^\/+/, ""),
+    template.replace("{assetType}", encodeURIComponent(assetType)).replace(/^\/+/, ""),
     `${serverUrl}/`,
   ).toString();
   const response = await fetch(endpoint, {
@@ -341,6 +482,8 @@ async function uploadCosmeticToVps({ assetType, fileName, buffer, sha256 }) {
       asset_type: assetType,
       fileName,
       file_name: fileName,
+      content_type: mimeType,
+      mime_type: mimeType,
       content_base64: buffer.toString("base64"),
     }),
   });
@@ -361,18 +504,22 @@ async function uploadCosmeticToVps({ assetType, fileName, buffer, sha256 }) {
   const responseHeight = Number(getResponseValue(data, ["height"], 0));
   const responseSize = Number(getResponseValue(data, ["size"], 0));
   const responseOk = Boolean(getResponseValue(data, ["success", "ok"], false));
+  const acceptedResponseTypes =
+    assetType === PROFILE_COSMETIC_AVATAR_VIDEO ? [PROFILE_COSMETIC_AVATAR_VIDEO, PROFILE_COSMETIC_AVATAR_VIDEO_FOLDER] : [assetType];
+  const dimensionsOk =
+    assetType === PROFILE_COSMETIC_AVATAR_VIDEO ||
+    (responseWidth === expectedWidth && responseHeight === expectedHeight);
 
   if (
     !responseOk ||
-    responseType !== assetType ||
+    !acceptedResponseTypes.includes(responseType) ||
     responseFileName !== fileName ||
     normalizedResponsePublicUrl !== expectedPublicUrl ||
     responseSha !== sha256 ||
-    responseWidth !== TARGET_COSMETIC_SIZE ||
-    responseHeight !== TARGET_COSMETIC_SIZE ||
+    !dimensionsOk ||
     responseSize !== buffer.length
   ) {
-    throw createPublishError("verification VPS", "La reponse VPS ne correspond pas au PNG envoye.", 502);
+    throw createPublishError("verification VPS", "La reponse VPS ne correspond pas au fichier envoye.", 502);
   }
 
   return {
@@ -470,7 +617,15 @@ async function uploadEffectToVps({ fileName, buffer, sha256 }) {
   throw error;
 }
 
-async function verifyPublicCosmeticUrl({ publicUrl, buffer, sha256, assetType }) {
+async function verifyPublicCosmeticUrl({
+  publicUrl,
+  buffer,
+  sha256,
+  assetType,
+  mimeType = "image/png",
+  maxBytes = MAX_NORMALIZED_PNG_BYTES,
+  requirePngInfo = true,
+}) {
   const response = await fetch(publicUrl, {
     method: "GET",
     cache: "no-store",
@@ -480,22 +635,28 @@ async function verifyPublicCosmeticUrl({ publicUrl, buffer, sha256, assetType })
   }
 
   const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
-  if (!contentType.includes("image/png")) {
-    throw createPublishError("verification VPS", "Le VPS ne sert pas un PNG.", 502);
+  if (!contentType.includes(mimeType)) {
+    throw createPublishError("verification VPS", "Le VPS ne sert pas le type de fichier attendu.", 502);
   }
 
   const remoteBuffer = Buffer.from(await response.arrayBuffer());
-  if (remoteBuffer.length > MAX_NORMALIZED_PNG_BYTES) {
-    throw createPublishError("verification VPS", "Le PNG servi par le VPS est trop volumineux.", 502);
+  if (remoteBuffer.length > maxBytes) {
+    throw createPublishError("verification VPS", "Le fichier servi par le VPS est trop volumineux.", 502);
   }
 
   const remoteSha = crypto.createHash("sha256").update(remoteBuffer).digest("hex");
-  const remoteInfo = inspectPngBuffer(remoteBuffer, { requireAlpha: assetType === PROFILE_COSMETIC_FRAME });
-  if (remoteSha !== sha256 || remoteInfo.width !== TARGET_COSMETIC_SIZE || remoteInfo.height !== TARGET_COSMETIC_SIZE) {
-    throw createPublishError("verification VPS", "Le fichier public VPS ne correspond pas au PNG envoye.", 502);
+  const remoteInfo = requirePngInfo
+    ? inspectPngBuffer(remoteBuffer, { requireAlpha: assetType === PROFILE_COSMETIC_FRAME })
+    : assetType === PROFILE_COSMETIC_AVATAR_VIDEO && mimeType === PROFILE_AVATAR_VIDEO_MIME_MP4
+      ? inspectMp4Buffer(remoteBuffer)
+      : assetType === PROFILE_COSMETIC_AVATAR_VIDEO && mimeType === PROFILE_AVATAR_VIDEO_MIME_WEBM
+        ? inspectWebmBuffer(remoteBuffer)
+        : { bytes: remoteBuffer.length };
+  if (remoteSha !== sha256 || (requirePngInfo && (remoteInfo.width !== TARGET_COSMETIC_SIZE || remoteInfo.height !== TARGET_COSMETIC_SIZE))) {
+    throw createPublishError("verification VPS", "Le fichier public VPS ne correspond pas au fichier envoye.", 502);
   }
   if (!remoteBuffer.equals(buffer)) {
-    throw createPublishError("verification VPS", "Le contenu public VPS differe du PNG envoye.", 502);
+    throw createPublishError("verification VPS", "Le contenu public VPS differe du fichier envoye.", 502);
   }
   return remoteInfo;
 }
@@ -510,6 +671,7 @@ function buildPublicCosmeticUrl(assetType, fileName) {
 
 function getPublicCosmeticFolder(assetType) {
   if (assetType === PROFILE_COSMETIC_AVATAR) return "avatars";
+  if (assetType === PROFILE_COSMETIC_AVATAR_VIDEO) return PROFILE_COSMETIC_AVATAR_VIDEO_FOLDER;
   if (assetType === PROFILE_COSMETIC_FRAME) return "frames";
   if (assetType === PROFILE_COSMETIC_EFFECT) return PROFILE_COSMETIC_EFFECTS_FOLDER;
   throw createPublishError("verification VPS", "Type de dossier cosmetique invalide.", 500);
@@ -518,7 +680,12 @@ function getPublicCosmeticFolder(assetType) {
 function assertAllowedPublicCosmeticUrl(publicUrl, { assetType, fileName }) {
   const { publicBaseUrl } = getServerConfig();
   const expectedFolder = getPublicCosmeticFolder(assetType);
-  const expectedExtension = assetType === PROFILE_COSMETIC_EFFECT ? ".webp" : ".png";
+  const expectedExtensions =
+    assetType === PROFILE_COSMETIC_EFFECT
+      ? [".webp"]
+      : assetType === PROFILE_COSMETIC_AVATAR_VIDEO
+        ? [".mp4", ".webm"]
+        : [".png"];
   let expectedUrl;
   let actualUrl;
   try {
@@ -535,7 +702,7 @@ function assertAllowedPublicCosmeticUrl(publicUrl, { assetType, fileName }) {
     actualUrl.pathname !== expectedUrl.pathname ||
     actualUrl.search ||
     actualUrl.hash ||
-    !actualUrl.pathname.toLowerCase().endsWith(expectedExtension)
+    !expectedExtensions.some((extension) => actualUrl.pathname.toLowerCase().endsWith(extension))
   ) {
     throw createPublishError("verification VPS", "URL publique VPS hors domaine ou dossier autorise.", 502);
   }
@@ -644,7 +811,58 @@ function validateAvatarMetadataForStorage(value) {
   return normalized;
 }
 
-function buildStoredMetadata({ assetType, metadata, sha256, info, originalFileName }) {
+function validateAvatarVideoMetadataForStorage(value, { mimeType, extension }) {
+  const metadata = value === undefined || value === null ? {} : ensurePlainObject(value, "metadata");
+  assertAllowedKeys(
+    metadata,
+    new Set([
+      "media_type",
+      "mediaType",
+      "media_mime",
+      "mediaMime",
+      "media_extension",
+      "mediaExtension",
+      "avatar_fit",
+      "avatar_position",
+    ]),
+    "metadata",
+  );
+
+  const fit = metadata.avatar_fit !== undefined ? cleanProfileCosmeticText(metadata.avatar_fit, 16).toLowerCase() : "cover";
+  if (!["cover", "contain"].includes(fit)) {
+    throw createPublishError("validation", "metadata.avatar_fit doit etre cover ou contain.");
+  }
+
+  let avatarPosition = { x: 0.5, y: 0.5 };
+  if (metadata.avatar_position !== undefined) {
+    const position = ensurePlainObject(metadata.avatar_position, "metadata.avatar_position");
+    assertAllowedKeys(position, new Set(["x", "y"]), "metadata.avatar_position");
+    avatarPosition = {
+      x: readBoundedNumber(position.x, "metadata.avatar_position.x", 0, 1),
+      y: readBoundedNumber(position.y, "metadata.avatar_position.y", 0, 1),
+    };
+  }
+
+  const metadataMimeType = normalizeProfileAvatarVideoMimeType(metadata.media_mime ?? metadata.mediaMime ?? mimeType);
+  if (metadataMimeType !== mimeType) {
+    throw createPublishError("validation", "metadata.media_mime incoherent.");
+  }
+
+  const metadataExtension = cleanProfileCosmeticText(metadata.media_extension ?? metadata.mediaExtension ?? extension, 12).toLowerCase();
+  if (metadataExtension !== extension) {
+    throw createPublishError("validation", "metadata.media_extension incoherent.");
+  }
+
+  return {
+    media_type: PROFILE_AVATAR_MEDIA_VIDEO,
+    media_mime: mimeType,
+    media_extension: extension,
+    avatar_fit: fit,
+    avatar_position: avatarPosition,
+  };
+}
+
+function buildStoredMetadata({ assetType, metadata, sha256, info, originalFileName, mediaInfo = null }) {
   if (assetType === PROFILE_COSMETIC_FRAME) {
     const renderMetadata = normalizeFrameRenderMetadataForStorage(metadata);
     return {
@@ -653,6 +871,17 @@ function buildStoredMetadata({ assetType, metadata, sha256, info, originalFileNa
       source_file_name: cleanProfileCosmeticText(originalFileName, 180) || null,
       normalized_width: info.width,
       normalized_height: info.height,
+      published_via: "portal_studio",
+    };
+  }
+
+  if (assetType === PROFILE_COSMETIC_AVATAR && mediaInfo?.mediaType === PROFILE_AVATAR_MEDIA_VIDEO) {
+    const avatarVideoMetadata = validateAvatarVideoMetadataForStorage(metadata, mediaInfo);
+    return {
+      ...avatarVideoMetadata,
+      source_sha256: sha256,
+      source_file_name: cleanProfileCosmeticText(originalFileName, 180) || null,
+      original_bytes: info.bytes,
       published_via: "portal_studio",
     };
   }
@@ -749,6 +978,26 @@ export async function publishProfileCosmeticAsset(supabase, member, body = {}) {
       "fileName",
       "file_name",
       "metadata",
+      "mediaKind",
+      "media_kind",
+      "mediaType",
+      "media_type",
+      "mediaMime",
+      "media_mime",
+      "mimeType",
+      "mime_type",
+      "contentType",
+      "content_type",
+      "contentBase64",
+      "content_base64",
+      "videoBase64",
+      "video_base64",
+      "videoDataUrl",
+      "video_data_url",
+      "size",
+      "bytes",
+      "fileSize",
+      "file_size",
       "pngBase64",
       "png_base64",
       "pngDataUrl",
@@ -764,26 +1013,53 @@ export async function publishProfileCosmeticAsset(supabase, member, body = {}) {
     throw createPublishError("validation", "Type de cosmetique invalide.");
   }
 
-  const buffer = decodePngPayload(body);
+  const isAvatarVideoPayload = payloadLooksLikeAvatarVideo(body);
+  if (isAvatarVideoPayload && assetType !== PROFILE_COSMETIC_AVATAR) {
+    throw createPublishError("validation", "Les cadres video ne sont pas supportes.");
+  }
+
+  const collectionKey = validateCollectionKey(body.collectionKey || body.collection_key || "basic");
+  const collection = await loadActiveCollection(supabase, collectionKey);
+  let buffer;
+  let info;
+  let mediaInfo = null;
+  let storageAssetType = assetType;
+  let mimeType = "image/png";
+  let fileName;
+  let assetKey;
+  let publicUrl;
+
+  if (isAvatarVideoPayload) {
+    const decoded = decodeAvatarVideoPayload(body);
+    buffer = decoded.buffer;
+    info = decoded.info;
+    mediaInfo = {
+      mediaType: PROFILE_AVATAR_MEDIA_VIDEO,
+      mimeType: decoded.mimeType,
+      extension: decoded.extension,
+    };
+    storageAssetType = PROFILE_COSMETIC_AVATAR_VIDEO;
+    mimeType = decoded.mimeType;
+  } else {
+    buffer = decodePngPayload(body);
+    info = inspectPngBuffer(buffer, {
+      requireAlpha: assetType === PROFILE_COSMETIC_FRAME,
+    });
+    if (info.width !== TARGET_COSMETIC_SIZE || info.height !== TARGET_COSMETIC_SIZE) {
+      throw createPublishError("validation", "Le PNG normalise doit faire exactement 1024x1024.");
+    }
+  }
+
   const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
   const expectedSha = cleanProfileCosmeticText(body.sha256 || body.clientSha256 || body.client_sha256, 128).toLowerCase();
   if (expectedSha && expectedSha !== sha256) {
     throw createPublishError("validation", "SHA-256 client incoherent.");
   }
 
-  const info = inspectPngBuffer(buffer, {
-    requireAlpha: assetType === PROFILE_COSMETIC_FRAME,
-  });
-  if (info.width !== TARGET_COSMETIC_SIZE || info.height !== TARGET_COSMETIC_SIZE) {
-    throw createPublishError("validation", "Le PNG normalise doit faire exactement 1024x1024.");
-  }
-
-  const collectionKey = validateCollectionKey(body.collectionKey || body.collection_key || "basic");
-  const collection = await loadActiveCollection(supabase, collectionKey);
   const hashPrefix = sha256.slice(0, 16);
-  const assetKey = `${collectionKey}_${assetType}_${hashPrefix}`;
-  const fileName = `${assetKey}.png`;
-  const publicUrl = buildPublicCosmeticUrl(assetType, fileName);
+  assetKey = `${collectionKey}_${assetType}${isAvatarVideoPayload ? "_video" : ""}_${hashPrefix}`;
+  fileName = `${assetKey}${mediaInfo?.extension || ".png"}`;
+  publicUrl = buildPublicCosmeticUrl(storageAssetType, fileName);
   const displayFallback = assetType === PROFILE_COSMETIC_AVATAR ? "Avatar" : "Cadre";
   const displayName = sanitizeDisplayName(body.displayName || body.display_name, `${displayFallback} ${hashPrefix.slice(0, 6)}`);
   const metadata = buildStoredMetadata({
@@ -792,6 +1068,7 @@ export async function publishProfileCosmeticAsset(supabase, member, body = {}) {
     sha256,
     info,
     originalFileName: body.fileName || body.file_name,
+    mediaInfo,
   });
 
   const existingByKey = await loadAssetByAssetKey(supabase, assetKey);
@@ -811,13 +1088,23 @@ export async function publishProfileCosmeticAsset(supabase, member, body = {}) {
         url: existingByKey.asset_url,
         width: info.width,
         height: info.height,
+        size: info.bytes,
+        mimeType,
       },
     };
   }
 
   await ensureNoUrlCollision(supabase, publicUrl, sha256);
-  await uploadCosmeticToVps({ assetType, fileName, buffer, sha256 });
-  await verifyPublicCosmeticUrl({ publicUrl, buffer, sha256, assetType });
+  await uploadCosmeticToVps({ assetType: storageAssetType, fileName, buffer, sha256, mimeType, expectedWidth: info.width, expectedHeight: info.height });
+  await verifyPublicCosmeticUrl({
+    publicUrl,
+    buffer,
+    sha256,
+    assetType: storageAssetType,
+    mimeType,
+    maxBytes: isAvatarVideoPayload ? MAX_AVATAR_VIDEO_BYTES : MAX_NORMALIZED_PNG_BYTES,
+    requirePngInfo: !isAvatarVideoPayload,
+  });
 
   const inserted = await insertCosmeticAsset(supabase, {
     collection_id: collection.id,
@@ -847,6 +1134,8 @@ export async function publishProfileCosmeticAsset(supabase, member, body = {}) {
       url: publicUrl,
       width: info.width,
       height: info.height,
+      size: info.bytes,
+      mimeType,
     },
   };
 }

@@ -34,7 +34,7 @@ function cleanText(value, maxLength = 120) {
 }
 
 function createPayloadTooLargeError() {
-  const error = new Error("Payload cosmetique trop volumineux. Publie un PNG normalise plus leger.");
+  const error = new Error("Payload cosmetique trop volumineux. Publie un fichier plus leger.");
   error.status = 413;
   return error;
 }
