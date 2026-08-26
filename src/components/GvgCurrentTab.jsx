@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Ban, Pencil, Trash2 } from "lucide-react";
+import { Ban, Pencil, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
@@ -2094,11 +2094,37 @@ function renderDesktopSlot(slot, team) {
 ) : null}
 
 {reproCandidatesModalOpen && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-    <div className="w-[700px] max-h-[80vh] overflow-y-auto rounded-2xl bg-zinc-900 p-6">
-      <div className="mb-4 text-lg font-bold text-zinc-50">
-        {t("gvgCurrent.whoCanReproDefense", "Qui peut repro cette defense")}
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+    role="presentation"
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        setReproCandidatesModalOpen(false);
+      }
+    }}
+  >
+    <div
+      className="flex max-h-[80vh] w-[700px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="gvg-repro-candidates-title"
+    >
+      <div className="flex items-center justify-between gap-4 border-b border-zinc-800 bg-zinc-900 px-6 py-5">
+        <div id="gvg-repro-candidates-title" className="text-lg font-bold text-zinc-50">
+          {t("gvgCurrent.whoCanReproDefense", "Qui peut repro cette defense")}
+        </div>
+        <button
+          type="button"
+          onClick={() => setReproCandidatesModalOpen(false)}
+          className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-800/80 px-3 py-2 text-sm font-semibold text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-700"
+          title={t("common.close", "Fermer")}
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+          <span>{t("common.close", "Fermer")}</span>
+        </button>
       </div>
+
+      <div className="overflow-y-auto px-6 py-5">
 
       <div className="mb-4 flex gap-4 text-sm text-zinc-400">
         {reproHeroes.map((h) => (
@@ -2159,14 +2185,7 @@ function renderDesktopSlot(slot, team) {
       </div>
     </div>
   ))}
-
-      <button
-        type="button"
-        onClick={() => setReproCandidatesModalOpen(false)}
-        className="mt-4 rounded-xl bg-zinc-700 px-4 py-2 hover:bg-zinc-600"
-      >
-        {t("common.close", "Fermer")}
-      </button>
+      </div>
     </div>
   </div>
 )}
