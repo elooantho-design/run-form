@@ -38,6 +38,10 @@ import {
   MAX_PROFILE_FRAME_ANIMATION_LAYERS,
   normalizeFrameRenderMetadata,
   PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES,
+  PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX,
+  PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN,
+  PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX,
+  PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN,
   shouldRefreshFrameMetadataDraft,
   sortProfileCosmeticAssetsNatural,
 } from "@/lib/profileCosmetics";
@@ -108,6 +112,12 @@ function fromPercent(value) {
   return clampUnit(Number(value) / 100);
 }
 
+function fromBoundedPercent(value, fallback = 0, min = 0, max = 100) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, numeric)) / 100;
+}
+
 const ANIMATION_LAYER_URL_PLACEHOLDER = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/effet.webp";
 const MAX_ANIMATION_EFFECT_BYTES = 5 * 1024 * 1024;
 const ANIMATION_LAYER_BLEND_MODES = Array.from(PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES);
@@ -138,17 +148,17 @@ function buildAnimationLayerDraft(side = "left", existingLayers = []) {
     label: isRight ? "Feu droite" : "Feu gauche",
     type: "webp",
     url: "",
-    x: isRight ? 0.77 : 0,
-    y: 0.15,
-    width: 0.23,
-    height: 0.23,
+    x: isRight ? 0.8 : -0.15,
+    y: 0.1,
+    width: 0.35,
+    height: 0.35,
     rotation: 0,
     flipX: isRight,
     opacity: 1,
     zIndex: 20,
     delayMs: isRight ? 450 : 0,
     pointerEvents: false,
-    blendMode: "screen",
+    blendMode: "normal",
   };
 }
 
@@ -339,6 +349,23 @@ function GeometryInput({ label, value, min = 0, max = 100, step = 1, onChange })
         step={step}
         value={toPercent(value)}
         onChange={(event) => onChange(fromPercent(event.target.value))}
+        className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-400"
+      />
+    </label>
+  );
+}
+
+function AnimationGeometryInput({ label, value, min, max, step = 0.5, onChange }) {
+  return (
+    <label className="space-y-1">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={toPercent(value)}
+        onChange={(event) => onChange(fromBoundedPercent(event.target.value, value, min, max))}
         className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-400"
       />
     </label>
@@ -660,28 +687,34 @@ function FrameAnimationLayersPanel({ metadata, onMetadataChange, t, apiBase, onM
               </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-4">
-                <GeometryInput
+                <AnimationGeometryInput
                   label="X"
+                  min={PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN * 100}
+                  max={PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX * 100}
                   step={0.5}
                   value={layer.x}
                   onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { x: value }))}
                 />
-                <GeometryInput
+                <AnimationGeometryInput
                   label="Y"
+                  min={PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN * 100}
+                  max={PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX * 100}
                   step={0.5}
                   value={layer.y}
                   onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { y: value }))}
                 />
-                <GeometryInput
+                <AnimationGeometryInput
                   label="Largeur"
-                  min={1}
+                  min={PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN * 100}
+                  max={PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX * 100}
                   step={0.5}
                   value={layer.width}
                   onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { width: value }))}
                 />
-                <GeometryInput
+                <AnimationGeometryInput
                   label="Hauteur"
-                  min={1}
+                  min={PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN * 100}
+                  max={PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX * 100}
                   step={0.5}
                   value={layer.height}
                   onChange={(value) => onMetadataChange((current) => updateAnimationLayer(current, index, { height: value }))}

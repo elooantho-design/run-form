@@ -29,6 +29,10 @@ export const DEFAULT_FRAME_AVATAR_FIT = "cover";
 export const DEFAULT_FRAME_AVATAR_POSITION = { x: 0.5, y: 0.5 };
 export const DEFAULT_FRAME_BOX = { x: 0, y: 0, width: 1, height: 1 };
 export const MAX_PROFILE_FRAME_ANIMATION_LAYERS = 8;
+export const PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN = -1;
+export const PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX = 2;
+export const PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN = 0.01;
+export const PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX = 2;
 export const PROFILE_FRAME_ALLOWED_RENDER_METADATA_KEYS = new Set([
   "render_version",
   "content_box",
@@ -374,10 +378,30 @@ function normalizeFrameAnimationLayer(layer, index = 0) {
   const type = cleanProfileCosmeticText(source.type || "webp", 16).toLowerCase();
   if (!PROFILE_FRAME_ALLOWED_ANIMATION_LAYER_TYPES.has(type)) return null;
 
-  const width = Math.min(1, Math.max(0.01, Number.isFinite(Number(source.width)) ? Number(source.width) : 0.22));
-  const height = Math.min(1, Math.max(0.01, Number.isFinite(Number(source.height)) ? Number(source.height) : 0.22));
-  const x = Math.min(1 - width, Math.max(0, Number.isFinite(Number(source.x)) ? Number(source.x) : 0));
-  const y = Math.min(1 - height, Math.max(0, Number.isFinite(Number(source.y)) ? Number(source.y) : 0));
+  const width = clampSignedNumber(
+    source.width,
+    0.22,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX,
+  );
+  const height = clampSignedNumber(
+    source.height,
+    0.22,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX,
+  );
+  const x = clampSignedNumber(
+    source.x,
+    0,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX,
+  );
+  const y = clampSignedNumber(
+    source.y,
+    0,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX,
+  );
   const blendMode = cleanProfileCosmeticText(source.blendMode || source.blend_mode || "normal", 32);
 
   return {
@@ -604,16 +628,34 @@ function validateFrameAnimationLayerForStorage(value, index) {
     throw createMetadataValidationError(`${path}.type doit etre webp.`);
   }
 
-  const width = validateOptionalNumber(layer.width, `${path}.width`, 0.22, 0.01, 1);
-  const height = validateOptionalNumber(layer.height, `${path}.height`, 0.22, 0.01, 1);
-  const x = validateOptionalNumber(layer.x, `${path}.x`, 0, 0, 1);
-  const y = validateOptionalNumber(layer.y, `${path}.y`, 0, 0, 1);
-  if (x + width > 1 + Number.EPSILON) {
-    throw createMetadataValidationError(`${path}.x + ${path}.width doit rester inferieur ou egal a 1.`);
-  }
-  if (y + height > 1 + Number.EPSILON) {
-    throw createMetadataValidationError(`${path}.y + ${path}.height doit rester inferieur ou egal a 1.`);
-  }
+  const width = validateOptionalNumber(
+    layer.width,
+    `${path}.width`,
+    0.22,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX,
+  );
+  const height = validateOptionalNumber(
+    layer.height,
+    `${path}.height`,
+    0.22,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX,
+  );
+  const x = validateOptionalNumber(
+    layer.x,
+    `${path}.x`,
+    0,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX,
+  );
+  const y = validateOptionalNumber(
+    layer.y,
+    `${path}.y`,
+    0,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN,
+    PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX,
+  );
 
   const pointerEvents = validateOptionalBoolean(layer.pointerEvents, `${path}.pointerEvents`);
   if (pointerEvents) {

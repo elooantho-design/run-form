@@ -36,6 +36,10 @@ import {
   normalizeFrameRenderMetadata,
   shouldRefreshFrameMetadataDraft,
   MAX_PROFILE_FRAME_ANIMATION_LAYERS,
+  PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX,
+  PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN,
+  PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX,
+  PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN,
   PROFILE_COSMETIC_UI_ACCESS_BASIC,
   PROFILE_COSMETIC_UI_ACCESS_MANUAL,
   PROFILE_COSMETIC_UI_ACCESS_MONTHLY_LOYALTY,
@@ -503,6 +507,59 @@ assert.deepEqual(
   validateFrameRenderMetadataForStorage(animatedRenderMetadata).animation_layers,
   [animatedLayerLeft, animatedLayerRight],
   "storage validation preserves two WebP animation layers",
+);
+const overflowAnimatedLayerLeft = {
+  ...animatedLayerLeft,
+  x: -0.2,
+  y: -0.1,
+  width: 0.35,
+  height: 0.35,
+  blendMode: "normal",
+};
+const overflowAnimatedLayerRight = {
+  ...animatedLayerRight,
+  x: 1.2,
+  y: 1.1,
+  width: 1.5,
+  height: 1.5,
+  blendMode: "normal",
+};
+assert.deepEqual(
+  normalizeFrameAnimationLayers([overflowAnimatedLayerLeft, overflowAnimatedLayerRight]),
+  [overflowAnimatedLayerLeft, overflowAnimatedLayerRight],
+  "runtime animation layer normalization preserves intentional overflow outside the frame box",
+);
+assert.deepEqual(
+  validateFrameRenderMetadataForStorage({
+    ...validRenderMetadata,
+    animation_layers: [overflowAnimatedLayerLeft, overflowAnimatedLayerRight],
+  }).animation_layers,
+  [overflowAnimatedLayerLeft, overflowAnimatedLayerRight],
+  "storage validation accepts signed animation layer positions and sizes above 100%",
+);
+const clampedOverflowLayer = normalizeFrameAnimationLayers([
+  {
+    ...animatedLayerLeft,
+    x: -50,
+    y: 50,
+    width: 50,
+    height: 50,
+  },
+])[0];
+assert.equal(clampedOverflowLayer.x, PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN, "runtime clamps very negative animation X safely");
+assert.equal(clampedOverflowLayer.y, PROFILE_FRAME_ANIMATION_LAYER_POSITION_MAX, "runtime clamps very large animation Y safely");
+assert.equal(clampedOverflowLayer.width, PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX, "runtime clamps very large animation width safely");
+assert.equal(clampedOverflowLayer.height, PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX, "runtime clamps very large animation height safely");
+assert.equal(PROFILE_FRAME_ANIMATION_LAYER_SIZE_MIN, 0.01, "animation layers keep a small positive minimum size");
+assert.deepEqual(
+  normalizeFrameRenderMetadata({
+    ...validRenderMetadata,
+    content_box: { x: -0.2, y: -0.1, width: 1.5, height: 1.5 },
+    frame_box: { x: -0.2, y: -0.1, width: 1.5, height: 1.5 },
+    animation_layers: [overflowAnimatedLayerLeft],
+  }).animation_layers,
+  [overflowAnimatedLayerLeft],
+  "animation layer overflow uses different constraints than content_box and frame_box",
 );
 assert.equal(
   shouldRefreshFrameMetadataDraft({
@@ -1583,6 +1640,20 @@ assert.match(studioSource, /const framePreviewAvatar = previewAvatar \|\| catalo
 assert.match(studioSource, /<ProfileAvatar avatar=\{framePreviewAvatar\} frame=\{frame\}/, "frame catalog previews render the actual frame instead of the initial fallback");
 assert.match(studioSource, /FrameAnimationLayersPanel/, "studio exposes the animated layer editor");
 assert.match(studioSource, /Ajouter gauche\/droite/, "studio can add mirrored left and right animation layers");
+assert.match(studioSource, /function AnimationGeometryInput/, "studio uses dedicated signed geometry inputs for animation layers");
+assert.match(studioSource, /fromBoundedPercent/, "animation layer inputs do not reuse the 0..100 percent clamp");
+assert.match(
+  studioSource,
+  /PROFILE_FRAME_ANIMATION_LAYER_POSITION_MIN \* 100/,
+  "animation layer X/Y inputs allow negative positions",
+);
+assert.match(
+  studioSource,
+  /PROFILE_FRAME_ANIMATION_LAYER_SIZE_MAX \* 100/,
+  "animation layer width/height inputs allow sizes above 100%",
+);
+assert.match(studioSource, /x: isRight \? 0\.8 : -0\.15/, "mirrored animation layer draft can overflow on both sides");
+assert.match(studioSource, /width: 0\.35/, "mirrored animation layer draft starts with the visual control size");
 assert.match(studioSource, /publish-cosmetic-effect/, "studio can upload an animated WebP effect through the admin API");
 assert.match(studioSource, /Importer un WebP anime/, "studio renders the animated WebP import button");
 assert.match(studioSource, /Dupliquer l'URL/, "studio can copy an uploaded effect URL to the mirrored layer");
@@ -1623,6 +1694,7 @@ assert.doesNotMatch(rendererSource, /animationDelay/, "animated layer visibility
 
 const indexCssSource = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
 assert.match(indexCssSource, /profile-avatar-animation-layer/, "global styles contain animation layer rules");
+assert.match(indexCssSource, /profile-avatar-frame-layer,[\s\S]*profile-avatar-animation-layer[\s\S]*overflow: visible/, "frame animation layers are not clipped by their coordinate wrapper");
 assert.match(indexCssSource, /prefers-reduced-motion/, "animation layer styles remain compatible with reduced motion");
 assert.match(indexCssSource, /profile-avatar-root--preview-animations/, "studio preview can show animated layers while regular users keep reduced-motion protection");
 assert.doesNotMatch(indexCssSource, /profileAnimationLayerReveal/, "animated WebP layer visibility no longer depends on a 1ms CSS reveal animation");

@@ -1390,6 +1390,11 @@ body {
   object-fit: contain;
 }
 
+.profile-avatar-frame-layer,
+.profile-avatar-animation-layer {
+  overflow: visible;
+}
+
 .profile-avatar-animation-layer {
   transform-origin: center;
   transition: opacity 120ms linear;
