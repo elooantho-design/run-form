@@ -2041,7 +2041,7 @@ export default function ProfileCosmeticsTab({
                     setErrorMessage("");
                   }}
                 >
-                  <ProfileAvatar avatar={avatar} frame={frameWithDraftMetadata} name={displayName} size={88} />
+                  <ProfileAvatar avatar={avatar} frame={null} name={displayName} size={88} />
                 </CosmeticChoice>
               ))}
             </div>

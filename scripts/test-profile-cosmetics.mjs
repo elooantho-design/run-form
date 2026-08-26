@@ -1637,6 +1637,7 @@ assert.match(studioSource, /cache: "no-store"/, "admin cosmetics reloads bypass 
 assert.match(studioSource, /AdminAccessBadge/, "admin collection badges use classification rules instead of personal unlock state");
 assert.match(studioSource, /save-frame-render-metadata/, "studio saves only on explicit metadata action");
 assert.match(studioSource, /const framePreviewAvatar = previewAvatar \|\| catalogPreviewAvatar;/, "frame catalog previews keep a demo avatar when no avatar is selected");
+assert.match(studioSource, /<ProfileAvatar avatar=\{avatar\} frame=\{null\} name=\{displayName\} size=\{88\}/, "avatar catalog previews render nude avatars without the selected frame");
 assert.match(studioSource, /<ProfileAvatar avatar=\{framePreviewAvatar\} frame=\{frame\}/, "frame catalog previews render the actual frame instead of the initial fallback");
 assert.match(studioSource, /FrameAnimationLayersPanel/, "studio exposes the animated layer editor");
 assert.match(studioSource, /Ajouter gauche\/droite/, "studio can add mirrored left and right animation layers");
