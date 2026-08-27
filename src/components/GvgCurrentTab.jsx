@@ -839,7 +839,7 @@ async function markDefenseAsOpened(defenseId) {
         defense.id === defenseId
           ? {
           ...defense,
-          record_status: defense.record_status || "pas_record",
+          record_status: defense.record_status || "open",
             }
           : defense
       )

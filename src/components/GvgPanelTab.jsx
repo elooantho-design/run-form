@@ -619,6 +619,15 @@ function getDefenseRecordState(defense) {
     };
   }
 
+  if (defense.record_status === "open") {
+    return {
+      label: t("gvgPanel.recordStatePanelOpen", "A verifier"),
+      title: t("gvgPanel.recordStatePanelOpenTitle", "Cette defense est ouverte dans le panel, sans decision record."),
+      badgeClass: "border-zinc-600 bg-zinc-800/60 text-zinc-300",
+      cardClass: "border-zinc-800 bg-zinc-950/60",
+    };
+  }
+
   return {
     label: t("gvgPanel.recordStateOpen", "A ouvrir"),
     title: t("gvgPanel.recordStateOpenTitle", "Clique la ligne pour ouvrir cette defense dans le panel."),
@@ -690,7 +699,7 @@ function getMirrorGroup(defense) {
   if (defense.record_status === "record" || defense.record_status === "push") return;
 
   const previousStatus = defense.record_status;
-  const optimisticStatus = previousStatus === "a_record" ? "pas_record" : "a_record";
+  const optimisticStatus = previousStatus === "a_record" ? "open" : "a_record";
 
   setRecordTogglingIds((current) => {
     const next = new Set(current);
@@ -1487,7 +1496,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                               ? "border-green-500 bg-green-500/15"
                               : defense.record_status === "pas_record"
                               ? "border-red-500 bg-red-500/15"
-                              : "border-zinc-600 bg-zinc-800/40 cursor-not-allowed opacity-60"
+                              : "border-zinc-600 bg-zinc-800/40 hover:scale-110"
                           }`}
                           disabled={
                             defense.record_status === "record" ||
@@ -1527,20 +1536,23 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                           type="button"
                           onClick={() => markNotRecord(defense)}
                           className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition ${
-                            defense.record_status === "pas_record"
+                            defense.record_status === "a_record"
+                              ? "cursor-default border-green-500 bg-green-500/15 text-green-100"
+                              : defense.record_status === "pas_record"
                               ? "border-red-400 bg-red-500/25 text-red-100"
                               : defense.record_status === "record" || defense.record_status === "push"
                               ? "cursor-not-allowed border-zinc-600 bg-zinc-800/40 opacity-50"
                               : "border-red-500 bg-red-500/15 text-red-100 hover:scale-110"
                           }`}
                           disabled={
+                            defense.record_status === "a_record" ||
                             defense.record_status === "record" ||
                             defense.record_status === "push" ||
                             recordTogglingIds.has(defense.id)
                           }
                           title={t("gvgPanel.markNotRecord", "Marquer comme verifiee : ne pas record")}
                         >
-                          ❌
+                          {defense.record_status === "a_record" ? "✅" : "❌"}
                         </button>
 
                         <button

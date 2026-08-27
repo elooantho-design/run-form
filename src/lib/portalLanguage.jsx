@@ -981,6 +981,8 @@ const PORTAL_TRANSLATIONS = {
   "gvgPanel.recordStateToRecordTitle": "This defense is in the next record plan.",
   "gvgPanel.recordStateNotRecord": "Do not record",
   "gvgPanel.recordStateNotRecordTitle": "This defense was checked and intentionally skipped for recording.",
+  "gvgPanel.recordStatePanelOpen": "To review",
+  "gvgPanel.recordStatePanelOpenTitle": "This defense is open in the panel, with no record decision yet.",
   "gvgPanel.recordStateOpen": "To open",
   "gvgPanel.recordStateOpenTitle": "Click the line to open this defense in the panel.",
   "gvgAdmin.title": "GVG admin",

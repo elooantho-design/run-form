@@ -1446,7 +1446,7 @@ async function openDefenseInPanel(supabase, defenseId) {
   const { data, error } = await supabase
     .from("gvg_defense")
     .update({
-      record_status: "pas_record",
+      record_status: "open",
       updated_at: new Date().toISOString(),
     })
     .eq("id", defenseId)

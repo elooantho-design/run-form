@@ -1321,7 +1321,7 @@ async function handlePanelOpen(req, res) {
   const { data, error } = await supabase
     .from("gvg_defense")
     .update({
-      record_status: "pas_record",
+      record_status: "open",
       updated_at: new Date().toISOString(),
     })
     .eq("id", id)
@@ -1374,7 +1374,7 @@ async function handleRecordToggle(req, res) {
   }
 
   const nextStatus =
-    defense.record_status === "a_record" ? "pas_record" : "a_record";
+    defense.record_status === "a_record" ? "open" : "a_record";
 
   const { data, error } = await supabase
     .from("gvg_defense")
