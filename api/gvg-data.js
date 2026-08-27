@@ -1397,6 +1397,64 @@ async function handleRecordToggle(req, res) {
   });
 }
 
+async function handleRecordSkip(req, res) {
+  const { id } = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ error: "id manquant" });
+  }
+
+  const access = await loadGvgDefenseForAction(req, res, id, "id, guild, record_status", {
+    adminOnly: true,
+  });
+  if (!access) return;
+  const defense = access.defense;
+
+  if (defense.record_status === "record" || defense.record_status === "push") {
+    return res.status(400).json({ error: "statut verrouillé" });
+  }
+
+  const { data, error } = await supabase
+    .from("gvg_defense")
+    .update({
+      record_status: "pas_record",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .select("id, record_status")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[gvg-data:record_skip] update error:", error);
+    return res.status(500).json({ error: "update failed" });
+  }
+
+  if (!data) {
+    return res.status(404).json({ error: "défense introuvable" });
+  }
+
+  let discordReproCleanup = null;
+  let discordReproWarning = null;
+
+  try {
+    discordReproCleanup = await cleanupDiscordReproRequestForDefenseId(supabase, id, {
+      reason: "portal_record_skip",
+      source: "gvg-data:record_skip",
+      notifyReproducer: true,
+    });
+  } catch (cleanupError) {
+    discordReproWarning = cleanupError?.message || "nettoyage Discord repro impossible";
+    console.error("[gvg-data:record_skip] discord repro cleanup error:", cleanupError);
+  }
+
+  return res.status(200).json({
+    success: true,
+    item: data,
+    discord_repro_cleanup: discordReproCleanup,
+    discord_repro_warning: discordReproWarning,
+  });
+}
+
 async function handlePanelUpdateFields(req, res) {
   const { id, record_comment, attack_code } = req.body || {};
 
@@ -2277,6 +2335,10 @@ if (req.method === "POST") {
 
   if (action === "record_toggle") {
     return await handleRecordToggle(req, res);
+  }
+
+  if (action === "record_skip") {
+    return await handleRecordSkip(req, res);
   }
 
   if (action === "record_session_create") {

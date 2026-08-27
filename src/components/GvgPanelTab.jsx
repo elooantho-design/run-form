@@ -612,10 +612,10 @@ function getDefenseRecordState(defense) {
 
   if (defense.record_status === "pas_record") {
     return {
-      label: t("gvgPanel.recordStateNotRecord", "Pas record"),
-      title: t("gvgPanel.recordStateNotRecordTitle", "Cette defense est ouverte dans le panel mais pas demandee en record."),
-      badgeClass: "border-zinc-600 bg-zinc-800/60 text-zinc-300",
-      cardClass: "border-zinc-800 bg-zinc-950/60",
+      label: t("gvgPanel.recordStateNotRecord", "Ne pas record"),
+      title: t("gvgPanel.recordStateNotRecordTitle", "Cette defense a ete verifiee et ne doit pas etre record."),
+      badgeClass: "border-red-400/80 bg-red-500/20 text-red-100",
+      cardClass: "border-red-500/70 bg-red-500/10 shadow-[0_0_0_1px_rgba(248,113,113,0.12)]",
     };
   }
 
@@ -751,6 +751,86 @@ function getMirrorGroup(defense) {
   } catch (e) {
     console.error(e);
     setMessage("Erreur toggle");
+    setItems((current) =>
+      current.map((item) =>
+        item.id === defense.id ? { ...item, record_status: previousStatus } : item
+      )
+    );
+  } finally {
+    setRecordTogglingIds((current) => {
+      const next = new Set(current);
+      next.delete(defense.id);
+      return next;
+    });
+  }
+}
+
+async function markNotRecord(defense) {
+  if (!defense?.id || recordTogglingIds.has(defense.id)) return;
+  if (defense.record_status === "record" || defense.record_status === "push") return;
+  if (defense.record_status === "pas_record") return;
+
+  const previousStatus = defense.record_status;
+
+  setRecordTogglingIds((current) => {
+    const next = new Set(current);
+    next.add(defense.id);
+    return next;
+  });
+  setItems((current) =>
+    current.map((item) =>
+      item.id === defense.id ? { ...item, record_status: "pas_record" } : item
+    )
+  );
+
+  try {
+    const response = await fetch(`${apiBase}/api/gvg-data`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        id: defense.id,
+        action: "record_skip",
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setMessage("Erreur réponse skip record");
+      setItems((current) =>
+        current.map((item) =>
+          item.id === defense.id ? { ...item, record_status: previousStatus } : item
+        )
+      );
+      return;
+    }
+
+    if (!response.ok) {
+      setMessage(data?.error || "Erreur skip record");
+      setItems((current) =>
+        current.map((item) =>
+          item.id === defense.id ? { ...item, record_status: previousStatus } : item
+        )
+      );
+      return;
+    }
+
+    if (data?.item?.record_status !== undefined) {
+      setItems((current) =>
+        current.map((item) =>
+          item.id === defense.id ? { ...item, record_status: data.item.record_status } : item
+        )
+      );
+    }
+  } catch (e) {
+    console.error(e);
+    setMessage("Erreur skip record");
     setItems((current) =>
       current.map((item) =>
         item.id === defense.id ? { ...item, record_status: previousStatus } : item
@@ -1445,14 +1525,22 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 
                         <button
                           type="button"
-                          className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition cursor-default ${
-                            defense.record_status === "record" || defense.record_status === "push"
-                              ? "border-green-500 bg-green-500/15"
-                              : "border-red-500 bg-red-500/15"
+                          onClick={() => markNotRecord(defense)}
+                          className={`flex h-7 min-w-8 items-center justify-center rounded-full border px-2 text-[10px] font-semibold transition ${
+                            defense.record_status === "pas_record"
+                              ? "border-red-400 bg-red-500/25 text-red-100"
+                              : defense.record_status === "record" || defense.record_status === "push"
+                              ? "cursor-not-allowed border-zinc-600 bg-zinc-800/40 opacity-50"
+                              : "border-red-500 bg-red-500/15 text-red-100 hover:scale-110"
                           }`}
-                          title={t("gvgPanel.recordStatus", "Statut record")}
+                          disabled={
+                            defense.record_status === "record" ||
+                            defense.record_status === "push" ||
+                            recordTogglingIds.has(defense.id)
+                          }
+                          title={t("gvgPanel.markNotRecord", "Marquer comme verifiee : ne pas record")}
                         >
-                          ✅
+                          ❌
                         </button>
 
                         <button
