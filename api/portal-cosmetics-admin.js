@@ -9,6 +9,7 @@ import {
 } from "./_portal-auth.js";
 import {
   PROFILE_COSMETIC_ASSET_SELECT,
+  deleteProfileCosmeticAsset,
   isProfileCosmeticAssetUrlConstraintViolation,
   isMissingProfileCosmeticsSchema,
   loadProfileCosmeticAssetRows,
@@ -459,6 +460,11 @@ export default async function handler(req, res) {
     }
     if (action === "save-frame-render-metadata" || action === "save-frame-metadata") {
       const state = await saveProfileCosmeticFrameMetadata(supabase, leader.member, body);
+      sendPortalJson(res, 200, state, req);
+      return;
+    }
+    if (action === "delete-cosmetic-asset" || action === "deactivate-cosmetic-asset") {
+      const state = await deleteProfileCosmeticAsset(supabase, leader.member, body);
       sendPortalJson(res, 200, state, req);
       return;
     }

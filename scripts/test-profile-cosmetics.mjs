@@ -5,6 +5,7 @@ import zlib from "node:zlib";
 import {
   isProfileCosmeticAssetUrlConstraintViolation,
   isMissingProfileCosmeticsSchema,
+  deleteProfileCosmeticAsset,
   loadCosmeticsForMemberIds,
   saveProfileCosmeticFrameMetadata,
   saveProfileCosmeticsSelection,
@@ -870,6 +871,32 @@ function createFakeSupabase(options = {}) {
           error: result.error,
         });
       },
+      applyUpdate() {
+        const result = resolveQuery(state);
+        if (!state.updatePayload) return result;
+
+        if (state.table === "portal_member_cosmetics") {
+          const updatedRows = result.data.map((row) => {
+            const nextRow = {
+              ...row,
+              ...state.updatePayload,
+            };
+            selections.set(String(nextRow.member_id), nextRow);
+            return nextRow;
+          });
+          return { data: updatedRows, error: null };
+        }
+
+        if (state.table === "portal_cosmetic_assets") {
+          const updatedRows = result.data.map((row) => {
+            Object.assign(row, state.updatePayload);
+            return row;
+          });
+          return { data: updatedRows, error: null };
+        }
+
+        return result;
+      },
       upsert(payload) {
         calls.push({ table, payload });
         selections.set(String(payload.member_id), {
@@ -886,13 +913,13 @@ function createFakeSupabase(options = {}) {
         return builder;
       },
       then(resolve, reject) {
-        return Promise.resolve(resolveQuery(state)).then(resolve, reject);
+        return Promise.resolve(builder.applyUpdate()).then(resolve, reject);
       },
     };
     return builder;
   }
 
-  return { calls, from };
+  return { assetRows, calls, from, selections };
 }
 
 function createPngChunk(type, data = Buffer.alloc(0)) {
@@ -1200,6 +1227,80 @@ await assert.rejects(
     }),
   /nombre fini/,
   "admin metadata save refuses NaN before updating Supabase",
+);
+
+const deleteAvatarSupabase = createFakeSupabase({
+  selections: [
+    [
+      "member-a",
+      {
+        member_id: "member-a",
+        selected_avatar_id: "avatar-1",
+        selected_frame_id: "frame-1",
+        updated_at: "2026-08-23T00:00:00.000Z",
+      },
+    ],
+    [
+      "member-b",
+      {
+        member_id: "member-b",
+        selected_avatar_id: "avatar-2",
+        selected_frame_id: "frame-1",
+        updated_at: "2026-08-23T00:00:00.000Z",
+      },
+    ],
+  ],
+});
+const deleteAvatarState = await deleteProfileCosmeticAsset(
+  deleteAvatarSupabase,
+  { id: "member-a", watcher_name: "Darius" },
+  { assetId: "avatar-1" },
+);
+assert.equal(
+  deleteAvatarSupabase.assetRows.find((asset) => asset.id === "avatar-1")?.is_active,
+  false,
+  "admin cosmetic delete deactivates the selected avatar asset",
+);
+assert.equal(deleteAvatarSupabase.selections.get("member-a").selected_avatar_id, null, "deleted avatar is cleared from selections");
+assert.equal(deleteAvatarSupabase.selections.get("member-a").selected_frame_id, null, "deleted avatar also clears the selected frame");
+assert.equal(deleteAvatarSupabase.selections.get("member-b").selected_frame_id, "frame-1", "unrelated selections keep their frame");
+assert.equal(deleteAvatarState.deletedAssetId, "avatar-1", "delete response includes the removed asset id");
+assert.equal(deleteAvatarState.deletedAssetType, "avatar", "delete response includes the removed asset type");
+assert.equal(deleteAvatarState.clearedSelectionCount, 1, "delete response reports cleaned selections");
+assert.equal(
+  deleteAvatarState.catalog.avatars.some((asset) => asset.id === "avatar-1"),
+  false,
+  "inactive avatar disappears from the reloaded catalog",
+);
+
+const deleteFrameSupabase = createFakeSupabase();
+const deleteFrameState = await deleteProfileCosmeticAsset(
+  deleteFrameSupabase,
+  { id: "member-a", watcher_name: "Darius" },
+  { asset_id: "frame-2" },
+);
+assert.equal(
+  deleteFrameSupabase.assetRows.find((asset) => asset.id === "frame-2")?.is_active,
+  false,
+  "admin cosmetic delete deactivates the selected frame asset",
+);
+assert.equal(deleteFrameSupabase.selections.get("member-a").selected_avatar_id, "avatar-2", "deleting a frame keeps the avatar selection");
+assert.equal(deleteFrameSupabase.selections.get("member-a").selected_frame_id, null, "deleted frame is cleared from selections");
+assert.equal(deleteFrameState.deletedAssetId, "frame-2", "frame delete response includes the removed asset id");
+assert.equal(
+  deleteFrameState.catalog.frames.some((asset) => asset.id === "frame-2"),
+  false,
+  "inactive frame disappears from the reloaded catalog",
+);
+
+await assert.rejects(
+  () =>
+    deleteProfileCosmeticAsset(fakeSupabase, { id: "member-a", watcher_name: "Darius" }, {
+      assetId: "frame-1",
+      displayName: "Cadre pirate",
+    }),
+  /pas autorise/,
+  "admin cosmetic delete refuses attempts to alter asset fields",
 );
 
 const validFramePng = createTestPng({ frame: true });

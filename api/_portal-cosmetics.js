@@ -291,6 +291,93 @@ export async function saveProfileCosmeticFrameMetadata(supabase, member, body = 
   };
 }
 
+async function clearProfileCosmeticSelectionsForAsset(supabase, asset) {
+  const assetId = cleanProfileCosmeticText(asset?.id, 120);
+  const assetType = normalizeProfileCosmeticType(asset?.asset_type || asset?.assetType);
+  if (!assetId || !assetType) return 0;
+
+  const updatedAt = new Date().toISOString();
+  const query =
+    assetType === PROFILE_COSMETIC_AVATAR
+      ? supabase
+          .from("portal_member_cosmetics")
+          .update({
+            selected_avatar_id: null,
+            selected_frame_id: null,
+            updated_at: updatedAt,
+          })
+          .eq("selected_avatar_id", assetId)
+      : supabase
+          .from("portal_member_cosmetics")
+          .update({
+            selected_frame_id: null,
+            updated_at: updatedAt,
+          })
+          .eq("selected_frame_id", assetId);
+
+  const { data, error } = await query.select("member_id");
+  if (error) throw error;
+  return (data || []).length;
+}
+
+export async function deleteProfileCosmeticAsset(supabase, member, body = {}) {
+  const allowedBodyKeys = new Set(["action", "assetId", "asset_id"]);
+  for (const key of Object.keys(body || {})) {
+    if (!allowedBodyKeys.has(key)) {
+      const error = new Error(`Le champ ${key} n'est pas autorise pour cette action.`);
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+
+  const assetId = cleanProfileCosmeticText(body.assetId || body.asset_id, 120);
+  if (!assetId) {
+    const error = new Error("Cosmetique manquant.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { data: asset, error: assetError } = await supabase
+    .from("portal_cosmetic_assets")
+    .select(PROFILE_COSMETIC_ASSET_SELECT)
+    .eq("id", assetId)
+    .maybeSingle();
+
+  if (assetError) throw assetError;
+  if (!asset) {
+    const error = new Error("Cosmetique introuvable.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const assetType = normalizeProfileCosmeticType(asset.asset_type || asset.assetType);
+  if (![PROFILE_COSMETIC_AVATAR, PROFILE_COSMETIC_FRAME].includes(assetType)) {
+    const error = new Error("Type de cosmetique invalide.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const { data: updatedAsset, error } = await supabase
+    .from("portal_cosmetic_assets")
+    .update({ is_active: false })
+    .eq("id", assetId)
+    .select(PROFILE_COSMETIC_ASSET_SELECT)
+    .single();
+
+  if (error) throw error;
+
+  const clearedSelectionCount = await clearProfileCosmeticSelectionsForAsset(supabase, updatedAsset || asset);
+  const state = await loadProfileCosmeticsState(supabase, member);
+
+  return {
+    ...state,
+    deletedAssetId: assetId,
+    deletedAssetType: assetType,
+    deletedAsset: serializeProfileCosmeticAsset(updatedAsset || { ...asset, is_active: false }),
+    clearedSelectionCount,
+  };
+}
+
 export async function loadCosmeticsForMemberIds(supabase, memberIds = []) {
   const ids = [...new Set((memberIds || []).map((value) => cleanProfileCosmeticText(value)).filter(Boolean))];
   if (!ids.length) return new Map();

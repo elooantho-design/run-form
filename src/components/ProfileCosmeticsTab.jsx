@@ -1034,28 +1034,45 @@ function AdminAccessBadge({ rule, adminState, t, language }) {
   );
 }
 
-function AdminCollectionsPanel({ catalog, adminState, t, language }) {
+function AdminCollectionsPanel({ catalog, adminState, t, language, onDeleteAsset, deletingAssetId }) {
   const sortedAvatars = useMemo(() => sortProfileCosmeticAssetsNatural(catalog.avatars || [], "fr"), [catalog.avatars]);
   const sortedFrames = useMemo(() => sortProfileCosmeticAssetsNatural(catalog.frames || [], "fr"), [catalog.frames]);
   const renderAsset = (asset) => {
     const rule = getAccessRuleForAsset(adminState, asset.id);
     const tier = rule.tierId ? (adminState?.tiers || []).find((item) => String(item.id) === String(rule.tierId)) : null;
+    const isDeleting = deletingAssetId === String(asset.id);
     return (
       <div key={`admin-asset-${asset.id}`} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <div className="flex items-center gap-3">
+        <div className="flex items-start gap-3">
           <ProfileAvatar
             avatar={asset.assetType === "avatar" ? asset : (catalog.avatars || [])[0] || null}
             frame={asset.assetType === "frame" ? asset : null}
             name={asset.displayName}
             size={58}
           />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-zinc-100">{asset.displayName}</div>
-            <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">{asset.assetType}</div>
-            <AdminAccessBadge rule={rule} adminState={adminState} t={t} language={language} />
-            {tier?.displayName ? <div className="mt-2 truncate text-xs text-zinc-400">{tier.displayName}</div> : null}
-            {rule.publicUnlockTitle ? <div className="mt-1 truncate text-xs font-semibold text-zinc-200">{rule.publicUnlockTitle}</div> : null}
-            {rule.publicUnlockDescription ? <div className="mt-1 line-clamp-2 text-xs text-zinc-500">{rule.publicUnlockDescription}</div> : null}
+          <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-zinc-100">{asset.displayName}</div>
+              <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">{asset.assetType}</div>
+              <AdminAccessBadge rule={rule} adminState={adminState} t={t} language={language} />
+              {tier?.displayName ? <div className="mt-2 truncate text-xs text-zinc-400">{tier.displayName}</div> : null}
+              {rule.publicUnlockTitle ? <div className="mt-1 truncate text-xs font-semibold text-zinc-200">{rule.publicUnlockTitle}</div> : null}
+              {rule.publicUnlockDescription ? <div className="mt-1 line-clamp-2 text-xs text-zinc-500">{rule.publicUnlockDescription}</div> : null}
+            </div>
+            {onDeleteAsset ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 rounded-lg border border-red-400/20 bg-red-500/5 text-red-200 hover:bg-red-500/15 hover:text-red-100 disabled:opacity-50"
+                onClick={() => onDeleteAsset(asset)}
+                disabled={isDeleting}
+                title={t("profile.deleteCosmetic", "Supprimer ce cosmetique")}
+                aria-label={t("profile.deleteCosmetic", "Supprimer ce cosmetique")}
+              >
+                {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              </Button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1662,6 +1679,7 @@ export default function ProfileCosmeticsTab({
   const [adminTab, setAdminTab] = useState("collections");
   const [adminState, setAdminState] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
+  const [deletingAssetId, setDeletingAssetId] = useState("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -1839,6 +1857,63 @@ export default function ProfileCosmeticsTab({
       setErrorMessage(error?.message || t("profile.frameMetadataSaveError", "Reglage du cadre impossible."));
     } finally {
       setSavingFrameMetadata(false);
+    }
+  }
+
+  async function deleteCosmeticAsset(asset) {
+    const assetId = normalizeCosmeticId(asset?.id);
+    if (!assetId || deletingAssetId) return;
+    const assetName = asset?.displayName || t("profile.cosmetic", "Cosmetique");
+    const confirmed = window.confirm(
+      t(
+        "profile.deleteCosmeticConfirm",
+        "Supprimer {name} du catalogue ? Les joueurs qui l'utilisent perdront cette selection.",
+      ).replace("{name}", assetName),
+    );
+    if (!confirmed) return;
+
+    setDeletingAssetId(assetId);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const response = await fetch(`${apiBase}/api/portal-cosmetics-admin`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete-cosmetic-asset",
+          assetId,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || t("profile.deleteCosmeticError", "Suppression du cosmetique impossible."));
+      }
+
+      if (asset.assetType === PROFILE_COSMETIC_AVATAR && draftAvatarId === assetId) {
+        setDraftAvatarId("");
+        setDraftFrameId("");
+      }
+      if (asset.assetType === PROFILE_COSMETIC_FRAME && draftFrameId === assetId) {
+        setDraftFrameId("");
+      }
+      if (studioAvatarId === assetId) setStudioAvatarId("");
+      if (inspectedAssetId === assetId) setInspectedAssetId("");
+      if (frameMetadataDraftFrameIdRef.current === assetId) {
+        frameMetadataDraftFrameIdRef.current = "";
+        frameMetadataDirtyRef.current = false;
+        setFrameMetadataDraft(null);
+      }
+
+      onCosmeticsStateChange?.(payload);
+      await refreshAdminState();
+      await onCosmeticsChanged?.();
+      setMessage(t("profile.cosmeticDeleted", "{name} retire du catalogue.").replace("{name}", assetName));
+    } catch (error) {
+      setErrorMessage(error?.message || t("profile.deleteCosmeticError", "Suppression du cosmetique impossible."));
+    } finally {
+      setDeletingAssetId("");
     }
   }
 
@@ -2148,7 +2223,14 @@ export default function ProfileCosmeticsTab({
 
               <div className="mt-5">
                 {adminTab === "collections" ? (
-                  <AdminCollectionsPanel catalog={catalog} adminState={adminState} t={t} language={language} />
+                  <AdminCollectionsPanel
+                    catalog={catalog}
+                    adminState={adminState}
+                    t={t}
+                    language={language}
+                    onDeleteAsset={deleteCosmeticAsset}
+                    deletingAssetId={deletingAssetId}
+                  />
                 ) : null}
 
                 {adminTab === "classification" ? (
