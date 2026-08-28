@@ -26,6 +26,10 @@ export function getPortalSessionSignature(session) {
   });
 }
 
+export function arePortalSessionsEquivalent(currentSession, nextSession) {
+  return JSON.stringify(currentSession ?? null) === JSON.stringify(nextSession ?? null);
+}
+
 export function reconcilePortalSession(currentSession, serverSession) {
   if (!serverSession) {
     return {

@@ -126,6 +126,7 @@ import {
   PORTAL_COSMETICS_SYNC_STORAGE_KEY,
   PORTAL_SESSION_SYNC_CHANNEL,
   PORTAL_SESSION_SYNC_STORAGE_KEY,
+  arePortalSessionsEquivalent,
   createPortalSyncMessage,
   getPortalSessionMemberId,
   getPortalSessionSignature,
@@ -7755,11 +7756,15 @@ function SaasPortalContent() {
         return null;
       }
 
-      const reconciliation = reconcilePortalSession(sessionRef.current, payload.session);
-      replaceStoredPortalSession(reconciliation.session);
-      sessionRef.current = reconciliation.session;
+      const previousSession = sessionRef.current;
+      const reconciliation = reconcilePortalSession(previousSession, payload.session);
+      const shouldCommitSession = !arePortalSessionsEquivalent(previousSession, reconciliation.session);
+      if (shouldCommitSession) {
+        replaceStoredPortalSession(reconciliation.session);
+        sessionRef.current = reconciliation.session;
+        setSession(reconciliation.session);
+      }
       sessionVerifiedRef.current = true;
-      setSession(reconciliation.session);
       setSessionCheckStatus("authenticated");
       setSessionCheckError("");
 
@@ -7923,7 +7928,7 @@ function SaasPortalContent() {
 
   return (
     <PortalShell
-      key={getPortalSessionSignature(session)}
+      key={getPortalSessionMemberId(session)}
       session={session}
       sessionNotice={sessionNotice}
       onClearSessionNotice={() => setSessionNotice("")}

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
+  arePortalSessionsEquivalent,
   createPortalSyncMessage,
   getPortalSessionMemberId,
   getPortalSessionSignature,
@@ -26,6 +27,16 @@ const serverMember = {
 };
 
 assert.equal(getPortalSessionMemberId(localLeader), "leader-id", "member id is read from the Portal session");
+assert.equal(
+  arePortalSessionsEquivalent(serverMember, { ...serverMember }),
+  true,
+  "equivalent server sessions do not need a React state refresh",
+);
+assert.equal(
+  arePortalSessionsEquivalent(serverMember, { ...serverMember, role: "admin" }),
+  false,
+  "real server session changes are still committed",
+);
 assert.notEqual(
   getPortalSessionSignature(localLeader),
   getPortalSessionSignature(serverMember),
@@ -61,13 +72,14 @@ assert.equal(shouldHandlePortalSyncMessage({ ...syncMessage, session: localLeade
 const portalSource = await readFile(new URL("../src/SaasPortal.jsx", import.meta.url), "utf8");
 assert.match(portalSource, /\/api\/portal-auth\?action=session/, "Portal validates the session through the server endpoint");
 assert.match(portalSource, /cache: "no-store"/, "Portal session and cosmetics reloads bypass browser caches");
-assert.match(portalSource, /reconcilePortalSession\(sessionRef\.current, payload\.session\)/, "Portal reconciles against the server session");
+assert.match(portalSource, /reconcilePortalSession\(previousSession, payload\.session\)/, "Portal reconciles against the server session");
+assert.match(portalSource, /arePortalSessionsEquivalent\(previousSession, reconciliation\.session\)/, "unchanged revalidations do not reset Portal state");
 assert.doesNotMatch(portalSource, /currentMemberId !== nextMemberId[^]*return current/, "Portal no longer keeps stale local sessions on member mismatch");
 assert.match(portalSource, /BroadcastChannel\(PORTAL_SESSION_SYNC_CHANNEL\)/, "Portal uses BroadcastChannel for auth synchronization");
 assert.match(portalSource, /PORTAL_SESSION_SYNC_STORAGE_KEY/, "Portal keeps a storage-event fallback for auth synchronization");
 assert.match(portalSource, /verifyServerSession\(\{ reason: "focus" \}\)/, "focus revalidates the server session");
 assert.match(portalSource, /verifyServerSession\(\{ reason: "visible" \}\)/, "visibilitychange revalidates the server session");
-assert.match(portalSource, /key=\{getPortalSessionSignature\(session\)\}/, "PortalShell remounts when the real server session changes");
+assert.match(portalSource, /key=\{getPortalSessionMemberId\(session\)\}/, "PortalShell remounts only when the authenticated member changes");
 assert.match(portalSource, /setRolePreviewMode\(PORTAL_REAL_VIEW_MODE\)/, "role preview is reset when it is no longer available");
 assert.match(portalSource, /buildPortalRolePreviewSession\(session, rolePreviewMode\)/, "role preview remains UI-only and starts from the real session");
 assert.match(portalSource, /PORTAL_COSMETICS_SYNC_CHANNEL/, "cosmetic changes have a dedicated revalidation signal");
