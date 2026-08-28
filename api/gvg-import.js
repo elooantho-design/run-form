@@ -31,6 +31,42 @@ function isValidGuild(value) {
   return normalizeGuildCode(value) !== null;
 }
 
+function getImportSideLabel(isAlly) {
+  return isAlly ? "allie" : "ennemi";
+}
+
+async function ensureGvgImportSideIsEmpty(guild, isAlly) {
+  let query = supabase
+    .from("gvg_defense")
+    .select("id", { count: "exact", head: true })
+    .eq("guild", guild);
+
+  if (isAlly) {
+    query = query.eq("is_ally", true);
+  } else {
+    query = query.or("is_ally.is.false,is_ally.is.null");
+  }
+
+  const { count, error } = await query;
+
+  if (error) {
+    console.error("[api/gvg-import] duplicate guard read error:", error);
+    const wrapped = new Error("verification import gvg impossible");
+    wrapped.statusCode = 500;
+    throw wrapped;
+  }
+
+  if (Number(count || 0) > 0) {
+    const sideLabel = getImportSideLabel(isAlly);
+    const conflict = new Error(
+      `Import ${sideLabel} bloque : des defenses ${sideLabel}s existent deja pour cette GVG. Va dans GVG > Imports VPS et reset la GVG avant d'importer un nouveau job ${sideLabel}.`
+    );
+    conflict.statusCode = 409;
+    conflict.existingCount = Number(count || 0);
+    throw conflict;
+  }
+}
+
 function parseDefenseMeta(defName) {
   const value = String(defName || "").toLowerCase();
 
@@ -264,6 +300,8 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
   const runScope = getRunScopeForGvgGuild(normalizedGuild);
   const rows = [];
 
+  await ensureGvgImportSideIsEmpty(normalizedGuild, isAlly);
+
   for (const item of items) {
     const meta = parseDefenseMeta(item?.def);
 
@@ -362,6 +400,8 @@ export default async function handler(req, res) {
     const runScope = getRunScopeForGvgGuild(normalizedGuild);
 
     const rows = [];
+
+    await ensureGvgImportSideIsEmpty(normalizedGuild, isAlly);
 
     for (const item of items) {
       const meta = parseDefenseMeta(item?.def);

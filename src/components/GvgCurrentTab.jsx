@@ -1255,7 +1255,10 @@ function renderDefenseCard(defense, key = defense.id) {
 }
 
 function renderDesktopSlot(slot, team) {
-  const defense = selectedBastionAllDefenses.find((item) =>
+  const defense = selectedBastion.defenses.find((item) =>
+    defenseMatchesDesktopSlot(item, slot, team)
+  );
+  const slotDefense = defense || selectedBastionAllDefenses.find((item) =>
     defenseMatchesDesktopSlot(item, slot, team)
   );
   const key = `slot-${selectedBastionId}-${slot.id}-${team}`;
@@ -1273,7 +1276,7 @@ function renderDesktopSlot(slot, team) {
     t
   );
   const placeholderLabel =
-    defense && hasOpenRecordStatus(defense)
+    slotDefense && hasOpenRecordStatus(slotDefense)
       ? t("gvgCurrent.slotOpened", "Ouverte")
       : t("gvgCurrent.slotEmpty", "Vide");
 
