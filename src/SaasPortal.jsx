@@ -7337,7 +7337,7 @@ function MemberActivityDateCell({ value, emptyLabel }) {
   const tone = getMemberActivityDateTone(value);
   const toneClasses = {
     fresh: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-    neutral: "border-zinc-500/35 bg-zinc-50 text-zinc-950",
+    neutral: "border-zinc-600 bg-zinc-800 text-zinc-200",
     stale: "border-amber-400/45 bg-amber-400/15 text-amber-100",
     critical: "border-red-500/45 bg-red-500/15 text-red-100",
     missing: "border-red-400/70 bg-red-500/25 text-red-50 shadow-[0_0_0_1px_rgba(248,113,113,0.25)]",
@@ -7365,7 +7365,7 @@ const memberActivityFreshnessLegend = [
 function MemberActivityFreshnessLegend() {
   const dotClasses = {
     fresh: "bg-emerald-400",
-    neutral: "bg-zinc-100",
+    neutral: "bg-zinc-500",
     stale: "bg-amber-300",
     critical: "bg-red-400",
     missing: "bg-red-500 ring-2 ring-red-300/40",
