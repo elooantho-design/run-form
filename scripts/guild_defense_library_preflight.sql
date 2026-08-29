@@ -238,28 +238,14 @@ legacy_g2_organization as (
 ),
 legacy_g2_member_defenses as (
   select distinct
-    member.guild_code as target_guild_code,
-    normalized_slot.defense_name
-  from public.guild_members member
-  cross join lateral (values
-    (member.defense_1),
-    (member.defense_2)
-  ) as slot(raw_defense_name)
-  left join assignment_empty_markers
-    on assignment_empty_markers.raw_value = btrim(coalesce(slot.raw_defense_name, ''))
-  cross join lateral (
-    select case
-      when slot.raw_defense_name is null then null
-      when assignment_empty_markers.raw_value is not null then null
-      else btrim(slot.raw_defense_name)
-    end as defense_name
-  ) normalized_slot
+    member_defenses.guild_code as target_guild_code,
+    member_defenses.defense_name
+  from member_defenses
   join public.portal_guilds target_guild
-    on target_guild.guild_code = member.guild_code
+    on target_guild.guild_code = member_defenses.guild_code
   join legacy_g2_organization
     on legacy_g2_organization.organization_id = target_guild.organization_id
-  where normalized_slot.defense_name is not null
-    and member.guild_code <> 'G2'
+  where member_defenses.guild_code <> 'G2'
 ),
 legacy_g2_source_matches as (
   select

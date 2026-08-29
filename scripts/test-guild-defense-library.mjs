@@ -216,6 +216,10 @@ const [
   readFile(new URL("../scripts/guild_defense_library_verify.sql", import.meta.url), "utf8"),
 ]);
 
+function countSqlMatches(sql, pattern) {
+  return [...sql.matchAll(pattern)].length;
+}
+
 assert.match(adminApi, /action === "import"/, "admin API exposes explicit import action");
 assert.match(adminApi, /import_guild_defense_snapshot/, "admin API imports through transactional RPC");
 assert.match(adminApi, /targetGuild === defenseGuild/, "admin API manages defenses only in the selected guild");
@@ -264,6 +268,32 @@ assert.match(preflightSql, /column_organization_id_exists/, "preflight reports w
 assert.match(preflightSql, /column_defense_1_id_exists/, "preflight reports whether defense_1_id exists");
 assert.match(preflightSql, /column_defense_2_id_exists/, "preflight reports whether defense_2_id exists");
 assert.match(preflightSql, /assignment_raw_values/, "preflight reports raw legacy assignment values");
+assert.equal(
+  countSqlMatches(preflightSql, /^assignment_normalized_slots as \(/gm),
+  1,
+  "preflight defines assignment_normalized_slots exactly once",
+);
+assert.equal(
+  countSqlMatches(preflightSql, /^member_defenses as \(/gm),
+  1,
+  "preflight defines member_defenses exactly once",
+);
+assert.equal(
+  countSqlMatches(preflightSql, /^legacy_g2_member_defenses as \(/gm),
+  1,
+  "preflight defines legacy_g2_member_defenses exactly once",
+);
+assert.doesNotMatch(preflightSql, /^assignment_raw_slots as \(/m, "preflight has no stale assignment_raw_slots cte");
+assert.doesNotMatch(
+  preflightSql,
+  /where\s+slot\.defense_name\s+is\s+not\s+null/i,
+  "preflight has no stale slot.defense_name filter from the old assignment block",
+);
+assert.doesNotMatch(
+  preflightSql,
+  /\('defense_1',\s*nullif\(nullif\(member\.defense_1,\s*'--'\),\s*'—'\)\)/i,
+  "preflight has no stale defense_1 partial placeholder normalization",
+);
 const preflightStatementCount = preflightSql
   .replace(/--.*$/gm, "")
   .split(";")
