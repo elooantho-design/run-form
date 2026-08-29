@@ -176,7 +176,7 @@ begin
       and guild.guild_code = new.guild_code
       and guild.is_active = true;
   else
-    select count(distinct guild.organization_id), min(guild.organization_id)
+    select count(distinct guild.organization_id), (array_agg(distinct guild.organization_id))[1]
       into v_matching_organizations, v_target_organization_id
     from public.portal_guilds guild
     where guild.guild_code = new.guild_code
@@ -444,7 +444,7 @@ begin
     source_by_name as (
       select
         source_defense.name,
-        min(source_defense.id) as source_defense_id
+        (array_agg(source_defense.id))[1] as source_defense_id
       from public.guild_defenses source_defense
       where source_defense.guild_code = 'G2'
         and source_defense.organization_id = v_legacy_organization_id
@@ -541,8 +541,8 @@ slot_matches as (
 member_slot_matches as (
   select
     member_id,
-    max(matching_ids[1]) filter (where slot_name = 'defense_1_id' and matching_count = 1) as defense_1_id,
-    max(matching_ids[1]) filter (where slot_name = 'defense_2_id' and matching_count = 1) as defense_2_id
+    (array_agg(matching_ids[1]) filter (where slot_name = 'defense_1_id' and matching_count = 1))[1] as defense_1_id,
+    (array_agg(matching_ids[1]) filter (where slot_name = 'defense_2_id' and matching_count = 1))[1] as defense_2_id
   from slot_matches
   group by member_id
 )

@@ -302,6 +302,11 @@ assert.match(
 );
 assert.match(migrationSql, /v_unexpected_legacy_count/, "migration validates historical native defenses are still marked G2");
 assert.match(migrationSql, /import_guild_defense_snapshot\(/, "migration uses the import RPC for legacy assignment copies");
+assert.doesNotMatch(
+  migrationSql,
+  /\b(?:min|max)\s*\(\s*(?:guild\.organization_id|source_defense\.id|matching_ids\[1\])\s*\)/i,
+  "migration does not use invalid min/max aggregates on uuid values",
+);
 assert.match(verifySql, /portal_guild_code_duplicates/, "verify confirms no guild_code crosses tenants");
 assert.match(verifySql, /unique_import_index_tenant_scoped/, "verify checks tenant-scoped duplicate import index");
 assert.match(verifySql, /native_defenses_outside_expected_g2/, "verify checks legacy native G2 mapping");

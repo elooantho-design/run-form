@@ -161,34 +161,25 @@ relation_counts as (
     (select count(*) from public.guild_defense_blocks)::bigint as block_rows,
     (select count(*) from public.cluster_defense_likes)::bigint as like_rows
 ),
-assignment_raw_slots as (
+assignment_normalized_slots as (
   select
     member.id as member_id,
     member.watcher_name,
     member.guild_code,
     slot.slot_name,
-    slot.raw_defense_name
+    slot.raw_defense_name,
+    case
+      when slot.raw_defense_name is null then null
+      when assignment_empty_markers.raw_value is not null then null
+      else btrim(slot.raw_defense_name)
+    end as defense_name
   from public.guild_members member
   cross join lateral (values
     ('defense_1', member.defense_1),
     ('defense_2', member.defense_2)
   ) as slot(slot_name, raw_defense_name)
-),
-assignment_normalized_slots as (
-  select
-    assignment_raw_slots.member_id,
-    assignment_raw_slots.watcher_name,
-    assignment_raw_slots.guild_code,
-    assignment_raw_slots.slot_name,
-    assignment_raw_slots.raw_defense_name,
-    case
-      when assignment_raw_slots.raw_defense_name is null then null
-      when assignment_empty_markers.raw_value is not null then null
-      else btrim(assignment_raw_slots.raw_defense_name)
-    end as defense_name
-  from assignment_raw_slots
   left join assignment_empty_markers
-    on assignment_empty_markers.raw_value = btrim(coalesce(assignment_raw_slots.raw_defense_name, ''))
+    on assignment_empty_markers.raw_value = btrim(coalesce(slot.raw_defense_name, ''))
 ),
 assignment_raw_values as (
   select
