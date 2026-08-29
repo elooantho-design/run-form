@@ -7,6 +7,7 @@ import {
   getDefenseAssignmentId,
   getDefenseAssignmentName,
   isImportedDefense,
+  normalizeLegacyDefenseAssignmentName,
   resolveAssignedDefense,
   resolveDefenseVariantsForGuild,
 } from "../src/lib/defenseVariants.js";
@@ -49,9 +50,72 @@ const importedG3FromG2 = {
 };
 const paladinRows = [nativeG1, nativeG2, importedG2FromG1, importedG3FromG2];
 
+function collectLegacyG2CopyRequests({ members = [], g2NativeDefenses = [] } = {}) {
+  const uniqueSourceByName = new Map();
+  const sourceCounts = new Map();
+
+  g2NativeDefenses.forEach((defense) => {
+    if (defense.guildCode !== "G2" || isImportedDefense(defense)) return;
+    sourceCounts.set(defense.name, (sourceCounts.get(defense.name) || 0) + 1);
+    uniqueSourceByName.set(defense.name, defense.id);
+  });
+
+  const requests = new Set();
+  members.forEach((member) => {
+    if (!member?.guildCode || member.guildCode === "G2") return;
+    [member.defense1, member.defense2].forEach((rawName) => {
+      const defenseName = normalizeLegacyDefenseAssignmentName(rawName);
+      if (!defenseName || sourceCounts.get(defenseName) !== 1) return;
+      requests.add(`${member.guildCode}:${uniqueSourceByName.get(defenseName)}`);
+    });
+  });
+
+  return [...requests].sort();
+}
+
+for (const [rawValue, expectedValue] of [
+  [null, null],
+  ["", null],
+  ["   ", null],
+  ["--", null],
+  ["-", null],
+  ["—", null],
+  ["–", null],
+  ["â€”", null],
+  ["â€“", null],
+  ["  Mirror  ", "Mirror"],
+]) {
+  assert.equal(
+    normalizeLegacyDefenseAssignmentName(rawValue),
+    expectedValue,
+    `legacy defense assignment ${String(rawValue)} normalizes correctly`,
+  );
+}
+
 assert.equal(defenseBelongsToGuild(nativeG1, "G1"), true, "native G1 belongs to G1");
 assert.equal(defenseBelongsToGuild(nativeG1, "G2"), false, "native G1 is not directly visible in G2");
 assert.equal(isImportedDefense(importedG2FromG1), true, "imported copy is marked by sourceDefenseId");
+assert.equal(
+  resolveAssignedDefense([nativeG2], { guildCode: "G2", defense1: "â€”" }, 1),
+  null,
+  "mojibake em-dash placeholder does not resolve as a defense",
+);
+assert.deepEqual(
+  collectLegacyG2CopyRequests({
+    members: [{ guildCode: "G1", defense1: "â€”", defense2: "--" }],
+    g2NativeDefenses: [nativeG2],
+  }),
+  [],
+  "a non-G2 member with only placeholders never triggers a local copy",
+);
+assert.deepEqual(
+  collectLegacyG2CopyRequests({
+    members: [{ guildCode: "G1", defense1: "  Mirror  ", defense2: "â€”" }],
+    g2NativeDefenses: [nativeG2],
+  }),
+  [`G1:${nativeG2.id}`],
+  "a non-G2 member with a real unique G2 defense name triggers one local copy",
+);
 
 assert.deepEqual(
   resolveDefenseVariantsForGuild(paladinRows, "G1").map((defense) => defense.id),
@@ -186,11 +250,20 @@ for (const [label, sql] of [
 ]) {
   assert.doesNotMatch(sql, /\bpg_constraint\s+constraint\b/i, `${label} does not alias pg_constraint as a reserved word`);
   assert.doesNotMatch(sql, /\bconstraint\./i, `${label} does not reference the reserved constraint alias`);
+  assert.match(sql, /assignment_empty_markers/, `${label} centralizes legacy empty assignment markers`);
+  assert.match(sql, /'â€”'/, `${label} ignores mojibake em-dash placeholders`);
+  assert.match(sql, /'â€“'/, `${label} ignores mojibake en-dash placeholders`);
+  assert.doesNotMatch(
+    sql,
+    /nullif\(nullif\(member\.defense_[12]/i,
+    `${label} does not use the old partial placeholder filter`,
+  );
 }
 assert.match(preflightSql, /column_source_defense_id_exists/, "preflight reports whether source_defense_id exists");
 assert.match(preflightSql, /column_organization_id_exists/, "preflight reports whether organization_id exists");
 assert.match(preflightSql, /column_defense_1_id_exists/, "preflight reports whether defense_1_id exists");
 assert.match(preflightSql, /column_defense_2_id_exists/, "preflight reports whether defense_2_id exists");
+assert.match(preflightSql, /assignment_raw_values/, "preflight reports raw legacy assignment values");
 const preflightStatementCount = preflightSql
   .replace(/--.*$/gm, "")
   .split(";")

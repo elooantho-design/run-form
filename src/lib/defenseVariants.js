@@ -1,5 +1,14 @@
 import { normalizeGuildCodeKey } from "./guildScope.js";
 
+export const LEGACY_EMPTY_DEFENSE_ASSIGNMENT_VALUES = new Set(["", "--", "-", "—", "–", "â€”", "â€“"]);
+
+export function normalizeLegacyDefenseAssignmentName(value) {
+  if (value == null) return null;
+  const normalized = String(value).trim();
+  if (LEGACY_EMPTY_DEFENSE_ASSIGNMENT_VALUES.has(normalized)) return null;
+  return normalized;
+}
+
 export function getDefenseRootId(defense) {
   return defense?.sourceDefenseId || defense?.source_defense_id || defense?.id || null;
 }
@@ -55,8 +64,8 @@ export function resolveAssignedDefense(defenses = [], member, slot) {
     if (byId) return byId;
   }
 
-  const defenseName = getDefenseAssignmentName(member, slot);
-  if (!defenseName || defenseName === "--" || defenseName === "—") return null;
+  const defenseName = normalizeLegacyDefenseAssignmentName(getDefenseAssignmentName(member, slot));
+  if (!defenseName) return null;
 
   const memberGuildCode = member?.guildCode || member?.guild_code || "";
   return (

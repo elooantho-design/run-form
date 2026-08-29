@@ -369,20 +369,39 @@ begin
   from public.portal_guilds guild
   where guild.guild_code = 'G2';
 
-  with member_defenses as (
+  with assignment_empty_markers(raw_value) as (
+    values
+      (''),
+      ('--'),
+      ('-'),
+      ('—'),
+      ('–'),
+      ('â€”'),
+      ('â€“')
+  ),
+  member_defenses as (
     select
       member.id as member_id,
       member.guild_code as target_guild_code,
-      slot.defense_name
+      normalized_slot.defense_name
     from public.guild_members member
     cross join lateral (values
-      (nullif(nullif(member.defense_1, '--'), '—')),
-      (nullif(nullif(member.defense_2, '--'), '—'))
-    ) as slot(defense_name)
+      (member.defense_1),
+      (member.defense_2)
+    ) as slot(raw_defense_name)
+    left join assignment_empty_markers
+      on assignment_empty_markers.raw_value = btrim(coalesce(slot.raw_defense_name, ''))
+    cross join lateral (
+      select case
+        when slot.raw_defense_name is null then null
+        when assignment_empty_markers.raw_value is not null then null
+        else btrim(slot.raw_defense_name)
+      end as defense_name
+    ) normalized_slot
     join public.portal_guilds target_guild
       on target_guild.guild_code = member.guild_code
      and target_guild.organization_id = v_legacy_organization_id
-    where slot.defense_name is not null
+    where normalized_slot.defense_name is not null
       and member.guild_code <> 'G2'
   ),
   source_matches as (
@@ -412,7 +431,17 @@ begin
   end if;
 
   for import_candidate in
-    with source_by_name as (
+    with assignment_empty_markers(raw_value) as (
+      values
+        (''),
+        ('--'),
+        ('-'),
+        ('—'),
+        ('–'),
+        ('â€”'),
+        ('â€“')
+    ),
+    source_by_name as (
       select
         source_defense.name,
         min(source_defense.id) as source_defense_id
@@ -430,14 +459,23 @@ begin
         source_by_name.source_defense_id
       from public.guild_members member
       cross join lateral (values
-        (nullif(nullif(member.defense_1, '--'), '—')),
-        (nullif(nullif(member.defense_2, '--'), '—'))
-      ) as slot(defense_name)
+        (member.defense_1),
+        (member.defense_2)
+      ) as slot(raw_defense_name)
+      left join assignment_empty_markers
+        on assignment_empty_markers.raw_value = btrim(coalesce(slot.raw_defense_name, ''))
+      cross join lateral (
+        select case
+          when slot.raw_defense_name is null then null
+          when assignment_empty_markers.raw_value is not null then null
+          else btrim(slot.raw_defense_name)
+        end as defense_name
+      ) normalized_slot
       join public.portal_guilds target_guild
         on target_guild.guild_code = member.guild_code
        and target_guild.organization_id = v_legacy_organization_id
-      join source_by_name on source_by_name.name = slot.defense_name
-      where slot.defense_name is not null
+      join source_by_name on source_by_name.name = normalized_slot.defense_name
+      where normalized_slot.defense_name is not null
         and member.guild_code <> 'G2'
     )
     select requested_imports.*
@@ -460,7 +498,17 @@ begin
   end loop;
 end $$;
 
-with slot_matches as (
+with assignment_empty_markers(raw_value) as (
+  values
+    (''),
+    ('--'),
+    ('-'),
+    ('—'),
+    ('–'),
+    ('â€”'),
+    ('â€“')
+),
+slot_matches as (
   select
     member.id as member_id,
     slot.slot_name,
@@ -470,15 +518,24 @@ with slot_matches as (
   join public.portal_guilds member_guild
     on member_guild.guild_code = member.guild_code
   cross join lateral (values
-    ('defense_1_id', nullif(nullif(member.defense_1, '--'), '—')),
-    ('defense_2_id', nullif(nullif(member.defense_2, '--'), '—'))
-  ) as slot(slot_name, defense_name)
+    ('defense_1_id', member.defense_1),
+    ('defense_2_id', member.defense_2)
+  ) as slot(slot_name, raw_defense_name)
+  left join assignment_empty_markers
+    on assignment_empty_markers.raw_value = btrim(coalesce(slot.raw_defense_name, ''))
+  cross join lateral (
+    select case
+      when slot.raw_defense_name is null then null
+      when assignment_empty_markers.raw_value is not null then null
+      else btrim(slot.raw_defense_name)
+    end as defense_name
+  ) normalized_slot
   left join public.guild_defenses defense
-    on defense.name = slot.defense_name
+    on defense.name = normalized_slot.defense_name
    and defense.guild_code = member.guild_code
    and defense.organization_id = member_guild.organization_id
    and coalesce(defense.is_hidden, false) = false
-  where slot.defense_name is not null
+  where normalized_slot.defense_name is not null
   group by member.id, slot.slot_name
 ),
 member_slot_matches as (

@@ -140,32 +140,50 @@ select
   '0 missing id when local name is unique' as expected_value,
   count(*)::text as actual_value,
   case when count(*) = 0 then 'OK' else 'ERROR' end as status
-from public.guild_members member
-left join public.portal_guilds member_guild on member_guild.guild_code = member.guild_code
-where (
-    nullif(nullif(member.defense_1, '--'), '—') is not null
-    and member.defense_1_id is null
-    and (
-      select count(*)
-      from public.guild_defenses defense
-      where defense.name = member.defense_1
-        and defense.guild_code = member.guild_code
-        and defense.organization_id = member_guild.organization_id
-        and coalesce(defense.is_hidden, false) = false
-    ) = 1
+from (
+  with assignment_empty_markers(raw_value) as (
+    values
+      (''),
+      ('--'),
+      ('-'),
+      ('—'),
+      ('–'),
+      ('â€”'),
+      ('â€“')
   )
-   or (
-    nullif(nullif(member.defense_2, '--'), '—') is not null
-    and member.defense_2_id is null
-    and (
-      select count(*)
-      from public.guild_defenses defense
-      where defense.name = member.defense_2
-        and defense.guild_code = member.guild_code
-        and defense.organization_id = member_guild.organization_id
-        and coalesce(defense.is_hidden, false) = false
-    ) = 1
-  )
+  select
+    member.id,
+    member.guild_code,
+    member_guild.organization_id,
+    slot.slot_name,
+    slot.defense_id,
+    normalized_slot.defense_name
+  from public.guild_members member
+  left join public.portal_guilds member_guild on member_guild.guild_code = member.guild_code
+  cross join lateral (values
+    ('defense_1_id', member.defense_1, member.defense_1_id),
+    ('defense_2_id', member.defense_2, member.defense_2_id)
+  ) as slot(slot_name, raw_defense_name, defense_id)
+  left join assignment_empty_markers
+    on assignment_empty_markers.raw_value = btrim(coalesce(slot.raw_defense_name, ''))
+  cross join lateral (
+    select case
+      when slot.raw_defense_name is null then null
+      when assignment_empty_markers.raw_value is not null then null
+      else btrim(slot.raw_defense_name)
+    end as defense_name
+  ) normalized_slot
+  where normalized_slot.defense_name is not null
+) assignment_slots
+where assignment_slots.defense_id is null
+  and (
+    select count(*)
+    from public.guild_defenses defense
+    where defense.name = assignment_slots.defense_name
+      and defense.guild_code = assignment_slots.guild_code
+      and defense.organization_id = assignment_slots.organization_id
+      and coalesce(defense.is_hidden, false) = false
+  ) = 1
 
 union all
 

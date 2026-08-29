@@ -24,6 +24,16 @@ future_columns(check_name, table_name, column_name) as (
     ('column_defense_1_id_exists', 'guild_members', 'defense_1_id'),
     ('column_defense_2_id_exists', 'guild_members', 'defense_2_id')
 ),
+assignment_empty_markers(raw_value) as (
+  values
+    (''),
+    ('--'),
+    ('-'),
+    ('—'),
+    ('–'),
+    ('â€”'),
+    ('â€“')
+),
 column_state as (
   select
     exists (
@@ -151,19 +161,60 @@ relation_counts as (
     (select count(*) from public.guild_defense_blocks)::bigint as block_rows,
     (select count(*) from public.cluster_defense_likes)::bigint as like_rows
 ),
-member_defenses as (
+assignment_raw_slots as (
   select
     member.id as member_id,
     member.watcher_name,
     member.guild_code,
     slot.slot_name,
-    slot.defense_name
+    slot.raw_defense_name
   from public.guild_members member
   cross join lateral (values
-    ('defense_1', nullif(nullif(member.defense_1, '--'), '—')),
-    ('defense_2', nullif(nullif(member.defense_2, '--'), '—'))
-  ) as slot(slot_name, defense_name)
-  where slot.defense_name is not null
+    ('defense_1', member.defense_1),
+    ('defense_2', member.defense_2)
+  ) as slot(slot_name, raw_defense_name)
+),
+assignment_normalized_slots as (
+  select
+    assignment_raw_slots.member_id,
+    assignment_raw_slots.watcher_name,
+    assignment_raw_slots.guild_code,
+    assignment_raw_slots.slot_name,
+    assignment_raw_slots.raw_defense_name,
+    case
+      when assignment_raw_slots.raw_defense_name is null then null
+      when assignment_empty_markers.raw_value is not null then null
+      else btrim(assignment_raw_slots.raw_defense_name)
+    end as defense_name
+  from assignment_raw_slots
+  left join assignment_empty_markers
+    on assignment_empty_markers.raw_value = btrim(coalesce(assignment_raw_slots.raw_defense_name, ''))
+),
+assignment_raw_values as (
+  select
+    slot_name,
+    raw_defense_name,
+    btrim(coalesce(raw_defense_name, '')) as trimmed_defense_name,
+    case
+      when raw_defense_name is null then '<NULL>'
+      when raw_defense_name = '' then '<empty>'
+      when btrim(raw_defense_name) = '' then '<spaces>'
+      else raw_defense_name
+    end as raw_value_label,
+    max(defense_name) as normalized_defense_name,
+    count(*) as occurrence_count
+  from assignment_normalized_slots
+  group by slot_name, raw_defense_name
+),
+member_defenses as (
+  select
+    member_id,
+    watcher_name,
+    guild_code,
+    slot_name,
+    defense_name
+  from assignment_normalized_slots
+  where defense_name is not null
 ),
 assignment_matches as (
   select
@@ -197,17 +248,26 @@ legacy_g2_organization as (
 legacy_g2_member_defenses as (
   select distinct
     member.guild_code as target_guild_code,
-    slot.defense_name
+    normalized_slot.defense_name
   from public.guild_members member
   cross join lateral (values
-    (nullif(nullif(member.defense_1, '--'), '—')),
-    (nullif(nullif(member.defense_2, '--'), '—'))
-  ) as slot(defense_name)
+    (member.defense_1),
+    (member.defense_2)
+  ) as slot(raw_defense_name)
+  left join assignment_empty_markers
+    on assignment_empty_markers.raw_value = btrim(coalesce(slot.raw_defense_name, ''))
+  cross join lateral (
+    select case
+      when slot.raw_defense_name is null then null
+      when assignment_empty_markers.raw_value is not null then null
+      else btrim(slot.raw_defense_name)
+    end as defense_name
+  ) normalized_slot
   join public.portal_guilds target_guild
     on target_guild.guild_code = member.guild_code
   join legacy_g2_organization
     on legacy_g2_organization.organization_id = target_guild.organization_id
-  where slot.defense_name is not null
+  where normalized_slot.defense_name is not null
     and member.guild_code <> 'G2'
 ),
 legacy_g2_source_matches as (
@@ -503,6 +563,25 @@ result_rows as (
     'INFO',
     to_jsonb(relation_counts)
   from relation_counts
+
+  union all
+
+  select
+    155,
+    'assignment_raw_values',
+    slot_name || ':' || raw_value_label,
+    'reported',
+    occurrence_count::text,
+    'INFO',
+    jsonb_build_object(
+      'slot_name', slot_name,
+      'raw_value', raw_defense_name,
+      'trimmed_value', trimmed_defense_name,
+      'normalized_defense_name', normalized_defense_name,
+      'is_empty_assignment', normalized_defense_name is null,
+      'occurrence_count', occurrence_count
+    )
+  from assignment_raw_values
 
   union all
 
