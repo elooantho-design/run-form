@@ -121,12 +121,15 @@ export function getMetaDefenseCounters(defenses, members, metaFilter = "all") {
   const usageMap = new Map();
 
   (members || []).forEach((member) => {
-    const assigned = [...new Set([member.defense1, member.defense2])].filter(
-      (name) => name && name !== "—"
+    const assigned = [
+      member.defense1Id || member.defense_1_id || member.defense1,
+      member.defense2Id || member.defense_2_id || member.defense2,
+    ].filter(
+      (value) => value && value !== "—" && value !== "--"
     );
 
-    assigned.forEach((name) => {
-      usageMap.set(name, (usageMap.get(name) || 0) + 1);
+    [...new Set(assigned.map(String))].forEach((value) => {
+      usageMap.set(value, (usageMap.get(value) || 0) + 1);
     });
   });
 
@@ -144,7 +147,7 @@ export function getMetaDefenseCounters(defenses, members, metaFilter = "all") {
       id: defense.id,
       label: formatDefenseCounterLabel(index),
       name: defense.name,
-      count: usageMap.get(defense.name) || 0,
+      count: usageMap.get(String(defense.id)) || usageMap.get(defense.name) || 0,
       tier: normalizeDefenseTier(defense.tier),
     }));
 }

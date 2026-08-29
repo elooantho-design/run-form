@@ -60,6 +60,8 @@ const HERO_SEARCH_MAX_REQUIREMENTS = 10;
 const PALADIN_ORGANIZATION_KEY = "paladin";
 const SAFE_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, primary_member_id";
+const SAFE_MEMBER_SELECT_WITH_DEFENSE_IDS =
+  "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, defense_1_id, defense_2_id, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, primary_member_id";
 const EDIT_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, roster_status, primary_member_id";
 const HERO_SEARCH_MEMBER_SELECT =
@@ -88,7 +90,33 @@ const SAFE_MEMBER_SELECT_WITH_AWAKENINGS = `
     )
   )
 `;
-const DEFENSE_SELECT = `
+const SAFE_MEMBER_SELECT_WITH_AWAKENINGS_AND_DEFENSE_IDS = `
+  id,
+  watcher_name,
+  discord_id,
+  guild_code,
+  assignment,
+  status,
+  defense_1,
+  defense_2,
+  defense_1_id,
+  defense_2_id,
+  awakening_status,
+  personal_forum_post_url,
+  role,
+  preferred_language,
+  community_access_type,
+  community_status,
+  primary_member_id,
+  member_awakenings (
+    awakening_level,
+    champion_id,
+    champions (
+      name
+    )
+  )
+`;
+const DEFENSE_SELECT_BASE = `
   id,
   name,
   tier,
@@ -123,6 +151,45 @@ const DEFENSE_SELECT = `
     )
   )
 `;
+const DEFENSE_SELECT_WITH_LIBRARY = `
+  id,
+  name,
+  tier,
+  type,
+  faction,
+  guild_code,
+  is_global,
+  is_hidden,
+  source_defense_id,
+  source_guild_code,
+  source_defense_name,
+  imported_at,
+  sort_order,
+  image_url,
+  created_at,
+  guild_defense_slots (
+    slot_index,
+    champion_id,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  ),
+  guild_defense_conditions (
+    id,
+    champion_id,
+    min_awakening,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  )
+`;
+const DEFENSE_SELECT = DEFENSE_SELECT_WITH_LIBRARY;
 const CHAMPION_SAFE_SELECT =
   "id, name, portal_name, english_name, rarity, faction, role, lord";
 
@@ -208,6 +275,14 @@ function isMissingColumn(error, columnName) {
     error?.code === "42703" ||
     error?.code === "PGRST204" ||
     message.includes(String(columnName || "").toLowerCase())
+  );
+}
+
+function isMissingGuildLibrarySchema(error) {
+  return (
+    isMissingColumn(error, "source_guild_code") ||
+    isMissingColumn(error, "source_defense_name") ||
+    isMissingColumn(error, "imported_at")
   );
 }
 
@@ -373,7 +448,7 @@ function sameGuildSpace(left, right) {
 
 function canViewGuildCode(actor, guildCode, { leaderSeesAll = false } = {}) {
   if (!actor || isCommunityAccount(actor)) return false;
-  if (leaderSeesAll && isLeaderRole(actor?.role)) return true;
+  void leaderSeesAll;
 
   const actorGuild = normalizeGuildCode(actor?.guild_code);
   const targetGuild = normalizeGuildCode(guildCode);
@@ -385,15 +460,17 @@ function canViewGuildCode(actor, guildCode, { leaderSeesAll = false } = {}) {
 
 function canViewDefense(actor, defense, { guildCode = "", leaderSeesAll = false } = {}) {
   if (!actor || isCommunityAccount(actor)) return false;
-  if (leaderSeesAll && isLeaderRole(actor?.role)) return true;
+  if (defense?.is_hidden) return false;
 
-  const actorGuild = normalizeGuildCode(guildCode || actor?.guild_code);
-  if (!actorGuild) return false;
-
+  const requestedGuild = normalizeGuildCode(guildCode);
   const defenseGuild = normalizeGuildCode(defense?.guild_code);
-  if (defense?.is_global || !defenseGuild) return isPaladinGuildCode(actorGuild);
-  if (isPaladinGuildCode(actorGuild)) return isPaladinGuildCode(defenseGuild);
-  return sameGuildSpace(actorGuild, defenseGuild);
+  if (!defenseGuild) return false;
+
+  if (requestedGuild) {
+    return canViewGuildCode(actor, requestedGuild, { leaderSeesAll }) && defenseGuild === requestedGuild;
+  }
+
+  return canViewGuildCode(actor, defenseGuild, { leaderSeesAll });
 }
 
 function sameMemberId(left, right) {
@@ -465,6 +542,10 @@ function serializeManagedMember(row, actor = null) {
     permissions: actor ? serializeDefenseMemberDataPermissions(actor, row) : null,
     defense1: row.defense_1 || EMPTY_DEFENSE_SLOT,
     defense2: row.defense_2 || EMPTY_DEFENSE_SLOT,
+    defense1Id: row.defense_1_id || null,
+    defense2Id: row.defense_2_id || null,
+    defense_1_id: row.defense_1_id || null,
+    defense_2_id: row.defense_2_id || null,
     awakenings,
   };
 }
@@ -633,6 +714,11 @@ function serializeDefenseRow(row, blocksByDefenseId = new Map()) {
     isGlobal: Boolean(row.is_global),
     isHidden: Boolean(row.is_hidden),
     sourceDefenseId: row.source_defense_id || null,
+    sourceGuildCode: row.source_guild_code || "",
+    sourceDefenseName: row.source_defense_name || "",
+    originGuildCode: row.source_guild_code || row.guild_code || "",
+    originDefenseName: row.source_defense_name || row.name || "",
+    importedAt: row.imported_at || null,
     sortOrder: row.sort_order ?? 9999,
     slots,
     conditions,
@@ -649,15 +735,6 @@ function serializeVoteRow(row) {
     value: row.value,
     createdAt: row.created_at,
   };
-}
-
-function sortByName(rows) {
-  return [...rows].sort((a, b) =>
-    String(a.name || "").localeCompare(String(b.name || ""), "fr", {
-      numeric: true,
-      sensitivity: "base",
-    })
-  );
 }
 
 async function loadDefenseBlocks(defenseIds) {
@@ -683,10 +760,19 @@ async function loadDefenseBlocks(defenseIds) {
 }
 
 async function loadVisibleDefenses(actor, { guildCode = "", leaderSeesAll = false } = {}) {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("guild_defenses")
     .select(DEFENSE_SELECT)
     .order("created_at", { ascending: true });
+
+  if (error && isMissingGuildLibrarySchema(error)) {
+    const fallback = await supabase
+      .from("guild_defenses")
+      .select(DEFENSE_SELECT_BASE)
+      .order("created_at", { ascending: true });
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     throw new Error(error.message || "Chargement des defenses impossible.");
@@ -740,6 +826,53 @@ async function loadSafeMemberById(memberId, select = SAFE_MEMBER_SELECT) {
   }
 
   return data || null;
+}
+
+async function loadSafeMemberByIdWithDefenseIds(memberId, { withAwakenings = false } = {}) {
+  const selectWithIds = withAwakenings
+    ? SAFE_MEMBER_SELECT_WITH_AWAKENINGS_AND_DEFENSE_IDS
+    : SAFE_MEMBER_SELECT_WITH_DEFENSE_IDS;
+  const fallbackSelect = withAwakenings ? SAFE_MEMBER_SELECT_WITH_AWAKENINGS : SAFE_MEMBER_SELECT;
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(selectWithIds)
+    .eq("id", memberId)
+    .maybeSingle();
+
+  if (!error) return { member: data || null, assignmentIdsReady: true };
+  if (!isMissingColumn(error, "defense_1_id") && !isMissingColumn(error, "defense_2_id")) {
+    throw new Error(error.message || "Chargement du membre impossible.");
+  }
+
+  const fallback = await loadSafeMemberById(memberId, fallbackSelect);
+  return { member: fallback, assignmentIdsReady: false };
+}
+
+async function selectGuildMembersWithDefenseIds({ withAwakenings = false } = {}) {
+  const selectWithIds = withAwakenings
+    ? SAFE_MEMBER_SELECT_WITH_AWAKENINGS_AND_DEFENSE_IDS
+    : SAFE_MEMBER_SELECT_WITH_DEFENSE_IDS;
+  const fallbackSelect = withAwakenings ? SAFE_MEMBER_SELECT_WITH_AWAKENINGS : SAFE_MEMBER_SELECT;
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(selectWithIds)
+    .order("watcher_name", { ascending: true })
+    .limit(MAX_MEMBER_ROWS);
+
+  if (!error) return { data: data || [], error: null, assignmentIdsReady: true };
+  if (!isMissingColumn(error, "defense_1_id") && !isMissingColumn(error, "defense_2_id")) {
+    return { data: [], error, assignmentIdsReady: false };
+  }
+
+  const fallback = await supabase
+    .from("guild_members")
+    .select(fallbackSelect)
+    .order("watcher_name", { ascending: true })
+    .limit(MAX_MEMBER_ROWS);
+
+  return { data: fallback.data || [], error: fallback.error, assignmentIdsReady: false };
 }
 
 function normalizeMemberPatch(patch) {
@@ -1168,12 +1301,7 @@ function pickDefenseForGuild(rows, name, guildCode) {
   const matching = rows.filter((row) => row.name === name);
   const normalizedGuild = normalizeGuildCode(guildCode);
 
-  return (
-    matching.find((row) => normalizeGuildCode(row.guild_code) === normalizedGuild) ||
-    matching.find((row) => row.is_global) ||
-    matching[0] ||
-    null
-  );
+  return matching.find((row) => normalizeGuildCode(row.guild_code) === normalizedGuild) || null;
 }
 
 function buildDefenseMessage({ target, defenses, missingNames, actor }) {
@@ -1890,11 +2018,7 @@ async function handleMyDefensesLoad(body, res) {
   }
 
   const [membersResult, defenses, championsResult] = await Promise.all([
-    supabase
-      .from("guild_members")
-      .select(SAFE_MEMBER_SELECT)
-      .order("watcher_name", { ascending: true })
-      .limit(MAX_MEMBER_ROWS),
+    selectGuildMembersWithDefenseIds(),
     loadVisibleDefenses(actor, { leaderSeesAll: true }),
     supabase.from("champions").select(CHAMPION_SAFE_SELECT),
   ]);
@@ -1920,6 +2044,7 @@ async function handleMyDefensesLoad(body, res) {
     defenses,
     defenseVotes,
     champions: championsResult.data || [],
+    assignmentIdsReady: membersResult.assignmentIdsReady,
   });
 }
 
@@ -1976,6 +2101,7 @@ async function handleMemberAwakeningsLoad(body, res) {
 async function handleMemberDefenseAssign(body, res) {
   const memberId = cleanText(body.memberId || body.member_id);
   const slot = Number(body.slot);
+  const defenseId = cleanText(body.defenseId || body.defense_id);
   const defenseName = cleanText(body.defenseName || body.defense_name || body.name) || EMPTY_DEFENSE_SLOT;
   const sessionCheck = await requirePortalSession(res._portalReq, supabase);
 
@@ -1995,7 +2121,9 @@ async function handleMemberDefenseAssign(body, res) {
     return;
   }
 
-  const target = await loadSafeMemberById(memberId, SAFE_MEMBER_SELECT_WITH_AWAKENINGS);
+  const { member: target, assignmentIdsReady } = await loadSafeMemberByIdWithDefenseIds(memberId, {
+    withAwakenings: true,
+  });
   if (!target) {
     sendJson(res, 404, { error: "Joueur introuvable." });
     return;
@@ -2007,22 +2135,45 @@ async function handleMemberDefenseAssign(body, res) {
     return;
   }
 
-  if (defenseName !== EMPTY_DEFENSE_SLOT) {
+  let selectedDefense = null;
+  if (defenseName !== EMPTY_DEFENSE_SLOT || defenseId) {
     const defenses = await loadVisibleDefenses(target, { guildCode: target.guild_code });
-    const defenseAllowed = defenses.some((defense) => String(defense.name) === defenseName);
-    if (!defenseAllowed) {
+    selectedDefense =
+      (defenseId && defenses.find((defense) => String(defense.id) === String(defenseId))) ||
+      defenses.find((defense) => String(defense.name) === defenseName) ||
+      null;
+    if (!selectedDefense) {
       sendJson(res, 403, { error: "Defense hors perimetre du joueur." });
       return;
     }
   }
 
   const column = slot === 1 ? "defense_1" : "defense_2";
-  const { data: updated, error } = await supabase
+  const idColumn = slot === 1 ? "defense_1_id" : "defense_2_id";
+  const nextDefenseName = selectedDefense ? selectedDefense.name : EMPTY_DEFENSE_SLOT;
+  const updatePayload = {
+    [column]: nextDefenseName,
+    ...(assignmentIdsReady ? { [idColumn]: selectedDefense?.id || null } : {}),
+  };
+
+  let updateQuery = supabase
     .from("guild_members")
-    .update({ [column]: defenseName })
+    .update(updatePayload)
     .eq("id", target.id)
-    .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
-    .maybeSingle();
+    .select(assignmentIdsReady ? SAFE_MEMBER_SELECT_WITH_AWAKENINGS_AND_DEFENSE_IDS : SAFE_MEMBER_SELECT_WITH_AWAKENINGS);
+
+  let { data: updated, error } = await updateQuery.maybeSingle();
+
+  if (error && assignmentIdsReady && (isMissingColumn(error, "defense_1_id") || isMissingColumn(error, "defense_2_id"))) {
+    const fallback = await supabase
+      .from("guild_members")
+      .update({ [column]: nextDefenseName })
+      .eq("id", target.id)
+      .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
+      .maybeSingle();
+    updated = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     sendJson(res, 500, { error: error.message || "Affectation defense impossible." });
@@ -2036,14 +2187,14 @@ async function handleMemberDefenseAssign(body, res) {
     actor_name: actorName,
     target_member_id: target.id,
     target_name: targetName,
-    action_type: defenseName === EMPTY_DEFENSE_SLOT ? "defense_unassign" : "defense_assign",
+    action_type: nextDefenseName === EMPTY_DEFENSE_SLOT ? "defense_unassign" : "defense_assign",
     entity_type: "defense",
-    entity_id: defenseName === EMPTY_DEFENSE_SLOT ? null : defenseName,
+    entity_id: selectedDefense?.id || null,
     summary:
-      defenseName === EMPTY_DEFENSE_SLOT
+      nextDefenseName === EMPTY_DEFENSE_SLOT
         ? `${targetName} : defense ${slot} retiree`
-        : `${targetName} : defense ${slot} affectee a ${defenseName}`,
-    metadata: { slot, defenseName, guildCode: target.guild_code || "" },
+        : `${targetName} : defense ${slot} affectee a ${nextDefenseName}`,
+    metadata: { slot, defenseId: selectedDefense?.id || null, defenseName: nextDefenseName, guildCode: target.guild_code || "" },
   });
 
   sendJson(res, 200, { member: serializeManagedMember(updated || target, actor) });
@@ -2070,11 +2221,21 @@ async function handleDefenseVote(body, res) {
     return;
   }
 
-  const { data: defense, error: defenseError } = await supabase
+  let { data: defense, error: defenseError } = await supabase
     .from("guild_defenses")
     .select("id, guild_code, is_global, source_defense_id")
     .eq("id", defenseId)
     .maybeSingle();
+
+  if (defenseError && isMissingColumn(defenseError, "source_defense_id")) {
+    const fallback = await supabase
+      .from("guild_defenses")
+      .select("id, guild_code, is_global")
+      .eq("id", defenseId)
+      .maybeSingle();
+    defense = fallback.data;
+    defenseError = fallback.error;
+  }
 
   if (defenseError) {
     sendJson(res, 500, { error: defenseError.message || "Chargement defense impossible." });
@@ -2335,11 +2496,7 @@ async function handleGuildManagementLoad(body, res) {
   }
 
   const [membersResult, defenses, championsResult] = await Promise.all([
-    supabase
-      .from("guild_members")
-      .select(SAFE_MEMBER_SELECT_WITH_AWAKENINGS)
-      .order("watcher_name", { ascending: true })
-      .limit(MAX_MEMBER_ROWS),
+    selectGuildMembersWithDefenseIds({ withAwakenings: true }),
     loadVisibleDefenses(adminCheck.admin, { guildCode: activeGuildCode, leaderSeesAll: true }),
     supabase.from("champions").select(CHAMPION_SAFE_SELECT),
   ]);
@@ -2360,7 +2517,13 @@ async function handleGuildManagementLoad(body, res) {
     .map(serializeManagedMember);
   const defenseVotes = await loadDefenseVotes(defenses);
 
-  sendJson(res, 200, { members, defenses, defenseVotes, champions: championsResult.data || [] });
+  sendJson(res, 200, {
+    members,
+    defenses,
+    defenseVotes,
+    champions: championsResult.data || [],
+    assignmentIdsReady: membersResult.assignmentIdsReady,
+  });
 }
 
 async function handleGuildMemberUpdate(body, res) {
@@ -3520,14 +3683,12 @@ async function handleSendDefenses(body, res) {
     return;
   }
 
-  const { data: target, error: targetError } = await supabase
-    .from("guild_members")
-    .select("id, role, discord_id, watcher_name, guild_code, defense_1, defense_2, personal_forum_post_url")
-    .eq("id", memberId)
-    .maybeSingle();
-
-  if (targetError) {
-    sendJson(res, 500, { error: targetError.message || "Joueur introuvable." });
+  let target;
+  try {
+    const targetResult = await loadSafeMemberByIdWithDefenseIds(memberId);
+    target = targetResult.member;
+  } catch (error) {
+    sendJson(res, 500, { error: error?.message || "Joueur introuvable." });
     return;
   }
 
@@ -3546,8 +3707,12 @@ async function handleSendDefenses(body, res) {
     return;
   }
 
-  const defenseNames = [normalizeDefenseName(target.defense_1), normalizeDefenseName(target.defense_2)].filter(Boolean);
-  if (defenseNames.length === 0) {
+  const defenseAssignments = [
+    { slot: 1, id: cleanText(target.defense_1_id), name: normalizeDefenseName(target.defense_1) },
+    { slot: 2, id: cleanText(target.defense_2_id), name: normalizeDefenseName(target.defense_2) },
+  ].filter((assignment) => assignment.id || assignment.name);
+
+  if (defenseAssignments.length === 0) {
     sendJson(res, 400, { error: "Aucune defense assignee a ce joueur." });
     return;
   }
@@ -3562,6 +3727,8 @@ async function handleSendDefenses(body, res) {
       faction,
       guild_code,
       is_global,
+      is_hidden,
+      source_defense_id,
       image_url,
       guild_defense_slots (
         slot_index,
@@ -3581,7 +3748,8 @@ async function handleSendDefenses(body, res) {
         sort_order
       )
     `)
-    .in("name", defenseNames);
+    .eq("guild_code", normalizeGuildCode(target.guild_code))
+    .or("is_hidden.is.null,is_hidden.eq.false");
 
   if (defenseError) {
     sendJson(res, 500, { error: defenseError.message || "Chargement defenses impossible." });
@@ -3590,12 +3758,21 @@ async function handleSendDefenses(body, res) {
 
   const defenses = [];
   const missingNames = [];
+  const defenseNames = defenseAssignments.map((assignment) => assignment.name).filter(Boolean);
   const customContent = cleanText(body.customMessage || body.custom_message || body.message);
 
-  defenseNames.forEach((name) => {
-    const defense = pickDefenseForGuild(defenseRows || [], name, target.guild_code);
+  defenseAssignments.forEach((assignment) => {
+    const defense =
+      (assignment.id &&
+        (defenseRows || []).find(
+          (row) =>
+            String(row.id) === String(assignment.id) &&
+            normalizeGuildCode(row.guild_code) === normalizeGuildCode(target.guild_code) &&
+            !row.is_hidden,
+        )) ||
+      pickDefenseForGuild(defenseRows || [], assignment.name, target.guild_code);
     if (defense) defenses.push(defense);
-    else missingNames.push(name);
+    else missingNames.push(assignment.name || `Defense ${assignment.slot}`);
   });
 
   const content =

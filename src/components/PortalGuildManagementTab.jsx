@@ -9,13 +9,12 @@ import {
 } from "@/calculations";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
-  isPaladinGuildCode,
   isLeaderSession,
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
 import { getChampionDisplayName } from "@/lib/championDisplay";
-import { resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
+import { resolveAssignedDefense, resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
@@ -70,11 +69,6 @@ function openDiscordTarget(value) {
 
 function getSessionGuildCode(session) {
   return session?.guildCode || session?.guild_code || "G1";
-}
-
-function normalizeAssignment(value) {
-  const cleanValue = String(value || "").trim();
-  return cleanValue || "Tour";
 }
 
 function normalizeRoleValue(role) {
@@ -600,7 +594,6 @@ export default function PortalGuildManagementTab({ session }) {
     const sessionGuildCode = getSessionGuildCode(session);
     return sessionGuildCode ? [sessionGuildCode] : [];
   }, [session]);
-  const activeGuildIsPaladin = isPaladinGuildCode(activeGuildCode);
   const removeMemberLabel = isPaladinSession(session)
     ? t("guildManagement.leaveCluster", "Quitte le cluster")
     : t("guildManagement.leaveGuild", "Quitte la guilde");
@@ -637,13 +630,12 @@ export default function PortalGuildManagementTab({ session }) {
   const activeDefenses = useMemo(
     () =>
       resolveDefenseVariantsForGuild(
-        defenses.filter((defense) => {
-          if (defense.isGlobal || !defense.guildCode) return activeGuildIsPaladin;
-          return normalizeGuildCodeKey(defense.guildCode) === normalizeGuildCodeKey(activeGuildCode);
-        }),
+        defenses.filter(
+          (defense) => normalizeGuildCodeKey(defense.guildCode || defense.guild_code) === normalizeGuildCodeKey(activeGuildCode)
+        ),
         activeGuildCode,
       ),
-    [activeGuildCode, activeGuildIsPaladin, defenses]
+    [activeGuildCode, defenses]
   );
 
   const trackedMetaDefense = useMemo(() => {
@@ -804,15 +796,13 @@ export default function PortalGuildManagementTab({ session }) {
   }
 
   function getAssignedDefenseDetails(member) {
-    return getAssignedDefenseNames(member).map((defenseName) => {
-      const defense =
-        activeDefenses.find((entry) => String(entry.name || "") === String(defenseName || "")) || null;
-
+    return [1, 2].map((slot) => {
+      const defenseName = slot === 1 ? member?.defense1 : member?.defense2;
       return {
         name: defenseName,
-        defense,
+        defense: resolveAssignedDefense(activeDefenses, member, slot),
       };
-    });
+    }).filter(({ name, defense }) => defense || (name && name !== EMPTY_DEFENSE && name !== "—"));
   }
 
   function formatDefenseDraftDetails(defense) {
@@ -1005,32 +995,33 @@ export default function PortalGuildManagementTab({ session }) {
   async function assignDefense(slot, defense, memberId) {
     if (!memberId || !defense?.name) return;
 
-    const column = slot === 1 ? "defense_1" : "defense_2";
     const localKey = slot === 1 ? "defense1" : "defense2";
-    const targetMember = members.find((member) => String(member.id) === String(memberId));
+    const idKey = slot === 1 ? "defense1Id" : "defense2Id";
+    setSavingMessage("Sauvegarde en cours...");
+    setErrorMessage("");
 
-    const saved = await updateMemberField(
-      memberId,
-      { [column]: defense.name },
-      "Erreur assignation defense Portal:",
-      {
-        targetMemberId: memberId,
-        targetName: targetMember?.name || "",
-        actionType: "guild_management_defense_assign",
-        entityType: "defense",
-        entityId: String(defense.id),
-        summary: `${targetMember?.name || "Joueur"} : defense ${slot} affectee a ${defense.name}`,
-        metadata: {
-          slot,
-          defenseId: defense.id,
-          defenseName: defense.name,
-          guildCode: activeGuildCode,
-        },
-      }
-    );
-
-    if (saved) {
-      updateMemberLocal(memberId, { [localKey]: defense.name });
+    try {
+      const payload = await postPortalAccess("member-defense-assign", {
+        memberId,
+        slot,
+        defenseId: defense.id,
+        defenseName: defense.name,
+      });
+      const updatedMember = payload.member || {};
+      const localPatch = {
+        ...updatedMember,
+        [localKey]: updatedMember[localKey] || defense.name,
+        [idKey]: updatedMember[idKey] || defense.id,
+      };
+      updateMemberLocal(memberId, localPatch);
+      setMemberPanelMember((previous) =>
+        previous && String(previous.id) === String(memberId) ? { ...previous, ...localPatch } : previous
+      );
+    } catch (error) {
+      console.error("Erreur assignation defense Portal:", error);
+      setErrorMessage(error?.message || "Affectation defense impossible.");
+    } finally {
+      setSavingMessage("");
     }
   }
 
@@ -1038,30 +1029,34 @@ export default function PortalGuildManagementTab({ session }) {
     if (!selectedMemberId) return;
 
     const targetMember = members.find((member) => String(member.id) === String(selectedMemberId));
-    const column = slot === 1 ? "defense_1" : "defense_2";
     const localKey = slot === 1 ? "defense1" : "defense2";
+    const idKey = slot === 1 ? "defense1Id" : "defense2Id";
     const previousDefenseName = slot === 1 ? targetMember?.defense1 : targetMember?.defense2;
+    setSavingMessage("Sauvegarde en cours...");
+    setErrorMessage("");
 
-    const saved = await updateMemberField(
-      selectedMemberId,
-      { [column]: EMPTY_DEFENSE },
-      "Erreur suppression defense Portal:",
-      {
-        targetMemberId: selectedMemberId,
-        targetName: targetMember?.name || "",
-        actionType: "guild_management_defense_unassign",
-        entityType: "defense",
-        summary: `${targetMember?.name || "Joueur"} : defense ${slot} retiree`,
-        metadata: {
-          slot,
-          previousDefenseName,
-          guildCode: activeGuildCode,
-        },
-      }
-    );
-
-    if (saved) {
-      updateMemberLocal(selectedMemberId, { [localKey]: EMPTY_DEFENSE });
+    try {
+      const payload = await postPortalAccess("member-defense-assign", {
+        memberId: selectedMemberId,
+        slot,
+        defenseId: "",
+        defenseName: EMPTY_DEFENSE,
+      });
+      const updatedMember = payload.member || {};
+      const localPatch = {
+        ...updatedMember,
+        [localKey]: updatedMember[localKey] || EMPTY_DEFENSE,
+        [idKey]: updatedMember[idKey] || null,
+      };
+      updateMemberLocal(selectedMemberId, localPatch);
+      setMemberPanelMember((previous) =>
+        previous && String(previous.id) === String(selectedMemberId) ? { ...previous, ...localPatch } : previous
+      );
+    } catch (error) {
+      console.error("Erreur suppression defense Portal:", error, previousDefenseName);
+      setErrorMessage(error?.message || "Retrait defense impossible.");
+    } finally {
+      setSavingMessage("");
     }
   }
 

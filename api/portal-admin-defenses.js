@@ -18,7 +18,7 @@ const PALADIN_CLUSTER_GUILD_CODES = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const EMPTY_DEFENSE_SLOT = "--";
 const MAX_DEFENSE_ROWS = 1200;
 const MAX_BLOCK_ROWS = 200;
-const DEFENSE_SELECT = `
+const DEFENSE_SELECT_BASE = `
   id,
   name,
   tier,
@@ -28,6 +28,46 @@ const DEFENSE_SELECT = `
   is_global,
   is_hidden,
   source_defense_id,
+  sort_order,
+  image_url,
+  created_at,
+  guild_defense_slots (
+    slot_index,
+    champion_id,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  ),
+  guild_defense_conditions (
+    id,
+    champion_id,
+    min_awakening,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  )
+`;
+const DEFENSE_SELECT = DEFENSE_SELECT_BASE;
+const DEFENSE_SELECT_WITH_LIBRARY = `
+  id,
+  name,
+  tier,
+  type,
+  faction,
+  guild_code,
+  is_global,
+  is_hidden,
+  source_defense_id,
+  source_guild_code,
+  source_defense_name,
+  imported_at,
+  organization_id,
   sort_order,
   image_url,
   created_at,
@@ -91,8 +131,19 @@ function isCommunityAccount(member) {
   );
 }
 
-function isLeaderRole(role) {
-  return normalizeText(role) === "leader";
+function isMissingColumn(error, columnName = "") {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return error?.code === "42703" || error?.code === "PGRST204" || message.includes(columnName.toLowerCase());
+}
+
+function isMissingGuildLibrarySchema(error) {
+  return (
+    isMissingColumn(error, "organization_id") ||
+    isMissingColumn(error, "source_guild_code") ||
+    isMissingColumn(error, "source_defense_name") ||
+    isMissingColumn(error, "imported_at") ||
+    String(error?.message || "").toLowerCase().includes("import_guild_defense_snapshot")
+  );
 }
 
 function getGuildSpaceKey(value) {
@@ -110,9 +161,96 @@ function sameGuildSpace(left, right) {
   return Boolean(leftSpace && rightSpace && leftSpace === rightSpace);
 }
 
+function normalizeAllowedGuildCodes(guildCodes = []) {
+  return [...new Set(guildCodes.map(normalizeGuildCode).filter(Boolean))];
+}
+
+async function resolveDefenseLibraryScope(actor, requestedGuildCode) {
+  const fallbackGuildCodes = normalizeAllowedGuildCodes(
+    isPaladinGuildCode(actor?.guild_code) ? PALADIN_CLUSTER_GUILD_CODES : [actor?.guild_code],
+  );
+  const requested = normalizeGuildCode(requestedGuildCode || actor?.guild_code || fallbackGuildCodes[0]);
+  const fallback = {
+    organizationId: "",
+    organizationKey: "",
+    activeGuildCode: requested,
+    allowedGuildCodes: fallbackGuildCodes,
+    manageableGuildCodes: fallbackGuildCodes,
+    librarySchemaReady: false,
+    migrationRequired: true,
+    migrationMessage:
+      "Migration bibliotheque defenses non confirmee : execute scripts/guild_defense_library.sql avant d'utiliser les imports.",
+  };
+
+  if (!actor || isCommunityAccount(actor)) return fallback;
+
+  const { data: actorGuild, error: actorGuildError } = await supabase
+    .from("portal_guilds")
+    .select("guild_code, organization_id, is_active")
+    .eq("guild_code", normalizeGuildCode(actor.guild_code))
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (actorGuildError) return fallback;
+  if (!actorGuild?.organization_id) return fallback;
+
+  const { data: targetGuild, error: targetGuildError } = await supabase
+    .from("portal_guilds")
+    .select("guild_code, organization_id, is_active")
+    .eq("guild_code", requested)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (targetGuildError || !targetGuild?.organization_id || targetGuild.organization_id !== actorGuild.organization_id) {
+    const error = new Error("Acces guilde refuse.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const { data: organization, error: organizationError } = await supabase
+    .from("portal_organizations")
+    .select("id, organization_key, is_active")
+    .eq("id", actorGuild.organization_id)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (organizationError || !organization?.id) {
+    const error = new Error("Organisation introuvable.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const { data: guildRows, error: guildRowsError } = await supabase
+    .from("portal_guilds")
+    .select("guild_code")
+    .eq("organization_id", organization.id)
+    .eq("is_active", true)
+    .order("guild_code", { ascending: true });
+
+  if (guildRowsError) throw guildRowsError;
+
+  const allowedGuildCodes = normalizeAllowedGuildCodes((guildRows || []).map((row) => row.guild_code));
+
+  return {
+    organizationId: organization.id,
+    organizationKey: organization.organization_key || "",
+    activeGuildCode: targetGuild.guild_code || requested,
+    allowedGuildCodes,
+    manageableGuildCodes: allowedGuildCodes,
+    librarySchemaReady: true,
+    migrationRequired: false,
+    migrationMessage: "",
+  };
+}
+
+function isGuildInScope(scope, guildCode) {
+  const key = normalizeGuildCode(guildCode);
+  return Boolean(key && (scope?.allowedGuildCodes || []).some((allowed) => normalizeGuildCode(allowed) === key));
+}
+
 function canViewGuildCode(actor, guildCode, { leaderSeesAll = false } = {}) {
   if (!actor || isCommunityAccount(actor)) return false;
-  if (leaderSeesAll && isLeaderRole(actor.role)) return true;
+  void leaderSeesAll;
 
   const actorGuild = normalizeGuildCode(actor.guild_code);
   const targetGuild = normalizeGuildCode(guildCode);
@@ -124,32 +262,20 @@ function canViewGuildCode(actor, guildCode, { leaderSeesAll = false } = {}) {
 
 function canViewDefense(actor, defense, targetGuildCode) {
   if (!canViewGuildCode(actor, targetGuildCode, { leaderSeesAll: true })) return false;
-  if (isLeaderRole(actor.role)) return true;
   if (defense?.is_hidden) return false;
 
   const targetGuild = normalizeGuildCode(targetGuildCode);
   const defenseGuild = normalizeGuildCode(defense?.guild_code);
-
-  if (isPaladinGuildCode(targetGuild)) {
-    return Boolean(defense?.is_global) || isPaladinGuildCode(defenseGuild) || defenseGuild === targetGuild;
-  }
-
-  return sameGuildSpace(targetGuild, defenseGuild);
+  return Boolean(targetGuild && defenseGuild && targetGuild === defenseGuild);
 }
 
 function canManageDefense(actor, defense, targetGuildCode) {
   if (!canViewGuildCode(actor, targetGuildCode, { leaderSeesAll: true })) return false;
-  if (isLeaderRole(actor.role)) return true;
 
   const targetGuild = normalizeGuildCode(targetGuildCode);
   const defenseGuild = normalizeGuildCode(defense?.guild_code);
   if (!targetGuild || !defenseGuild) return false;
-
-  if (isPaladinGuildCode(targetGuild)) {
-    return isPaladinGuildCode(defenseGuild) || Boolean(defense?.is_global);
-  }
-
-  return sameGuildSpace(targetGuild, defenseGuild);
+  return targetGuild === defenseGuild;
 }
 
 function getDefenseRootId(defense) {
@@ -159,7 +285,6 @@ function getDefenseRootId(defense) {
 function isInheritedDefense(defense, targetGuildCode) {
   if (!defense?.id) return false;
   if (defense.source_defense_id || defense.sourceDefenseId) return false;
-  if (!isPaladinGuildCode(targetGuildCode)) return false;
   return Boolean(defense.is_global || defense.isGlobal) && normalizeGuildCode(defense.guild_code || defense.guildCode) !== normalizeGuildCode(targetGuildCode);
 }
 
@@ -208,6 +333,16 @@ function mapDefenseRow(row, blocksByDefenseId = new Map()) {
     is_hidden: Boolean(row.is_hidden),
     sourceDefenseId: row.source_defense_id || null,
     source_defense_id: row.source_defense_id || null,
+    sourceGuildCode: row.source_guild_code || "",
+    source_guild_code: row.source_guild_code || "",
+    sourceDefenseName: row.source_defense_name || "",
+    source_defense_name: row.source_defense_name || "",
+    originGuildCode: row.source_guild_code || row.guild_code || "",
+    originDefenseName: row.source_defense_name || row.name || "",
+    organizationId: row.organization_id || "",
+    organization_id: row.organization_id || "",
+    importedAt: row.imported_at || null,
+    imported_at: row.imported_at || null,
     sortOrder: row.sort_order ?? 9999,
     sort_order: row.sort_order ?? 9999,
     slots,
@@ -216,49 +351,6 @@ function mapDefenseRow(row, blocksByDefenseId = new Map()) {
     image: row.image_url || "",
     image_url: row.image_url || "",
   };
-}
-
-function resolveDefenseVariantsForGuild(defenses = [], guildCode) {
-  const activeGuildKey = normalizeGuildCode(guildCode);
-  const localByRootId = new Map();
-  const hiddenRootIds = new Set();
-
-  defenses.forEach((defense) => {
-    const rootId = getDefenseRootId(defense);
-    if (!rootId || !defense.sourceDefenseId) return;
-    if (normalizeGuildCode(defense.guildCode) !== activeGuildKey) return;
-
-    if (defense.isHidden) {
-      hiddenRootIds.add(String(rootId));
-      return;
-    }
-
-    localByRootId.set(String(rootId), defense);
-  });
-
-  const resolved = [];
-  const emittedRootIds = new Set();
-
-  defenses.forEach((defense) => {
-    const rootId = getDefenseRootId(defense);
-    if (!rootId) return;
-
-    const rootKey = String(rootId);
-    if (emittedRootIds.has(rootKey) || hiddenRootIds.has(rootKey)) return;
-
-    const localVariant = localByRootId.get(rootKey);
-    if (localVariant) {
-      resolved.push(localVariant);
-      emittedRootIds.add(rootKey);
-      return;
-    }
-
-    if (defense.isHidden) return;
-    resolved.push(defense);
-    emittedRootIds.add(rootKey);
-  });
-
-  return resolved;
 }
 
 function sortDefenses(defenses = []) {
@@ -283,6 +375,39 @@ function extractStoragePath(fileUrl) {
   } catch {
     return null;
   }
+}
+
+async function filterUnusedStoragePaths(storagePaths = [], ignoredDefenseId = "") {
+  const uniqueStoragePaths = [...new Set(storagePaths.filter(Boolean))];
+  if (uniqueStoragePaths.length === 0) return [];
+
+  const [defensesResult, blocksResult] = await Promise.all([
+    supabase.from("guild_defenses").select("id, image_url").neq("id", ignoredDefenseId || "0"),
+    supabase.from("guild_defense_blocks").select("id, defense_id, content").neq("defense_id", ignoredDefenseId || "0"),
+  ]);
+
+  if (defensesResult.error) throw defensesResult.error;
+  if (blocksResult.error) throw blocksResult.error;
+
+  const usedPaths = new Set();
+  (defensesResult.data || []).forEach((row) => {
+    const path = extractStoragePath(row.image_url);
+    if (path) usedPaths.add(path);
+  });
+  (blocksResult.data || []).forEach((row) => {
+    const path = extractStoragePath(row.content);
+    if (path) usedPaths.add(path);
+  });
+
+  return uniqueStoragePaths.filter((path) => !usedPaths.has(path));
+}
+
+async function removeUnusedStoragePaths(storagePaths = [], ignoredDefenseId = "") {
+  const removablePaths = await filterUnusedStoragePaths(storagePaths, ignoredDefenseId);
+  if (removablePaths.length === 0) return;
+
+  const { error } = await supabase.storage.from("defense-images").remove(removablePaths);
+  if (error) throw error;
 }
 
 function parseDataUrl(dataUrl) {
@@ -330,26 +455,120 @@ async function loadBlocksArray(defenseId) {
 async function loadDefenseRow(defenseId) {
   const { data, error } = await supabase
     .from("guild_defenses")
-    .select(DEFENSE_SELECT)
+    .select(DEFENSE_SELECT_WITH_LIBRARY)
     .eq("id", defenseId)
     .maybeSingle();
 
-  if (error) throw error;
-  return data || null;
+  if (!error) return { row: data || null, schemaReady: true };
+  if (!isMissingGuildLibrarySchema(error)) throw error;
+
+  const fallback = await supabase
+    .from("guild_defenses")
+    .select(DEFENSE_SELECT_BASE)
+    .eq("id", defenseId)
+    .maybeSingle();
+
+  if (fallback.error) throw fallback.error;
+  return { row: fallback.data || null, schemaReady: false };
 }
 
-async function loadVisibleMappedDefenses(actor, guildCode) {
+async function loadDefenseRows() {
   const { data, error } = await supabase
     .from("guild_defenses")
-    .select(DEFENSE_SELECT)
+    .select(DEFENSE_SELECT_WITH_LIBRARY)
     .order("created_at", { ascending: true })
     .limit(MAX_DEFENSE_ROWS);
 
-  if (error) throw error;
+  if (!error) return { rows: data || [], schemaReady: true };
+  if (!isMissingGuildLibrarySchema(error)) throw error;
 
-  const rows = (data || []).filter((row) => canViewDefense(actor, row, guildCode));
-  const blocksByDefenseId = await loadBlocksByDefenseIds(rows.map((row) => row.id).filter(Boolean));
-  return rows.map((row) => mapDefenseRow(row, blocksByDefenseId));
+  const fallback = await supabase
+    .from("guild_defenses")
+    .select(DEFENSE_SELECT_BASE)
+    .order("created_at", { ascending: true })
+    .limit(MAX_DEFENSE_ROWS);
+
+  if (fallback.error) throw fallback.error;
+  return { rows: fallback.data || [], schemaReady: false };
+}
+
+async function hasGuildDefenseLibrarySchema() {
+  const { error } = await supabase
+    .from("guild_defenses")
+    .select("organization_id, source_guild_code, source_defense_name, imported_at")
+    .limit(1);
+
+  if (!error) return true;
+  if (isMissingGuildLibrarySchema(error)) return false;
+  throw error;
+}
+
+async function loadMappedDefenseRowsInScope(scope) {
+  const { rows, schemaReady } = await loadDefenseRows();
+  const scopedRows = rows.filter((row) => isGuildInScope(scope, row.guild_code));
+  const blocksByDefenseId = await loadBlocksByDefenseIds(scopedRows.map((row) => row.id).filter(Boolean));
+
+  return {
+    defenses: scopedRows.map((row) => mapDefenseRow(row, blocksByDefenseId)),
+    schemaReady,
+  };
+}
+
+function buildLibraryEntries(nativeDefenses, localDefenses, scope, activeGuildCode) {
+  const activeGuildKey = normalizeGuildCode(activeGuildCode);
+  const activeSourceIds = new Set(
+    localDefenses
+      .filter(
+        (defense) =>
+          defense.sourceDefenseId &&
+          normalizeGuildCode(defense.guildCode) === activeGuildKey &&
+          !defense.isHidden,
+      )
+      .map((defense) => String(defense.sourceDefenseId)),
+  );
+
+  return sortDefenses(nativeDefenses).map((defense) => {
+    const sourceId = String(defense.id || "");
+    const sourceGuildKey = normalizeGuildCode(defense.guildCode);
+    const importTargets = (scope.manageableGuildCodes || []).map((guildCode) => {
+      const guildKey = normalizeGuildCode(guildCode);
+      const nativeInGuild = guildKey === sourceGuildKey;
+      const importedInGuild = localDefenses.some(
+        (candidate) =>
+          String(candidate.sourceDefenseId || "") === sourceId &&
+          normalizeGuildCode(candidate.guildCode) === guildKey &&
+          !candidate.isHidden,
+      );
+
+      return {
+        guildCode,
+        status: nativeInGuild ? "native" : importedInGuild ? "imported" : "available",
+      };
+    });
+
+    return {
+      ...defense,
+      originGuildCode: defense.guildCode,
+      libraryTargetStatus:
+        sourceGuildKey === activeGuildKey ? "native" : activeSourceIds.has(sourceId) ? "imported" : "available",
+      importTargets,
+    };
+  });
+}
+
+async function loadDefenseLibraryPayload(scope, guildCode) {
+  const { defenses, schemaReady } = await loadMappedDefenseRowsInScope(scope);
+  const activeGuildKey = normalizeGuildCode(guildCode);
+  const visibleDefenses = defenses.filter(
+    (defense) => normalizeGuildCode(defense.guildCode) === activeGuildKey && !defense.isHidden,
+  );
+  const nativeDefenses = defenses.filter((defense) => !defense.sourceDefenseId && !defense.isHidden);
+
+  return {
+    schemaReady,
+    defenses: sortDefenses(visibleDefenses),
+    libraryDefenses: buildLibraryEntries(nativeDefenses, defenses, scope, guildCode),
+  };
 }
 
 async function loadChampions() {
@@ -410,7 +629,7 @@ async function copyDefenseChildren(sourceDefense, targetDefenseId, champions = [
 }
 
 async function ensureEditableDefense(actor, defenseId, guildCode, { hidden = false } = {}) {
-  const row = await loadDefenseRow(defenseId);
+  const { row } = await loadDefenseRow(defenseId);
   if (!row) throw new Error("Defense introuvable.");
   if (!canManageDefense(actor, row, guildCode)) throw new Error("Acces defense refuse.");
 
@@ -469,27 +688,71 @@ async function ensureEditableDefense(actor, defenseId, guildCode, { hidden = fal
   return mapDefenseRow(localRow, await loadBlocksByDefenseIds([localRow.id]));
 }
 
-async function resetAssignedDefenseNames(defenseName, guildCode, resetAllPaladin) {
-  const resetGuildCodes = resetAllPaladin
-    ? PALADIN_CLUSTER_GUILD_CODES
-    : [guildCode].filter(Boolean);
+async function resetAssignedDefense(defense, guildCode) {
+  const defenseId = cleanText(defense?.id);
+  const defenseName = cleanText(defense?.name);
+  const targetGuildCode = normalizeGuildCode(guildCode);
 
-  let resetDefense1Query = supabase
-    .from("guild_members")
-    .update({ defense_1: EMPTY_DEFENSE_SLOT })
-    .eq("defense_1", defenseName);
-  let resetDefense2Query = supabase
-    .from("guild_members")
-    .update({ defense_2: EMPTY_DEFENSE_SLOT })
-    .eq("defense_2", defenseName);
-
-  if (resetGuildCodes.length > 0) {
-    resetDefense1Query = resetDefense1Query.in("guild_code", resetGuildCodes);
-    resetDefense2Query = resetDefense2Query.in("guild_code", resetGuildCodes);
+  const updates = [];
+  if (defenseId) {
+    updates.push(
+      supabase
+        .from("guild_members")
+        .update({ defense_1: EMPTY_DEFENSE_SLOT, defense_1_id: null })
+        .eq("defense_1_id", defenseId),
+      supabase
+        .from("guild_members")
+        .update({ defense_2: EMPTY_DEFENSE_SLOT, defense_2_id: null })
+        .eq("defense_2_id", defenseId),
+    );
   }
 
-  const [resetDefense1, resetDefense2] = await Promise.all([resetDefense1Query, resetDefense2Query]);
-  const mutationError = resetDefense1.error || resetDefense2.error;
+  if (defenseName) {
+    let defense1ByName = supabase
+      .from("guild_members")
+      .update({ defense_1: EMPTY_DEFENSE_SLOT })
+      .eq("defense_1", defenseName);
+    let defense2ByName = supabase
+      .from("guild_members")
+      .update({ defense_2: EMPTY_DEFENSE_SLOT })
+      .eq("defense_2", defenseName);
+
+    if (targetGuildCode) {
+      defense1ByName = defense1ByName.eq("guild_code", targetGuildCode);
+      defense2ByName = defense2ByName.eq("guild_code", targetGuildCode);
+    }
+
+    updates.push(defense1ByName, defense2ByName);
+  }
+
+  const results = await Promise.all(updates);
+  const missingAssignmentIdColumn = results.find(
+    (result) => result.error && (isMissingColumn(result.error, "defense_1_id") || isMissingColumn(result.error, "defense_2_id")),
+  );
+  if (missingAssignmentIdColumn) {
+    const fallbackUpdates = [];
+    if (defenseName) {
+      let defense1ByName = supabase
+        .from("guild_members")
+        .update({ defense_1: EMPTY_DEFENSE_SLOT })
+        .eq("defense_1", defenseName);
+      let defense2ByName = supabase
+        .from("guild_members")
+        .update({ defense_2: EMPTY_DEFENSE_SLOT })
+        .eq("defense_2", defenseName);
+      if (targetGuildCode) {
+        defense1ByName = defense1ByName.eq("guild_code", targetGuildCode);
+        defense2ByName = defense2ByName.eq("guild_code", targetGuildCode);
+      }
+      fallbackUpdates.push(defense1ByName, defense2ByName);
+    }
+    const fallbackResults = await Promise.all(fallbackUpdates);
+    const fallbackError = fallbackResults.find((result) => result.error)?.error;
+    if (fallbackError) throw fallbackError;
+    return;
+  }
+
+  const mutationError = results.find((result) => result.error)?.error;
   if (mutationError) throw mutationError;
 }
 
@@ -497,20 +760,34 @@ async function handleLoad(body, req, res) {
   const actor = await requireAdmin(req, res);
   if (!actor) return;
 
-  const guildCode = normalizeGuildCode(validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  const guildCode = scope.activeGuildCode;
   if (!canViewGuildCode(actor, guildCode, { leaderSeesAll: true })) {
     sendJson(res, 403, { error: "Acces guilde refuse." });
     return;
   }
 
-  const [defenses, champions] = await Promise.all([
-    loadVisibleMappedDefenses(actor, guildCode),
-    loadChampions(),
-  ]);
+  const [payload, champions] = await Promise.all([loadDefenseLibraryPayload(scope, guildCode), loadChampions()]);
 
   sendJson(res, 200, {
     ok: true,
-    defenses: sortDefenses(resolveDefenseVariantsForGuild(defenses, guildCode)),
+    defenses: payload.defenses,
+    libraryDefenses: payload.libraryDefenses,
+    guilds: scope.allowedGuildCodes,
+    manageableGuilds: scope.manageableGuildCodes,
+    migrationRequired: scope.migrationRequired || !payload.schemaReady,
+    migrationMessage:
+      scope.migrationMessage ||
+      (!payload.schemaReady
+        ? "Migration bibliotheque defenses non executee : imports et IDs d'attribution indisponibles."
+        : ""),
     champions,
   });
 }
@@ -553,15 +830,111 @@ async function handleUploadImage(body, req, res) {
   sendJson(res, 200, { ok: true, imageUrl: data.publicUrl });
 }
 
+async function handleImport(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  const sourceDefenseId = validatePortalInput(body.sourceDefenseId || body.source_defense_id || body.defenseId, 80);
+  const targetGuildCodeInput = validatePortalInput(body.targetGuildCode || body.target_guild_code || body.guildCode, 40);
+  if (!sourceDefenseId || !targetGuildCodeInput) {
+    sendJson(res, 400, { error: "Defense source et guilde cible requises." });
+    return;
+  }
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, targetGuildCodeInput);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  if (scope.migrationRequired || !scope.librarySchemaReady) {
+    sendJson(res, 428, {
+      error: scope.migrationMessage || "Migration bibliotheque defenses requise avant import.",
+    });
+    return;
+  }
+
+  const targetGuildCode = scope.activeGuildCode;
+  const canManageTargetGuild = (scope.manageableGuildCodes || []).some(
+    (guildCode) => normalizeGuildCode(guildCode) === normalizeGuildCode(targetGuildCode),
+  );
+  if (!canManageTargetGuild) {
+    sendJson(res, 403, { error: "Guilde cible hors perimetre." });
+    return;
+  }
+
+  const { row: source, schemaReady } = await loadDefenseRow(sourceDefenseId);
+  if (!schemaReady) {
+    sendJson(res, 428, { error: "Migration bibliotheque defenses requise avant import." });
+    return;
+  }
+
+  if (!source || !isGuildInScope(scope, source.guild_code) || source.is_hidden) {
+    sendJson(res, 404, { error: "Defense source introuvable dans la bibliotheque." });
+    return;
+  }
+
+  if (source.source_defense_id) {
+    sendJson(res, 400, { error: "Seules les defenses natives peuvent etre importees depuis la bibliotheque." });
+    return;
+  }
+
+  if (normalizeGuildCode(source.guild_code) === normalizeGuildCode(targetGuildCode)) {
+    sendJson(res, 409, { error: `Cette defense est deja native dans ${targetGuildCode}.` });
+    return;
+  }
+
+  const { data: existingImport, error: existingImportError } = await supabase
+    .from("guild_defenses")
+    .select("id")
+    .eq("guild_code", targetGuildCode)
+    .eq("source_defense_id", source.id)
+    .or("is_hidden.is.null,is_hidden.eq.false")
+    .maybeSingle();
+
+  if (existingImportError) throw existingImportError;
+  if (existingImport) {
+    sendJson(res, 409, { error: `Cette defense est deja importee dans ${targetGuildCode}.` });
+    return;
+  }
+
+  const { data: importedDefenseId, error: importError } = await supabase.rpc("import_guild_defense_snapshot", {
+    p_source_defense_id: source.id,
+    p_target_guild_code: targetGuildCode,
+    p_actor_member_id: actor.id,
+  });
+
+  if (importError) {
+    if (isMissingGuildLibrarySchema(importError)) {
+      sendJson(res, 428, { error: "Migration bibliotheque defenses requise avant import." });
+      return;
+    }
+    throw importError;
+  }
+
+  const { row: importedDefense } = await loadDefenseRow(importedDefenseId);
+  const mappedDefense = importedDefense
+    ? mapDefenseRow(importedDefense, await loadBlocksByDefenseIds([importedDefense.id]))
+    : null;
+
+  sendJson(res, 200, { ok: true, defense: mappedDefense, defenseId: importedDefenseId });
+}
+
 async function handleSave(body, req, res) {
   const actor = await requireAdmin(req, res);
   if (!actor) return;
 
-  const guildCode = normalizeGuildCode(validatePortalInput(body.guildCode, 40) || actor.guild_code);
-  if (!canViewGuildCode(actor, guildCode, { leaderSeesAll: true })) {
-    sendJson(res, 403, { error: "Acces guilde refuse." });
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
     return;
   }
+
+  const guildCode = scope.activeGuildCode;
 
   const champions = await loadChampions();
   const championByName = buildChampionByName(champions);
@@ -587,26 +960,31 @@ async function handleSave(body, req, res) {
   let existing = null;
 
   if (isEditMode) {
-    existing = await loadDefenseRow(defenseId);
+    const existingResult = await loadDefenseRow(defenseId);
+    existing = existingResult.row;
     if (!existing) throw new Error("Defense introuvable.");
     if (!canManageDefense(actor, existing, guildCode)) throw new Error("Acces defense refuse.");
   }
 
-  const nextIsGlobal = isPaladinGuildCode(guildCode) && Boolean(draft.isGlobal);
   const defensePayload = {
     name: cleanName,
     tier: validatePortalInput(draft.tier, 40) || "meta_s",
     type: validatePortalInput(draft.type, 40) || "Tour",
     faction: validatePortalInput(draft.faction, 80) || null,
     image_url: validatePortalInput(draft.imageUrl || draft.image || draft.image_url, 500) || null,
-    guild_code: nextIsGlobal ? normalizeGuildCode(draft.guildCode || guildCode || "G1") : guildCode,
-    is_global: nextIsGlobal,
-    source_defense_id: draft.sourceDefenseId || draft.source_defense_id || null,
+    guild_code: guildCode,
+    is_global: false,
+    source_defense_id: isEditMode ? existing.source_defense_id || null : null,
   };
 
+  const defenseLibrarySchemaReady = await hasGuildDefenseLibrarySchema();
+  if (!isEditMode && defenseLibrarySchemaReady && scope.organizationId) {
+    defensePayload.organization_id = scope.organizationId;
+  }
+
   const { data: savedDefense, error: defenseError } = isEditMode
-    ? await supabase.from("guild_defenses").update(defensePayload).eq("id", defenseId).select(DEFENSE_SELECT).single()
-    : await supabase.from("guild_defenses").insert(defensePayload).select(DEFENSE_SELECT).single();
+    ? await supabase.from("guild_defenses").update(defensePayload).eq("id", defenseId).select("id").single()
+    : await supabase.from("guild_defenses").insert(defensePayload).select("id").single();
 
   if (defenseError) throw defenseError;
 
@@ -624,7 +1002,11 @@ async function handleSave(body, req, res) {
   );
   if (slotsError) throw slotsError;
 
-  sendJson(res, 200, { ok: true, defense: mapDefenseRow(savedDefense, await loadBlocksByDefenseIds([savedDefense.id])) });
+  const { row: reloadedDefense } = await loadDefenseRow(savedDefense.id);
+  sendJson(res, 200, {
+    ok: true,
+    defense: mapDefenseRow(reloadedDefense || savedDefense, await loadBlocksByDefenseIds([savedDefense.id])),
+  });
 }
 
 async function handleConditionsLoad(body, req, res) {
@@ -713,25 +1095,15 @@ async function handleDelete(body, req, res) {
 
   const guildCode = normalizeGuildCode(validatePortalInput(body.guildCode, 40) || actor.guild_code);
   const defenseId = validatePortalInput(body.defenseId, 80);
-  const row = await loadDefenseRow(defenseId);
+  const { row } = await loadDefenseRow(defenseId);
 
   if (!row) throw new Error("Defense introuvable.");
   if (!canManageDefense(actor, row, guildCode)) throw new Error("Acces defense refuse.");
 
   const mappedDefense = mapDefenseRow(row, await loadBlocksByDefenseIds([row.id]));
-  const shouldHideLocally = Boolean(mappedDefense.sourceDefenseId || isInheritedDefense(row, guildCode));
+  const isImportedCopy = Boolean(mappedDefense.sourceDefenseId);
 
-  await resetAssignedDefenseNames(
-    mappedDefense.name,
-    guildCode,
-    !shouldHideLocally && (mappedDefense.isGlobal || isPaladinGuildCode(mappedDefense.guildCode)),
-  );
-
-  if (shouldHideLocally) {
-    const localDefense = await ensureEditableDefense(actor, defenseId, guildCode, { hidden: true });
-    sendJson(res, 200, { ok: true, hidden: true, defense: localDefense });
-    return;
-  }
+  await resetAssignedDefense(mappedDefense, guildCode);
 
   const { data: blocks, error: blocksError } = await supabase
     .from("guild_defense_blocks")
@@ -748,8 +1120,7 @@ async function handleDelete(body, req, res) {
 
   const uniqueStoragePaths = [...new Set(storagePaths)];
   if (uniqueStoragePaths.length > 0) {
-    const { error: storageError } = await supabase.storage.from("defense-images").remove(uniqueStoragePaths);
-    if (storageError) throw storageError;
+    await removeUnusedStoragePaths(uniqueStoragePaths, defenseId);
   }
 
   const [blocksDelete, conditionsDelete, slotsDelete] = await Promise.all([
@@ -764,7 +1135,7 @@ async function handleDelete(body, req, res) {
   const { error: defenseError } = await supabase.from("guild_defenses").delete().eq("id", defenseId);
   if (defenseError) throw defenseError;
 
-  sendJson(res, 200, { ok: true, deleted: true });
+  sendJson(res, 200, { ok: true, deleted: true, removedLocalCopy: isImportedCopy });
 }
 
 async function handleBlocksLoad(body, req, res) {
@@ -773,7 +1144,7 @@ async function handleBlocksLoad(body, req, res) {
 
   const guildCode = normalizeGuildCode(validatePortalInput(body.guildCode, 40) || actor.guild_code);
   const defenseId = validatePortalInput(body.defenseId, 80);
-  const defense = await loadDefenseRow(defenseId);
+  const { row: defense } = await loadDefenseRow(defenseId);
   if (!defense || !canViewDefense(actor, defense, guildCode)) throw new Error("Acces defense refuse.");
 
   const blocks = await loadBlocksArray(defenseId);
@@ -819,8 +1190,7 @@ async function handleBlockDelete(body, req, res) {
 
   const storagePath = block?.block_type === "image" ? extractStoragePath(block.content) : null;
   if (storagePath) {
-    const { error: storageError } = await supabase.storage.from("defense-images").remove([storagePath]);
-    if (storageError) throw storageError;
+    await removeUnusedStoragePaths([storagePath], defense.id);
   }
 
   const { error } = await supabase
@@ -913,6 +1283,7 @@ export default async function handler(req, res) {
     if (action === "load") return await handleLoad(body, req, res);
     if (action === "ensure-local") return await handleEnsureLocal(body, req, res);
     if (action === "upload-image") return await handleUploadImage(body, req, res);
+    if (action === "import") return await handleImport(body, req, res);
     if (action === "save") return await handleSave(body, req, res);
     if (action === "conditions-load") return await handleConditionsLoad(body, req, res);
     if (action === "condition-add") return await handleConditionAdd(body, req, res);

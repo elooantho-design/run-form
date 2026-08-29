@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
-import { Shield, Plus, Pencil, Trash2, ClipboardPaste } from "lucide-react";
+import { Ban, CheckCircle2, ClipboardPaste, Download, Library, Pencil, Plus, Search, Shield, Trash2 } from "lucide-react";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { normalizeGuildCodeKey } from "@/lib/guildScope";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -37,16 +38,24 @@ function fileToDataUrl(file) {
 
 export default function AdminDefensesTab({
   defenses = [],
+  libraryDefenses = [],
   activeGuildCode = "",
+  manageableGuildCodes = [],
+  migrationRequired = false,
   onEdit,
   onDelete,
   onAdd,
   onAddCondition,
   onRemoveCondition,
   onEnsureEditable,
+  onImportDefense,
 }) {
   const { t } = usePortalLanguage();
   const [typeFilter, setTypeFilter] = useState("all");
+const [query, setQuery] = useState("");
+const [showLibrary, setShowLibrary] = useState(false);
+const [importTargetByDefenseId, setImportTargetByDefenseId] = useState({});
+const [importingKey, setImportingKey] = useState("");
 const [blocksModalOpen, setBlocksModalOpen] = useState(false);
 const [selectedDefenseForBlocks, setSelectedDefenseForBlocks] = useState(null);
 const [defenseBlocks, setDefenseBlocks] = useState([]);
@@ -110,7 +119,14 @@ const openDefenseBlocksModal = async (defense) => {
 };
 
   const displayedDefenses = useMemo(() => {
-    return [...defenses]
+    const sourceRows = showLibrary ? libraryDefenses : defenses;
+    const normalizedQuery = query
+      .trim()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+    return [...sourceRows]
       .filter((defense) => {
         if (typeFilter === "all") return true;
 
@@ -120,12 +136,29 @@ const openDefenseBlocksModal = async (defense) => {
             .toLowerCase() === typeFilter
         );
       })
+      .filter((defense) => {
+        if (!normalizedQuery) return true;
+        return [
+          defense.name,
+          defense.type,
+          defense.faction,
+          defense.guildCode,
+          defense.originGuildCode,
+          defense.sourceGuildCode,
+          ...(defense.slots || []),
+        ]
+          .join(" ")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .includes(normalizedQuery);
+      })
       .sort((a, b) =>
         String(a.name || "").localeCompare(String(b.name || ""), "fr", {
           sensitivity: "base",
         })
       );
-  }, [defenses, typeFilter]);
+  }, [defenses, libraryDefenses, query, showLibrary, typeFilter]);
 
   const filterButtonClass = (value) =>
     `rounded-xl border px-3 py-1.5 text-sm ${
@@ -141,6 +174,42 @@ const openDefenseBlocksModal = async (defense) => {
     if (normalizedType === "bastion") return t("defenses.bastion", "Bastion");
     if (normalizedType === "bulle") return t("defenses.bubble", "Bulle");
     return value || "";
+  };
+
+  const getSelectedImportTarget = (defense) => {
+    const preferredTarget = importTargetByDefenseId[String(defense?.id || "")] || activeGuildCode;
+    const allowedTargets = manageableGuildCodes.length ? manageableGuildCodes : [activeGuildCode].filter(Boolean);
+    const matchingTarget = allowedTargets.find(
+      (guildCode) => normalizeGuildCodeKey(guildCode) === normalizeGuildCodeKey(preferredTarget)
+    );
+    return matchingTarget || allowedTargets[0] || activeGuildCode;
+  };
+
+  const getImportTargetStatus = (defense, targetGuildCode) => {
+    const target = (defense?.importTargets || []).find(
+      (entry) => normalizeGuildCodeKey(entry.guildCode) === normalizeGuildCodeKey(targetGuildCode)
+    );
+    return target?.status || defense?.libraryTargetStatus || "available";
+  };
+
+  const getImportActionLabel = (status, targetGuildCode) => {
+    if (status === "native") return `Deja dans ${targetGuildCode}`;
+    if (status === "imported") return `Deja importee dans ${targetGuildCode}`;
+    return t("adminDefenses.import", "Importer");
+  };
+
+  const importLibraryDefense = async (defense) => {
+    const targetGuildCode = getSelectedImportTarget(defense);
+    const status = getImportTargetStatus(defense, targetGuildCode);
+    if (migrationRequired || status !== "available" || !onImportDefense) return;
+
+    const key = `${defense.id}:${targetGuildCode}`;
+    setImportingKey(key);
+    try {
+      await onImportDefense(defense, targetGuildCode);
+    } finally {
+      setImportingKey("");
+    }
   };
 
 const defenseCardClass = (tier) => {
@@ -382,6 +451,7 @@ const pasteImageBlockFromClipboard = async () => {
         <button
           type="button"
           onClick={onAdd}
+          disabled={showLibrary}
           className="flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800"
         >
           <Plus className="h-4 w-4" />
@@ -389,7 +459,7 @@ const pasteImageBlockFromClipboard = async () => {
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setTypeFilter("all")}
@@ -421,7 +491,49 @@ const pasteImageBlockFromClipboard = async () => {
         >
           {t("defenses.bubble", "Bulle")}
         </button>
+
+        <button
+          type="button"
+          onClick={() => setShowLibrary((value) => !value)}
+          className={`rounded-xl border px-3 py-1.5 text-sm ${
+            showLibrary
+              ? "border-cyan-500 bg-cyan-950/50 text-cyan-100"
+              : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+          }`}
+        >
+          <Library className="mr-1.5 inline h-4 w-4 align-[-3px]" />
+          {t("adminDefenses.library", "Bibliotheque")}
+        </button>
+
+        <label className="relative min-w-[220px] flex-1 sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t("common.search", "Rechercher")}
+            className="h-9 w-full rounded-xl border border-zinc-700 bg-zinc-900 pl-9 pr-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
+          />
+        </label>
       </div>
+
+      {showLibrary ? (
+        <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
+          {t(
+            "adminDefenses.libraryHelp",
+            "La bibliotheque affiche les defenses natives de ton organisation. L'import cree une copie locale independante."
+          )}
+        </div>
+      ) : null}
+
+      {showLibrary && migrationRequired ? (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          {t(
+            "adminDefenses.libraryMigrationRequired",
+            "Migration bibliotheque requise avant de pouvoir importer une defense."
+          )}
+        </div>
+      ) : null}
 
       <div className="grid gap-3">
         {displayedDefenses.length === 0 ? (
@@ -432,18 +544,35 @@ const pasteImageBlockFromClipboard = async () => {
           displayedDefenses.map((defense) => {
             const imageSrc = defense.image || defense.image_url || "";
             const infoBlocks = getDefenseInfoBlocks(defense);
+            const selectedTarget = getSelectedImportTarget(defense);
+            const targetStatus = getImportTargetStatus(defense, selectedTarget);
+            const importKey = `${defense.id}:${selectedTarget}`;
+            const canImport = showLibrary && !migrationRequired && targetStatus === "available";
 
             return (
               <div
                 key={defense.id}
-                className={`grid min-h-[220px] gap-5 rounded-2xl p-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)_auto] ${defenseCardClass(
+                className={`grid min-h-[220px] gap-5 rounded-2xl p-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)_auto] ${
+                  showLibrary && targetStatus !== "available" ? "opacity-70" : ""
+                } ${defenseCardClass(
                   defense.tier
                 )}`}
               >
                 <div className="flex flex-col">
                   <div>
-                    <div className="font-semibold text-white">
-                      {defense.name}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-semibold text-white">
+                        {defense.name}
+                      </div>
+                      {showLibrary ? (
+                        <span className="rounded-md border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-xs font-semibold text-cyan-100">
+                          {defense.originGuildCode || defense.guildCode || "-"}
+                        </span>
+                      ) : defense.sourceGuildCode ? (
+                        <span className="rounded-md border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-xs font-semibold text-amber-100">
+                          Importee depuis {defense.sourceGuildCode}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-xs text-zinc-300">
                       {defense.tier} · {formatDefenseTypeLabel(defense.type)}
@@ -531,45 +660,89 @@ const pasteImageBlockFromClipboard = async () => {
                 </div>
 
                 <div className="flex flex-col gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onEdit?.(defense)}
-                    className="rounded-xl border border-zinc-700 bg-zinc-950/40 p-2 text-zinc-200 hover:bg-zinc-800"
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </button>
+                  {showLibrary ? (
+                    <>
+                      <select
+                        value={selectedTarget}
+                        onChange={(event) =>
+                          setImportTargetByDefenseId((previous) => ({
+                            ...previous,
+                            [String(defense.id)]: event.target.value,
+                          }))
+                        }
+                        className="rounded-xl border border-zinc-700 bg-zinc-950/80 px-2 py-2 text-xs text-zinc-100 outline-none"
+                      >
+                        {(manageableGuildCodes.length ? manageableGuildCodes : [activeGuildCode]).map((guildCode) => {
+                          const optionStatus = getImportTargetStatus(defense, guildCode);
+                          return (
+                            <option key={guildCode} value={guildCode} disabled={optionStatus !== "available"}>
+                              {guildCode} {optionStatus === "available" ? "" : "- deja presente"}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => importLibraryDefense(defense)}
+                        disabled={!canImport || importingKey === importKey}
+                        className="flex items-center justify-center gap-2 rounded-xl border border-cyan-500/50 bg-cyan-500/15 px-3 py-2 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:border-zinc-700 disabled:bg-zinc-950/40 disabled:text-zinc-500"
+                      >
+                        {targetStatus === "available" ? (
+                          <Download className="h-4 w-4" />
+                        ) : targetStatus === "native" ? (
+                          <CheckCircle2 className="h-4 w-4" />
+                        ) : (
+                          <Ban className="h-4 w-4" />
+                        )}
+                        {importingKey === importKey
+                          ? t("common.loading", "Chargement...")
+                          : getImportActionLabel(targetStatus, selectedTarget)}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onEdit?.(defense)}
+                        className="rounded-xl border border-zinc-700 bg-zinc-950/40 p-2 text-zinc-200 hover:bg-zinc-800"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={() => onDelete?.(defense)}
-                    className="rounded-xl border border-red-900/60 bg-zinc-950/40 p-2 text-red-300 hover:bg-red-950/40"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => onDelete?.(defense)}
+                        className="rounded-xl border border-red-900/60 bg-zinc-950/40 p-2 text-red-300 hover:bg-red-950/40"
+                        title={defense.sourceDefenseId ? `Retirer de ${activeGuildCode}` : t("common.delete", "Supprimer")}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={() => onAddCondition?.(defense)}
-                    className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
-                  >
-                    + {t("defenses.conditions", "Condition")}
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => onAddCondition?.(defense)}
+                        className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+                      >
+                        + {t("defenses.conditions", "Condition")}
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={() => onRemoveCondition?.(defense)}
-                    disabled={(defense.conditions || []).length === 0}
-                    className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    - {t("defenses.conditions", "Condition")}
-                  </button>
-                  <button
-  type="button"
-  onClick={() => openDefenseBlocksModal(defense)}
-  className="rounded-xl border border-blue-700 bg-blue-900/30 px-2 py-1 text-xs text-blue-300 hover:bg-blue-800/50"
->
-  {t("adminDefenses.infoButton", "Infos")}
-</button>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveCondition?.(defense)}
+                        disabled={(defense.conditions || []).length === 0}
+                        className="rounded-xl border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        - {t("defenses.conditions", "Condition")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openDefenseBlocksModal(defense)}
+                        className="rounded-xl border border-blue-700 bg-blue-900/30 px-2 py-1 text-xs text-blue-300 hover:bg-blue-800/50"
+                      >
+                        {t("adminDefenses.infoButton", "Infos")}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             );

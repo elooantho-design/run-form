@@ -14,11 +14,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
-import {
-  isPaladinGuildCode,
-  isSameGuildSpace,
-  normalizeGuildCodeKey,
-} from "@/lib/guildScope";
+import { normalizeGuildCodeKey } from "@/lib/guildScope";
 import {
   getDefenseConditionRequirements,
   getDefenseRootId,
@@ -26,7 +22,12 @@ import {
   getMemberTrackedDefenseScore,
   normalizeDefenseTier,
 } from "@/calculations";
-import { resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
+import {
+  getDefenseAssignmentId,
+  getDefenseAssignmentName,
+  resolveAssignedDefense,
+  resolveDefenseVariantsForGuild,
+} from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 const EMPTY_DEFENSE = "--";
@@ -56,14 +57,10 @@ function getDefenseLikeTargetId(defense) {
 }
 
 function defenseMatchesMemberGuild(defense, memberGuildCode) {
-  const memberIsPaladin = isPaladinGuildCode(memberGuildCode);
-
-  if (defense.isGlobal || !defense.guildCode) return memberIsPaladin;
-  if (memberIsPaladin) {
-    return normalizeGuildCodeKey(defense.guildCode) === normalizeGuildCodeKey(memberGuildCode);
-  }
-
-  return isSameGuildSpace(defense.guildCode, memberGuildCode);
+  return (
+    normalizeGuildCodeKey(defense?.guildCode || defense?.guild_code) === normalizeGuildCodeKey(memberGuildCode) &&
+    !(defense?.isHidden || defense?.is_hidden)
+  );
 }
 
 function getDefenseTypeLabel(defense) {
@@ -210,17 +207,20 @@ export default function MyDefensesTab({ session }) {
     );
   }, [defenses, guildCode, member?.guildCode]);
 
-  const selectedDefenseNames = useMemo(() => {
-    return [member?.defense1, member?.defense2].filter((name) => !isEmptyDefenseName(name));
-  }, [member?.defense1, member?.defense2]);
+  const selectedDefenseKeys = useMemo(() => {
+    return [1, 2]
+      .flatMap((slot) => [getDefenseAssignmentId(member, slot), getDefenseAssignmentName(member, slot)])
+      .filter((value) => !isEmptyDefenseName(value));
+  }, [member]);
 
   const selectedHeroSet = useMemo(() => {
     return new Set(
-      memberDefenses
-        .filter((defense) => selectedDefenseNames.includes(defense.name))
+      [1, 2]
+        .map((slot) => resolveAssignedDefense(memberDefenses, member, slot))
+        .filter(Boolean)
         .flatMap((defense) => (defense.slots || []).map(getSlotHeroName).filter(Boolean))
     );
-  }, [memberDefenses, selectedDefenseNames]);
+  }, [member, memberDefenses]);
 
   const defenseLikesCountByRootId = useMemo(() => {
     const counts = new Map();
@@ -259,18 +259,22 @@ export default function MyDefensesTab({ session }) {
   }, [connectedMemberId, defenseVotes]);
 
   const assignedDefenses = useMemo(() => {
-    return [member?.defense1, member?.defense2].map((defenseName, index) => ({
-      slot: index + 1,
-      defenseName,
-      defense: memberDefenses.find((item) => item.name === defenseName) || null,
+    return [1, 2].map((slot) => ({
+      slot,
+      defenseName: getDefenseAssignmentName(member, slot),
+      defense: resolveAssignedDefense(memberDefenses, member, slot),
     }));
-  }, [member?.defense1, member?.defense2, memberDefenses]);
+  }, [member, memberDefenses]);
 
   const availableDefenses = useMemo(() => {
     const search = normalizeText(defenseQuery);
 
     return memberDefenses
-      .filter((defense) => !selectedDefenseNames.includes(defense.name))
+      .filter(
+        (defense) =>
+          !selectedDefenseKeys.includes(String(defense.id || "")) &&
+          !selectedDefenseKeys.includes(String(defense.name || ""))
+      )
       .filter((defense) => {
         if (defenseTypeFilter === "all") return true;
         return normalizeText(defense.type).includes(defenseTypeFilter);
@@ -301,7 +305,7 @@ export default function MyDefensesTab({ session }) {
         if (a.score !== b.score) return b.score - a.score;
         return String(a.name || "").localeCompare(String(b.name || ""), "fr", { sensitivity: "base" });
       });
-  }, [defenseQuery, defenseTypeFilter, member, memberDefenses, selectedDefenseNames, selectedHeroSet]);
+  }, [defenseQuery, defenseTypeFilter, member, memberDefenses, selectedDefenseKeys, selectedHeroSet]);
 
   const summary = useMemo(() => {
     const filledSlots = assignedDefenses.filter((slot) => slot.defense).length;
@@ -418,14 +422,21 @@ export default function MyDefensesTab({ session }) {
       const payload = await postPortalAccess("member-defense-assign", {
         memberId: member.id,
         slot,
+        defenseId: defense.id,
         defenseName: defense.name,
       });
 
       const updatedMember = payload.member || {};
+      const idKey = slot === 1 ? "defense1Id" : "defense2Id";
       setMembers((previous) =>
         previous.map((item) =>
           String(item.id) === String(member.id)
-            ? { ...item, ...updatedMember, [localKey]: updatedMember[localKey] || defense.name }
+            ? {
+                ...item,
+                ...updatedMember,
+                [localKey]: updatedMember[localKey] || defense.name,
+                [idKey]: updatedMember[idKey] || defense.id,
+              }
             : item
         )
       );
@@ -448,14 +459,21 @@ export default function MyDefensesTab({ session }) {
       const payload = await postPortalAccess("member-defense-assign", {
         memberId: member.id,
         slot,
+        defenseId: "",
         defenseName: EMPTY_DEFENSE,
       });
 
       const updatedMember = payload.member || {};
+      const idKey = slot === 1 ? "defense1Id" : "defense2Id";
       setMembers((previous) =>
         previous.map((item) =>
           String(item.id) === String(member.id)
-            ? { ...item, ...updatedMember, [localKey]: updatedMember[localKey] || EMPTY_DEFENSE }
+            ? {
+                ...item,
+                ...updatedMember,
+                [localKey]: updatedMember[localKey] || EMPTY_DEFENSE,
+                [idKey]: updatedMember[idKey] || null,
+              }
             : item
         )
       );

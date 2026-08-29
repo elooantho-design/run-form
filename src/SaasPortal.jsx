@@ -80,7 +80,6 @@ import {
   getGuildScopeDescription,
   getSessionGuildSpaceKey,
   getVisibleGvgGuildCodes,
-  isPaladinGuildCode,
   isPaladinSession,
   normalizeGuildCode,
   normalizeGuildCodeKey,
@@ -96,11 +95,6 @@ import {
   normalizeLicensePlan,
   normalizeLicenseStatus,
 } from "@/lib/portalLicensePlans";
-import {
-  getDefenseRootId,
-  isInheritedDefense,
-  resolveDefenseVariantsForGuild,
-} from "@/lib/defenseVariants";
 import {
   buildPublicCalqueUrl,
   buildPublicCalquesBaseUrl,
@@ -4599,6 +4593,11 @@ function getPortalSessionGuildCode(session) {
   return normalizeGuildCode(session?.guildCode || session?.guild_code || session?.guild || "G1");
 }
 
+function sameGuildCodeList(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  return left.every((guildCode, index) => normalizeGuildCodeKey(guildCode) === normalizeGuildCodeKey(right[index]));
+}
+
 function normalizePortalDefenseFaction(value) {
   const normalized = normalizeHeroDataValue(value);
   return heroFactionMeta[normalized] ? normalized : String(value || "").trim();
@@ -4659,11 +4658,22 @@ function PortalAdminDefensesView({ session }) {
   const { t } = usePortalLanguage();
   const [activeGuildCode, setActiveGuildCode] = useState(getPortalSessionGuildCode(session));
   const [defenses, setDefenses] = useState([]);
+  const [libraryDefenses, setLibraryDefenses] = useState([]);
+  const [visibleDefenseGuildCodes, setVisibleDefenseGuildCodes] = useState(() => {
+    const sessionGuildCode = getPortalSessionGuildCode(session);
+    return sessionGuildCode ? [sessionGuildCode] : [];
+  });
+  const [manageableDefenseGuildCodes, setManageableDefenseGuildCodes] = useState(() => {
+    const sessionGuildCode = getPortalSessionGuildCode(session);
+    return sessionGuildCode ? [sessionGuildCode] : [];
+  });
   const [champions, setChampions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [migrationMessage, setMigrationMessage] = useState("");
+  const [migrationRequired, setMigrationRequired] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [draftOpen, setDraftOpen] = useState(false);
   const [draft, setDraft] = useState(emptyPortalDefenseDraft);
@@ -4674,17 +4684,10 @@ function PortalAdminDefensesView({ session }) {
   const [conditionRemoveDefense, setConditionRemoveDefense] = useState(null);
   const [newCondition, setNewCondition] = useState({ hero: "", minAwakening: 5 });
   const isAdminUser = isAdminSession(session);
-  const visibleDefenseGuildCodes = useMemo(() => {
-    if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
-
-    const sessionGuildCode = getPortalSessionGuildCode(session);
-    return sessionGuildCode ? [sessionGuildCode] : [];
-  }, [session]);
   const activeGuildCodeKey = normalizeGuildCodeKey(activeGuildCode);
   const activeGuildIsVisible = visibleDefenseGuildCodes.some(
     (guildCode) => normalizeGuildCodeKey(guildCode) === activeGuildCodeKey,
   );
-  const activeGuildIsPaladin = isPaladinGuildCode(activeGuildCode);
 
   const championByName = useMemo(() => {
     const entries = champions.map((champion) => [
@@ -4742,12 +4745,24 @@ function PortalAdminDefensesView({ session }) {
         if (cancelled) return;
 
         setDefenses(data.defenses || []);
+        setLibraryDefenses(data.libraryDefenses || []);
+        const nextGuilds = data.guilds?.length ? data.guilds : visibleDefenseGuildCodes;
+        const nextManageableGuilds = data.manageableGuilds?.length ? data.manageableGuilds : nextGuilds;
+        setVisibleDefenseGuildCodes((previous) => (sameGuildCodeList(previous, nextGuilds) ? previous : nextGuilds));
+        setManageableDefenseGuildCodes((previous) =>
+          sameGuildCodeList(previous, nextManageableGuilds) ? previous : nextManageableGuilds
+        );
+        setMigrationRequired(Boolean(data.migrationRequired));
+        setMigrationMessage(data.migrationMessage || "");
         setChampions(data.champions || []);
       } catch (error) {
         if (cancelled) return;
         console.error("Erreur chargement gestion defense Portal:", error);
         setDefenses([]);
+        setLibraryDefenses([]);
         setChampions([]);
+        setMigrationRequired(false);
+        setMigrationMessage("");
         setErrorMessage(error?.message || "Impossible de charger les defenses admin pour le moment.");
       } finally {
         if (!cancelled) setLoading(false);
@@ -4759,7 +4774,7 @@ function PortalAdminDefensesView({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [activeGuildCode, activeGuildIsPaladin, activeGuildIsVisible, isAdminUser, refreshTick]);
+  }, [activeGuildCode, activeGuildIsVisible, isAdminUser, refreshTick, visibleDefenseGuildCodes]);
 
   function openAddDefense() {
     setMessage("");
@@ -4768,63 +4783,13 @@ function PortalAdminDefensesView({ session }) {
     setDraft({
       ...emptyPortalDefenseDraft,
       guildCode: activeGuildCode,
-      isGlobal: activeGuildIsPaladin && activeGuildCode === "G1",
+      isGlobal: false,
     });
     setDraftOpen(true);
   }
 
-  function addOrReplaceLocalDefense(localDefense) {
-    if (!localDefense?.id) return;
-
-    setDefenses((previous) =>
-      resolveDefenseVariantsForGuild(
-        [
-          ...previous.filter((item) => String(item.id) !== String(localDefense.id)),
-          localDefense,
-        ],
-        activeGuildCode,
-      ).sort((left, right) => {
-        if ((left.sortOrder ?? 9999) !== (right.sortOrder ?? 9999)) {
-          return (left.sortOrder ?? 9999) - (right.sortOrder ?? 9999);
-        }
-
-        return String(left.name || "").localeCompare(String(right.name || ""), "fr", { sensitivity: "base" });
-      }),
-    );
-  }
-
-  async function createLocalDefenseVariant(defense, { hidden = false } = {}) {
-    if (!defense?.id) return null;
-
-    const data = await callPortalAdminDefenses({
-      action: "ensure-local",
-      defenseId: defense.id,
-      guildCode: activeGuildCode,
-      hidden,
-    });
-
-    const localDefense = data.defense || null;
-
-    addOrReplaceLocalDefense(localDefense);
-    return localDefense;
-  }
-
   async function ensureEditableDefense(defense) {
-    if (!isInheritedDefense(defense, activeGuildCode)) return defense;
-
-    setSaving(true);
-    setErrorMessage("");
-
-    try {
-      const localDefense = await createLocalDefenseVariant(defense);
-      setMessage(`Copie locale creee pour ${activeGuildCode} : ${defense.name}.`);
-      return localDefense || defense;
-    } catch (error) {
-      setErrorMessage(error?.message || "Creation de la copie locale impossible.");
-      return null;
-    } finally {
-      setSaving(false);
-    }
+    return defense || null;
   }
 
   async function openEditDefense(defense) {
@@ -4975,8 +4940,8 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
 
     const isEditMode = draft.id && String(draft.id) !== "0";
-    const nextIsGlobal = activeGuildIsPaladin && (isEditMode ? Boolean(draft.isGlobal) : activeGuildCode === "G1");
-    const nextGuildCode = nextIsGlobal ? draft.guildCode || "G1" : activeGuildCode;
+    const nextIsGlobal = false;
+    const nextGuildCode = activeGuildCode;
 
     try {
       const data = await callPortalAdminDefenses({
@@ -5190,12 +5155,37 @@ function PortalAdminDefensesView({ session }) {
     }
   }
 
+  async function importDefense(defense, targetGuildCode) {
+    const cleanTargetGuildCode = normalizeGuildCode(targetGuildCode || activeGuildCode);
+    if (!isAdminUser || saving || !defense?.id || !cleanTargetGuildCode) return;
+
+    setSaving(true);
+    setMessage("");
+    setErrorMessage("");
+
+    try {
+      const data = await callPortalAdminDefenses({
+        action: "import",
+        sourceDefenseId: defense.id,
+        targetGuildCode: cleanTargetGuildCode,
+      });
+
+      const importedDefense = data.defense || null;
+      setMessage(`Defense importee dans ${cleanTargetGuildCode} : ${importedDefense?.name || defense.name}.`);
+      setRefreshTick((value) => value + 1);
+    } catch (error) {
+      setErrorMessage(error?.message || "Import de la defense impossible.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function deleteDefense(defense) {
     if (!isAdminUser || saving || !defense?.id) return;
 
-    const shouldHideLocally = Boolean(defense.sourceDefenseId || isInheritedDefense(defense, activeGuildCode));
+    const isImportedCopy = Boolean(defense.sourceDefenseId);
     const confirmed = window.confirm(
-      shouldHideLocally
+      isImportedCopy
         ? `Retirer la defense "${defense.name}" uniquement pour ${activeGuildCode} ?`
         : `Supprimer la defense "${defense.name}" ?`,
     );
@@ -5213,26 +5203,22 @@ function PortalAdminDefensesView({ session }) {
       });
 
       void logPortalActivity(session, {
-        actionType: data.hidden ? "admin_defense_local_hide" : "admin_defense_delete",
+        actionType: data.removedLocalCopy ? "admin_defense_local_remove" : "admin_defense_delete",
         entityType: "defense",
         entityId: String(defense.id),
-        summary: data.hidden
+        summary: data.removedLocalCopy
           ? `${session?.watcherName || session?.name || "Admin"} a retire localement ${defense.name} pour ${activeGuildCode}`
           : `${session?.watcherName || session?.name || "Admin"} a supprime la defense ${defense.name}`,
         metadata: {
           defenseName: defense.name,
           guildCode: activeGuildCode,
           isGlobal: defense.isGlobal,
-          sourceDefenseId: getDefenseRootId(defense),
+          sourceDefenseId: defense.sourceDefenseId || null,
         },
       });
 
-      if (data.hidden || shouldHideLocally) {
-        setDefenses((previous) =>
-          resolveDefenseVariantsForGuild(previous, activeGuildCode).filter(
-            (item) => String(getDefenseRootId(item)) !== String(getDefenseRootId(defense)),
-          ),
-        );
+      if (data.removedLocalCopy || isImportedCopy) {
+        setDefenses((previous) => previous.filter((item) => String(item.id) !== String(defense.id)));
         setMessage(`Defense retiree uniquement pour ${activeGuildCode} : ${defense.name}.`);
       } else {
         setMessage(`Defense supprimee : ${defense.name}.`);
@@ -5312,6 +5298,12 @@ function PortalAdminDefensesView({ session }) {
         </div>
       ) : null}
 
+      {migrationRequired && migrationMessage ? (
+        <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          {migrationMessage}
+        </div>
+      ) : null}
+
       {loading ? (
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-400">
           {t("adminDefenses.loading", "Chargement des defenses...")}
@@ -5319,13 +5311,17 @@ function PortalAdminDefensesView({ session }) {
       ) : (
         <AdminDefensesTab
           defenses={defenses}
+          libraryDefenses={libraryDefenses}
           activeGuildCode={activeGuildCode}
+          manageableGuildCodes={manageableDefenseGuildCodes}
+          migrationRequired={migrationRequired}
           onAdd={openAddDefense}
           onEdit={openEditDefense}
           onDelete={deleteDefense}
           onAddCondition={openConditionDialog}
           onRemoveCondition={openRemoveConditionDialog}
           onEnsureEditable={ensureEditableDefense}
+          onImportDefense={importDefense}
         />
       )}
 
@@ -5495,13 +5491,11 @@ function PortalAdminDefensesView({ session }) {
                   <div className="text-xs text-zinc-300">{draftImageMessage}</div>
                 ) : null}
 
-                {draft.isGlobal && isPaladinGuildCode(draft.guildCode || activeGuildCode) ? (
-                  <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-200">{t("adminDefenses.globalDefense", "Defense globale")}</Badge>
-                ) : (
-                  <Badge className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
-                    {t("home.guild", "Guilde")} {activeGuildCode}
-                  </Badge>
-                )}
+                <Badge className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-300">
+                  {draft.sourceDefenseId
+                    ? `Importee dans ${activeGuildCode}`
+                    : `${t("home.guild", "Guilde")} ${activeGuildCode}`}
+                </Badge>
               </div>
             </div>
 
