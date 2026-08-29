@@ -7328,24 +7328,59 @@ function getMemberActivityDateTone(value) {
 
   const ageMs = Date.now() - timestamp;
   if (ageMs <= 7 * 24 * 60 * 60 * 1000) return "fresh";
-  if (ageMs <= 21 * 24 * 60 * 60 * 1000) return "stale";
-  return "old";
+  if (ageMs <= 14 * 24 * 60 * 60 * 1000) return "neutral";
+  if (ageMs <= 30 * 24 * 60 * 60 * 1000) return "stale";
+  return "critical";
 }
 
 function MemberActivityDateCell({ value, emptyLabel }) {
   const tone = getMemberActivityDateTone(value);
   const toneClasses = {
     fresh: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-    stale: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-    old: "border-zinc-700 bg-zinc-900 text-zinc-300",
-    missing: "border-red-500/25 bg-red-500/10 text-red-200",
+    neutral: "border-zinc-500/35 bg-zinc-50 text-zinc-950",
+    stale: "border-amber-400/45 bg-amber-400/15 text-amber-100",
+    critical: "border-red-500/45 bg-red-500/15 text-red-100",
+    missing: "border-red-400/70 bg-red-500/25 text-red-50 shadow-[0_0_0_1px_rgba(248,113,113,0.25)]",
   };
 
   return (
-    <span className={`inline-flex w-fit items-center gap-1 rounded-md border px-2 py-1 text-xs ${toneClasses[tone]}`}>
+    <span
+      className={`inline-flex w-fit items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${toneClasses[tone]}`}
+      title={value ? formatMemberActivityDate(value) : emptyLabel}
+    >
       {value ? <Clock3 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
       {value ? formatMemberActivityDate(value) : emptyLabel}
     </span>
+  );
+}
+
+const memberActivityFreshnessLegend = [
+  { label: "Moins de 7 jours", tone: "fresh" },
+  { label: "7 a 14 jours", tone: "neutral" },
+  { label: "14 a 30 jours", tone: "stale" },
+  { label: "Plus de 30 jours", tone: "critical" },
+  { label: "Jamais", tone: "missing" },
+];
+
+function MemberActivityFreshnessLegend() {
+  const dotClasses = {
+    fresh: "bg-emerald-400",
+    neutral: "bg-zinc-100",
+    stale: "bg-amber-300",
+    critical: "bg-red-400",
+    missing: "bg-red-500 ring-2 ring-red-300/40",
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800 bg-zinc-950 px-4 py-3 text-xs text-zinc-400">
+      <span className="font-semibold uppercase tracking-[0.14em] text-zinc-500">Fraicheur</span>
+      {memberActivityFreshnessLegend.map((item) => (
+        <span key={item.tone} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/70 px-2 py-1">
+          <span className={`h-2.5 w-2.5 rounded-full ${dotClasses[item.tone]}`} />
+          {item.label}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -7574,46 +7609,49 @@ function MemberActivityOverviewView({ session }) {
         ) : visibleMembers.length === 0 ? (
           <div className="p-5 text-sm text-zinc-500">Aucun membre pour ce filtre.</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-[1120px] w-full border-collapse text-left text-sm">
-              <thead className="bg-zinc-900/80 text-xs uppercase tracking-[0.12em] text-zinc-500">
-                <tr>
-                  <th className="sticky left-0 z-10 border-b border-zinc-800 bg-zinc-900/95 px-4 py-3">
-                    <button type="button" onClick={() => toggleSort("name")} className="inline-flex items-center gap-2">
-                      Joueur
-                      <ArrowUpDown className="h-3.5 w-3.5" />
-                    </button>
-                  </th>
-                  {memberActivityColumns.map((column) => (
-                    <th key={column.id} className="border-b border-zinc-800 px-4 py-3">
-                      <button type="button" onClick={() => toggleSort(column.id)} className="inline-flex items-center gap-2">
-                        {column.label}
+          <>
+            <MemberActivityFreshnessLegend />
+            <div className="overflow-x-auto">
+              <table className="min-w-[1120px] w-full border-collapse text-left text-sm">
+                <thead className="bg-zinc-900/80 text-xs uppercase tracking-[0.12em] text-zinc-500">
+                  <tr>
+                    <th className="sticky left-0 z-10 border-b border-zinc-800 bg-zinc-900/95 px-4 py-3">
+                      <button type="button" onClick={() => toggleSort("name")} className="inline-flex items-center gap-2">
+                        Joueur
                         <ArrowUpDown className="h-3.5 w-3.5" />
                       </button>
                     </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visibleMembers.map((member) => (
-                  <tr key={member.memberId} className="border-b border-zinc-900/90 last:border-0">
-                    <td className="sticky left-0 z-10 bg-zinc-950 px-4 py-3">
-                      <div className="font-semibold text-zinc-100">{member.name}</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                        <span>{member.guildCode}</span>
-                        <Badge className="rounded-md border-zinc-700 bg-zinc-900 text-zinc-400">{member.role || "member"}</Badge>
-                      </div>
-                    </td>
                     {memberActivityColumns.map((column) => (
-                      <td key={`${member.memberId}-${column.id}`} className="px-4 py-3">
-                        <MemberActivityDateCell value={member[column.id]} emptyLabel={column.emptyLabel} />
-                      </td>
+                      <th key={column.id} className="border-b border-zinc-800 px-4 py-3">
+                        <button type="button" onClick={() => toggleSort(column.id)} className="inline-flex items-center gap-2">
+                          {column.label}
+                          <ArrowUpDown className="h-3.5 w-3.5" />
+                        </button>
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {visibleMembers.map((member) => (
+                    <tr key={member.memberId} className="border-b border-zinc-900/90 last:border-0">
+                      <td className="sticky left-0 z-10 bg-zinc-950 px-4 py-3">
+                        <div className="font-semibold text-zinc-100">{member.name}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                          <span>{member.guildCode}</span>
+                          <Badge className="rounded-md border-zinc-700 bg-zinc-900 text-zinc-400">{member.role || "member"}</Badge>
+                        </div>
+                      </td>
+                      {memberActivityColumns.map((column) => (
+                        <td key={`${member.memberId}-${column.id}`} className="px-4 py-3">
+                          <MemberActivityDateCell value={member[column.id]} emptyLabel={column.emptyLabel} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </section>
