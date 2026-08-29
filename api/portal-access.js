@@ -125,7 +125,6 @@ const DEFENSE_SELECT_BASE = `
   guild_code,
   is_global,
   is_hidden,
-  source_defense_id,
   sort_order,
   image_url,
   created_at,
@@ -280,6 +279,7 @@ function isMissingColumn(error, columnName) {
 
 function isMissingGuildLibrarySchema(error) {
   return (
+    isMissingColumn(error, "source_defense_id") ||
     isMissingColumn(error, "source_guild_code") ||
     isMissingColumn(error, "source_defense_name") ||
     isMissingColumn(error, "imported_at")

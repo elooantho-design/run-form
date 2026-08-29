@@ -31,6 +31,34 @@ where table_schema = 'public'
 union all
 
 select
+  'portal_guild_code_duplicates' as check_name,
+  0::text as expected_value,
+  count(*)::text as actual_value,
+  case when count(*) = 0 then 'OK' else 'ERROR' end as status
+from (
+  select guild_code
+  from public.portal_guilds
+  group by guild_code
+  having count(distinct organization_id) > 1
+) duplicates
+
+union all
+
+select
+  'portal_guilds_global_unique_index' as check_name,
+  '>=1' as expected_value,
+  count(*)::text as actual_value,
+  case when count(*) >= 1 then 'OK' else 'ERROR' end as status
+from pg_indexes
+where schemaname = 'public'
+  and tablename = 'portal_guilds'
+  and indexdef ilike 'CREATE UNIQUE INDEX%'
+  and indexdef ilike '%guild_code%'
+  and indexdef not ilike '%organization_id%'
+
+union all
+
+select
   'defenses_without_organization' as check_name,
   0::text as expected_value,
   count(*)::text as actual_value,
@@ -41,18 +69,57 @@ where organization_id is null
 union all
 
 select
+  'native_defenses_outside_expected_g2' as check_name,
+  0::text as expected_value,
+  count(*)::text as actual_value,
+  case when count(*) = 0 then 'OK' else 'ERROR' end as status
+from public.guild_defenses
+where source_defense_id is null
+  and coalesce(is_hidden, false) = false
+  and upper(coalesce(guild_code, '')) <> 'G2'
+
+union all
+
+select
+  'paladin_guilds_attached_to_non_paladin_org' as check_name,
+  0::text as expected_value,
+  count(*)::text as actual_value,
+  case when count(*) = 0 then 'OK' else 'ERROR' end as status
+from public.guild_defenses defense
+join public.portal_organizations org on org.id = defense.organization_id
+where upper(coalesce(defense.guild_code, '')) in ('G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7')
+  and lower(coalesce(org.organization_key, '')) <> 'paladin'
+
+union all
+
+select
   'duplicate_active_imports' as check_name,
   0::text as expected_value,
   count(*)::text as actual_value,
   case when count(*) = 0 then 'OK' else 'ERROR' end as status
 from (
-  select guild_code, source_defense_id
+  select organization_id, guild_code, source_defense_id
   from public.guild_defenses
   where source_defense_id is not null
     and coalesce(is_hidden, false) = false
-  group by guild_code, source_defense_id
+  group by organization_id, guild_code, source_defense_id
   having count(*) > 1
 ) duplicates
+
+union all
+
+select
+  'unique_import_index_tenant_scoped' as check_name,
+  1::text as expected_value,
+  count(*)::text as actual_value,
+  case when count(*) = 1 then 'OK' else 'ERROR' end as status
+from pg_indexes
+where schemaname = 'public'
+  and tablename = 'guild_defenses'
+  and indexname = 'guild_defenses_unique_active_import_idx'
+  and indexdef ilike '%organization_id%'
+  and indexdef ilike '%guild_code%'
+  and indexdef ilike '%source_defense_id%'
 
 union all
 
@@ -70,10 +137,11 @@ union all
 
 select
   'assignments_migrated_where_unambiguous' as check_name,
-  '0 ambiguous/missing id when local name is unique' as expected_value,
+  '0 missing id when local name is unique' as expected_value,
   count(*)::text as actual_value,
   case when count(*) = 0 then 'OK' else 'ERROR' end as status
 from public.guild_members member
+left join public.portal_guilds member_guild on member_guild.guild_code = member.guild_code
 where (
     nullif(nullif(member.defense_1, '--'), '—') is not null
     and member.defense_1_id is null
@@ -82,6 +150,7 @@ where (
       from public.guild_defenses defense
       where defense.name = member.defense_1
         and defense.guild_code = member.guild_code
+        and defense.organization_id = member_guild.organization_id
         and coalesce(defense.is_hidden, false) = false
     ) = 1
   )
@@ -93,9 +162,43 @@ where (
       from public.guild_defenses defense
       where defense.name = member.defense_2
         and defense.guild_code = member.guild_code
+        and defense.organization_id = member_guild.organization_id
         and coalesce(defense.is_hidden, false) = false
     ) = 1
   )
+
+union all
+
+select
+  'invalid_assignment_ids' as check_name,
+  0::text as expected_value,
+  count(*)::text as actual_value,
+  case when count(*) = 0 then 'OK' else 'ERROR' end as status
+from (
+  select member.id, 'defense_1_id' as slot_name
+  from public.guild_members member
+  left join public.portal_guilds member_guild on member_guild.guild_code = member.guild_code
+  left join public.guild_defenses defense on defense.id = member.defense_1_id
+  where member.defense_1_id is not null
+    and (
+      defense.id is null
+      or defense.guild_code is distinct from member.guild_code
+      or defense.organization_id is distinct from member_guild.organization_id
+    )
+
+  union all
+
+  select member.id, 'defense_2_id' as slot_name
+  from public.guild_members member
+  left join public.portal_guilds member_guild on member_guild.guild_code = member.guild_code
+  left join public.guild_defenses defense on defense.id = member.defense_2_id
+  where member.defense_2_id is not null
+    and (
+      defense.id is null
+      or defense.guild_code is distinct from member.guild_code
+      or defense.organization_id is distinct from member_guild.organization_id
+    )
+) invalid_assignments
 
 union all
 
@@ -104,10 +207,10 @@ select
   0::text as expected_value,
   count(*)::text as actual_value,
   case when count(*) = 0 then 'OK' else 'ERROR' end as status
-from public.guild_defenses copy
-join public.guild_defenses source on source.id = copy.source_defense_id
-where copy.source_defense_id is not null
-  and copy.organization_id is distinct from source.organization_id
+from public.guild_defenses copy_defense
+join public.guild_defenses source_defense on source_defense.id = copy_defense.source_defense_id
+where copy_defense.source_defense_id is not null
+  and copy_defense.organization_id is distinct from source_defense.organization_id
 
 union all
 
@@ -116,10 +219,10 @@ select
   0::text as expected_value,
   count(*)::text as actual_value,
   case when count(*) = 0 then 'OK' else 'ERROR' end as status
-from pg_constraint constraint
-join pg_attribute attribute
-  on attribute.attrelid = constraint.conrelid
- and attribute.attnum = any(constraint.conkey)
-where constraint.conrelid = 'public.guild_defenses'::regclass
-  and constraint.contype = 'f'
-  and attribute.attname = 'source_defense_id';
+from pg_constraint c
+join pg_attribute a
+  on a.attrelid = c.conrelid
+ and a.attnum = any(c.conkey)
+where c.conrelid = 'public.guild_defenses'::regclass
+  and c.contype = 'f'
+  and a.attname = 'source_defense_id';

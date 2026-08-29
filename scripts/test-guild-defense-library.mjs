@@ -139,6 +139,7 @@ const [
   myDefensesTab,
   guildManagementTab,
   migrationSql,
+  preflightSql,
   verifySql,
 ] = await Promise.all([
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
@@ -147,6 +148,7 @@ const [
   readFile(new URL("../src/components/MyDefensesTab.jsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/PortalGuildManagementTab.jsx", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_verify.sql", import.meta.url), "utf8"),
 ]);
 
@@ -154,9 +156,19 @@ assert.match(adminApi, /action === "import"/, "admin API exposes explicit import
 assert.match(adminApi, /import_guild_defense_snapshot/, "admin API imports through transactional RPC");
 assert.match(adminApi, /targetGuild === defenseGuild/, "admin API manages defenses only in the selected guild");
 assert.match(adminApi, /normalizeGuildCode\(defense\.guildCode\) === activeGuildKey/, "admin API library import status is scoped to the active guild");
+assert.doesNotMatch(
+  adminApi.match(/const DEFENSE_SELECT_BASE = `[\s\S]*?`;/)?.[0] || "",
+  /source_defense_id/,
+  "admin API pre-migration fallback does not select source_defense_id",
+);
 assert.match(accessApi, /defenseGuild === requestedGuild/, "portal access reads defenses by exact requested guild");
 assert.match(accessApi, /assignment\.id/, "Discord send path resolves assignments by id first");
 assert.doesNotMatch(accessApi, /\.in\("name", defenseNames\)/, "Discord send path no longer fetches defenses only by name");
+assert.doesNotMatch(
+  accessApi.match(/const DEFENSE_SELECT_BASE = `[\s\S]*?`;/)?.[0] || "",
+  /source_defense_id/,
+  "portal access pre-migration fallback does not select source_defense_id",
+);
 assert.match(saasPortal, /libraryDefenses=/, "admin UI passes library entries to list component");
 assert.match(saasPortal, /onImportDefense=\{importDefense\}/, "admin UI wires explicit import handler");
 assert.match(myDefensesTab, /resolveAssignedDefense/, "Mes defenses resolves local copy assignments");
@@ -167,6 +179,48 @@ assert.match(migrationSql, /insert into public\.guild_defense_slots/, "import cl
 assert.match(migrationSql, /insert into public\.guild_defense_conditions/, "import clones conditions");
 assert.match(migrationSql, /insert into public\.guild_defense_blocks/, "import clones blocks");
 assert.match(migrationSql, /drop constraint if exists/, "migration removes destructive source FK constraints");
+for (const [label, sql] of [
+  ["preflight", preflightSql],
+  ["migration", migrationSql],
+  ["verify", verifySql],
+]) {
+  assert.doesNotMatch(sql, /\bpg_constraint\s+constraint\b/i, `${label} does not alias pg_constraint as a reserved word`);
+  assert.doesNotMatch(sql, /\bconstraint\./i, `${label} does not reference the reserved constraint alias`);
+}
+assert.match(preflightSql, /column_source_defense_id_exists/, "preflight reports whether source_defense_id exists");
+assert.match(preflightSql, /column_organization_id_exists/, "preflight reports whether organization_id exists");
+assert.match(preflightSql, /column_defense_1_id_exists/, "preflight reports whether defense_1_id exists");
+assert.match(preflightSql, /column_defense_2_id_exists/, "preflight reports whether defense_2_id exists");
+assert.match(preflightSql, /to_jsonb\(defense\)->>'source_defense_id'/, "preflight reads future source column through jsonb");
+assert.doesNotMatch(
+  preflightSql,
+  /\b(?:defense|local_defense|g2_defense|source_defense)\.source_defense_id\b/i,
+  "preflight does not directly reference source_defense_id before migration",
+);
+assert.match(preflightSql, /guild_code_cross_tenant_duplicates/, "preflight audits cross-tenant guild_code duplicates");
+assert.match(preflightSql, /existing_defense_total/, "preflight reports existing defense total");
+assert.match(preflightSql, /existing_defenses_expected_native_guild_g2/, "preflight reports the confirmed G2 legacy ownership assumption");
+assert.doesNotMatch(
+  migrationSql,
+  /from\s+public\.portal_guilds\s+guild[\s\S]{0,240}where\s+guild\.guild_code\s*=[\s\S]{0,160}limit\s+1/i,
+  "migration does not resolve portal_guilds with guild_code plus limit 1",
+);
+assert.match(
+  migrationSql,
+  /guild\.organization_id\s*=\s*v_source\.organization_id[\s\S]{0,160}guild\.guild_code\s*=\s*p_target_guild_code/i,
+  "import RPC resolves target guild inside the source organization",
+);
+assert.match(
+  migrationSql,
+  /on public\.guild_defenses \(organization_id, guild_code, source_defense_id\)/,
+  "duplicate import index is tenant-scoped",
+);
+assert.match(migrationSql, /v_unexpected_legacy_count/, "migration validates historical native defenses are still marked G2");
+assert.match(migrationSql, /import_guild_defense_snapshot\(/, "migration uses the import RPC for legacy assignment copies");
+assert.match(verifySql, /portal_guild_code_duplicates/, "verify confirms no guild_code crosses tenants");
+assert.match(verifySql, /unique_import_index_tenant_scoped/, "verify checks tenant-scoped duplicate import index");
+assert.match(verifySql, /native_defenses_outside_expected_g2/, "verify checks legacy native G2 mapping");
+assert.match(verifySql, /invalid_assignment_ids/, "verify checks assignment ids");
 assert.match(verifySql, /source_defense_id_fk_removed/, "verify checks source FK removal");
 
 console.log("Guild defense library tests passed");

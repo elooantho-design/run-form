@@ -27,7 +27,6 @@ const DEFENSE_SELECT_BASE = `
   guild_code,
   is_global,
   is_hidden,
-  source_defense_id,
   sort_order,
   image_url,
   created_at,
@@ -139,6 +138,7 @@ function isMissingColumn(error, columnName = "") {
 function isMissingGuildLibrarySchema(error) {
   return (
     isMissingColumn(error, "organization_id") ||
+    isMissingColumn(error, "source_defense_id") ||
     isMissingColumn(error, "source_guild_code") ||
     isMissingColumn(error, "source_defense_name") ||
     isMissingColumn(error, "imported_at") ||
@@ -495,7 +495,7 @@ async function loadDefenseRows() {
 async function hasGuildDefenseLibrarySchema() {
   const { error } = await supabase
     .from("guild_defenses")
-    .select("organization_id, source_guild_code, source_defense_name, imported_at")
+    .select("organization_id, source_defense_id, source_guild_code, source_defense_name, imported_at")
     .limit(1);
 
   if (!error) return true;
@@ -974,10 +974,12 @@ async function handleSave(body, req, res) {
     image_url: validatePortalInput(draft.imageUrl || draft.image || draft.image_url, 500) || null,
     guild_code: guildCode,
     is_global: false,
-    source_defense_id: isEditMode ? existing.source_defense_id || null : null,
   };
 
   const defenseLibrarySchemaReady = await hasGuildDefenseLibrarySchema();
+  if (defenseLibrarySchemaReady) {
+    defensePayload.source_defense_id = isEditMode ? existing.source_defense_id || null : null;
+  }
   if (!isEditMode && defenseLibrarySchemaReady && scope.organizationId) {
     defensePayload.organization_id = scope.organizationId;
   }
