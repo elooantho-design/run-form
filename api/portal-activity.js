@@ -8,6 +8,10 @@ import {
   sendPortalJson,
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
+import {
+  loadPortalMemberActivityOverview,
+  touchPortalMemberLastSeen,
+} from "./_portal-member-activity.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -47,6 +51,17 @@ async function handleGet(req, res) {
   }
 
   const url = new URL(req.url, "http://localhost");
+  const action = cleanText(url.searchParams.get("action"));
+  if (action === "overview") {
+    try {
+      const overview = await loadPortalMemberActivityOverview(supabase, sessionCheck.member);
+      sendJson(res, 200, { ok: true, mode: "overview", ...overview });
+    } catch (error) {
+      sendJson(res, 500, { ok: false, error: error.message || "Impossible de charger le suivi des membres." });
+    }
+    return;
+  }
+
   const memberId = cleanMemberId(url.searchParams.get("memberId"));
   const actionType = cleanText(url.searchParams.get("actionType"));
   const limit = Math.min(Number(url.searchParams.get("limit") || 80) || 80, MAX_LIMIT);
@@ -83,6 +98,13 @@ async function handlePost(req, res) {
   }
 
   const body = await readBody(req);
+  const action = cleanText(body.action);
+  if (action === "heartbeat") {
+    const touchResult = await touchPortalMemberLastSeen(supabase, sessionCheck.member.id);
+    sendJson(res, 200, { ok: true, activityStateReady: !touchResult.missing, ...touchResult });
+    return;
+  }
+
   const actionType = cleanText(body.actionType || body.action_type);
   const summary = cleanText(body.summary);
 

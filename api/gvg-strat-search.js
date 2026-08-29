@@ -1,3 +1,4 @@
+/* global process */
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
@@ -11,6 +12,10 @@ import {
   resolveRunScope,
   stratMatchesRunReadScope,
 } from "../src/lib/runScopeServer.js";
+import {
+  buildGvgActivityContextId,
+  touchPortalMemberActivityState,
+} from "./_portal-member-activity.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -300,7 +305,7 @@ export default async function handler(req, res) {
 
     const { data: defense, error: defenseError } = await supabase
       .from("gvg_defense")
-      .select("id, guild, heroes, type")
+      .select("id, guild, heroes, type, created_at")
       .eq("id", gvgDefenseId)
       .maybeSingle();
 
@@ -350,6 +355,13 @@ export default async function handler(req, res) {
       targetGuildCode: defense.guild,
       mapType: defenseMapType,
     });
+
+    if (results.length) {
+      await touchPortalMemberActivityState(supabase, sessionCheck.member.id, {
+        last_gvg_strat_view_at: new Date().toISOString(),
+        last_gvg_strat_context_id: buildGvgActivityContextId(defense),
+      });
+    }
 
     return res.status(200).json({
       success: true,

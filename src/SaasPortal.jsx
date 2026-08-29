@@ -9,10 +9,8 @@ import {
   Clock3,
   Compass,
   ClipboardPaste,
-  Cpu,
   Eye,
   FileJson,
-  Gauge,
   Grid3X3,
   HardDrive,
   HeartHandshake,
@@ -39,6 +37,7 @@ import {
   WalletCards,
   X,
   XCircle,
+  ArrowUpDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,14 +65,16 @@ import SupportProjectTab from "@/components/SupportProjectTab";
 import GlobalChatTab from "@/components/GlobalChatTab";
 import ProfileAvatar from "@/components/ProfileAvatar";
 import ProfileCosmeticsTab from "@/components/ProfileCosmeticsTab";
-import { logPortalActivity } from "@/lib/portalActivity";
+import {
+  PORTAL_PRESENCE_HEARTBEAT_INTERVAL_MS,
+  logPortalActivity,
+  touchPortalPresence,
+} from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
-import { fetchPortalChampions } from "@/lib/portalChampions";
 import { getGuildDisplayName, getSessionGuildDisplayName } from "@/lib/guildDisplay";
 import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
 import moontonHeroImages from "@/data/moontonHeroImages.json";
 import {
-  filterByGuildScope,
   getControlBrand,
   getGvgGuildLabel,
   getGuildScopeDescription,
@@ -110,7 +111,6 @@ import {
   canShowPortalHomeCard,
   canShowPortalNavItem,
   canShowPortalPve,
-  isPortalCommunityRole,
   isPortalCommunitySession,
 } from "@/lib/portalPermissions";
 import {
@@ -680,28 +680,6 @@ const categoryCards = [
   },
 ];
 
-const guildRows = [
-  { name: "Cluster Paladin", plan: "Interne", gvg: "G1 - G7", status: "Actif", tone: "emerald" },
-  { name: "Guilde externe test", plan: "Essai", gvg: "G2", status: "A valider", tone: "amber" },
-  { name: "Prospect", plan: "Aucun", gvg: "-", status: "Invite", tone: "zinc" },
-];
-
-const runSteps = [
-  { label: "Launcher en ligne", status: "pret", icon: Cpu },
-  { label: "Calibration plein ecran", status: "attente", icon: Gauge },
-  { label: "Capture 48 defenses", status: "attente", icon: UploadCloud },
-  { label: "Reco serveur", status: "attente", icon: FileJson },
-  { label: "Validation joueur", status: "attente", icon: CheckCircle2 },
-];
-
-const bastions = Array.from({ length: 4 }, (_, index) => ({
-  id: index + 1,
-  title: `Bastion ${index + 1}`,
-  done: index === 0 ? 12 : index === 1 ? 8 : 0,
-  total: 12,
-  status: index === 0 ? "pret" : index === 1 ? "controle" : "vide",
-}));
-
 const calquesBaseUrl = String(
   import.meta.env?.VITE_CALQUES_BASE_URL || buildPublicCalquesBaseUrl()
 ).replace(/\/$/, "");
@@ -822,52 +800,6 @@ function isLeaderSession(session) {
 
 function isAdminSession(session) {
   return Boolean(session?.isAdmin || session?.admin || isAdminRole(session?.role));
-}
-
-function isMissingPortalLicenseTable(error) {
-  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
-  return (
-    error?.code === "42P01" ||
-    error?.code === "PGRST205" ||
-    message.includes("portal_guild_licenses")
-  );
-}
-
-function buildPortalSession(member) {
-  const watcherName = member?.watcher_name || member?.discord_id || "Joueur";
-  const role = member?.role || "Joueur";
-  const communityAccessType = member?.community_access_type || (isPortalCommunityRole(role) ? "community" : "");
-  const community = communityAccessType === "community" || isPortalCommunityRole(role);
-  const guildCode = community ? "COMMUNITY" : member?.guild_code || "G1";
-  const admin = isAdminRole(role);
-  const leader = isLeaderRole(role);
-
-  return {
-    memberId: member?.id || null,
-    id: member?.id || null,
-    discordId: member?.discord_id || "",
-    discord_id: member?.discord_id || "",
-    name: watcherName,
-    watcherName,
-    memberName: watcherName,
-    role,
-    guild: guildCode,
-    guildCode,
-    guild_code: guildCode,
-    accessType: community ? "community" : "guild",
-    access_type: community ? "community" : "guild",
-    communityAccessType,
-    community_access_type: communityAccessType,
-    communityStatus: member?.community_status || (community ? "active" : ""),
-    community_status: member?.community_status || (community ? "active" : ""),
-    preferredLanguage: member?.preferred_language || "",
-    preferred_language: member?.preferred_language || "",
-    isAdmin: admin,
-    admin,
-    isLeader: leader,
-    leader,
-    passwordChangeRequired: Boolean(member?.password_change_required),
-  };
 }
 
 function isForcedPortalPassword(password) {
@@ -2139,6 +2071,7 @@ function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogo
   const cosmeticsSyncSourceIdRef = useRef(createPortalSyncSourceId("cosmetics"));
   const cosmeticsSyncChannelRef = useRef(null);
   const loggedTabViewsRef = useRef(new Set());
+  const presenceHeartbeatRef = useRef(0);
   const realSessionSignature = useMemo(() => getPortalSessionSignature(session), [session]);
   const realIsPaladinUser = isPaladinSession(session);
   const realIsCommunityUser = isPortalCommunitySession(session);
@@ -2553,6 +2486,33 @@ function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogo
       metadata: { tab: active, title: activeTitle },
     });
   }, [active, activeTitle, session]);
+
+  useEffect(() => {
+    if (!getPortalSessionMemberId(session)) return undefined;
+    if (typeof window === "undefined") return undefined;
+
+    const sendPresence = () => {
+      const now = Date.now();
+      if (now - presenceHeartbeatRef.current < PORTAL_PRESENCE_HEARTBEAT_INTERVAL_MS) return;
+      presenceHeartbeatRef.current = now;
+      void touchPortalPresence();
+    };
+    const handleVisiblePresence = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      sendPresence();
+    };
+
+    sendPresence();
+    window.addEventListener("focus", handleVisiblePresence);
+    document.addEventListener("visibilitychange", handleVisiblePresence);
+    const intervalId = window.setInterval(sendPresence, PORTAL_PRESENCE_HEARTBEAT_INTERVAL_MS);
+
+    return () => {
+      window.removeEventListener("focus", handleVisiblePresence);
+      document.removeEventListener("visibilitychange", handleVisiblePresence);
+      window.clearInterval(intervalId);
+    };
+  }, [session]);
 
   useEffect(() => {
     if (activeAdminItem) setAdminNavOpen(true);
@@ -4202,19 +4162,16 @@ function GvgView({ session, onEditRun }) {
     { id: "panel", label: "Pilotage", labelKey: "gvg.panel", adminOnly: true },
     { id: "admin", label: "Imports VPS", labelKey: "gvg.imports", adminOnly: true },
   ];
-
-  useEffect(() => {
-    const activeView = views.find((view) => view.id === activeGvgView);
-    if (activeView?.adminOnly && !canUseGvgAdminViews) {
-      setActiveGvgView("current");
-    }
-  }, [activeGvgView, canUseGvgAdminViews]);
+  const effectiveActiveGvgView =
+    views.find((view) => view.id === activeGvgView)?.adminOnly && !canUseGvgAdminViews
+      ? "current"
+      : activeGvgView;
 
   return (
     <section className="space-y-5">
       <div className="flex flex-wrap gap-2 rounded-xl border border-zinc-800 bg-zinc-950/90 p-2">
         {views.map((view) => {
-          const selected = activeGvgView === view.id;
+          const selected = effectiveActiveGvgView === view.id;
           const disabled = Boolean(view.adminOnly && !canUseGvgAdminViews);
 
           return (
@@ -4240,9 +4197,9 @@ function GvgView({ session, onEditRun }) {
         })}
       </div>
 
-      {activeGvgView === "current" ? <GvgCurrentTab session={session} onEditRun={onEditRun} /> : null}
-      {activeGvgView === "panel" && canUseGvgAdminViews ? <GvgPanelTab session={session} onEditRun={onEditRun} /> : null}
-      {activeGvgView === "admin" && canUseGvgAdminViews ? <GvgAdminTab session={session} /> : null}
+      {effectiveActiveGvgView === "current" ? <GvgCurrentTab session={session} onEditRun={onEditRun} /> : null}
+      {effectiveActiveGvgView === "panel" && canUseGvgAdminViews ? <GvgPanelTab session={session} onEditRun={onEditRun} /> : null}
+      {effectiveActiveGvgView === "admin" && canUseGvgAdminViews ? <GvgAdminTab session={session} /> : null}
     </section>
   );
 }
@@ -4642,42 +4599,6 @@ function getPortalSessionGuildCode(session) {
   return normalizeGuildCode(session?.guildCode || session?.guild_code || session?.guild || "G1");
 }
 
-function mapPortalAdminDefenseRow(row, blocksByDefenseId = new Map()) {
-  const slots = [...(row.guild_defense_slots || [])]
-    .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
-    .map((slot) => slot.champions?.name || "")
-    .filter(Boolean);
-
-  const conditions = (row.guild_defense_conditions || []).map(mapPortalDefenseConditionRow);
-
-  return {
-    id: row.id,
-    name: row.name || "",
-    tier: row.tier || "meta_s",
-    type: row.type || "Tour",
-    faction: row.faction || "",
-    guildCode: row.guild_code || "G1",
-    isGlobal: Boolean(row.is_global),
-    isHidden: Boolean(row.is_hidden),
-    sourceDefenseId: row.source_defense_id || null,
-    sortOrder: row.sort_order ?? 9999,
-    slots,
-    conditions,
-    infoBlocks: blocksByDefenseId.get(String(row.id)) || [],
-    image: row.image_url || "",
-    image_url: row.image_url || "",
-  };
-}
-
-function mapPortalDefenseConditionRow(condition) {
-  return {
-    id: condition.id,
-    championId: condition.champion_id,
-    minAwakening: condition.min_awakening,
-    label: `${condition.champions?.name || "Hero"} A${condition.min_awakening} minimum`,
-  };
-}
-
 function normalizePortalDefenseFaction(value) {
   const normalized = normalizeHeroDataValue(value);
   return heroFactionMeta[normalized] ? normalized : String(value || "").trim();
@@ -4685,22 +4606,6 @@ function normalizePortalDefenseFaction(value) {
 
 function normalizeDefenseChampionName(value) {
   return String(value || "").trim().toLowerCase();
-}
-
-function getDefenseStoragePathFromPublicUrl(fileUrl) {
-  if (!fileUrl) return null;
-
-  try {
-    const url = new URL(fileUrl);
-    const marker = "/storage/v1/object/public/defense-images/";
-    const markerIndex = url.pathname.indexOf(marker);
-
-    if (markerIndex === -1) return null;
-    return decodeURIComponent(url.pathname.slice(markerIndex + marker.length));
-  } catch (error) {
-    console.error("Erreur parsing URL storage defense:", error);
-    return null;
-  }
 }
 
 function compressPortalDefenseImage(file, maxWidth = 1400, quality = 0.86) {
@@ -7380,7 +7285,385 @@ function getLogEntityLabel(entityType, t) {
   return key ? t(key, fallback) : entityType;
 }
 
+const logsSubViews = [
+  { id: "members", label: "Suivi des membres", icon: Users },
+  { id: "journal", label: "Journal des logs", icon: Activity },
+];
+
+const memberActivityFilters = [
+  { id: "all", label: "Tous" },
+  { id: "never_seen", label: "Jamais vus" },
+  { id: "missing_pb", label: "PB manquant" },
+  { id: "missing_demonic", label: "Monstres manquants" },
+  { id: "missing_hero_box", label: "Box heros manquante" },
+  { id: "missing_gvg_strat", label: "Strat GVG non consultee" },
+  { id: "missing_repro", label: "Repro manquante" },
+];
+
+const memberActivityColumns = [
+  { id: "lastSeenAt", label: "Presence site", emptyLabel: "Jamais" },
+  { id: "lastPbUpdateAt", label: "PB", emptyLabel: "Jamais renseigne" },
+  { id: "lastDemonicUpdateAt", label: "Monstres demoniaques", emptyLabel: "Jamais sauvegarde" },
+  { id: "lastHeroBoxUpdateAt", label: "Box heros", emptyLabel: "Jamais sauvegardee" },
+  { id: "currentGvgStratViewedAt", label: "Strat GVG en cours", emptyLabel: "Non consultee" },
+  { id: "lastGvgReproAt", label: "Derniere repro", emptyLabel: "Aucune repro" },
+];
+
+function formatMemberActivityDate(value) {
+  if (!value) return "";
+
+  return new Date(value).toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getMemberActivityDateTone(value) {
+  if (!value) return "missing";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "stale";
+
+  const ageMs = Date.now() - timestamp;
+  if (ageMs <= 7 * 24 * 60 * 60 * 1000) return "fresh";
+  if (ageMs <= 21 * 24 * 60 * 60 * 1000) return "stale";
+  return "old";
+}
+
+function MemberActivityDateCell({ value, emptyLabel }) {
+  const tone = getMemberActivityDateTone(value);
+  const toneClasses = {
+    fresh: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+    stale: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+    old: "border-zinc-700 bg-zinc-900 text-zinc-300",
+    missing: "border-red-500/25 bg-red-500/10 text-red-200",
+  };
+
+  return (
+    <span className={`inline-flex w-fit items-center gap-1 rounded-md border px-2 py-1 text-xs ${toneClasses[tone]}`}>
+      {value ? <Clock3 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+      {value ? formatMemberActivityDate(value) : emptyLabel}
+    </span>
+  );
+}
+
+function getActivityMemberSearchText(member) {
+  return normalizeHeroKey(`${member?.name || ""} ${member?.watcherName || ""} ${member?.guildCode || ""} ${member?.role || ""}`);
+}
+
+function getActivityMemberValue(member, key) {
+  if (key === "name") return member?.name || "";
+  return member?.[key] || "";
+}
+
+function compareActivityMembers(left, right, sort) {
+  const leftValue = getActivityMemberValue(left, sort.key);
+  const rightValue = getActivityMemberValue(right, sort.key);
+  const direction = sort.direction === "asc" ? 1 : -1;
+
+  if (sort.key === "name") {
+    return direction * String(leftValue || "").localeCompare(String(rightValue || ""), "fr", {
+      numeric: true,
+      sensitivity: "base",
+    });
+  }
+
+  const leftTime = Date.parse(leftValue || "");
+  const rightTime = Date.parse(rightValue || "");
+  const leftRank = Number.isFinite(leftTime) ? leftTime : 0;
+  const rightRank = Number.isFinite(rightTime) ? rightTime : 0;
+  if (leftRank === rightRank) return compareActivityMembers(left, right, { key: "name", direction: "asc" });
+  return direction * (leftRank - rightRank);
+}
+
+function filterActivityMembers(members, filterId) {
+  switch (filterId) {
+    case "never_seen":
+      return members.filter((member) => !member.lastSeenAt);
+    case "missing_pb":
+      return members.filter((member) => !member.lastPbUpdateAt);
+    case "missing_demonic":
+      return members.filter((member) => !member.lastDemonicUpdateAt);
+    case "missing_hero_box":
+      return members.filter((member) => !member.lastHeroBoxUpdateAt);
+    case "missing_gvg_strat":
+      return members.filter((member) => !member.viewedCurrentGvgStrat);
+    case "missing_repro":
+      return members.filter((member) => !member.lastGvgReproAt);
+    default:
+      return members;
+  }
+}
+
+function MemberActivityOverviewView({ session }) {
+  const apiBase = useMemo(() => getApiBase(), []);
+  const [overview, setOverview] = useState(null);
+  const [selectedGuildCode, setSelectedGuildCode] = useState("");
+  const [query, setQuery] = useState("");
+  const [filterId, setFilterId] = useState("all");
+  const [sort, setSort] = useState({ key: "name", direction: "asc" });
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const loadOverview = useCallback(async () => {
+    setLoading(true);
+    setErrorMessage("");
+
+    try {
+      const response = await fetch(`${apiBase}/api/portal-activity?action=overview`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || "Suivi des membres impossible.");
+      setOverview(data);
+      const nextGuilds = data?.guilds || [];
+      setSelectedGuildCode((current) => {
+        if (current && nextGuilds.some((guild) => String(guild.guildCode) === String(current))) return current;
+        const sessionGuildCode = normalizeGuildCode(session?.guildCode || session?.guild_code || session?.guild);
+        const sessionGuild = nextGuilds.find((guild) => normalizeGuildCode(guild.guildCode) === sessionGuildCode);
+        return sessionGuild?.guildCode || nextGuilds[0]?.guildCode || "";
+      });
+    } catch (error) {
+      setOverview(null);
+      setErrorMessage(error?.message || "Suivi des membres impossible.");
+    } finally {
+      setLoading(false);
+    }
+  }, [apiBase, session]);
+
+  useEffect(() => {
+    void loadOverview();
+  }, [loadOverview]);
+
+  const guilds = useMemo(() => overview?.guilds || [], [overview]);
+  const selectedGuild = useMemo(
+    () => guilds.find((guild) => String(guild.guildCode) === String(selectedGuildCode)) || guilds[0] || null,
+    [guilds, selectedGuildCode],
+  );
+  const visibleMembers = useMemo(() => {
+    const search = normalizeHeroKey(query);
+    return filterActivityMembers(selectedGuild?.members || [], filterId)
+      .filter((member) => !search || getActivityMemberSearchText(member).includes(search))
+      .sort((left, right) => compareActivityMembers(left, right, sort));
+  }, [filterId, query, selectedGuild, sort]);
+  const summary = selectedGuild?.summary || overview?.summary || {};
+
+  const toggleSort = (key) => {
+    setSort((current) => {
+      if (current.key !== key) return { key, direction: key === "name" ? "asc" : "desc" };
+      return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="text-sm font-semibold uppercase tracking-[0.18em] text-cyan-300">Suivi des membres</div>
+            <h2 className="mt-2 text-2xl font-semibold text-zinc-50">Vue activite par guilde</h2>
+            <p className="mt-2 max-w-3xl text-sm text-zinc-400">
+              Les lignes viennent des membres actifs de guilde. Un joueur apparait meme s'il n'a jamais utilise le Portal.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={loadOverview}
+            disabled={loading}
+            className="w-full rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 xl:w-auto"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Rafraichir
+          </Button>
+        </div>
+
+        {overview?.migrationRequired ? (
+          <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            {overview.warning || "La migration portal_member_activity_state doit etre executee pour activer le suivi."}
+          </div>
+        ) : null}
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Membres</div>
+            <div className="mt-2 text-2xl font-semibold text-zinc-50">{summary.totalMembers || 0}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Jamais vus</div>
+            <div className="mt-2 text-2xl font-semibold text-red-200">{summary.neverSeenMembers || 0}</div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Box/PB/Monstres manquants</div>
+            <div className="mt-2 text-2xl font-semibold text-amber-200">
+              {(summary.heroBoxMissing || 0) + (summary.pbMissing || 0) + (summary.demonicMissing || 0)}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-4">
+            <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Strats GVG non vues</div>
+            <div className="mt-2 text-2xl font-semibold text-cyan-200">{summary.currentGvgStratMissing || 0}</div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          {guilds.map((guild) => {
+            const selected = String(guild.guildCode) === String(selectedGuild?.guildCode || selectedGuildCode);
+            return (
+              <button
+                key={guild.guildCode}
+                type="button"
+                onClick={() => setSelectedGuildCode(guild.guildCode)}
+                className={`rounded-lg border px-3 py-2 text-sm transition ${
+                  selected
+                    ? "border-cyan-300/60 bg-cyan-500/10 text-cyan-100"
+                    : "border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-cyan-400/35 hover:bg-zinc-800"
+                }`}
+              >
+                {guild.displayName || getGuildDisplayName({ guildCode: guild.guildCode })}
+                <span className="ml-2 text-xs text-zinc-500">{guild.summary?.totalMembers || 0}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-5 grid gap-3 xl:grid-cols-[minmax(260px,420px)_1fr]">
+          <div className="flex h-11 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 ring-cyan-400/20 transition focus-within:border-cyan-400/60 focus-within:ring-2">
+            <Search className="h-4 w-4 shrink-0 text-zinc-500" />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Chercher un joueur"
+              className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {memberActivityFilters.map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() => setFilterId(filter.id)}
+                className={`rounded-lg px-3 py-2 text-sm transition ${
+                  filterId === filter.id
+                    ? "bg-zinc-100 text-zinc-950"
+                    : "border border-zinc-800 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {errorMessage ? (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {errorMessage}
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
+        {loading ? (
+          <div className="p-5 text-sm text-zinc-500">Chargement du suivi...</div>
+        ) : !selectedGuild ? (
+          <div className="p-5 text-sm text-zinc-500">Aucune guilde disponible dans ce perimetre.</div>
+        ) : visibleMembers.length === 0 ? (
+          <div className="p-5 text-sm text-zinc-500">Aucun membre pour ce filtre.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-[1120px] w-full border-collapse text-left text-sm">
+              <thead className="bg-zinc-900/80 text-xs uppercase tracking-[0.12em] text-zinc-500">
+                <tr>
+                  <th className="sticky left-0 z-10 border-b border-zinc-800 bg-zinc-900/95 px-4 py-3">
+                    <button type="button" onClick={() => toggleSort("name")} className="inline-flex items-center gap-2">
+                      Joueur
+                      <ArrowUpDown className="h-3.5 w-3.5" />
+                    </button>
+                  </th>
+                  {memberActivityColumns.map((column) => (
+                    <th key={column.id} className="border-b border-zinc-800 px-4 py-3">
+                      <button type="button" onClick={() => toggleSort(column.id)} className="inline-flex items-center gap-2">
+                        {column.label}
+                        <ArrowUpDown className="h-3.5 w-3.5" />
+                      </button>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleMembers.map((member) => (
+                  <tr key={member.memberId} className="border-b border-zinc-900/90 last:border-0">
+                    <td className="sticky left-0 z-10 bg-zinc-950 px-4 py-3">
+                      <div className="font-semibold text-zinc-100">{member.name}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                        <span>{member.guildCode}</span>
+                        <Badge className="rounded-md border-zinc-700 bg-zinc-900 text-zinc-400">{member.role || "member"}</Badge>
+                      </div>
+                    </td>
+                    {memberActivityColumns.map((column) => (
+                      <td key={`${member.memberId}-${column.id}`} className="px-4 py-3">
+                        <MemberActivityDateCell value={member[column.id]} emptyLabel={column.emptyLabel} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function LogsView({ session }) {
+  const [activeView, setActiveView] = useState("members");
+
+  return (
+    <section className="space-y-5">
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-500">Logs</div>
+            <h2 className="mt-2 text-2xl font-semibold text-zinc-50">
+              {activeView === "members" ? "Suivi des membres" : "Journal des logs"}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+              Suivi operationnel par guilde, avec le journal historique disponible sans changement.
+            </p>
+          </div>
+
+          <div className="flex w-full rounded-lg border border-zinc-800 bg-zinc-900 p-1 xl:w-auto">
+            {logsSubViews.map((view) => {
+              const Icon = view.icon;
+              return (
+                <button
+                  key={view.id}
+                  type="button"
+                  onClick={() => setActiveView(view.id)}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm transition xl:flex-none ${
+                    activeView === view.id ? "bg-zinc-100 text-zinc-950" : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {view.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {activeView === "members" ? <MemberActivityOverviewView session={session} /> : <LogsJournalView session={session} />}
+    </section>
+  );
+}
+
+function LogsJournalView({ session }) {
   const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const [members, setMembers] = useState([]);

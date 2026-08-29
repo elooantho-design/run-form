@@ -19,6 +19,7 @@ import {
   getMemberDataGuildCode,
   serializeMemberDataPermissions,
 } from "./_member-data-permissions.js";
+import { touchPortalMemberActivityState } from "./_portal-member-activity.js";
 
 const SAFE_MEMBER_SELECT =
   "id, role, discord_id, watcher_name, guild_code, assignment, community_access_type, community_status, preferred_language, primary_member_id";
@@ -362,6 +363,9 @@ async function handleSetHeroAwakening(req, res, supabase, actor, body) {
     championId,
     awakeningLevel,
   });
+  await touchPortalMemberActivityState(supabase, target.id, {
+    last_hero_box_update_at: new Date().toISOString(),
+  });
   return sendJson(req, res, 200, { ok: true, ...awakening, awakening });
 }
 
@@ -389,6 +393,9 @@ async function handleBulkHeroAwakening(req, res, supabase, actor, body) {
   }
 
   const awakenings = await upsertHeroBoxAwakenings(supabase, rows);
+  await touchPortalMemberActivityState(supabase, target.id, {
+    last_hero_box_update_at: new Date().toISOString(),
+  });
   return sendJson(req, res, 200, { ok: true, count: awakenings.length, awakenings });
 }
 
@@ -470,11 +477,15 @@ async function handleUpdatePersonalBestHero(req, res, supabase, actor, body) {
 
   const championId = Number(body.championId || body.champion_id);
   if (!Number.isFinite(championId)) return sendJson(req, res, 400, { ok: false, error: "Champion invalide." });
+  const updatedAt = new Date().toISOString();
   const { error } = await supabase
     .from("member_pb_entries")
-    .update({ champion_id: championId, updated_at: new Date().toISOString() })
+    .update({ champion_id: championId, updated_at: updatedAt })
     .eq("id", resolved.entry.id);
   if (error) throw error;
+  await touchPortalMemberActivityState(supabase, resolved.member.id, {
+    last_pb_update_at: updatedAt,
+  });
   return sendJson(req, res, 200, { ok: true });
 }
 
@@ -489,7 +500,8 @@ async function handleUpdatePersonalBestValue(req, res, supabase, actor, body) {
   const rawAwakening = body.awakeningLevel ?? body.awakening_level;
   const awakeningLevel =
     rawAwakening === null || rawAwakening === undefined || rawAwakening === "" ? null : normalizeAwakeningLevel(rawAwakening);
-  const payload = { pb_raw: pbRaw, updated_at: new Date().toISOString(), awakening_level: awakeningLevel };
+  const updatedAt = new Date().toISOString();
+  const payload = { pb_raw: pbRaw, updated_at: updatedAt, awakening_level: awakeningLevel };
   let { error } = await supabase.from("member_pb_entries").update(payload).eq("id", resolved.entry.id);
   let pbAwakeningColumnReady = true;
   if (isMissingColumn(error, "awakening_level")) {
@@ -501,6 +513,9 @@ async function handleUpdatePersonalBestValue(req, res, supabase, actor, body) {
     pbAwakeningColumnReady = false;
   }
   if (error) throw error;
+  await touchPortalMemberActivityState(supabase, resolved.member.id, {
+    last_pb_update_at: updatedAt,
+  });
   return sendJson(req, res, 200, { ok: true, pbAwakeningColumnReady });
 }
 
@@ -654,6 +669,7 @@ async function handleSetDemonicMonsterLevel(req, res, supabase, actor, body) {
   const monsterId = validateUuid(body.monsterId || body.monster_id);
   const level = Math.min(20, Math.max(0, Math.round(Number(body.level || 0))));
   if (!monsterId) return sendJson(req, res, 400, { ok: false, error: "Monstre invalide." });
+  const updatedAt = new Date().toISOString();
   const { data, error } = await supabase
     .from("member_demonic_monsters")
     .upsert(
@@ -661,7 +677,7 @@ async function handleSetDemonicMonsterLevel(req, res, supabase, actor, body) {
         member_id: target.id,
         monster_id: monsterId,
         level,
-        updated_at: new Date().toISOString(),
+        updated_at: updatedAt,
       },
       { onConflict: "member_id,monster_id" },
     )
@@ -681,6 +697,9 @@ async function handleSetDemonicMonsterLevel(req, res, supabase, actor, body) {
     )
     .single();
   if (error) throw error;
+  await touchPortalMemberActivityState(supabase, target.id, {
+    last_demonic_update_at: updatedAt,
+  });
   return sendJson(req, res, 200, { ok: true, entry: data });
 }
 

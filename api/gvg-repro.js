@@ -1,3 +1,4 @@
+/* global process */
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
@@ -8,6 +9,7 @@ import {
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
 import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
+import { touchPortalMemberActivityState } from "./_portal-member-activity.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -330,6 +332,10 @@ async function handleSave(req, res, sessionCheck, runScope) {
       error: error.message || "erreur sauvegarde repro",
     });
   }
+
+  await touchPortalMemberActivityState(supabase, requestedMember.memberId, {
+    last_gvg_repro_at: payloadBase.updated_at,
+  });
 
   return res.status(200).json({
     success: true,
