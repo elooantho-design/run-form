@@ -191,6 +191,18 @@ assert.match(preflightSql, /column_source_defense_id_exists/, "preflight reports
 assert.match(preflightSql, /column_organization_id_exists/, "preflight reports whether organization_id exists");
 assert.match(preflightSql, /column_defense_1_id_exists/, "preflight reports whether defense_1_id exists");
 assert.match(preflightSql, /column_defense_2_id_exists/, "preflight reports whether defense_2_id exists");
+const preflightStatementCount = preflightSql
+  .replace(/--.*$/gm, "")
+  .split(";")
+  .map((statement) => statement.trim())
+  .filter(Boolean).length;
+assert.equal(preflightStatementCount, 1, "preflight returns one consolidated result set for Supabase");
+assert.match(preflightSql, /\bunion all\b/i, "preflight consolidates diagnostics through one unioned result set");
+assert.match(
+  preflightSql,
+  /check_name[\s\S]*subject[\s\S]*expected_value[\s\S]*actual_value[\s\S]*status[\s\S]*details/i,
+  "preflight exposes one diagnostic table with stable columns",
+);
 assert.match(preflightSql, /to_jsonb\(defense\)->>'source_defense_id'/, "preflight reads future source column through jsonb");
 assert.doesNotMatch(
   preflightSql,
