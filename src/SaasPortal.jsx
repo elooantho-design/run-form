@@ -7300,13 +7300,21 @@ const memberActivityFilters = [
   { id: "missing_repro", label: "Repro manquante" },
 ];
 
+const MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE = "unknown_date";
+const MEMBER_ACTIVITY_STATUS_NEVER = "never";
+
 const memberActivityColumns = [
-  { id: "lastSeenAt", label: "Presence site", emptyLabel: "Jamais" },
-  { id: "lastPbUpdateAt", label: "PB", emptyLabel: "Jamais renseigne" },
-  { id: "lastDemonicUpdateAt", label: "Monstres demoniaques", emptyLabel: "Jamais sauvegarde" },
-  { id: "lastHeroBoxUpdateAt", label: "Box heros", emptyLabel: "Jamais sauvegardee" },
-  { id: "currentGvgStratViewedAt", label: "Strat GVG en cours", emptyLabel: "Non consultee" },
-  { id: "lastGvgReproAt", label: "Derniere repro", emptyLabel: "Aucune repro" },
+  { id: "lastSeenAt", statusId: "lastSeenStatus", label: "Presence site", emptyLabel: "Jamais" },
+  { id: "lastPbUpdateAt", statusId: "pbStatus", label: "PB", emptyLabel: "Jamais renseigne" },
+  {
+    id: "lastDemonicUpdateAt",
+    statusId: "demonicStatus",
+    label: "Monstres demoniaques",
+    emptyLabel: "Jamais sauvegarde",
+  },
+  { id: "lastHeroBoxUpdateAt", statusId: "heroBoxStatus", label: "Box heros", emptyLabel: "Jamais sauvegardee" },
+  { id: "currentGvgStratViewedAt", statusId: "gvgStratStatus", label: "Strat GVG en cours", emptyLabel: "Non consultee" },
+  { id: "lastGvgReproAt", statusId: "reproStatus", label: "Derniere repro", emptyLabel: "Aucune repro" },
 ];
 
 function formatMemberActivityDate(value) {
@@ -7321,7 +7329,8 @@ function formatMemberActivityDate(value) {
   });
 }
 
-function getMemberActivityDateTone(value) {
+function getMemberActivityDateTone(value, status) {
+  if (status === MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE) return "unknown";
   if (!value) return "missing";
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return "stale";
@@ -7333,11 +7342,15 @@ function getMemberActivityDateTone(value) {
   return "critical";
 }
 
-function MemberActivityDateCell({ value, emptyLabel }) {
-  const tone = getMemberActivityDateTone(value);
+function MemberActivityDateCell({ value, status, emptyLabel, unknownLabel = "Non communique" }) {
+  const isUnknownDate = status === MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE && !value;
+  const tone = getMemberActivityDateTone(value, status);
+  const label = value ? formatMemberActivityDate(value) : isUnknownDate ? unknownLabel : emptyLabel;
+  const title = value ? formatMemberActivityDate(value) : isUnknownDate ? "Donnees historiques presentes, date non communiquee" : emptyLabel;
   const toneClasses = {
     fresh: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
     neutral: "border-zinc-600 bg-zinc-800 text-zinc-200",
+    unknown: "border-zinc-700 bg-zinc-900 text-zinc-300",
     stale: "border-amber-400/45 bg-amber-400/15 text-amber-100",
     critical: "border-red-500/45 bg-red-500/15 text-red-100",
     missing: "border-red-400/70 bg-red-500/25 text-red-50 shadow-[0_0_0_1px_rgba(248,113,113,0.25)]",
@@ -7346,10 +7359,10 @@ function MemberActivityDateCell({ value, emptyLabel }) {
   return (
     <span
       className={`inline-flex w-fit items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${toneClasses[tone]}`}
-      title={value ? formatMemberActivityDate(value) : emptyLabel}
+      title={title}
     >
-      {value ? <Clock3 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-      {value ? formatMemberActivityDate(value) : emptyLabel}
+      {value || isUnknownDate ? <Clock3 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+      {label}
     </span>
   );
 }
@@ -7359,6 +7372,7 @@ const memberActivityFreshnessLegend = [
   { label: "7 a 14 jours", tone: "neutral" },
   { label: "14 a 30 jours", tone: "stale" },
   { label: "Plus de 30 jours", tone: "critical" },
+  { label: "Non communique", tone: "unknown" },
   { label: "Jamais", tone: "missing" },
 ];
 
@@ -7366,6 +7380,7 @@ function MemberActivityFreshnessLegend() {
   const dotClasses = {
     fresh: "bg-emerald-400",
     neutral: "bg-zinc-500",
+    unknown: "bg-zinc-700",
     stale: "bg-amber-300",
     critical: "bg-red-400",
     missing: "bg-red-500 ring-2 ring-red-300/40",
@@ -7413,20 +7428,26 @@ function compareActivityMembers(left, right, sort) {
   return direction * (leftRank - rightRank);
 }
 
+function isMissingMemberActivity(member, valueKey, statusKey) {
+  const status = member?.[statusKey];
+  if (status) return status === MEMBER_ACTIVITY_STATUS_NEVER;
+  return !member?.[valueKey];
+}
+
 function filterActivityMembers(members, filterId) {
   switch (filterId) {
     case "never_seen":
-      return members.filter((member) => !member.lastSeenAt);
+      return members.filter((member) => isMissingMemberActivity(member, "lastSeenAt", "lastSeenStatus"));
     case "missing_pb":
-      return members.filter((member) => !member.lastPbUpdateAt);
+      return members.filter((member) => isMissingMemberActivity(member, "lastPbUpdateAt", "pbStatus"));
     case "missing_demonic":
-      return members.filter((member) => !member.lastDemonicUpdateAt);
+      return members.filter((member) => isMissingMemberActivity(member, "lastDemonicUpdateAt", "demonicStatus"));
     case "missing_hero_box":
-      return members.filter((member) => !member.lastHeroBoxUpdateAt);
+      return members.filter((member) => isMissingMemberActivity(member, "lastHeroBoxUpdateAt", "heroBoxStatus"));
     case "missing_gvg_strat":
-      return members.filter((member) => !member.viewedCurrentGvgStrat);
+      return members.filter((member) => isMissingMemberActivity(member, "currentGvgStratViewedAt", "gvgStratStatus"));
     case "missing_repro":
-      return members.filter((member) => !member.lastGvgReproAt);
+      return members.filter((member) => isMissingMemberActivity(member, "lastGvgReproAt", "reproStatus"));
     default:
       return members;
   }
@@ -7643,7 +7664,11 @@ function MemberActivityOverviewView({ session }) {
                       </td>
                       {memberActivityColumns.map((column) => (
                         <td key={`${member.memberId}-${column.id}`} className="px-4 py-3">
-                          <MemberActivityDateCell value={member[column.id]} emptyLabel={column.emptyLabel} />
+                          <MemberActivityDateCell
+                            value={member[column.id]}
+                            status={member[column.statusId]}
+                            emptyLabel={column.emptyLabel}
+                          />
                         </td>
                       ))}
                     </tr>

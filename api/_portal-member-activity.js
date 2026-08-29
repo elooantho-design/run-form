@@ -37,6 +37,21 @@ const ACTIVITY_TIMESTAMP_FIELDS = new Set([
   "last_gvg_strat_view_at",
   "last_gvg_repro_at",
 ]);
+export const ACTIVITY_STATUS_KNOWN_DATE = "known_date";
+export const ACTIVITY_STATUS_UNKNOWN_DATE = "unknown_date";
+export const ACTIVITY_STATUS_NEVER = "never";
+
+const PB_HISTORY_SELECT = "member_id, champion_id, pb_raw, updated_at";
+const PB_HISTORY_SELECT_FALLBACK = "member_id, champion_id, pb_raw";
+const HERO_BOX_HISTORY_SELECT = "member_id, champion_id, awakening_level";
+const DEMONIC_HISTORY_SELECT = "member_id, monster_id, level, updated_at";
+const DEMONIC_HISTORY_SELECT_FALLBACK = "member_id, monster_id, level";
+const REPRO_HISTORY_SELECT = "member_id, created_at, updated_at";
+const REPRO_HISTORY_SELECT_FALLBACK = "member_id, created_at";
+const ACTIVITY_LOG_HISTORY_SELECT = "id, actor_member_id, target_member_id, action_type, created_at";
+const PB_ACTIVITY_LOG_TYPES = new Set(["pb_update", "pb_hero_update"]);
+const DEMONIC_ACTIVITY_LOG_TYPES = new Set(["demon_monster_update"]);
+const HERO_BOX_ACTIVITY_LOG_TYPES = new Set(["hero_box_update", "hero_box_bulk_a5"]);
 const INACTIVE_ROSTER_STATUSES = new Set(["inactive", "non_roster"]);
 const COMMUNITY_ROLES = new Set(["community_member", "content_creator"]);
 
@@ -59,6 +74,88 @@ function normalizeDateDayKey(value) {
 
 function makeGuildKey(value) {
   return normalizeGuildCodeKey(value);
+}
+
+function normalizeActivityDate(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return null;
+  return new Date(timestamp).toISOString();
+}
+
+function maxActivityDate(...values) {
+  let best = null;
+  let bestTime = Number.NEGATIVE_INFINITY;
+
+  values.flat().forEach((value) => {
+    const normalized = normalizeActivityDate(value);
+    if (!normalized) return;
+    const timestamp = Date.parse(normalized);
+    if (timestamp > bestTime) {
+      best = normalized;
+      bestTime = timestamp;
+    }
+  });
+
+  return best;
+}
+
+function pickRowActivityDate(row) {
+  return maxActivityDate(row?.updated_at, row?.created_at);
+}
+
+function buildActivityValue({ stateDate = null, historicalDate = null, hasHistoricalData = false } = {}) {
+  const value = maxActivityDate(stateDate, historicalDate);
+  if (value) return { value, status: ACTIVITY_STATUS_KNOWN_DATE };
+  if (hasHistoricalData) return { value: null, status: ACTIVITY_STATUS_UNKNOWN_DATE };
+  return { value: null, status: ACTIVITY_STATUS_NEVER };
+}
+
+function ensureEvidence(evidenceByMemberId, memberId) {
+  const key = cleanText(memberId);
+  if (!key) return null;
+  if (!evidenceByMemberId.has(key)) {
+    evidenceByMemberId.set(key, {
+      lastSeen: { date: null, hasData: false },
+      pb: { date: null, hasData: false },
+      demonic: { date: null, hasData: false },
+      heroBox: { date: null, hasData: false },
+      repro: { date: null, hasData: false },
+    });
+  }
+  return evidenceByMemberId.get(key);
+}
+
+function mergeEvidence(evidenceByMemberId, memberId, key, { date = null, hasData = true } = {}) {
+  const evidence = ensureEvidence(evidenceByMemberId, memberId);
+  if (!evidence?.[key]) return;
+  evidence[key] = {
+    hasData: Boolean(evidence[key].hasData || hasData),
+    date: maxActivityDate(evidence[key].date, date),
+  };
+}
+
+function getHistoricalEvidence(historicalEvidenceByMemberId, memberId) {
+  const key = cleanText(memberId);
+  if (!key) return {};
+  if (historicalEvidenceByMemberId instanceof Map) return historicalEvidenceByMemberId.get(key) || {};
+  return historicalEvidenceByMemberId?.[key] || {};
+}
+
+function hasMeaningfulPbEntry(row) {
+  const rawText = cleanText(row?.pb_raw).replace(/\s/g, "");
+  const rawNumber = Number(String(row?.pb_raw ?? "").replace(/[^\d.-]/g, ""));
+  const zeroLike = /^0+([.,]0+)?$/.test(rawText);
+  return Boolean(row?.champion_id || (rawText && !zeroLike) || (Number.isFinite(rawNumber) && rawNumber > 0));
+}
+
+function hasMeaningfulHeroBoxEntry(row) {
+  const level = Number(row?.awakening_level);
+  return Number.isFinite(level) && level >= 0;
+}
+
+function hasMeaningfulDemonicEntry(row) {
+  const level = Number(row?.level);
+  return Number.isFinite(level) && level > 0;
 }
 
 function readContextForGuild(contexts, guildCode) {
@@ -150,11 +247,68 @@ export function buildCurrentGvgContextsByGuild(defenses = []) {
   return contexts;
 }
 
+export function buildHistoricalEvidenceByMember({
+  pbEntries = [],
+  heroBoxEntries = [],
+  demonicEntries = [],
+  reproEntries = [],
+  activityLogs = [],
+} = {}) {
+  const evidenceByMemberId = new Map();
+
+  (pbEntries || []).forEach((row) => {
+    if (!hasMeaningfulPbEntry(row)) return;
+    mergeEvidence(evidenceByMemberId, row?.member_id, "pb", {
+      date: pickRowActivityDate(row),
+    });
+  });
+
+  (heroBoxEntries || []).forEach((row) => {
+    if (!hasMeaningfulHeroBoxEntry(row)) return;
+    mergeEvidence(evidenceByMemberId, row?.member_id, "heroBox", {
+      date: pickRowActivityDate(row),
+    });
+  });
+
+  (demonicEntries || []).forEach((row) => {
+    if (!hasMeaningfulDemonicEntry(row)) return;
+    mergeEvidence(evidenceByMemberId, row?.member_id, "demonic", {
+      date: pickRowActivityDate(row),
+    });
+  });
+
+  (reproEntries || []).forEach((row) => {
+    if (!row?.member_id) return;
+    mergeEvidence(evidenceByMemberId, row.member_id, "repro", {
+      date: pickRowActivityDate(row),
+    });
+  });
+
+  (activityLogs || []).forEach((row) => {
+    const date = normalizeActivityDate(row?.created_at);
+    if (row?.actor_member_id) {
+      mergeEvidence(evidenceByMemberId, row.actor_member_id, "lastSeen", { date });
+    }
+
+    let evidenceKey = "";
+    if (PB_ACTIVITY_LOG_TYPES.has(row?.action_type)) evidenceKey = "pb";
+    if (DEMONIC_ACTIVITY_LOG_TYPES.has(row?.action_type)) evidenceKey = "demonic";
+    if (HERO_BOX_ACTIVITY_LOG_TYPES.has(row?.action_type)) evidenceKey = "heroBox";
+    if (!evidenceKey) return;
+
+    mergeEvidence(evidenceByMemberId, row?.actor_member_id, evidenceKey, { date });
+    mergeEvidence(evidenceByMemberId, row?.target_member_id, evidenceKey, { date });
+  });
+
+  return evidenceByMemberId;
+}
+
 export function buildPortalMemberActivityOverview({
   guilds = [],
   members = [],
   states = [],
   currentGvgContextsByGuild = {},
+  historicalEvidenceByMemberId = new Map(),
 } = {}) {
   const stateByMemberId = new Map(
     (states || [])
@@ -204,12 +358,55 @@ export function buildPortalMemberActivityOverview({
       if (!guildRowsByKey.has(guildKey)) return;
 
       const state = stateByMemberId.get(String(member.id)) || {};
+      const history = getHistoricalEvidence(historicalEvidenceByMemberId, member.id);
       const currentGvgContextId = readContextForGuild(currentGvgContextsByGuild, guildCode);
       const viewedCurrentGvgStrat = Boolean(
         state.last_gvg_strat_view_at &&
           currentGvgContextId &&
           state.last_gvg_strat_context_id === currentGvgContextId,
       );
+      const pbActivity = buildActivityValue({
+        stateDate: state.last_pb_update_at,
+        historicalDate: history.pb?.date,
+        hasHistoricalData: history.pb?.hasData,
+      });
+      const demonicActivity = buildActivityValue({
+        stateDate: state.last_demonic_update_at,
+        historicalDate: history.demonic?.date,
+        hasHistoricalData: history.demonic?.hasData,
+      });
+      const heroBoxActivity = buildActivityValue({
+        stateDate: state.last_hero_box_update_at,
+        historicalDate: history.heroBox?.date,
+        hasHistoricalData: history.heroBox?.hasData,
+      });
+      const gvgReproActivity = buildActivityValue({
+        stateDate: state.last_gvg_repro_at,
+        historicalDate: history.repro?.date,
+        hasHistoricalData: history.repro?.hasData,
+      });
+      const currentGvgStratActivity = viewedCurrentGvgStrat
+        ? buildActivityValue({ stateDate: state.last_gvg_strat_view_at })
+        : buildActivityValue();
+      const lastSeenActivity = buildActivityValue({
+        stateDate: maxActivityDate(
+          state.last_seen_at,
+          history.lastSeen?.date,
+          pbActivity.value,
+          demonicActivity.value,
+          heroBoxActivity.value,
+          currentGvgStratActivity.value,
+          gvgReproActivity.value,
+        ),
+        hasHistoricalData: Boolean(
+          history.lastSeen?.hasData ||
+            pbActivity.status !== ACTIVITY_STATUS_NEVER ||
+            demonicActivity.status !== ACTIVITY_STATUS_NEVER ||
+            heroBoxActivity.status !== ACTIVITY_STATUS_NEVER ||
+            currentGvgStratActivity.status !== ACTIVITY_STATUS_NEVER ||
+            gvgReproActivity.status !== ACTIVITY_STATUS_NEVER,
+        ),
+      });
       const row = {
         memberId: member.id,
         id: member.id,
@@ -219,16 +416,22 @@ export function buildPortalMemberActivityOverview({
         guildCode,
         role: member.role || "member",
         rosterStatus: member.roster_status || member.rosterStatus || "",
-        lastSeenAt: state.last_seen_at || null,
-        lastPbUpdateAt: state.last_pb_update_at || null,
-        lastDemonicUpdateAt: state.last_demonic_update_at || null,
-        lastHeroBoxUpdateAt: state.last_hero_box_update_at || null,
+        lastSeenAt: lastSeenActivity.value,
+        lastSeenStatus: lastSeenActivity.status,
+        lastPbUpdateAt: pbActivity.value,
+        pbStatus: pbActivity.status,
+        lastDemonicUpdateAt: demonicActivity.value,
+        demonicStatus: demonicActivity.status,
+        lastHeroBoxUpdateAt: heroBoxActivity.value,
+        heroBoxStatus: heroBoxActivity.status,
         lastGvgStratViewAt: state.last_gvg_strat_view_at || null,
         lastGvgStratContextId: state.last_gvg_strat_context_id || null,
         currentGvgContextId,
         viewedCurrentGvgStrat,
-        currentGvgStratViewedAt: viewedCurrentGvgStrat ? state.last_gvg_strat_view_at : null,
-        lastGvgReproAt: state.last_gvg_repro_at || null,
+        currentGvgStratViewedAt: currentGvgStratActivity.value,
+        gvgStratStatus: currentGvgStratActivity.status,
+        lastGvgReproAt: gvgReproActivity.value,
+        reproStatus: gvgReproActivity.status,
       };
 
       guildRowsByKey.get(guildKey).members.push(row);
@@ -246,17 +449,17 @@ export function buildPortalMemberActivityOverview({
 
       guild.members.forEach((member) => {
         guild.summary.totalMembers += 1;
-        if (member.lastSeenAt) guild.summary.seenMembers += 1;
+        if (member.lastSeenStatus !== ACTIVITY_STATUS_NEVER) guild.summary.seenMembers += 1;
         else guild.summary.neverSeenMembers += 1;
-        if (member.lastPbUpdateAt) guild.summary.pbFilled += 1;
+        if (member.pbStatus !== ACTIVITY_STATUS_NEVER) guild.summary.pbFilled += 1;
         else guild.summary.pbMissing += 1;
-        if (member.lastDemonicUpdateAt) guild.summary.demonicFilled += 1;
+        if (member.demonicStatus !== ACTIVITY_STATUS_NEVER) guild.summary.demonicFilled += 1;
         else guild.summary.demonicMissing += 1;
-        if (member.lastHeroBoxUpdateAt) guild.summary.heroBoxFilled += 1;
+        if (member.heroBoxStatus !== ACTIVITY_STATUS_NEVER) guild.summary.heroBoxFilled += 1;
         else guild.summary.heroBoxMissing += 1;
-        if (member.viewedCurrentGvgStrat) guild.summary.currentGvgStratViewed += 1;
+        if (member.gvgStratStatus !== ACTIVITY_STATUS_NEVER) guild.summary.currentGvgStratViewed += 1;
         else guild.summary.currentGvgStratMissing += 1;
-        if (member.lastGvgReproAt) guild.summary.reproFilled += 1;
+        if (member.reproStatus !== ACTIVITY_STATUS_NEVER) guild.summary.reproFilled += 1;
         else guild.summary.reproMissing += 1;
       });
 
@@ -348,6 +551,51 @@ async function selectMembersForGuilds(supabase, guildCodes) {
   return { data: data || [], error };
 }
 
+function isMissingHistoryTable(error, tableName) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  const table = String(tableName || "").toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "PGRST205" ||
+    message.includes(`relation "public.${table}" does not exist`) ||
+    message.includes(`relation "${table}" does not exist`) ||
+    message.includes("could not find the table")
+  );
+}
+
+function isMissingHistoryColumn(error, columnName) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return error?.code === "PGRST204" || error?.code === "42703" || message.includes(String(columnName || "").toLowerCase());
+}
+
+async function selectHistoryRowsByColumn(supabase, tableName, selectClause, columnName, values, options = {}) {
+  const cleanValues = Array.from(new Set((values || []).map((value) => cleanText(value)).filter(Boolean)));
+  if (!cleanValues.length) return { data: [], error: null };
+
+  let query = supabase
+    .from(tableName)
+    .select(selectClause)
+    .in(columnName, cleanValues)
+    .limit(options.limit || 5000);
+
+  if (options.orderColumn) {
+    query = query.order(options.orderColumn, { ascending: options.ascending !== false });
+  }
+
+  const { data, error } = await query;
+  if (error && isMissingHistoryTable(error, tableName)) return { data: [], error: null, missing: true };
+  return { data: data || [], error };
+}
+
+async function selectHistoryRowsWithFallback(supabase, tableName, selectClause, fallbackSelectClause, memberIds, missingColumnName) {
+  let result = await selectHistoryRowsByColumn(supabase, tableName, selectClause, "member_id", memberIds);
+  if (result.error && isMissingHistoryColumn(result.error, missingColumnName)) {
+    result = await selectHistoryRowsByColumn(supabase, tableName, fallbackSelectClause, "member_id", memberIds);
+  }
+  if (result.error) throw result.error;
+  return result.data || [];
+}
+
 async function selectActivityStates(supabase, memberIds) {
   if (!memberIds.length) return { data: [], error: null };
 
@@ -356,6 +604,58 @@ async function selectActivityStates(supabase, memberIds) {
     .select(ACTIVITY_STATE_SELECT)
     .in("member_id", memberIds)
     .limit(1200);
+}
+
+async function selectHistoricalActivityEvidence(supabase, memberIds) {
+  if (!memberIds.length) return new Map();
+
+  const [pbEntries, heroBoxEntries, demonicEntries, reproEntries, actorLogsResult, targetLogsResult] = await Promise.all([
+    selectHistoryRowsWithFallback(supabase, "member_pb_entries", PB_HISTORY_SELECT, PB_HISTORY_SELECT_FALLBACK, memberIds, "updated_at"),
+    selectHistoryRowsWithFallback(
+      supabase,
+      "member_awakenings",
+      HERO_BOX_HISTORY_SELECT,
+      HERO_BOX_HISTORY_SELECT,
+      memberIds,
+      "updated_at",
+    ),
+    selectHistoryRowsWithFallback(
+      supabase,
+      "member_demonic_monsters",
+      DEMONIC_HISTORY_SELECT,
+      DEMONIC_HISTORY_SELECT_FALLBACK,
+      memberIds,
+      "updated_at",
+    ),
+    selectHistoryRowsWithFallback(supabase, "gvg_repro", REPRO_HISTORY_SELECT, REPRO_HISTORY_SELECT_FALLBACK, memberIds, "updated_at"),
+    selectHistoryRowsByColumn(supabase, "portal_activity_logs", ACTIVITY_LOG_HISTORY_SELECT, "actor_member_id", memberIds, {
+      limit: 5000,
+      orderColumn: "created_at",
+      ascending: false,
+    }),
+    selectHistoryRowsByColumn(supabase, "portal_activity_logs", ACTIVITY_LOG_HISTORY_SELECT, "target_member_id", memberIds, {
+      limit: 5000,
+      orderColumn: "created_at",
+      ascending: false,
+    }),
+  ]);
+
+  if (actorLogsResult.error) throw actorLogsResult.error;
+  if (targetLogsResult.error) throw targetLogsResult.error;
+
+  const activityLogsById = new Map();
+  [...(actorLogsResult.data || []), ...(targetLogsResult.data || [])].forEach((row, index) => {
+    const key = row?.id || `${row?.actor_member_id || ""}:${row?.target_member_id || ""}:${row?.action_type || ""}:${row?.created_at || ""}:${index}`;
+    activityLogsById.set(String(key), row);
+  });
+
+  return buildHistoricalEvidenceByMember({
+    pbEntries,
+    heroBoxEntries,
+    demonicEntries,
+    reproEntries,
+    activityLogs: Array.from(activityLogsById.values()),
+  });
 }
 
 async function selectCurrentGvgContexts(supabase, guildCodes) {
@@ -389,7 +689,10 @@ export async function loadPortalMemberActivityOverview(supabase, actor) {
   const members = membersResult.data || [];
   const memberIds = members.filter(isCurrentGuildActivityMember).map((member) => member.id);
   const currentGvgContextsByGuild = await selectCurrentGvgContexts(supabase, scopedGuildCodes);
-  const statesResult = await selectActivityStates(supabase, memberIds);
+  const [statesResult, historicalEvidenceByMemberId] = await Promise.all([
+    selectActivityStates(supabase, memberIds),
+    selectHistoricalActivityEvidence(supabase, memberIds),
+  ]);
   const activityStateReady = !isMissingPortalMemberActivityState(statesResult.error);
 
   if (statesResult.error && activityStateReady) throw statesResult.error;
@@ -399,6 +702,7 @@ export async function loadPortalMemberActivityOverview(supabase, actor) {
     members,
     states: activityStateReady ? statesResult.data || [] : [],
     currentGvgContextsByGuild,
+    historicalEvidenceByMemberId,
   });
 
   return {
