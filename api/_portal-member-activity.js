@@ -6,11 +6,24 @@ import {
   normalizeGuildCode,
   normalizeGuildCodeKey,
 } from "../src/lib/guildScope.js";
+import {
+  loadDiscordCapabilitiesForOrganization,
+  resolvePortalActorOrganization,
+} from "./_portal-discord-capabilities.js";
 
 export const PORTAL_MEMBER_ACTIVITY_TABLE = "portal_member_activity_state";
+export const PORTAL_MEMBER_REMINDERS_TABLE = "portal_member_reminders";
 export const PORTAL_MEMBER_ACTIVITY_HEARTBEAT_THROTTLE_MS = 5 * 60 * 1000;
+export const MEMBER_ACTIVITY_REMINDER_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 export const PORTAL_MEMBER_ACTIVITY_MIGRATION_MESSAGE =
   "Le suivi d'activite necessite la migration portal_member_activity_state.";
+export const MEMBER_ACTIVITY_REMINDER_TYPES = Object.freeze({
+  SITE_PRESENCE: "site_presence",
+  PB: "pb",
+  DEMONIC: "demonic",
+  HERO_BOX: "hero_box",
+});
+export const MEMBER_ACTIVITY_REMINDER_TYPE_KEYS = Object.freeze(Object.values(MEMBER_ACTIVITY_REMINDER_TYPES));
 
 const MEMBER_SELECT_WITH_ROSTER =
   "id, watcher_name, discord_id, guild_code, role, community_access_type, community_status, roster_status, primary_member_id";
@@ -49,6 +62,8 @@ const DEMONIC_HISTORY_SELECT_FALLBACK = "member_id, monster_id, level";
 const REPRO_HISTORY_SELECT = "member_id, created_at, updated_at";
 const REPRO_HISTORY_SELECT_FALLBACK = "member_id, created_at";
 const ACTIVITY_LOG_HISTORY_SELECT = "id, actor_member_id, target_member_id, action_type, created_at";
+const MEMBER_REMINDER_SELECT =
+  "id, organization_id, guild_code, member_id, reminder_type, sent_by_member_id, sent_by_name, discord_user_id, message, status, error_message, created_at, updated_at";
 const PB_ACTIVITY_LOG_TYPES = new Set(["pb_update", "pb_hero_update"]);
 const DEMONIC_ACTIVITY_LOG_TYPES = new Set(["demon_monster_update"]);
 const HERO_BOX_ACTIVITY_LOG_TYPES = new Set(["hero_box_update", "hero_box_bulk_a5"]);
@@ -309,6 +324,7 @@ export function buildPortalMemberActivityOverview({
   states = [],
   currentGvgContextsByGuild = {},
   historicalEvidenceByMemberId = new Map(),
+  lastSuccessfulRemindersByMemberId = new Map(),
 } = {}) {
   const stateByMemberId = new Map(
     (states || [])
@@ -432,6 +448,10 @@ export function buildPortalMemberActivityOverview({
         gvgStratStatus: currentGvgStratActivity.status,
         lastGvgReproAt: gvgReproActivity.value,
         reproStatus: gvgReproActivity.status,
+        lastReminders:
+          lastSuccessfulRemindersByMemberId instanceof Map
+            ? lastSuccessfulRemindersByMemberId.get(String(member.id)) || {}
+            : lastSuccessfulRemindersByMemberId?.[member.id] || {},
       };
 
       guildRowsByKey.get(guildKey).members.push(row);
@@ -563,6 +583,69 @@ function isMissingHistoryTable(error, tableName) {
   );
 }
 
+export function isMissingPortalMemberRemindersTable(error) {
+  return isMissingHistoryTable(error, PORTAL_MEMBER_REMINDERS_TABLE);
+}
+
+export function normalizeMemberActivityReminderType(value) {
+  const normalized = cleanText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return MEMBER_ACTIVITY_REMINDER_TYPE_KEYS.includes(normalized) ? normalized : "";
+}
+
+export function serializeMemberReminder(row = {}) {
+  return {
+    id: row.id || "",
+    organizationId: row.organization_id || row.organizationId || "",
+    guildCode: normalizeGuildCode(row.guild_code || row.guildCode),
+    memberId: row.member_id || row.memberId || "",
+    reminderType: normalizeMemberActivityReminderType(row.reminder_type || row.reminderType),
+    sentByMemberId: row.sent_by_member_id || row.sentByMemberId || "",
+    sentByName: row.sent_by_name || row.sentByName || "",
+    discordUserId: row.discord_user_id || row.discordUserId || "",
+    message: row.message || "",
+    status: row.status || "",
+    errorMessage: row.error_message || row.errorMessage || "",
+    createdAt: row.created_at || row.createdAt || "",
+    updatedAt: row.updated_at || row.updatedAt || "",
+  };
+}
+
+export function isRecentSuccessfulMemberReminder(reminder, now = Date.now()) {
+  if (!reminder || reminder.status !== "success") return false;
+  const timestamp = Date.parse(reminder.createdAt || reminder.created_at || "");
+  if (!Number.isFinite(timestamp)) return false;
+  const nowMs = typeof now === "number" ? now : Date.parse(now);
+  if (!Number.isFinite(nowMs)) return false;
+  return nowMs - timestamp >= 0 && nowMs - timestamp < MEMBER_ACTIVITY_REMINDER_COOLDOWN_MS;
+}
+
+export function buildLastSuccessfulMemberRemindersByMemberId(rows = []) {
+  const byMemberId = new Map();
+
+  (rows || []).forEach((row) => {
+    if (row?.status !== "success") return;
+    const memberId = cleanText(row.member_id || row.memberId);
+    const reminderType = normalizeMemberActivityReminderType(row.reminder_type || row.reminderType);
+    if (!memberId || !reminderType) return;
+
+    const serialized = serializeMemberReminder(row);
+    const existing = byMemberId.get(memberId)?.[reminderType];
+    const existingTime = Date.parse(existing?.createdAt || "");
+    const nextTime = Date.parse(serialized.createdAt || "");
+    if (!existing || (Number.isFinite(nextTime) && (!Number.isFinite(existingTime) || nextTime > existingTime))) {
+      byMemberId.set(memberId, {
+        ...(byMemberId.get(memberId) || {}),
+        [reminderType]: serialized,
+      });
+    }
+  });
+
+  return byMemberId;
+}
+
 function isMissingHistoryColumn(error, columnName) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   return error?.code === "PGRST204" || error?.code === "42703" || message.includes(String(columnName || "").toLowerCase());
@@ -604,6 +687,33 @@ async function selectActivityStates(supabase, memberIds) {
     .select(ACTIVITY_STATE_SELECT)
     .in("member_id", memberIds)
     .limit(1200);
+}
+
+export async function selectLatestSuccessfulMemberReminders(supabase, organizationId, memberIds) {
+  const cleanOrganizationId = cleanText(organizationId);
+  const cleanMemberIds = Array.from(new Set((memberIds || []).map((memberId) => cleanText(memberId)).filter(Boolean)));
+  if (!cleanOrganizationId || cleanMemberIds.length === 0) {
+    return { data: [], error: null, schemaReady: Boolean(cleanOrganizationId) };
+  }
+
+  const { data, error } = await supabase
+    .from(PORTAL_MEMBER_REMINDERS_TABLE)
+    .select(MEMBER_REMINDER_SELECT)
+    .eq("organization_id", cleanOrganizationId)
+    .in("member_id", cleanMemberIds)
+    .in("reminder_type", MEMBER_ACTIVITY_REMINDER_TYPE_KEYS)
+    .eq("status", "success")
+    .order("created_at", { ascending: false })
+    .limit(Math.min(Math.max(cleanMemberIds.length * MEMBER_ACTIVITY_REMINDER_TYPE_KEYS.length * 3, 100), 5000));
+
+  if (error) {
+    if (isMissingPortalMemberRemindersTable(error)) {
+      return { data: [], error: null, schemaReady: false };
+    }
+    return { data: [], error, schemaReady: true };
+  }
+
+  return { data: data || [], error: null, schemaReady: true };
 }
 
 async function selectHistoricalActivityEvidence(supabase, memberIds) {
@@ -688,14 +798,18 @@ export async function loadPortalMemberActivityOverview(supabase, actor) {
 
   const members = membersResult.data || [];
   const memberIds = members.filter(isCurrentGuildActivityMember).map((member) => member.id);
+  const actorOrganization = await resolvePortalActorOrganization(supabase, actor);
   const currentGvgContextsByGuild = await selectCurrentGvgContexts(supabase, scopedGuildCodes);
-  const [statesResult, historicalEvidenceByMemberId] = await Promise.all([
+  const [statesResult, historicalEvidenceByMemberId, remindersResult, discordCapabilityAccess] = await Promise.all([
     selectActivityStates(supabase, memberIds),
     selectHistoricalActivityEvidence(supabase, memberIds),
+    selectLatestSuccessfulMemberReminders(supabase, actorOrganization.organizationId, memberIds),
+    loadDiscordCapabilitiesForOrganization(supabase, actorOrganization.organizationId),
   ]);
   const activityStateReady = !isMissingPortalMemberActivityState(statesResult.error);
 
   if (statesResult.error && activityStateReady) throw statesResult.error;
+  if (remindersResult.error) throw remindersResult.error;
 
   const overview = buildPortalMemberActivityOverview({
     guilds: guildRows.filter((guild) => scopedGuildCodes.includes(normalizeGuildCode(guild.guild_code || guild.guildCode))),
@@ -703,10 +817,20 @@ export async function loadPortalMemberActivityOverview(supabase, actor) {
     states: activityStateReady ? statesResult.data || [] : [],
     currentGvgContextsByGuild,
     historicalEvidenceByMemberId,
+    lastSuccessfulRemindersByMemberId: buildLastSuccessfulMemberRemindersByMemberId(remindersResult.data || []),
   });
 
   return {
     ...overview,
+    organization: {
+      id: actorOrganization.organizationId || "",
+      key: actorOrganization.organizationKey || "",
+      name: actorOrganization.organizationName || "",
+      guildCodes: actorOrganization.guildCodes || [],
+    },
+    memberRemindersReady: remindersResult.schemaReady !== false,
+    discordCapabilitiesReady: discordCapabilityAccess.schemaReady !== false,
+    discordCapabilities: discordCapabilityAccess.capabilities,
     activityStateReady,
     migrationRequired: !activityStateReady,
     warning: activityStateReady ? "" : PORTAL_MEMBER_ACTIVITY_MIGRATION_MESSAGE,

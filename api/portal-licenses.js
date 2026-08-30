@@ -4,7 +4,6 @@ import {
   PALADIN_SPACE_KEY,
   getGuildSpaceKey,
   getGuildSpaceLabel,
-  isPaladinGuildCode,
   normalizeGuildCode,
   normalizeGuildCodeKey,
 } from "../src/lib/guildScope.js";
@@ -25,6 +24,14 @@ import {
   sendPortalJson,
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
+import {
+  DISCORD_DEFENSE_DM_CAPABILITY,
+  DISCORD_LOG_REMINDERS_CAPABILITY,
+  loadDiscordCapabilitiesForOrganizations,
+  normalizeOrganizationKeyForLookup,
+  resolvePortalActorOrganization,
+  updateDiscordCapabilitiesForOrganization,
+} from "./_portal-discord-capabilities.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -65,6 +72,11 @@ function isMissingLicenseTable(error) {
   );
 }
 
+function isMissingOrganizationTable(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return error?.code === "42P01" || error?.code === "PGRST205" || message.includes("portal_organizations");
+}
+
 async function readBody(req) {
   return readJsonBody(req);
 }
@@ -77,24 +89,44 @@ async function requireLeader(req) {
   return { leader: sessionCheck.member };
 }
 
-function buildExternalSpaces(members, licenses) {
+function buildExternalSpaces(members, licenses, organizations = []) {
   const spaces = new Map();
+
+  for (const organization of organizations || []) {
+    const organizationKey = normalizeOrganizationKeyForLookup(organization.organization_key);
+    if (!organizationKey) continue;
+    const guildSpaceKey = organizationKey === "paladin" ? PALADIN_SPACE_KEY : normalizeGuildCodeKey(organizationKey);
+    spaces.set(guildSpaceKey, {
+      organizationId: organization.id || "",
+      organizationKey,
+      guildSpaceKey,
+      label: organization.display_name || getGuildSpaceLabel(organizationKey),
+      guildCodes: new Set(),
+      memberCount: 0,
+      adminCount: 0,
+      officerCount: 0,
+      isInternal: organizationKey === "paladin",
+    });
+  }
 
   for (const member of members || []) {
     const guildCode = normalizeGuildCode(member.guild_code);
-    if (!guildCode || isPaladinGuildCode(guildCode)) continue;
+    if (!guildCode) continue;
 
     const spaceKey = getGuildSpaceKey(guildCode);
-    if (!spaceKey || spaceKey === PALADIN_SPACE_KEY) continue;
+    if (!spaceKey) continue;
 
     if (!spaces.has(spaceKey)) {
       spaces.set(spaceKey, {
+        organizationId: "",
+        organizationKey: spaceKey,
         guildSpaceKey: spaceKey,
         label: getGuildSpaceLabel(guildCode),
         guildCodes: new Set(),
         memberCount: 0,
         adminCount: 0,
         officerCount: 0,
+        isInternal: spaceKey === PALADIN_SPACE_KEY,
       });
     }
 
@@ -109,18 +141,24 @@ function buildExternalSpaces(members, licenses) {
 
   for (const license of licenses || []) {
     const spaceKey = normalizeGuildCodeKey(license.guild_space_key);
-    if (!spaceKey || spaceKey === PALADIN_SPACE_KEY) continue;
+    if (!spaceKey) continue;
 
     if (!spaces.has(spaceKey)) {
       spaces.set(spaceKey, {
+        organizationId: license.organization_id || "",
+        organizationKey: spaceKey,
         guildSpaceKey: spaceKey,
         label: license.guild_label || getGuildSpaceLabel(spaceKey),
         guildCodes: new Set(),
         memberCount: 0,
         adminCount: 0,
         officerCount: 0,
+        isInternal: spaceKey === PALADIN_SPACE_KEY,
       });
     }
+
+    const space = spaces.get(spaceKey);
+    if (!space.organizationId && license.organization_id) space.organizationId = license.organization_id;
   }
 
   return [...spaces.values()]
@@ -131,7 +169,7 @@ function buildExternalSpaces(members, licenses) {
     .sort((a, b) => a.label.localeCompare(b.label, "fr"));
 }
 
-function serializeLicense(license, space) {
+function serializeLicense(license, space, discordCapabilities = {}, discordCapabilitiesReady = true) {
   const plan = normalizeLicensePlan(license?.plan);
   const status = normalizeLicenseStatus(license?.status, plan);
   const access = getPortalLicenseAccess({ ...license, plan, status });
@@ -143,6 +181,9 @@ function serializeLicense(license, space) {
 
   return {
     id: license?.id || null,
+    organizationId: space.organizationId || license?.organization_id || "",
+    organizationKey: space.organizationKey || space.guildSpaceKey,
+    isInternal: Boolean(space.isInternal),
     guildSpaceKey: space.guildSpaceKey,
     guildLabel: license?.guild_label || space.label,
     guildCodes: space.guildCodes,
@@ -162,6 +203,11 @@ function serializeLicense(license, space) {
     periodDaysLeft,
     daysLeft: isTrialLicensePlan(plan) ? trialDaysLeft : periodDaysLeft,
     access,
+    discordCapabilitiesReady,
+    discordCapabilities: {
+      [DISCORD_LOG_REMINDERS_CAPABILITY]: discordCapabilities?.[DISCORD_LOG_REMINDERS_CAPABILITY] === true,
+      [DISCORD_DEFENSE_DM_CAPABILITY]: discordCapabilities?.[DISCORD_DEFENSE_DM_CAPABILITY] === true,
+    },
     source: license?.id ? "database" : "default",
     updatedAt: license?.updated_at || null,
     updatedBy: license?.updated_by_name || "",
@@ -169,7 +215,7 @@ function serializeLicense(license, space) {
 }
 
 async function listLicenses(res) {
-  const [membersResult, licensesResult] = await Promise.all([
+  const [membersResult, licensesResult, organizationsResult] = await Promise.all([
     supabase
       .from("guild_members")
       .select("id, role, watcher_name, discord_id, guild_code")
@@ -179,6 +225,11 @@ async function listLicenses(res) {
       .from("portal_guild_licenses")
       .select("*")
       .order("guild_label", { ascending: true }),
+    supabase
+      .from("portal_organizations")
+      .select("id, organization_key, display_name, is_active")
+      .eq("is_active", true)
+      .order("organization_key", { ascending: true }),
   ]);
 
   if (membersResult.error) {
@@ -201,17 +252,39 @@ async function listLicenses(res) {
     return;
   }
 
+  if (organizationsResult.error && !isMissingOrganizationTable(organizationsResult.error)) {
+    sendJson(res, 500, { error: organizationsResult.error.message || "Chargement organisations impossible." });
+    return;
+  }
+
   const licenseBySpace = new Map(
     (licensesResult.data || []).map((license) => [
       normalizeGuildCodeKey(license.guild_space_key),
       license,
     ])
   );
-  const spaces = buildExternalSpaces(membersResult.data || [], licensesResult.data || []);
-  const licenses = spaces.map((space) => serializeLicense(licenseBySpace.get(space.guildSpaceKey), space));
+  const spaces = buildExternalSpaces(
+    membersResult.data || [],
+    licensesResult.data || [],
+    organizationsResult.error ? [] : organizationsResult.data || [],
+  );
+  const capabilityAccess = await loadDiscordCapabilitiesForOrganizations(
+    supabase,
+    spaces.map((space) => space.organizationId).filter(Boolean),
+  );
+  const licenses = spaces.map((space) =>
+    serializeLicense(
+      licenseBySpace.get(space.guildSpaceKey),
+      space,
+      capabilityAccess.byOrganizationId.get(space.organizationId) || {},
+      capabilityAccess.schemaReady !== false,
+    )
+  );
 
   sendJson(res, 200, {
     schemaReady: true,
+    organizationSchemaReady: !organizationsResult.error,
+    discordCapabilitiesReady: capabilityAccess.schemaReady !== false,
     plans: PORTAL_LICENSE_PLANS,
     licenses,
   });
@@ -226,9 +299,26 @@ async function readCurrentLicense(req, res) {
 
   const guildCode = normalizeGuildCode(sessionCheck.member?.guild_code);
   const guildSpaceKey = getGuildSpaceKey(guildCode);
+  const actorOrganization = await resolvePortalActorOrganization(supabase, sessionCheck.member);
+  const capabilityAccess = await loadDiscordCapabilitiesForOrganizations(
+    supabase,
+    actorOrganization.organizationId ? [actorOrganization.organizationId] : [],
+  );
+  const currentCapabilities =
+    capabilityAccess.byOrganizationId.get(actorOrganization.organizationId) || {};
 
   if (!guildSpaceKey || guildSpaceKey === PALADIN_SPACE_KEY) {
-    sendJson(res, 200, { schemaReady: true, license: null });
+    sendJson(res, 200, {
+      schemaReady: true,
+      license: null,
+      organization: {
+        id: actorOrganization.organizationId || "",
+        key: actorOrganization.organizationKey || "",
+        name: actorOrganization.organizationName || "",
+      },
+      discordCapabilitiesReady: capabilityAccess.schemaReady !== false,
+      discordCapabilities: currentCapabilities,
+    });
     return;
   }
 
@@ -240,7 +330,17 @@ async function readCurrentLicense(req, res) {
 
   if (error) {
     if (isMissingLicenseTable(error)) {
-      sendJson(res, 200, { schemaReady: false, license: null });
+      sendJson(res, 200, {
+        schemaReady: false,
+        license: null,
+        organization: {
+          id: actorOrganization.organizationId || "",
+          key: actorOrganization.organizationKey || "",
+          name: actorOrganization.organizationName || "",
+        },
+        discordCapabilitiesReady: capabilityAccess.schemaReady !== false,
+        discordCapabilities: currentCapabilities,
+      });
       return;
     }
 
@@ -248,7 +348,17 @@ async function readCurrentLicense(req, res) {
     return;
   }
 
-  sendJson(res, 200, { schemaReady: true, license: data || null });
+  sendJson(res, 200, {
+    schemaReady: true,
+    license: data || null,
+    organization: {
+      id: actorOrganization.organizationId || "",
+      key: actorOrganization.organizationKey || "",
+      name: actorOrganization.organizationName || "",
+    },
+    discordCapabilitiesReady: capabilityAccess.schemaReady !== false,
+    discordCapabilities: currentCapabilities,
+  });
 }
 
 function buildUpsertPayload(body, existing, leader) {
@@ -313,10 +423,85 @@ async function loadExistingLicense(guildSpaceKey) {
   return data || null;
 }
 
+function readDiscordCapabilitiesDraft(body = {}) {
+  const source = body.discordCapabilities || body.discord_capabilities || body.capabilities || {};
+  return {
+    [DISCORD_LOG_REMINDERS_CAPABILITY]: source[DISCORD_LOG_REMINDERS_CAPABILITY] === true,
+    [DISCORD_DEFENSE_DM_CAPABILITY]: source[DISCORD_DEFENSE_DM_CAPABILITY] === true,
+  };
+}
+
+function hasDiscordCapabilitiesDraft(body = {}) {
+  const source = body.discordCapabilities || body.discord_capabilities || body.capabilities;
+  return source && typeof source === "object" && !Array.isArray(source);
+}
+
+async function loadOrganizationByLicenseScope({ guildSpaceKey, organizationId }) {
+  const cleanOrganizationId = cleanText(organizationId);
+  if (cleanOrganizationId) {
+    const { data, error } = await supabase
+      .from("portal_organizations")
+      .select("id, organization_key, display_name")
+      .eq("id", cleanOrganizationId)
+      .maybeSingle();
+    if (error) throw error;
+    if (data?.id) return data;
+  }
+
+  const organizationKey = normalizeOrganizationKeyForLookup(
+    normalizeGuildCodeKey(guildSpaceKey) === PALADIN_SPACE_KEY ? "paladin" : guildSpaceKey,
+  );
+  if (!organizationKey) return null;
+
+  const { data, error } = await supabase
+    .from("portal_organizations")
+    .select("id, organization_key, display_name")
+    .eq("organization_key", organizationKey)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function saveDiscordCapabilitiesForScope(body, res, leader) {
+  const guildSpaceKey = normalizeGuildCodeKey(body.guildSpaceKey || body.guild_space_key);
+  const organization = await loadOrganizationByLicenseScope({
+    guildSpaceKey,
+    organizationId: body.organizationId || body.organization_id,
+  });
+
+  if (!organization?.id) {
+    sendJson(res, 404, { error: "Organisation introuvable." });
+    return;
+  }
+
+  const capabilityAccess = await updateDiscordCapabilitiesForOrganization(
+    supabase,
+    organization.id,
+    readDiscordCapabilitiesDraft(body),
+    leader,
+  );
+
+  sendJson(res, 200, {
+    success: true,
+    organization: {
+      id: organization.id,
+      key: organization.organization_key || "",
+      name: organization.display_name || organization.organization_key || "",
+    },
+    discordCapabilitiesReady: capabilityAccess.schemaReady !== false,
+    discordCapabilities: capabilityAccess.capabilities,
+  });
+}
+
 async function updateLicense(body, res, leader) {
   const guildSpaceKey = normalizeGuildCodeKey(body.guildSpaceKey || body.guild_space_key);
-  if (!guildSpaceKey || guildSpaceKey === PALADIN_SPACE_KEY) {
+  if (!guildSpaceKey) {
     sendJson(res, 400, { error: "Espace externe invalide." });
+    return;
+  }
+
+  if (guildSpaceKey === PALADIN_SPACE_KEY) {
+    await saveDiscordCapabilitiesForScope(body, res, leader);
     return;
   }
 
@@ -332,6 +517,21 @@ async function updateLicense(body, res, leader) {
   if (error) {
     sendJson(res, 500, { error: error.message || "Mise a jour licence impossible." });
     return;
+  }
+
+  if (hasDiscordCapabilitiesDraft(body)) {
+    const organization = await loadOrganizationByLicenseScope({
+      guildSpaceKey,
+      organizationId: body.organizationId || body.organization_id || data?.organization_id,
+    });
+    if (organization?.id) {
+      await updateDiscordCapabilitiesForOrganization(
+        supabase,
+        organization.id,
+        readDiscordCapabilitiesDraft(body),
+        leader,
+      );
+    }
   }
 
   sendJson(res, 200, { success: true, license: data });
@@ -380,6 +580,11 @@ async function handleMutation(req, res, leader) {
 
   if (action === "save") {
     await updateLicense(body, res, leader);
+    return;
+  }
+
+  if (action === "save_capabilities") {
+    await saveDiscordCapabilitiesForScope(body, res, leader);
     return;
   }
 

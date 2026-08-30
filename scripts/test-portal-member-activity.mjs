@@ -4,13 +4,18 @@ import {
   ACTIVITY_STATUS_KNOWN_DATE,
   ACTIVITY_STATUS_NEVER,
   ACTIVITY_STATUS_UNKNOWN_DATE,
+  MEMBER_ACTIVITY_REMINDER_COOLDOWN_MS,
+  MEMBER_ACTIVITY_REMINDER_TYPES,
   PORTAL_MEMBER_ACTIVITY_HEARTBEAT_THROTTLE_MS,
+  buildLastSuccessfulMemberRemindersByMemberId,
   buildCurrentGvgContextsByGuild,
   buildGvgActivityContextId,
   buildHistoricalEvidenceByMember,
   buildPortalMemberActivityOverview,
+  isRecentSuccessfulMemberReminder,
   isCurrentGuildActivityMember,
   isMissingPortalMemberActivityState,
+  isMissingPortalMemberRemindersTable,
   touchPortalMemberLastSeen,
 } from "../api/_portal-member-activity.js";
 
@@ -81,6 +86,47 @@ const overview = buildPortalMemberActivityOverview({
   states,
   currentGvgContextsByGuild: { G1: currentContext },
   historicalEvidenceByMemberId,
+  lastSuccessfulRemindersByMemberId: buildLastSuccessfulMemberRemindersByMemberId([
+    {
+      id: "reminder-old",
+      organization_id: "org-paladin",
+      guild_code: "G1",
+      member_id: "member-b",
+      reminder_type: MEMBER_ACTIVITY_REMINDER_TYPES.DEMONIC,
+      sent_by_member_id: "admin-a",
+      sent_by_name: "Darius",
+      discord_user_id: "111111111111111111",
+      message: "Ancien",
+      status: "success",
+      created_at: "2026-08-20T08:00:00.000Z",
+    },
+    {
+      id: "reminder-new",
+      organization_id: "org-paladin",
+      guild_code: "G1",
+      member_id: "member-b",
+      reminder_type: MEMBER_ACTIVITY_REMINDER_TYPES.DEMONIC,
+      sent_by_member_id: "admin-a",
+      sent_by_name: "Darius",
+      discord_user_id: "111111111111111111",
+      message: "Recent",
+      status: "success",
+      created_at: "2026-08-24T08:00:00.000Z",
+    },
+    {
+      id: "reminder-failed",
+      organization_id: "org-paladin",
+      guild_code: "G1",
+      member_id: "member-b",
+      reminder_type: MEMBER_ACTIVITY_REMINDER_TYPES.PB,
+      sent_by_member_id: "admin-a",
+      sent_by_name: "Darius",
+      discord_user_id: "111111111111111111",
+      message: "Failed",
+      status: "failed",
+      created_at: "2026-08-24T09:00:00.000Z",
+    },
+  ]),
 });
 const g1 = overview.guilds.find((guild) => guild.guildCode === "G1");
 const g2 = overview.guilds.find((guild) => guild.guildCode === "G2");
@@ -105,6 +151,8 @@ assert.equal(beta.pbStatus, ACTIVITY_STATUS_KNOWN_DATE, "PB history with a relia
 assert.equal(beta.heroBoxStatus, ACTIVITY_STATUS_UNKNOWN_DATE, "Hero Box data without a reliable date is non-communicated");
 assert.equal(beta.lastHeroBoxUpdateAt, null, "unknown Hero Box history never invents a date");
 assert.equal(beta.demonicStatus, ACTIVITY_STATUS_UNKNOWN_DATE, "demonic data without a reliable date is non-communicated");
+assert.equal(beta.lastReminders.demonic.id, "reminder-new", "overview keeps the latest successful reminder by module");
+assert.equal(beta.lastReminders.pb, undefined, "failed reminders do not become latest successful reminder state");
 assert.equal(beta.lastSeenAt, "2026-08-02T08:00:00.000Z", "last seen uses the max reliable historical date");
 assert.equal(epsilon.pbStatus, ACTIVITY_STATUS_NEVER, "blank seeded PB rows remain never filled");
 assert.equal(epsilon.heroBoxStatus, ACTIVITY_STATUS_NEVER, "default Hero Box -1 rows remain never filled");
@@ -185,9 +233,49 @@ assert.equal(
   true,
   "missing migration is detected gracefully",
 );
+assert.equal(
+  isMissingPortalMemberRemindersTable({ code: "PGRST205", message: "portal_member_reminders missing" }),
+  true,
+  "missing reminder migration is detected gracefully",
+);
+assert.equal(
+  isRecentSuccessfulMemberReminder(
+    {
+      status: "success",
+      createdAt: "2026-08-24T08:00:00.000Z",
+    },
+    "2026-08-26T08:00:00.000Z",
+  ),
+  true,
+  "successful reminder creates the seven-day intervention cooldown",
+);
+assert.equal(
+  isRecentSuccessfulMemberReminder(
+    {
+      status: "success",
+      createdAt: "2026-08-24T08:00:00.000Z",
+    },
+    "2026-09-01T08:00:01.000Z",
+  ),
+  false,
+  "cooldown expires after seven days",
+);
+assert.equal(
+  isRecentSuccessfulMemberReminder(
+    {
+      status: "failed",
+      createdAt: "2026-08-24T08:00:00.000Z",
+    },
+    "2026-08-26T08:00:00.000Z",
+  ),
+  false,
+  "failed reminders never create intervention cooldown",
+);
+assert.equal(MEMBER_ACTIVITY_REMINDER_COOLDOWN_MS, 604800000, "reminder cooldown is seven days");
 
 const source = await readFile(new URL("../api/_portal-member-activity.js", import.meta.url), "utf8");
 assert.match(source, /\.in\("member_id", memberIds\)/, "activity state is loaded in one scoped query");
+assert.match(source, /selectLatestSuccessfulMemberReminders/, "latest reminders are loaded in one scoped batch");
 assert.match(source, /member_demonic_monsters/, "overview reads explicit saved demonic rows");
 assert.match(source, /level > 0/, "demonic historical evidence ignores unowned level zero rows");
 

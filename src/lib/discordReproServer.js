@@ -1,3 +1,4 @@
+/* global process */
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_REPRO_CHANNEL_IDS = {
   G1: "1501512158637457408",
@@ -1457,7 +1458,7 @@ async function openDefenseInPanel(supabase, defenseId) {
   return { item: data, already_open: false };
 }
 
-async function sendDiscordDm(userId, content) {
+export async function sendDiscordDm(userId, content) {
   if (!userId || !getDiscordBotToken()) return { skipped: true };
   const channel = await discordRequest("/users/@me/channels", {
     method: "POST",

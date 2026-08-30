@@ -25,6 +25,12 @@ import {
   isDirectLinkedSecondaryTarget,
   resolveMemberDataViewPermission,
 } from "./_member-data-permissions.js";
+import {
+  DISCORD_DEFENSE_DM_CAPABILITY,
+  hasDiscordCapability,
+  loadDiscordCapabilitiesForOrganization,
+  resolvePortalActorOrganization,
+} from "./_portal-discord-capabilities.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -2516,6 +2522,11 @@ async function handleGuildManagementLoad(body, res) {
     .filter((member) => !isCommunityAccount(member))
     .map(serializeManagedMember);
   const defenseVotes = await loadDefenseVotes(defenses);
+  const actorOrganization = await resolvePortalActorOrganization(supabase, adminCheck.admin);
+  const discordCapabilityAccess = await loadDiscordCapabilitiesForOrganization(
+    supabase,
+    actorOrganization.organizationId,
+  );
 
   sendJson(res, 200, {
     members,
@@ -2523,6 +2534,13 @@ async function handleGuildManagementLoad(body, res) {
     defenseVotes,
     champions: championsResult.data || [],
     assignmentIdsReady: membersResult.assignmentIdsReady,
+    organization: {
+      id: actorOrganization.organizationId || "",
+      key: actorOrganization.organizationKey || "",
+      name: actorOrganization.organizationName || "",
+    },
+    discordCapabilitiesReady: discordCapabilityAccess.schemaReady !== false,
+    discordCapabilities: discordCapabilityAccess.capabilities,
   });
 }
 
@@ -3699,6 +3717,32 @@ async function handleSendDefenses(body, res) {
 
   if (!canAdminManageTarget(adminCheck.admin, target)) {
     sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
+    return;
+  }
+
+  const actorOrganization = await resolvePortalActorOrganization(supabase, adminCheck.admin);
+  if (
+    actorOrganization.organizationId &&
+    actorOrganization.guildCodes?.length &&
+    !actorOrganization.guildCodes.map(normalizeGuildCode).includes(normalizeGuildCode(target.guild_code))
+  ) {
+    sendJson(res, 403, { error: "Ce joueur n'est pas dans ton organisation." });
+    return;
+  }
+
+  const discordCapabilityAccess = await loadDiscordCapabilitiesForOrganization(
+    supabase,
+    actorOrganization.organizationId,
+  );
+  if (discordCapabilityAccess.schemaReady === false) {
+    sendJson(res, 428, { error: "Migration capabilities Discord non executee." });
+    return;
+  }
+  if (!hasDiscordCapability(discordCapabilityAccess.capabilities, DISCORD_DEFENSE_DM_CAPABILITY)) {
+    sendJson(res, 403, {
+      error:
+        "Cette fonctionnalite n'est pas activee pour votre organisation. Pour activer l'envoi des defenses directement aux joueurs, contactez Darius.",
+    });
     return;
   }
 

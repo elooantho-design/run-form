@@ -23,6 +23,7 @@ const GUILD_STATUS_VERIFY = "\u00c0 v\u00e9rifier";
 const GUILD_STATUS_VALID = "Valid\u00e9";
 const LEADER_MEMBER_ROLE_OPTIONS = ["member", "admin", "leader", "community_member", "content_creator"];
 const ADMIN_MEMBER_ROLE_OPTIONS = ["member", "community_member", "content_creator"];
+const DISCORD_DEFENSE_DM_CAPABILITY = "discord_defense_dm";
 
 function getEmptyHeroSearchCriteria() {
   return [{ championId: "", heroQuery: "", minAwakening: 0 }];
@@ -584,6 +585,8 @@ export default function PortalGuildManagementTab({ session }) {
   const [linkSearchResults, setLinkSearchResults] = useState([]);
   const [linkSearchLoading, setLinkSearchLoading] = useState(false);
   const [linkActionLoading, setLinkActionLoading] = useState(false);
+  const [discordCapabilities, setDiscordCapabilities] = useState({});
+  const [discordCapabilitiesReady, setDiscordCapabilitiesReady] = useState(true);
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -597,6 +600,11 @@ export default function PortalGuildManagementTab({ session }) {
   const removeMemberLabel = isPaladinSession(session)
     ? t("guildManagement.leaveCluster", "Quitte le cluster")
     : t("guildManagement.leaveGuild", "Quitte la guilde");
+  const defenseDiscordEnabled = discordCapabilities?.[DISCORD_DEFENSE_DM_CAPABILITY] === true;
+  const defenseDiscordDisabledMessage = t(
+    "guildManagement.discordDefenseDisabled",
+    "Cette fonctionnalite n'est pas activee pour votre organisation. Pour activer l'envoi des defenses directement aux joueurs, contactez Darius.",
+  );
   const championOptions = useMemo(
     () =>
       [...(champions || [])]
@@ -712,6 +720,8 @@ export default function PortalGuildManagementTab({ session }) {
         setDefenses(payload.defenses || []);
         setDefenseVotes(payload.defenseVotes || []);
         setChampions(payload.champions || []);
+        setDiscordCapabilities(payload.discordCapabilities || {});
+        setDiscordCapabilitiesReady(payload.discordCapabilitiesReady !== false);
         setSelectedMemberId((current) => {
           if (current && mappedMembers.some((member) => String(member.id) === String(current))) return current;
           const connectedMember = mappedMembers.find((member) => String(member.id) === String(connectedMemberId));
@@ -732,6 +742,8 @@ export default function PortalGuildManagementTab({ session }) {
         setDefenses([]);
         setDefenseVotes([]);
         setChampions([]);
+        setDiscordCapabilities({});
+        setDiscordCapabilitiesReady(true);
         setLoading(false);
       }
     }
@@ -909,6 +921,15 @@ export default function PortalGuildManagementTab({ session }) {
 
   async function sendMemberDefensesToDiscord() {
     if (!memberPanelMember?.id || memberPanelSending) return;
+
+    if (!discordCapabilitiesReady || !defenseDiscordEnabled) {
+      setMemberPanelError(
+        discordCapabilitiesReady
+          ? defenseDiscordDisabledMessage
+          : t("guildManagement.discordCapabilityMigrationMissing", "Migration capabilities Discord non executee."),
+      );
+      return;
+    }
 
     const defenseNames = getAssignedDefenseNames(memberPanelMember);
     if (defenseNames.length === 0) {
@@ -2271,6 +2292,14 @@ export default function PortalGuildManagementTab({ session }) {
                 )}
               </div>
 
+              {!discordCapabilitiesReady || !defenseDiscordEnabled ? (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                  {discordCapabilitiesReady
+                    ? defenseDiscordDisabledMessage
+                    : t("guildManagement.discordCapabilityMigrationMissing", "Migration capabilities Discord non executee.")}
+                </div>
+              ) : null}
+
               <label className="block">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-sm text-zinc-400">
@@ -2341,6 +2370,8 @@ export default function PortalGuildManagementTab({ session }) {
                 disabled={
                   memberPanelSending ||
                   !isAdmin ||
+                  !discordCapabilitiesReady ||
+                  !defenseDiscordEnabled ||
                   getAssignedDefenseNames(memberPanelMember).length === 0 ||
                   !memberPanelCustomMessage.trim()
                 }

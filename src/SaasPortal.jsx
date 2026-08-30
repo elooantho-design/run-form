@@ -6235,10 +6235,14 @@ function BillingView({ session }) {
               status: license.status,
               notes: license.notes || "",
               guildLabel: license.guildLabel || license.guildSpaceKey,
+              organizationId: license.organizationId || "",
               trialStartedAt: formatLicenseDateInput(license.trialStartedAt),
               trialEndsAt: formatLicenseDateInput(license.trialEndsAt),
               currentPeriodStartedAt: formatLicenseDateInput(license.currentPeriodStartedAt),
               currentPeriodEndsAt: formatLicenseDateInput(license.currentPeriodEndsAt),
+              discordLogReminders:
+                license.discordCapabilities?.[DISCORD_LOG_REMINDERS_CAPABILITY] === true,
+              discordDefenseDm: license.discordCapabilities?.[DISCORD_DEFENSE_DM_CAPABILITY] === true,
             },
           ])
         )
@@ -6299,6 +6303,11 @@ function BillingView({ session }) {
           trialEndsAt: draft.trialEndsAt || extra.trialEndsAt || "",
           currentPeriodStartedAt: draft.currentPeriodStartedAt || extra.currentPeriodStartedAt || "",
           currentPeriodEndsAt: draft.currentPeriodEndsAt || extra.currentPeriodEndsAt || "",
+          organizationId: extra.organizationId || draft.organizationId || "",
+          discordCapabilities: {
+            [DISCORD_LOG_REMINDERS_CAPABILITY]: draft.discordLogReminders === true,
+            [DISCORD_DEFENSE_DM_CAPABILITY]: draft.discordDefenseDm === true,
+          },
           ...extra,
         }),
       });
@@ -6413,7 +6422,7 @@ function BillingView({ session }) {
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                      Espace externe
+                      {license.isInternal ? "Organisation interne" : "Espace externe"}
                     </div>
                     <h3 className="mt-1 text-xl font-semibold text-zinc-50">{license.guildLabel}</h3>
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -6457,6 +6466,7 @@ function BillingView({ session }) {
                     <select
                       value={plan}
                       onChange={(event) => updateDraft(license.guildSpaceKey, { plan: event.target.value })}
+                      disabled={license.isInternal}
                       className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
                     >
                       {Object.entries(PORTAL_LICENSE_PLANS).map(([planKey, planConfig]) => (
@@ -6472,6 +6482,7 @@ function BillingView({ session }) {
                     <select
                       value={status}
                       onChange={(event) => updateDraft(license.guildSpaceKey, { status: event.target.value })}
+                      disabled={license.isInternal}
                       className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
                     >
                       <option value="active">Actif</option>
@@ -6553,53 +6564,99 @@ function BillingView({ session }) {
                   <textarea
                     value={draft.notes ?? license.notes ?? ""}
                     onChange={(event) => updateDraft(license.guildSpaceKey, { notes: event.target.value })}
+                    disabled={license.isInternal}
                     className="mt-2 min-h-20 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500/60"
                     placeholder="Infos paiement, contact, conditions particulieres..."
                   />
                 </label>
 
+                <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                    Fonctionnalites Discord
+                  </div>
+                  {!license.discordCapabilitiesReady ? (
+                    <p className="mt-2 text-xs text-amber-200">
+                      Migration capabilities Discord a executer avant activation.
+                    </p>
+                  ) : null}
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <label className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+                      <input
+                        type="checkbox"
+                        checked={draft.discordLogReminders === true}
+                        onChange={(event) =>
+                          updateDraft(license.guildSpaceKey, { discordLogReminders: event.target.checked })
+                        }
+                        disabled={!license.organizationId || !license.discordCapabilitiesReady || isSavingThis}
+                        className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-cyan-400"
+                      />
+                      <span>Relances depuis le suivi des membres</span>
+                    </label>
+                    <label className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200">
+                      <input
+                        type="checkbox"
+                        checked={draft.discordDefenseDm === true}
+                        onChange={(event) =>
+                          updateDraft(license.guildSpaceKey, { discordDefenseDm: event.target.checked })
+                        }
+                        disabled={!license.organizationId || !license.discordCapabilitiesReady || isSavingThis}
+                        className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-cyan-400"
+                      />
+                      <span>Envoi des defenses aux joueurs</span>
+                    </label>
+                  </div>
+                </div>
+
                 <div className="mt-5 flex flex-wrap gap-2">
                   <Button
                     type="button"
-                    onClick={() => mutateLicense("save", license.guildSpaceKey)}
+                    onClick={() =>
+                      mutateLicense(license.isInternal ? "save_capabilities" : "save", license.guildSpaceKey, {
+                        organizationId: license.organizationId || "",
+                      })
+                    }
                     className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
                     disabled={isSavingThis}
                   >
                     <CheckCircle2 className="mr-2 h-4 w-4" />
                     Enregistrer
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => mutateLicense("mark_paid", license.guildSpaceKey)}
-                    className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
-                    disabled={isSavingThis || isTrial || plan === "suspended"}
-                    title={isTrial ? "Passe d'abord sur un abonnement payant." : "Prolonge d'un mois."}
-                  >
-                    <Clock3 className="mr-2 h-4 w-4" />
-                    Paiement recu +1 mois
-                  </Button>
-                  {status === "suspended" || plan === "suspended" ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => mutateLicense("resume", license.guildSpaceKey, { status: "active" })}
-                      className="rounded-lg border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20"
-                      disabled={isSavingThis}
-                    >
-                      Reprendre
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => mutateLicense("suspend", license.guildSpaceKey)}
-                      className="rounded-lg border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20"
-                      disabled={isSavingThis}
-                    >
-                      Suspendre
-                    </Button>
-                  )}
+                  {!license.isInternal ? (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => mutateLicense("mark_paid", license.guildSpaceKey)}
+                        className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                        disabled={isSavingThis || isTrial || plan === "suspended"}
+                        title={isTrial ? "Passe d'abord sur un abonnement payant." : "Prolonge d'un mois."}
+                      >
+                        <Clock3 className="mr-2 h-4 w-4" />
+                        Paiement recu +1 mois
+                      </Button>
+                      {status === "suspended" || plan === "suspended" ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => mutateLicense("resume", license.guildSpaceKey, { status: "active" })}
+                          className="rounded-lg border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20"
+                          disabled={isSavingThis}
+                        >
+                          Reprendre
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => mutateLicense("suspend", license.guildSpaceKey)}
+                          className="rounded-lg border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20"
+                          disabled={isSavingThis}
+                        >
+                          Suspendre
+                        </Button>
+                      )}
+                    </>
+                  ) : null}
                 </div>
               </article>
             );
@@ -7296,20 +7353,58 @@ const memberActivityFilters = [
 
 const MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE = "unknown_date";
 const MEMBER_ACTIVITY_STATUS_NEVER = "never";
+const MEMBER_ACTIVITY_STATUS_KNOWN_DATE = "known_date";
+const MEMBER_ACTIVITY_REMINDER_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+const MEMBER_ACTIVITY_SIMULATION_STORAGE_PREFIX = "portal-member-activity-simulations";
+const DISCORD_LOG_REMINDERS_CAPABILITY = "discord_log_reminders";
+const DISCORD_DEFENSE_DM_CAPABILITY = "discord_defense_dm";
+
+const memberActivityReminderTypes = {
+  SITE_PRESENCE: "site_presence",
+  PB: "pb",
+  DEMONIC: "demonic",
+  HERO_BOX: "hero_box",
+};
 
 const memberActivityColumns = [
-  { id: "lastSeenAt", statusId: "lastSeenStatus", label: "Presence site", emptyLabel: "Jamais" },
-  { id: "lastPbUpdateAt", statusId: "pbStatus", label: "PB", emptyLabel: "Jamais renseigne" },
+  {
+    id: "lastSeenAt",
+    statusId: "lastSeenStatus",
+    label: "Presence site",
+    emptyLabel: "Jamais",
+    reminderType: memberActivityReminderTypes.SITE_PRESENCE,
+  },
+  {
+    id: "lastPbUpdateAt",
+    statusId: "pbStatus",
+    label: "PB",
+    emptyLabel: "Jamais renseigne",
+    reminderType: memberActivityReminderTypes.PB,
+  },
   {
     id: "lastDemonicUpdateAt",
     statusId: "demonicStatus",
     label: "Monstres demoniaques",
     emptyLabel: "Jamais sauvegarde",
+    reminderType: memberActivityReminderTypes.DEMONIC,
   },
-  { id: "lastHeroBoxUpdateAt", statusId: "heroBoxStatus", label: "Box heros", emptyLabel: "Jamais sauvegardee" },
+  {
+    id: "lastHeroBoxUpdateAt",
+    statusId: "heroBoxStatus",
+    label: "Box heros",
+    emptyLabel: "Jamais sauvegardee",
+    reminderType: memberActivityReminderTypes.HERO_BOX,
+  },
   { id: "currentGvgStratViewedAt", statusId: "gvgStratStatus", label: "Strat GVG en cours", emptyLabel: "Non consultee" },
   { id: "lastGvgReproAt", statusId: "reproStatus", label: "Derniere repro", emptyLabel: "Aucune repro" },
 ];
+
+const memberActivityReminderLabels = {
+  [memberActivityReminderTypes.SITE_PRESENCE]: "Presence site",
+  [memberActivityReminderTypes.PB]: "PB",
+  [memberActivityReminderTypes.DEMONIC]: "Monstres demoniaques",
+  [memberActivityReminderTypes.HERO_BOX]: "Box heros",
+};
 
 function formatMemberActivityDate(value) {
   if (!value) return "";
@@ -7336,11 +7431,163 @@ function getMemberActivityDateTone(value, status) {
   return "critical";
 }
 
-function MemberActivityDateCell({ value, status, emptyLabel, unknownLabel = "Non communique" }) {
+function isValidMemberReminderDiscordId(value) {
+  return /^\d{15,25}$/.test(String(value || "").trim());
+}
+
+function isRecentMemberActivityReminder(reminder, now = Date.now()) {
+  if (!reminder || reminder.status !== "success") return false;
+  const timestamp = Date.parse(reminder.createdAt || reminder.created_at || "");
+  const nowMs = typeof now === "number" ? now : Date.parse(now);
+  if (!Number.isFinite(timestamp) || !Number.isFinite(nowMs)) return false;
+  return nowMs - timestamp >= 0 && nowMs - timestamp < MEMBER_ACTIVITY_REMINDER_COOLDOWN_MS;
+}
+
+function getMemberActivityReminderInterventionState({ value, status, lastReminder }) {
+  const tone = getMemberActivityDateTone(value, status);
+  if (tone === "fresh") {
+    return {
+      handled: true,
+      icon: "check",
+      title: "Donnees a jour, aucune relance necessaire.",
+    };
+  }
+
+  if (isRecentMemberActivityReminder(lastReminder)) {
+    return {
+      handled: true,
+      icon: "check",
+      title: "Relance deja envoyee recemment pour ce module.",
+    };
+  }
+
+  return {
+    handled: false,
+    icon: "x",
+    title: "Intervention a verifier pour ce module.",
+  };
+}
+
+function getMemberActivitySimulationStorageKey(session) {
+  const actorId = session?.memberId || session?.id || session?.discordId || session?.discord_id || "anonymous";
+  return `${MEMBER_ACTIVITY_SIMULATION_STORAGE_PREFIX}:${actorId}`;
+}
+
+function readMemberActivitySimulations(session) {
+  if (typeof window === "undefined") return {};
+  const stored = readJsonStorage(getMemberActivitySimulationStorageKey(session), window.localStorage);
+  return stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+}
+
+function persistMemberActivitySimulations(session, simulations) {
+  if (typeof window === "undefined") return;
+  const storageKey = getMemberActivitySimulationStorageKey(session);
+  const cleanEntries = Object.entries(simulations || {}).filter(([, value]) => {
+    const timestamp = Date.parse(value || "");
+    return Number.isFinite(timestamp);
+  });
+  if (cleanEntries.length === 0) {
+    window.localStorage.removeItem(storageKey);
+    return;
+  }
+  window.localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(cleanEntries)));
+}
+
+function getMemberActivitySimulationKey(member, column) {
+  return `${member?.memberId || member?.id || ""}:${column?.id || ""}`;
+}
+
+function normalizeMemberActivitySimulationDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const candidate = text.length === 10 ? `${text}T12:00:00` : text;
+  const date = new Date(candidate);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+}
+
+function formatMemberActivityDateInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function getEffectiveMemberActivityState(member, column, simulations) {
+  const simulationKey = getMemberActivitySimulationKey(member, column);
+  const simulatedValue = normalizeMemberActivitySimulationDate(simulations?.[simulationKey]);
+  if (simulatedValue) {
+    return {
+      value: simulatedValue,
+      status: MEMBER_ACTIVITY_STATUS_KNOWN_DATE,
+      simulated: true,
+    };
+  }
+
+  return {
+    value: member?.[column.id] || null,
+    status: member?.[column.statusId] || MEMBER_ACTIVITY_STATUS_NEVER,
+    simulated: false,
+  };
+}
+
+function buildMemberReminderMessage({ reminderType, value, status }) {
+  const dateLabel = value ? formatMemberActivityDate(value) : "";
+  const hasKnownDate = Boolean(value && status !== MEMBER_ACTIVITY_STATUS_NEVER);
+  const hello = "Salut 👋\n\n";
+  const footer =
+    "\n\nSi tu rencontres une difficulte, n'hesite pas a contacter Darius ou Robsoul. 🙂";
+
+  if (reminderType === memberActivityReminderTypes.SITE_PRESENCE) {
+    return hasKnownDate
+      ? `${hello}Petit rappel amical : nous ne t'avons pas vu sur le Dashboard depuis le ${dateLabel}.\n\nQuand tu auras un moment, pense a faire un petit passage sur le site afin que tes informations restent a jour.${footer}`
+      : `${hello}Petit rappel concernant le Dashboard : nous n'avons pas encore enregistre de connexion de ton compte.\n\nQuand tu auras un moment, pense a faire un passage sur le site.${footer}`;
+  }
+
+  if (reminderType === memberActivityReminderTypes.PB) {
+    return hasKnownDate
+      ? `${hello}Petit rappel amical : tes PB sur le Dashboard n'ont pas ete mis a jour depuis le ${dateLabel}.\n\nQuand tu auras un moment, pense a les actualiser afin que nous disposions des bonnes informations.${footer}`
+      : `${hello}Tes PB ne semblent pas encore avoir ete renseignes sur le Dashboard.\n\nQuand tu auras un moment, pense a les completer.${footer}`;
+  }
+
+  if (reminderType === memberActivityReminderTypes.DEMONIC) {
+    return hasKnownDate
+      ? `${hello}Petit rappel amical : ta box de monstres demoniaques n'a pas ete mise a jour depuis le ${dateLabel}.\n\nQuand tu auras un moment, pense a l'actualiser afin que nous disposions des bonnes informations.${footer}`
+      : `${hello}Ta box de monstres demoniaques ne semble pas encore avoir ete renseignee.\n\nQuand tu auras un moment, pense a la completer.${footer}`;
+  }
+
+  if (reminderType === memberActivityReminderTypes.HERO_BOX) {
+    return hasKnownDate
+      ? `${hello}Petit rappel amical : ta box de heros n'a pas ete mise a jour depuis le ${dateLabel}.\n\nQuand tu auras un moment, pense a l'actualiser afin que nous disposions des bonnes informations.${footer}`
+      : `${hello}Ta box de heros ne semble pas encore avoir ete renseignee.\n\nQuand tu auras un moment, pense a la completer.${footer}`;
+  }
+
+  return `${hello}Petit rappel amical concernant le Dashboard.${footer}`;
+}
+
+function MemberActivityDateCell({
+  value,
+  status,
+  emptyLabel,
+  unknownLabel = "Non communique",
+  reminderType = "",
+  lastReminder = null,
+  simulated = false,
+  onOpen = null,
+}) {
   const isUnknownDate = status === MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE && !value;
   const tone = getMemberActivityDateTone(value, status);
   const label = value ? formatMemberActivityDate(value) : isUnknownDate ? unknownLabel : emptyLabel;
-  const title = value ? formatMemberActivityDate(value) : isUnknownDate ? "Donnees historiques presentes, date non communiquee" : emptyLabel;
+  const reminderState = reminderType
+    ? getMemberActivityReminderInterventionState({ value, status, lastReminder })
+    : null;
+  const title = [
+    value ? formatMemberActivityDate(value) : isUnknownDate ? "Donnees historiques presentes, date non communiquee" : emptyLabel,
+    simulated ? "Date simulee localement pour ton navigateur." : "",
+    reminderState?.title || "",
+  ]
+    .filter(Boolean)
+    .join(" - ");
   const toneClasses = {
     fresh: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
     neutral: "border-zinc-600 bg-zinc-800 text-zinc-200",
@@ -7349,14 +7596,43 @@ function MemberActivityDateCell({ value, status, emptyLabel, unknownLabel = "Non
     critical: "border-red-500/45 bg-red-500/15 text-red-100",
     missing: "border-red-400/70 bg-red-500/25 text-red-50 shadow-[0_0_0_1px_rgba(248,113,113,0.25)]",
   };
+  const content = (
+    <>
+      {reminderState ? (
+        reminderState.icon === "check" ? (
+          <CheckCircle2 className="h-3 w-3 text-emerald-300" />
+        ) : (
+          <XCircle className="h-3 w-3 text-red-200" />
+        )
+      ) : value || isUnknownDate ? (
+        <Clock3 className="h-3 w-3" />
+      ) : (
+        <XCircle className="h-3 w-3" />
+      )}
+      <span>{label}</span>
+      {simulated ? <span className="text-[10px] uppercase tracking-[0.12em] opacity-80">test</span> : null}
+    </>
+  );
+
+  if (reminderType && onOpen) {
+    return (
+      <button
+        type="button"
+        className={`inline-flex w-fit items-center gap-1 rounded-md border px-2 py-1 text-left text-xs font-medium transition hover:border-cyan-300/50 hover:ring-2 hover:ring-cyan-400/15 ${toneClasses[tone]}`}
+        title={title}
+        onClick={onOpen}
+      >
+        {content}
+      </button>
+    );
+  }
 
   return (
     <span
       className={`inline-flex w-fit items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${toneClasses[tone]}`}
       title={title}
     >
-      {value || isUnknownDate ? <Clock3 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-      {label}
+      {content}
     </span>
   );
 }
@@ -7389,6 +7665,350 @@ function MemberActivityFreshnessLegend() {
           {item.label}
         </span>
       ))}
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/70 px-2 py-1">
+        <CheckCircle2 className="h-3 w-3 text-emerald-300" />
+        OK / relance recente
+      </span>
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/70 px-2 py-1">
+        <XCircle className="h-3 w-3 text-red-200" />
+        A verifier
+      </span>
+    </div>
+  );
+}
+
+function MemberReminderModal({
+  session,
+  modal,
+  history,
+  historyLoading,
+  capabilityEnabled,
+  capabilityReady,
+  remindersReady,
+  onClose,
+  onApplySimulation,
+  onResetSimulation,
+  onDiscordIdUpdated,
+  onReminderSent,
+}) {
+  const apiBase = useMemo(() => getApiBase(), []);
+  const actorMemberId = session?.memberId || session?.id || "";
+  const { member, column, realState, effectiveState } = modal;
+  const reminderType = column.reminderType;
+  const [discordIdDraft, setDiscordIdDraft] = useState(member.discordId || "");
+  const [messageDraft, setMessageDraft] = useState("");
+  const [simulationDateInput, setSimulationDateInput] = useState(formatMemberActivityDateInput(effectiveState.value));
+  const [savingDiscordId, setSavingDiscordId] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [botResult, setBotResult] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [localLastReminder, setLocalLastReminder] = useState(null);
+
+  useEffect(() => {
+    setDiscordIdDraft(member.discordId || "");
+    setMessageDraft(
+      buildMemberReminderMessage({
+        reminderType,
+        value: effectiveState.value,
+        status: effectiveState.status,
+      }),
+    );
+    setSimulationDateInput(formatMemberActivityDateInput(effectiveState.value));
+    setBotResult("");
+    setErrorMessage("");
+    setLocalLastReminder(null);
+  }, [member.memberId, member.discordId, reminderType, effectiveState.value, effectiveState.status]);
+
+  const lastReminder = localLastReminder || member.lastReminders?.[reminderType] || null;
+  const hasRecentReminder = isRecentMemberActivityReminder(lastReminder);
+  const tone = getMemberActivityDateTone(effectiveState.value, effectiveState.status);
+  const isFresh = tone === "fresh";
+  const discordIdValid = isValidMemberReminderDiscordId(discordIdDraft);
+  const lastReminderLabel = lastReminder
+    ? `${formatMemberActivityDate(lastReminder.createdAt)} par ${lastReminder.sentByName || "Admin"}`
+    : "Jamais";
+  const sendDisabled =
+    sending ||
+    savingDiscordId ||
+    !remindersReady ||
+    !capabilityReady ||
+    !capabilityEnabled ||
+    isFresh ||
+    hasRecentReminder ||
+    !discordIdValid ||
+    !messageDraft.trim();
+  const disabledReason = !remindersReady
+    ? "La migration portal_member_reminders doit etre executee."
+    : !capabilityReady
+      ? "La migration des fonctionnalites Discord doit etre executee."
+      : !capabilityEnabled
+        ? "Cette fonctionnalite n'est pas activee pour votre organisation. Pour l'activer, contactez Darius."
+        : isFresh
+          ? "Les donnees de ce joueur sont a jour. Aucune relance necessaire."
+          : hasRecentReminder
+            ? `Deja relance recemment : ${lastReminderLabel}.`
+            : !discordIdValid
+              ? "ID Discord invalide ou non renseigne."
+              : !messageDraft.trim()
+                ? "Le message ne peut pas etre vide."
+                : "";
+
+  async function saveDiscordId() {
+    const cleanDiscordId = discordIdDraft.trim();
+    if (cleanDiscordId && !isValidMemberReminderDiscordId(cleanDiscordId)) {
+      setErrorMessage("ID Discord invalide.");
+      return;
+    }
+
+    setSavingDiscordId(true);
+    setErrorMessage("");
+    setBotResult("");
+
+    try {
+      const response = await fetch(`${apiBase}/api/portal-activity`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update-reminder-discord-id",
+          actorMemberId,
+          memberId: member.memberId,
+          reminderType,
+          discordId: cleanDiscordId,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Sauvegarde ID Discord impossible.");
+      onDiscordIdUpdated(member.memberId, payload.discordId || cleanDiscordId);
+      setBotResult("ID Discord sauvegarde.");
+    } catch (error) {
+      setErrorMessage(error?.message || "Sauvegarde ID Discord impossible.");
+    } finally {
+      setSavingDiscordId(false);
+    }
+  }
+
+  async function sendReminder() {
+    if (sendDisabled) return;
+    setSending(true);
+    setErrorMessage("");
+    setBotResult("Envoi en cours...");
+
+    try {
+      const response = await fetch(`${apiBase}/api/portal-activity`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send-reminder",
+          actorMemberId,
+          memberId: member.memberId,
+          reminderType,
+          discordId: discordIdDraft.trim(),
+          message: messageDraft,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Envoi Discord impossible.");
+      setLocalLastReminder(payload.reminder || null);
+      onReminderSent(member.memberId, reminderType, payload.reminder);
+      setBotResult("Message envoye avec succes.");
+    } catch (error) {
+      setErrorMessage(error?.message || "Envoi Discord impossible.");
+      setBotResult("");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function applySimulation() {
+    const simulatedDate = normalizeMemberActivitySimulationDate(simulationDateInput);
+    if (!simulatedDate) {
+      setErrorMessage("Date de test invalide.");
+      return;
+    }
+    setErrorMessage("");
+    onApplySimulation(member, column, simulatedDate);
+    setBotResult("Date de test appliquee uniquement sur ton navigateur.");
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-cyan-500/30 bg-cyan-500/10">
+              <Bell className="h-5 w-5 text-cyan-200" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Relance manuelle</div>
+              <h3 className="mt-1 text-xl font-semibold text-zinc-50">{member.name}</h3>
+              <p className="mt-1 text-sm text-zinc-400">
+                {member.guildCode || "-"} · {memberActivityReminderLabels[reminderType] || column.label}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+            onClick={onClose}
+            disabled={sending || savingDiscordId}
+            title="Fermer"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 text-sm">
+            <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Etat actuel</div>
+            <div className="mt-3 space-y-2 text-zinc-300">
+              <div>Date reelle : {realState.value ? formatMemberActivityDate(realState.value) : column.emptyLabel}</div>
+              <div>
+                Date effective :{" "}
+                {effectiveState.value ? formatMemberActivityDate(effectiveState.value) : column.emptyLabel}
+                {effectiveState.simulated ? <span className="ml-2 text-cyan-200">test</span> : null}
+              </div>
+              <div>Derniere relance : {lastReminderLabel}</div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 text-sm">
+            <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Simulation locale</div>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                type="date"
+                value={simulationDateInput}
+                onChange={(event) => setSimulationDateInput(event.target.value)}
+                className="h-10 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-400/60"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20"
+                onClick={applySimulation}
+              >
+                Appliquer
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                onClick={() => onResetSimulation(member, column)}
+              >
+                Revenir au reel
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">La simulation ne modifie aucune date metier.</p>
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <label className="block">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">ID Discord</span>
+              <input
+                type="text"
+                value={discordIdDraft}
+                onChange={(event) => setDiscordIdDraft(event.target.value)}
+                placeholder="ID Discord non renseigne"
+                className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-400/60"
+              />
+            </label>
+            <div className="flex items-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 rounded-lg border-zinc-700 text-zinc-200"
+                onClick={saveDiscordId}
+                disabled={savingDiscordId || sending}
+              >
+                {savingDiscordId ? "Sauvegarde..." : "Sauvegarder"}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <label className="mt-4 block">
+          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Message a envoyer</span>
+          <textarea
+            value={messageDraft}
+            onChange={(event) => setMessageDraft(event.target.value)}
+            rows={9}
+            className="mt-2 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-3 text-sm text-zinc-100 outline-none focus:border-cyan-400/60"
+          />
+        </label>
+
+        {disabledReason ? (
+          <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            {disabledReason}
+          </div>
+        ) : null}
+
+        {botResult ? (
+          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+            {botResult}
+          </div>
+        ) : null}
+
+        {errorMessage ? (
+          <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {errorMessage}
+          </div>
+        ) : null}
+
+        <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Historique</div>
+          <div className="mt-3 space-y-2 text-sm text-zinc-300">
+            {historyLoading ? (
+              <div className="text-zinc-500">Chargement...</div>
+            ) : history.length ? (
+              history.map((item) => (
+                <div key={item.id} className="rounded-lg border border-zinc-800 bg-black/25 px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>{formatMemberActivityDate(item.createdAt)} par {item.sentByName || "Admin"}</span>
+                    <Badge
+                      className={`rounded-md ${
+                        item.status === "success"
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                          : item.status === "failed"
+                            ? "border-red-500/30 bg-red-500/10 text-red-200"
+                            : "border-zinc-700 bg-zinc-800 text-zinc-300"
+                      }`}
+                    >
+                      {item.status}
+                    </Badge>
+                  </div>
+                  {item.errorMessage ? <div className="mt-1 text-xs text-red-200">{item.errorMessage}</div> : null}
+                </div>
+              ))
+            ) : (
+              <div className="text-zinc-500">Aucune relance pour ce module.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-lg border-zinc-700 text-zinc-200"
+            onClick={onClose}
+            disabled={sending || savingDiscordId}
+          >
+            Fermer
+          </Button>
+          <Button
+            type="button"
+            className="rounded-lg bg-cyan-500 text-zinc-950 hover:bg-cyan-400"
+            onClick={sendReminder}
+            disabled={sendDisabled}
+          >
+            {sending ? "Envoi..." : "Envoyer la relance"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -7456,6 +8076,10 @@ function MemberActivityOverviewView({ session }) {
   const [sort, setSort] = useState({ key: "name", direction: "asc" });
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [activitySimulations, setActivitySimulations] = useState(() => readMemberActivitySimulations(session));
+  const [reminderModal, setReminderModal] = useState(null);
+  const [reminderHistory, setReminderHistory] = useState([]);
+  const [reminderHistoryLoading, setReminderHistoryLoading] = useState(false);
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -7488,6 +8112,10 @@ function MemberActivityOverviewView({ session }) {
     void loadOverview();
   }, [loadOverview]);
 
+  useEffect(() => {
+    setActivitySimulations(readMemberActivitySimulations(session));
+  }, [session]);
+
   const guilds = useMemo(() => overview?.guilds || [], [overview]);
   const selectedGuild = useMemo(
     () => guilds.find((guild) => String(guild.guildCode) === String(selectedGuildCode)) || guilds[0] || null,
@@ -7500,6 +8128,10 @@ function MemberActivityOverviewView({ session }) {
       .sort((left, right) => compareActivityMembers(left, right, sort));
   }, [filterId, query, selectedGuild, sort]);
   const summary = selectedGuild?.summary || overview?.summary || {};
+  const logRemindersCapabilityEnabled =
+    overview?.discordCapabilities?.[DISCORD_LOG_REMINDERS_CAPABILITY] === true;
+  const logRemindersCapabilityReady = overview?.discordCapabilitiesReady !== false;
+  const memberRemindersReady = overview?.memberRemindersReady !== false;
 
   const toggleSort = (key) => {
     setSort((current) => {
@@ -7507,6 +8139,134 @@ function MemberActivityOverviewView({ session }) {
       return { key, direction: current.direction === "asc" ? "desc" : "asc" };
     });
   };
+
+  function patchOverviewMember(memberId, patcher) {
+    setOverview((current) => {
+      if (!current?.guilds) return current;
+      return {
+        ...current,
+        guilds: current.guilds.map((guild) => ({
+          ...guild,
+          members: (guild.members || []).map((member) => {
+            if (String(member.memberId || member.id) !== String(memberId)) return member;
+            return typeof patcher === "function" ? patcher(member) : { ...member, ...patcher };
+          }),
+        })),
+      };
+    });
+  }
+
+  async function openMemberReminderModal(member, column) {
+    if (!column.reminderType) return;
+
+    const realState = {
+      value: member?.[column.id] || null,
+      status: member?.[column.statusId] || MEMBER_ACTIVITY_STATUS_NEVER,
+      simulated: false,
+    };
+    const effectiveState = getEffectiveMemberActivityState(member, column, activitySimulations);
+    setReminderModal({ member, column, realState, effectiveState });
+    setReminderHistory([]);
+    setReminderHistoryLoading(true);
+
+    try {
+      const params = new URLSearchParams({
+        action: "reminder-history",
+        memberId: member.memberId,
+        reminderType: column.reminderType,
+      });
+      const response = await fetch(`${apiBase}/api/portal-activity?${params.toString()}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Historique de relance impossible.");
+      setReminderHistory(payload.reminders || []);
+    } catch (error) {
+      setReminderHistory([]);
+      setErrorMessage(error?.message || "Historique de relance impossible.");
+    } finally {
+      setReminderHistoryLoading(false);
+    }
+  }
+
+  function applyMemberActivitySimulation(member, column, value) {
+    const simulationKey = getMemberActivitySimulationKey(member, column);
+    setActivitySimulations((current) => {
+      const next = { ...current, [simulationKey]: value };
+      persistMemberActivitySimulations(session, next);
+      return next;
+    });
+    setReminderModal((current) =>
+      current && current.member.memberId === member.memberId && current.column.id === column.id
+        ? {
+            ...current,
+            effectiveState: {
+              value,
+              status: MEMBER_ACTIVITY_STATUS_KNOWN_DATE,
+              simulated: true,
+            },
+          }
+        : current,
+    );
+  }
+
+  function resetMemberActivitySimulation(member, column) {
+    const simulationKey = getMemberActivitySimulationKey(member, column);
+    setActivitySimulations((current) => {
+      const next = { ...current };
+      delete next[simulationKey];
+      persistMemberActivitySimulations(session, next);
+      return next;
+    });
+    setReminderModal((current) =>
+      current && current.member.memberId === member.memberId && current.column.id === column.id
+        ? {
+            ...current,
+            effectiveState: {
+              value: current.realState.value,
+              status: current.realState.status,
+              simulated: false,
+            },
+          }
+        : current,
+    );
+  }
+
+  function updateReminderDiscordId(memberId, discordId) {
+    patchOverviewMember(memberId, { discordId });
+    setReminderModal((current) =>
+      current && String(current.member.memberId) === String(memberId)
+        ? { ...current, member: { ...current.member, discordId } }
+        : current,
+    );
+  }
+
+  function updateReminderSuccess(memberId, reminderType, reminder) {
+    if (!reminder) return;
+    patchOverviewMember(memberId, (member) => ({
+      ...member,
+      lastReminders: {
+        ...(member.lastReminders || {}),
+        [reminderType]: reminder,
+      },
+    }));
+    setReminderHistory((current) => [reminder, ...current.filter((item) => item.id !== reminder.id)]);
+    setReminderModal((current) =>
+      current && String(current.member.memberId) === String(memberId)
+        ? {
+            ...current,
+            member: {
+              ...current.member,
+              lastReminders: {
+                ...(current.member.lastReminders || {}),
+                [reminderType]: reminder,
+              },
+            },
+          }
+        : current,
+    );
+  }
 
   return (
     <section className="space-y-5">
@@ -7656,15 +8416,26 @@ function MemberActivityOverviewView({ session }) {
                           <Badge className="rounded-md border-zinc-700 bg-zinc-900 text-zinc-400">{member.role || "member"}</Badge>
                         </div>
                       </td>
-                      {memberActivityColumns.map((column) => (
-                        <td key={`${member.memberId}-${column.id}`} className="px-4 py-3">
-                          <MemberActivityDateCell
-                            value={member[column.id]}
-                            status={member[column.statusId]}
-                            emptyLabel={column.emptyLabel}
-                          />
-                        </td>
-                      ))}
+                      {memberActivityColumns.map((column) => {
+                        const effectiveState = getEffectiveMemberActivityState(member, column, activitySimulations);
+                        return (
+                          <td key={`${member.memberId}-${column.id}`} className="px-4 py-3">
+                            <MemberActivityDateCell
+                              value={effectiveState.value}
+                              status={effectiveState.status}
+                              emptyLabel={column.emptyLabel}
+                              reminderType={column.reminderType || ""}
+                              lastReminder={
+                                column.reminderType ? member.lastReminders?.[column.reminderType] || null : null
+                              }
+                              simulated={effectiveState.simulated}
+                              onOpen={
+                                column.reminderType ? () => openMemberReminderModal(member, column) : null
+                              }
+                            />
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -7673,6 +8444,23 @@ function MemberActivityOverviewView({ session }) {
           </>
         )}
       </div>
+
+      {reminderModal ? (
+        <MemberReminderModal
+          session={session}
+          modal={reminderModal}
+          history={reminderHistory}
+          historyLoading={reminderHistoryLoading}
+          capabilityEnabled={logRemindersCapabilityEnabled}
+          capabilityReady={logRemindersCapabilityReady}
+          remindersReady={memberRemindersReady}
+          onClose={() => setReminderModal(null)}
+          onApplySimulation={applyMemberActivitySimulation}
+          onResetSimulation={resetMemberActivitySimulation}
+          onDiscordIdUpdated={updateReminderDiscordId}
+          onReminderSent={updateReminderSuccess}
+        />
+      ) : null}
     </section>
   );
 }
