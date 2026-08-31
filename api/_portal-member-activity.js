@@ -10,6 +10,21 @@ import {
   loadDiscordCapabilitiesForOrganization,
   resolvePortalActorOrganization,
 } from "./_portal-discord-capabilities.js";
+import {
+  ACTIVITY_STATUS_KNOWN_DATE,
+  ACTIVITY_STATUS_NEVER,
+  ACTIVITY_STATUS_UNKNOWN_DATE,
+  getMemberActivityFreshnessTone,
+  isMemberActivityFreshnessActionRequired,
+} from "../src/lib/memberActivityFreshness.js";
+
+export {
+  ACTIVITY_STATUS_KNOWN_DATE,
+  ACTIVITY_STATUS_NEVER,
+  ACTIVITY_STATUS_UNKNOWN_DATE,
+  getMemberActivityFreshnessTone,
+  isMemberActivityFreshnessActionRequired,
+};
 
 export const PORTAL_MEMBER_ACTIVITY_TABLE = "portal_member_activity_state";
 export const PORTAL_MEMBER_REMINDERS_TABLE = "portal_member_reminders";
@@ -50,10 +65,6 @@ const ACTIVITY_TIMESTAMP_FIELDS = new Set([
   "last_gvg_strat_view_at",
   "last_gvg_repro_at",
 ]);
-export const ACTIVITY_STATUS_KNOWN_DATE = "known_date";
-export const ACTIVITY_STATUS_UNKNOWN_DATE = "unknown_date";
-export const ACTIVITY_STATUS_NEVER = "never";
-
 const PB_HISTORY_SELECT = "member_id, champion_id, pb_raw, updated_at";
 const PB_HISTORY_SELECT_FALLBACK = "member_id, champion_id, pb_raw";
 const HERO_BOX_HISTORY_SELECT = "member_id, champion_id, awakening_level";
@@ -513,6 +524,90 @@ export function buildPortalMemberActivityOverview({
   return { guilds: guildRows, summary };
 }
 
+export const MEMBER_ACTIVITY_PROFILE_MODULES = Object.freeze([
+  {
+    key: "pb",
+    valueKey: "lastPbUpdateAt",
+    statusKey: "pbStatus",
+    label: "PB",
+  },
+  {
+    key: "demonic",
+    valueKey: "lastDemonicUpdateAt",
+    statusKey: "demonicStatus",
+    label: "Monstres demoniaques",
+  },
+  {
+    key: "heroBox",
+    valueKey: "lastHeroBoxUpdateAt",
+    statusKey: "heroBoxStatus",
+    label: "Box heros",
+  },
+]);
+
+export function buildPortalMemberActivityProfileStatus({
+  member = {},
+  state = {},
+  historicalEvidence = {},
+  now = Date.now(),
+} = {}) {
+  const pbActivity = buildActivityValue({
+    stateDate: state.last_pb_update_at,
+    historicalDate: historicalEvidence.pb?.date,
+    hasHistoricalData: historicalEvidence.pb?.hasData,
+  });
+  const demonicActivity = buildActivityValue({
+    stateDate: state.last_demonic_update_at,
+    historicalDate: historicalEvidence.demonic?.date,
+    hasHistoricalData: historicalEvidence.demonic?.hasData,
+  });
+  const heroBoxActivity = buildActivityValue({
+    stateDate: state.last_hero_box_update_at,
+    historicalDate: historicalEvidence.heroBox?.date,
+    hasHistoricalData: historicalEvidence.heroBox?.hasData,
+  });
+
+  const modules = {
+    pb: {
+      key: "pb",
+      label: "PB",
+      updatedAt: pbActivity.value,
+      status: pbActivity.status,
+      tone: getMemberActivityFreshnessTone(pbActivity.value, pbActivity.status, now),
+    },
+    demonic: {
+      key: "demonic",
+      label: "Monstres demoniaques",
+      updatedAt: demonicActivity.value,
+      status: demonicActivity.status,
+      tone: getMemberActivityFreshnessTone(demonicActivity.value, demonicActivity.status, now),
+    },
+    heroBox: {
+      key: "heroBox",
+      label: "Box heros",
+      updatedAt: heroBoxActivity.value,
+      status: heroBoxActivity.status,
+      tone: getMemberActivityFreshnessTone(heroBoxActivity.value, heroBoxActivity.status, now),
+    },
+  };
+  const actionRequiredModules = MEMBER_ACTIVITY_PROFILE_MODULES
+    .map((module) => modules[module.key])
+    .filter((module) => isMemberActivityFreshnessActionRequired(module.updatedAt, module.status, now));
+
+  return {
+    profileValid: actionRequiredModules.length === 0,
+    actionRequired: actionRequiredModules.length > 0,
+    actionRequiredCount: actionRequiredModules.length,
+    actionRequiredModules: actionRequiredModules.map((module) => module.key),
+    member: {
+      memberId: member?.id || member?.memberId || "",
+      name: member?.watcher_name || member?.watcherName || member?.discord_id || member?.discordId || "Joueur",
+      guildCode: normalizeGuildCode(member?.guild_code || member?.guildCode),
+    },
+    modules,
+  };
+}
+
 async function selectPortalGuildRows(supabase, actor) {
   const actorGuildCode = normalizeGuildCode(actor?.guild_code || actor?.guildCode);
   if (!actorGuildCode || isCommunityActivityAccount(actor)) return [];
@@ -835,6 +930,39 @@ export async function loadPortalMemberActivityOverview(supabase, actor) {
     migrationRequired: !activityStateReady,
     warning: activityStateReady ? "" : PORTAL_MEMBER_ACTIVITY_MIGRATION_MESSAGE,
     currentGvgContextsByGuild,
+  };
+}
+
+export async function loadPortalMemberActivitySelfStatus(supabase, actor) {
+  const memberId = cleanText(actor?.id || actor?.memberId);
+  if (!memberId) {
+    const error = new Error("Session Portal invalide.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const [statesResult, historicalEvidenceByMemberId] = await Promise.all([
+    selectActivityStates(supabase, [memberId]),
+    selectHistoricalActivityEvidence(supabase, [memberId]),
+  ]);
+  const activityStateReady = !isMissingPortalMemberActivityState(statesResult.error);
+
+  if (statesResult.error && activityStateReady) throw statesResult.error;
+
+  const state = activityStateReady
+    ? (statesResult.data || []).find((row) => String(row?.member_id || "") === String(memberId)) || {}
+    : {};
+  const profileStatus = buildPortalMemberActivityProfileStatus({
+    member: actor,
+    state,
+    historicalEvidence: getHistoricalEvidence(historicalEvidenceByMemberId, memberId),
+  });
+
+  return {
+    ...profileStatus,
+    activityStateReady,
+    migrationRequired: !activityStateReady,
+    warning: activityStateReady ? "" : PORTAL_MEMBER_ACTIVITY_MIGRATION_MESSAGE,
   };
 }
 

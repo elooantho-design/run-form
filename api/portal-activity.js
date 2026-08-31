@@ -15,6 +15,7 @@ import {
   isMissingPortalMemberRemindersTable,
   isRecentSuccessfulMemberReminder,
   loadPortalMemberActivityOverview,
+  loadPortalMemberActivitySelfStatus,
   normalizeMemberActivityReminderType,
   serializeMemberReminder,
   touchPortalMemberLastSeen,
@@ -187,14 +188,34 @@ async function logReminderActivity({ actor, member, reminder, actionType, summar
 }
 
 async function handleGet(req, res) {
+  const url = new URL(req.url, "http://localhost");
+  const action = cleanText(url.searchParams.get("action"));
+
+  if (action === "self-status") {
+    const sessionCheck = await requirePortalSession(req, supabase);
+    if (sessionCheck.error) {
+      sendJson(res, sessionCheck.status, { error: sessionCheck.error });
+      return;
+    }
+
+    try {
+      const profileStatus = await loadPortalMemberActivitySelfStatus(supabase, sessionCheck.member);
+      sendJson(res, 200, { ok: true, mode: "self-status", ...profileStatus });
+    } catch (error) {
+      sendJson(res, error?.statusCode || 500, {
+        ok: false,
+        error: error.message || "Statut profil impossible.",
+      });
+    }
+    return;
+  }
+
   const sessionCheck = await requirePortalAdminSession(req, supabase);
   if (sessionCheck.error) {
     sendJson(res, sessionCheck.status, { error: sessionCheck.error });
     return;
   }
 
-  const url = new URL(req.url, "http://localhost");
-  const action = cleanText(url.searchParams.get("action"));
   if (action === "overview") {
     try {
       const overview = await loadPortalMemberActivityOverview(supabase, sessionCheck.member);

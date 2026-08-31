@@ -108,6 +108,13 @@ import {
   isPortalCommunitySession,
 } from "@/lib/portalPermissions";
 import {
+  ACTIVITY_STATUS_KNOWN_DATE as MEMBER_ACTIVITY_STATUS_KNOWN_DATE,
+  ACTIVITY_STATUS_NEVER as MEMBER_ACTIVITY_STATUS_NEVER,
+  ACTIVITY_STATUS_UNKNOWN_DATE as MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE,
+  getMemberActivityFreshnessTone,
+  isMemberActivityFreshnessActionRequired,
+} from "@/lib/memberActivityFreshness";
+import {
   PORTAL_REAL_VIEW_MODE,
   PORTAL_ROLE_PREVIEW_OPTIONS,
   buildPortalRolePreviewSession,
@@ -3032,17 +3039,255 @@ function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogo
   );
 }
 
+function getHomeProfileModuleLabel(moduleKey, t) {
+  if (moduleKey === "pb") return t("home.profileStatus.module.pb", "PB");
+  if (moduleKey === "demonic") return t("home.profileStatus.module.demonic", "Monstres demoniaques");
+  if (moduleKey === "heroBox") return t("home.profileStatus.module.heroBox", "Box heros");
+  return moduleKey || t("home.profileStatus.module.unknown", "Module");
+}
+
+function getHomeProfileModuleDetail(module, t) {
+  const label = getHomeProfileModuleLabel(module?.key, t);
+  const dateLabel = module?.updatedAt ? formatMemberActivityDate(module.updatedAt) : "";
+
+  if (module?.status === MEMBER_ACTIVITY_STATUS_NEVER || module?.tone === "missing") {
+    if (module?.key === "pb") {
+      return t("home.profileStatus.pbNever", "Tes PB n'ont jamais ete renseignes.");
+    }
+    if (module?.key === "demonic") {
+      return t("home.profileStatus.demonicNever", "Ta box de monstres demoniaques n'a jamais ete renseignee.");
+    }
+    if (module?.key === "heroBox") {
+      return t("home.profileStatus.heroBoxNever", "Ta box de heros n'a jamais ete renseignee.");
+    }
+    return `${label} : ${t("home.profileStatus.never", "Jamais renseigne")}`;
+  }
+
+  if (module?.key === "pb") {
+    return t("home.profileStatus.pbStale", "Tes PB n'ont pas ete mis a jour depuis le {date}.").replace("{date}", dateLabel);
+  }
+  if (module?.key === "demonic") {
+    return t(
+      "home.profileStatus.demonicStale",
+      "Ta box de monstres demoniaques n'a pas ete mise a jour depuis le {date}.",
+    ).replace("{date}", dateLabel);
+  }
+  if (module?.key === "heroBox") {
+    return t("home.profileStatus.heroBoxStale", "Ta box de heros n'a pas ete mise a jour depuis le {date}.").replace("{date}", dateLabel);
+  }
+
+  return `${label} : ${t("home.profileStatus.stale", "Mise a jour requise")}`;
+}
+
+function getHomeProfileStatusSummary(profileStatus, t) {
+  if (profileStatus.loading) {
+    return {
+      tone: "loading",
+      value: t("home.profileStatus.loadingLabel", "Profil"),
+      description: t("home.profileStatus.loadingDescription", "..."),
+      icon: Clock3,
+    };
+  }
+
+  if (profileStatus.error) {
+    return {
+      tone: "invalid",
+      value: t("home.profileStatus.errorLabel", "Indisponible"),
+      description: t("home.profileStatus.errorDescription", "A verifier"),
+      icon: XCircle,
+    };
+  }
+
+  if (profileStatus.data?.profileValid) {
+    return {
+      tone: "valid",
+      value: t("home.profileStatus.validLabel", "Valide"),
+      description: t("home.profileStatus.validDescription", "Profil a jour"),
+      icon: CheckCircle2,
+    };
+  }
+
+  return {
+    tone: "invalid",
+    value: t("home.profileStatus.invalidLabel", "Non valide"),
+    description: t("home.profileStatus.invalidDescription", "Action requise"),
+    icon: XCircle,
+  };
+}
+
+function getHomeProfileStatusToneClasses(tone) {
+  if (tone === "valid") {
+    return {
+      card: "border-emerald-400/60 bg-emerald-500/10 hover:border-emerald-200/85 hover:bg-emerald-500/15",
+      icon: "text-emerald-200",
+      label: "text-emerald-300",
+      value: "text-emerald-100",
+      description: "text-emerald-200/80",
+    };
+  }
+  if (tone === "invalid") {
+    return {
+      card: "border-red-400/65 bg-red-500/10 hover:border-red-200/85 hover:bg-red-500/15",
+      icon: "text-red-200",
+      label: "text-red-300",
+      value: "text-red-100",
+      description: "text-red-200/80",
+    };
+  }
+
+  return {
+    card: "border-violet-400/55 bg-black/38",
+    icon: "text-zinc-200",
+    label: "text-violet-300",
+    value: "text-white",
+    description: "text-zinc-300",
+  };
+}
+
+function HomeProfileStatusModal({ status, onClose }) {
+  const { t } = usePortalLanguage();
+  const data = status?.data || null;
+  const modules = data?.modules || {};
+  const profileModules = ["pb", "demonic", "heroBox"].map((key) => modules[key]).filter(Boolean);
+  const actionModules = profileModules.filter((module) =>
+    isMemberActivityFreshnessActionRequired(module?.updatedAt, module?.status),
+  );
+  const showInvalid = Boolean(data && !data.profileValid);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="home-profile-status-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-violet-300">
+              {t("home.profile", "Profil")}
+            </div>
+            <h3 id="home-profile-status-title" className="mt-1 text-xl font-semibold text-zinc-50">
+              {showInvalid
+                ? t("home.profileStatus.modalInvalidTitle", "Actions requises")
+                : t("home.profileStatus.modalValidTitle", "Profil a jour")}
+            </h3>
+          </div>
+          <button
+            type="button"
+            className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+            onClick={onClose}
+            title={t("common.close", "Fermer")}
+            aria-label={t("common.close", "Fermer")}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {status?.loading ? (
+          <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-900/70 px-4 py-3 text-sm text-zinc-300">
+            {t("home.profileStatus.modalLoading", "Chargement du statut profil...")}
+          </div>
+        ) : status?.error ? (
+          <div className="mt-5 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+            {status.error}
+          </div>
+        ) : showInvalid ? (
+          <div className="mt-5 space-y-3">
+            <div className="text-sm text-zinc-400">
+              {t("home.profileStatus.actionsCount", "{count} action(s) requise(s)").replace(
+                "{count}",
+                String(actionModules.length),
+              )}
+            </div>
+            {actionModules.map((module) => (
+              <div key={module.key} className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-red-100">
+                  <XCircle className="h-4 w-4" />
+                  {getHomeProfileModuleLabel(module.key, t)}
+                </div>
+                <p className="mt-2 text-sm leading-5 text-red-100/80">{getHomeProfileModuleDetail(module, t)}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-5 space-y-3">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-100">
+              {t("home.profileStatus.modalValidMessage", "Profil a jour")}
+            </div>
+            {profileModules.map((module) => (
+              <div
+                key={module.key}
+                className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900/70 px-4 py-3 text-sm"
+              >
+                <span className="text-zinc-200">{getHomeProfileModuleLabel(module.key, t)}</span>
+                <span className="inline-flex items-center gap-1 text-emerald-200">
+                  <CheckCircle2 className="h-4 w-4" />
+                  {t("home.profileStatus.upToDate", "a jour")}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HomeView({ session, setActive }) {
   const { t } = usePortalLanguage();
+  const apiBase = useMemo(() => getApiBase(), []);
+  const [profileStatus, setProfileStatus] = useState({ loading: true, data: null, error: "" });
+  const [profileStatusModalOpen, setProfileStatusModalOpen] = useState(false);
   const displayName = session.watcherName || session.name || "Joueur";
   const guildDisplayName = getSessionGuildDisplayName(session, {
     emptyFallback: t("common.community", "Communauté"),
   });
+  const profileSummary = getHomeProfileStatusSummary(profileStatus, t);
   const summaryCards = [
     { label: t("home.guild", "Guilde"), value: guildDisplayName || session.guild || "Paladin", icon: Users },
     { label: t("home.role", "Role"), value: session.role || "Joueur", icon: Shield },
-    { label: t("home.profile", "Profil"), value: t("home.notValidated", "Non valide"), icon: CheckCircle2 },
+    {
+      id: "profile-status",
+      label: t("home.profile", "Profil"),
+      value: profileSummary.value,
+      description: profileSummary.description,
+      icon: profileSummary.icon,
+      statusTone: profileSummary.tone,
+    },
   ];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfileStatus() {
+      setProfileStatus({ loading: true, data: null, error: "" });
+      try {
+        const response = await fetch(`${apiBase}/api/portal-activity?action=self-status`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || t("home.profileStatus.loadError", "Statut profil impossible."));
+        if (!cancelled) setProfileStatus({ loading: false, data: payload, error: "" });
+      } catch (error) {
+        if (!cancelled) {
+          setProfileStatus({
+            loading: false,
+            data: null,
+            error: error?.message || t("home.profileStatus.loadError", "Statut profil impossible."),
+          });
+        }
+      }
+    }
+
+    loadProfileStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase, session?.id, session?.memberId, t]);
 
   return (
     <>
@@ -3074,25 +3319,48 @@ function HomeView({ session, setActive }) {
           <div className="grid gap-3 sm:grid-cols-3 lg:gap-4">
             {summaryCards.map((card) => {
               const Icon = card.icon;
+              const isProfileStatus = card.id === "profile-status";
+              const toneClasses = isProfileStatus ? getHomeProfileStatusToneClasses(card.statusTone) : null;
+              const CardTag = isProfileStatus ? "button" : "div";
 
               return (
-                <div
+                <CardTag
                   key={card.label}
-                  className="relative min-h-[112px] cursor-default overflow-hidden rounded-xl border border-violet-400/55 bg-black/38 p-4 shadow-[inset_0_0_34px_rgba(0,0,0,0.72),0_0_18px_rgba(168,85,247,0.18)] backdrop-blur-[2px]"
+                  type={isProfileStatus ? "button" : undefined}
+                  onClick={isProfileStatus ? () => setProfileStatusModalOpen(true) : undefined}
+                  className={`relative min-h-[112px] overflow-hidden rounded-xl border p-4 text-left shadow-[inset_0_0_34px_rgba(0,0,0,0.72),0_0_18px_rgba(168,85,247,0.18)] backdrop-blur-[2px] transition ${
+                    isProfileStatus
+                      ? `${toneClasses.card} cursor-pointer hover:ring-2 hover:ring-violet-300/15`
+                      : "cursor-default border-violet-400/55 bg-black/38"
+                  }`}
+                  title={isProfileStatus ? t("home.profileStatus.openDetails", "Voir le detail du statut profil") : undefined}
                 >
                   <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-violet-300/80 shadow-[0_0_18px_4px_rgba(168,85,247,0.68)] opacity-75" />
                   <div className="pointer-events-none absolute inset-x-8 bottom-0 h-px bg-violet-400/60 shadow-[0_0_18px_4px_rgba(168,85,247,0.54)] opacity-65" />
-                  <Icon className="h-5 w-5 text-zinc-200" />
-                  <div className="mt-4 text-[0.68rem] font-bold uppercase tracking-[0.18em] text-violet-300">
+                  <Icon className={`h-5 w-5 ${toneClasses?.icon || "text-zinc-200"}`} />
+                  <div
+                    className={`mt-4 text-[0.68rem] font-bold uppercase tracking-[0.18em] ${
+                      toneClasses?.label || "text-violet-300"
+                    }`}
+                  >
                     {card.label}
                   </div>
-                  <div className="mt-1 text-lg font-semibold text-white">{card.value}</div>
-                </div>
+                  <div className={`mt-1 text-lg font-semibold ${toneClasses?.value || "text-white"}`}>{card.value}</div>
+                  {card.description ? (
+                    <div className={`mt-0.5 text-xs font-medium ${toneClasses?.description || "text-zinc-300"}`}>
+                      {card.description}
+                    </div>
+                  ) : null}
+                </CardTag>
               );
             })}
           </div>
         </div>
       </section>
+
+      {profileStatusModalOpen ? (
+        <HomeProfileStatusModal status={profileStatus} onClose={() => setProfileStatusModalOpen(false)} />
+      ) : null}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {categoryCards.filter((card) => canShowPortalHomeCard(card, session)).map((card) => {
@@ -7351,9 +7619,6 @@ const memberActivityFilters = [
   { id: "missing_repro", label: "Repro manquante" },
 ];
 
-const MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE = "unknown_date";
-const MEMBER_ACTIVITY_STATUS_NEVER = "never";
-const MEMBER_ACTIVITY_STATUS_KNOWN_DATE = "known_date";
 const MEMBER_ACTIVITY_REMINDER_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 const MEMBER_ACTIVITY_SIMULATION_STORAGE_PREFIX = "portal-member-activity-simulations";
 const DISCORD_LOG_REMINDERS_CAPABILITY = "discord_log_reminders";
@@ -7418,19 +7683,6 @@ function formatMemberActivityDate(value) {
   });
 }
 
-function getMemberActivityDateTone(value, status) {
-  if (status === MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE) return "unknown";
-  if (!value) return "missing";
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "stale";
-
-  const ageMs = Date.now() - timestamp;
-  if (ageMs <= 7 * 24 * 60 * 60 * 1000) return "fresh";
-  if (ageMs <= 14 * 24 * 60 * 60 * 1000) return "neutral";
-  if (ageMs <= 30 * 24 * 60 * 60 * 1000) return "stale";
-  return "critical";
-}
-
 function isValidMemberReminderDiscordId(value) {
   return /^\d{15,25}$/.test(String(value || "").trim());
 }
@@ -7444,7 +7696,7 @@ function isRecentMemberActivityReminder(reminder, now = Date.now()) {
 }
 
 function getMemberActivityReminderInterventionState({ value, status, lastReminder }) {
-  const tone = getMemberActivityDateTone(value, status);
+  const tone = getMemberActivityFreshnessTone(value, status);
   if (tone === "fresh") {
     return {
       handled: true,
@@ -7576,7 +7828,7 @@ function MemberActivityDateCell({
   onOpen = null,
 }) {
   const isUnknownDate = status === MEMBER_ACTIVITY_STATUS_UNKNOWN_DATE && !value;
-  const tone = getMemberActivityDateTone(value, status);
+  const tone = getMemberActivityFreshnessTone(value, status);
   const label = value ? formatMemberActivityDate(value) : isUnknownDate ? unknownLabel : emptyLabel;
   const reminderState = reminderType
     ? getMemberActivityReminderInterventionState({ value, status, lastReminder })
@@ -7721,7 +7973,7 @@ function MemberReminderModal({
 
   const lastReminder = localLastReminder || member.lastReminders?.[reminderType] || null;
   const hasRecentReminder = isRecentMemberActivityReminder(lastReminder);
-  const tone = getMemberActivityDateTone(effectiveState.value, effectiveState.status);
+  const tone = getMemberActivityFreshnessTone(effectiveState.value, effectiveState.status);
   const isFresh = tone === "fresh";
   const discordIdValid = isValidMemberReminderDiscordId(discordIdDraft);
   const lastReminderLabel = lastReminder
