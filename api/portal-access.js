@@ -928,11 +928,14 @@ async function deleteRowsIfPresent(table, column, value) {
   }
 }
 
-export function canAdminManageTarget(admin, target, { allowAdminTarget = false } = {}) {
+export function canAdminManageTarget(admin, target, { allowAdminTarget = false, allowLeaderTarget = false } = {}) {
   if (isLeaderRole(admin?.role)) return true;
   if (!isAdminRole(admin?.role)) return false;
-  if (isLeaderRole(target?.role)) return false;
-  if (!allowAdminTarget && isPrivilegedDashboardRole(target?.role)) return false;
+  if (isLeaderRole(target?.role)) {
+    if (!allowLeaderTarget) return false;
+  } else if (!allowAdminTarget && isPrivilegedDashboardRole(target?.role)) {
+    return false;
+  }
 
   const adminGuild = normalizeGuildCode(admin?.guild_code);
   const targetGuild = normalizeGuildCode(target?.guild_code);
@@ -970,6 +973,12 @@ function canAdminSetTargetRole(admin, target, nextRole) {
   return !isPrivilegedDashboardRole(target?.role) && !isPrivilegedDashboardRole(nextRole);
 }
 
+function canAdminUpdateLeaderGuildManagementFields(patch) {
+  const fields = Object.keys(patch || {});
+  const allowedLeaderFields = new Set(["assignment", "guild_code", "status"]);
+  return fields.length > 0 && fields.every((field) => allowedLeaderFields.has(field));
+}
+
 function canSetEditableGuildCode(admin, guildCode, scope = {}) {
   if (!guildCode) return true;
   if (isLeaderRole(admin?.role)) return true;
@@ -991,11 +1000,13 @@ function getCanonicalEditableGuildCode(guildCode, scope = {}) {
   return canonicalGuildCode || guildCode;
 }
 
-export function applyMemberEditUpdatePolicy({ admin, target, patch, editableScope = false, scope = {} }) {
+export function applyMemberEditUpdatePolicy({ admin, target, patch, editableScope = false, scope = {}, allowLeaderTarget = false }) {
   const nextPatch = { ...(patch || {}) };
+  const allowLeaderManagementFields =
+    allowLeaderTarget && isLeaderRole(target?.role) && canAdminUpdateLeaderGuildManagementFields(nextPatch);
   const canManageTarget = editableScope
     ? canManageEditableGuildMember(admin, target, scope)
-    : canAdminManageTarget(admin, target, { allowAdminTarget: true });
+    : canAdminManageTarget(admin, target, { allowAdminTarget: true, allowLeaderTarget: allowLeaderManagementFields });
 
   if (!canManageTarget) {
     const error = new Error("Ce joueur n'est pas dans ton perimetre.");
@@ -2569,13 +2580,15 @@ async function handleGuildMemberUpdate(body, res) {
     return;
   }
 
-  if (!canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true })) {
+  const allowLeaderManagementFields =
+    isLeaderRole(target?.role) && canAdminUpdateLeaderGuildManagementFields(patch);
+  if (!canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true, allowLeaderTarget: allowLeaderManagementFields })) {
     sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
     return;
   }
 
   try {
-    patch = applyMemberEditUpdatePolicy({ admin: adminCheck.admin, target, patch });
+    patch = applyMemberEditUpdatePolicy({ admin: adminCheck.admin, target, patch, allowLeaderTarget: true });
   } catch (error) {
     sendJson(res, error?.statusCode || 403, { error: error?.message || "Modification refusee." });
     return;
@@ -3527,7 +3540,7 @@ async function handleUpdateDefenseStatus(body, res) {
     return;
   }
 
-  if (!canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true })) {
+  if (!canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true, allowLeaderTarget: true })) {
     sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
     return;
   }
@@ -3623,7 +3636,7 @@ async function handleResetDefenseStatuses(body, res) {
   }
 
   const manageableTargets = (targets || []).filter((target) =>
-    canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true })
+    canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true, allowLeaderTarget: true })
   );
 
   if (manageableTargets.length !== memberIds.length) {

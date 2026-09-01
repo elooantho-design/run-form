@@ -55,6 +55,17 @@ function editablePolicyFails(actor, target, patch, scope = {}) {
   );
 }
 
+function guildManagementPolicySucceeds(actor, target, patch, options = {}) {
+  assert.doesNotThrow(() => applyMemberEditUpdatePolicy({ admin: actor, target, patch, ...options }));
+}
+
+function guildManagementPolicyFails(actor, target, patch, options = {}) {
+  assert.throws(
+    () => applyMemberEditUpdatePolicy({ admin: actor, target, patch, ...options }),
+    /leader|perimetre|refusee/i,
+  );
+}
+
 assert.equal(isPaladinGlobalGuildAdmin(paladinAdmin, paladinScope), true, "Paladin admin scope is resolved from organization");
 assert.equal(isPaladinGlobalGuildAdmin(paladinAdmin, madScope), false, "Paladin-like guild code is not enough with another organization");
 assert.equal(isPaladinGlobalGuildAdmin(paladinAdmin), false, "global Paladin scope is not granted without resolved organization");
@@ -78,6 +89,11 @@ assert.equal(
   canAdminManageTarget(paladinAdmin, targetLeader, { allowAdminTarget: true }),
   false,
   "leader target stays protected even for guild-management actions",
+);
+assert.equal(
+  canAdminManageTarget(paladinAdmin, targetLeader, { allowLeaderTarget: true }),
+  true,
+  "specific guild-management actions can explicitly allow leader targets",
 );
 assert.equal(canAdminManageTarget(paladinAdmin, madMember), false, "generic helper remains cross-tenant restricted");
 
@@ -131,6 +147,14 @@ editablePolicyFails(paladinAdmin, memberG1, { role: "admin" }, paladinScope);
 editablePolicyFails(paladinAdmin, memberG1, { role: "leader" }, paladinScope);
 editablePolicyFails(paladinAdmin, targetAdminPaladin, { role: "member" }, paladinScope);
 editablePolicyFails(paladinAdmin, targetLeader, { role: "leader" }, paladinScope);
+guildManagementPolicyFails(paladinAdmin, targetLeader, { status: "\u00c0 v\u00e9rifier" });
+guildManagementPolicySucceeds(paladinAdmin, targetLeader, { status: "\u00c0 v\u00e9rifier" }, { allowLeaderTarget: true });
+guildManagementPolicySucceeds(paladinAdmin, targetLeader, { assignment: "Bastion 2" }, { allowLeaderTarget: true });
+guildManagementPolicySucceeds(paladinAdmin, targetLeader, { guild_code: "G7" }, { allowLeaderTarget: true });
+guildManagementPolicyFails(paladinAdmin, targetLeader, { watcher_name: "Renamed leader" }, { allowLeaderTarget: true });
+guildManagementPolicyFails(paladinAdmin, targetLeader, { personal_forum_post_url: "https://discord.com/channels/1/2" }, { allowLeaderTarget: true });
+guildManagementPolicyFails(paladinAdmin, targetLeader, { role: "member" }, { allowLeaderTarget: true });
+guildManagementPolicyFails(paladinAdmin, targetLeader, { guild_code: "MAD G1" }, { allowLeaderTarget: true });
 assert.throws(
   () => applyMemberEditUpdatePolicy({ admin: paladinAdmin, target: memberG1, patch: { guild_code: "UNKNOWN G1" }, editableScope: true, scope: paladinScope }),
   /Guilde cible hors perimetre/i,
