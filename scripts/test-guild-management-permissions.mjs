@@ -68,7 +68,17 @@ assert.equal(canAdminManageTarget(paladinAdmin, memberG1), true, "generic helper
 assert.equal(canAdminManageTarget(paladinAdmin, memberG7), true, "generic helper allows Paladin G2 admin to manage G7");
 assert.equal(canAdminManageTarget(paladinAdmin, communityMember), true, "generic helper allows Paladin admin to manage community account");
 assert.equal(canAdminManageTarget(paladinAdmin, targetAdminPaladin), false, "generic helper blocks admin target");
+assert.equal(
+  canAdminManageTarget(paladinAdmin, targetAdminPaladin, { allowAdminTarget: true }),
+  true,
+  "guild-management actions can explicitly allow admin targets",
+);
 assert.equal(canAdminManageTarget(paladinAdmin, targetLeader), false, "generic helper blocks leader target");
+assert.equal(
+  canAdminManageTarget(paladinAdmin, targetLeader, { allowAdminTarget: true }),
+  false,
+  "leader target stays protected even for guild-management actions",
+);
 assert.equal(canAdminManageTarget(paladinAdmin, madMember), false, "generic helper remains cross-tenant restricted");
 
 assert.equal(canManageEditableGuildMember(leader, targetAdminMad, madScope), true, "leader keeps all member-edit rights");
@@ -78,8 +88,8 @@ assert.equal(canManageEditableGuildMember(paladinAdmin, memberG7, paladinScope),
 assert.equal(canManageEditableGuildMember(paladinAdmin, communityMember, paladinScope), true, "Paladin admin can edit community member");
 assert.equal(canManageEditableGuildMember(paladinAdmin, madMember, paladinScope), true, "Paladin admin can edit client member through member-edit");
 assert.equal(canManageEditableGuildMember(paladinAdmin, madSecondary, paladinScope), true, "Paladin admin can edit linked secondary accounts");
-assert.equal(canManageEditableGuildMember(paladinAdmin, targetAdminPaladin, paladinScope), false, "Paladin admin cannot edit Paladin admin");
-assert.equal(canManageEditableGuildMember(paladinAdmin, targetAdminMad, paladinScope), false, "Paladin admin cannot edit client admin");
+assert.equal(canManageEditableGuildMember(paladinAdmin, targetAdminPaladin, paladinScope), true, "Paladin admin can edit Paladin admin");
+assert.equal(canManageEditableGuildMember(paladinAdmin, targetAdminMad, paladinScope), true, "Paladin admin can edit client admin");
 assert.equal(canManageEditableGuildMember(paladinAdmin, targetLeader, paladinScope), false, "Paladin admin cannot edit leader");
 assert.equal(canManageEditableGuildMember(paladinAdmin, madMember), false, "Paladin admin global edit requires resolved organization scope");
 
@@ -96,6 +106,7 @@ const paladinAdminSearchResults = [
   communityMember,
   madMember,
   targetAdminPaladin,
+  targetAdminMad,
   targetLeader,
 ]
   .filter((member) => canManageEditableGuildMember(paladinAdmin, member, paladinScope))
@@ -103,8 +114,8 @@ const paladinAdminSearchResults = [
 
 assert.deepEqual(
   paladinAdminSearchResults,
-  ["member-g1", "member-g7", "community", "mad-member"],
-  "member-edit search exposes all non-privileged accounts for Paladin admin",
+  ["member-g1", "member-g7", "community", "mad-member", "target-admin-paladin", "target-admin-mad"],
+  "member-edit search exposes all non-leader accounts for Paladin admin",
 );
 
 editablePolicySucceeds(leader, memberG1, { role: "member" });
@@ -115,9 +126,10 @@ editablePolicySucceeds(paladinAdmin, memberG1, { role: "member", guild_code: "G7
 editablePolicySucceeds(paladinAdmin, communityMember, { role: "community_member" }, paladinScope);
 editablePolicySucceeds(paladinAdmin, madMember, { role: "member" }, paladinScope);
 editablePolicySucceeds(paladinAdmin, madMember, { guild_code: "G2", role: "member" }, paladinScope);
+editablePolicySucceeds(paladinAdmin, targetAdminPaladin, { role: "admin", roster_status: "active" }, paladinScope);
 editablePolicyFails(paladinAdmin, memberG1, { role: "admin" }, paladinScope);
 editablePolicyFails(paladinAdmin, memberG1, { role: "leader" }, paladinScope);
-editablePolicyFails(paladinAdmin, targetAdminPaladin, { role: "admin" }, paladinScope);
+editablePolicyFails(paladinAdmin, targetAdminPaladin, { role: "member" }, paladinScope);
 editablePolicyFails(paladinAdmin, targetLeader, { role: "leader" }, paladinScope);
 assert.throws(
   () => applyMemberEditUpdatePolicy({ admin: paladinAdmin, target: memberG1, patch: { guild_code: "UNKNOWN G1" }, editableScope: true, scope: paladinScope }),

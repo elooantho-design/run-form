@@ -309,13 +309,14 @@ function buildHeroOption(champion, language) {
 
 function HeroPortrait({ option, className = "" }) {
   const { language } = usePortalLanguage();
-  const [src, setSrc] = useState(option?.localImageUrl || option?.remoteImageUrl || "");
-
-  useEffect(() => {
-    setSrc(option?.localImageUrl || option?.remoteImageUrl || "");
-  }, [option?.localImageUrl, option?.remoteImageUrl]);
+  const [failedSources, setFailedSources] = useState([]);
 
   if (!option) return null;
+
+  const imageSources = [option.localImageUrl, option.remoteImageUrl].filter(
+    (src, index, sources) => src && sources.indexOf(src) === index,
+  );
+  const src = imageSources.find((imageSource) => !failedSources.includes(imageSource)) || "";
 
   return src ? (
     <img
@@ -324,11 +325,7 @@ function HeroPortrait({ option, className = "" }) {
       draggable={false}
       className={`rounded-full border border-yellow-400/70 bg-zinc-950 object-cover ${className}`}
       onError={() => {
-        if (src !== option.remoteImageUrl && option.remoteImageUrl) {
-          setSrc(option.remoteImageUrl);
-          return;
-        }
-        setSrc("");
+        setFailedSources((current) => (current.includes(src) ? current : [...current, src]));
       }}
     />
   ) : (

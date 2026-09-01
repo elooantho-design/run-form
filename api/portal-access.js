@@ -503,7 +503,7 @@ function resolveDefenseMemberEditPermission(actor, target) {
   if (isDirectLinkedSecondaryTarget(actor, target)) {
     return { canEdit: true, reason: "linked_secondary" };
   }
-  if (isAdminRole(actor?.role) && canAdminManageTarget(actor, target)) {
+  if (isAdminRole(actor?.role) && canAdminManageTarget(actor, target, { allowAdminTarget: true })) {
     return { canEdit: true, reason: "admin" };
   }
   return { canEdit: false, reason: "denied" };
@@ -928,10 +928,11 @@ async function deleteRowsIfPresent(table, column, value) {
   }
 }
 
-export function canAdminManageTarget(admin, target) {
+export function canAdminManageTarget(admin, target, { allowAdminTarget = false } = {}) {
   if (isLeaderRole(admin?.role)) return true;
   if (!isAdminRole(admin?.role)) return false;
-  if (isPrivilegedDashboardRole(target?.role)) return false;
+  if (isLeaderRole(target?.role)) return false;
+  if (!allowAdminTarget && isPrivilegedDashboardRole(target?.role)) return false;
 
   const adminGuild = normalizeGuildCode(admin?.guild_code);
   const targetGuild = normalizeGuildCode(target?.guild_code);
@@ -955,14 +956,17 @@ export function isPaladinGlobalGuildAdmin(actor, scope = {}) {
 export function canManageEditableGuildMember(admin, target, scope = {}) {
   if (isLeaderRole(admin?.role)) return true;
   if (!isAdminRole(admin?.role)) return false;
-  if (isPrivilegedDashboardRole(target?.role)) return false;
+  if (isLeaderRole(target?.role)) return false;
   if (isPaladinGlobalGuildAdmin(admin, scope)) return true;
-  return canAdminManageTarget(admin, target);
+  return canAdminManageTarget(admin, target, { allowAdminTarget: true });
 }
 
 function canAdminSetTargetRole(admin, target, nextRole) {
   if (isLeaderRole(admin?.role)) return true;
   if (!isAdminRole(admin?.role)) return false;
+  const currentRole = normalizeEditableMemberRole(target?.role);
+  const requestedRole = normalizeEditableMemberRole(nextRole);
+  if (currentRole && currentRole === requestedRole) return true;
   return !isPrivilegedDashboardRole(target?.role) && !isPrivilegedDashboardRole(nextRole);
 }
 
@@ -991,7 +995,7 @@ export function applyMemberEditUpdatePolicy({ admin, target, patch, editableScop
   const nextPatch = { ...(patch || {}) };
   const canManageTarget = editableScope
     ? canManageEditableGuildMember(admin, target, scope)
-    : canAdminManageTarget(admin, target);
+    : canAdminManageTarget(admin, target, { allowAdminTarget: true });
 
   if (!canManageTarget) {
     const error = new Error("Ce joueur n'est pas dans ton perimetre.");
@@ -2565,7 +2569,7 @@ async function handleGuildMemberUpdate(body, res) {
     return;
   }
 
-  if (!canAdminManageTarget(adminCheck.admin, target)) {
+  if (!canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true })) {
     sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
     return;
   }
@@ -3523,7 +3527,7 @@ async function handleUpdateDefenseStatus(body, res) {
     return;
   }
 
-  if (!canAdminManageTarget(adminCheck.admin, target)) {
+  if (!canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true })) {
     sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
     return;
   }
@@ -3619,7 +3623,7 @@ async function handleResetDefenseStatuses(body, res) {
   }
 
   const manageableTargets = (targets || []).filter((target) =>
-    canAdminManageTarget(adminCheck.admin, target)
+    canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true })
   );
 
   if (manageableTargets.length !== memberIds.length) {
@@ -3715,7 +3719,7 @@ async function handleSendDefenses(body, res) {
     return;
   }
 
-  if (!canAdminManageTarget(adminCheck.admin, target)) {
+  if (!canAdminManageTarget(adminCheck.admin, target, { allowAdminTarget: true })) {
     sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre." });
     return;
   }
