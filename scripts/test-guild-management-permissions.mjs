@@ -7,6 +7,7 @@ const {
   applyMemberEditUpdatePolicy,
   canAdminManageTarget,
   canManageEditableGuildMember,
+  findCanonicalPortalGuildCode,
   isCommunityAccount,
   isPaladinGlobalGuildAdmin,
 } = await import("../api/portal-access.js");
@@ -43,6 +44,7 @@ const madSecondary = {
   primary_member_id: "member-g1",
 };
 const ordinaryActor = { id: "ordinary", watcher_name: "Ordinary", role: "member", guild_code: "G1" };
+const portalGuildRows = [{ guild_code: "G1" }, { guild_code: "G2" }, { guild_code: "MAD G1" }];
 
 function editablePolicySucceeds(actor, target, patch, scope = {}) {
   assert.doesNotThrow(() => applyMemberEditUpdatePolicy({ admin: actor, target, patch, editableScope: true, scope }));
@@ -70,6 +72,11 @@ assert.equal(isPaladinGlobalGuildAdmin(paladinAdmin, paladinScope), true, "Palad
 assert.equal(isPaladinGlobalGuildAdmin(paladinAdmin, madScope), false, "Paladin-like guild code is not enough with another organization");
 assert.equal(isPaladinGlobalGuildAdmin(paladinAdmin), false, "global Paladin scope is not granted without resolved organization");
 assert.equal(isPaladinGlobalGuildAdmin(leader, paladinScope), false, "leader uses its own bypass, not the Paladin admin helper");
+assert.equal(findCanonicalPortalGuildCode("MAD G1", portalGuildRows), "MAD G1", "canonical Portal guild code keeps spaces");
+assert.equal(findCanonicalPortalGuildCode("MAD_G1", portalGuildRows), "MAD G1", "technical underscore key resolves to Portal canonical value");
+assert.equal(findCanonicalPortalGuildCode("mad   g1", portalGuildRows), "MAD G1", "case and repeated spaces resolve to Portal canonical value");
+assert.equal(findCanonicalPortalGuildCode("mad_g1", [{ guildCode: "MAD G1" }]), "MAD G1", "serialized guild rows also resolve to Portal canonical value");
+assert.equal(findCanonicalPortalGuildCode("UNKNOWN G1", portalGuildRows), "", "unknown guild code is not silently normalized");
 
 assert.equal(canAdminManageTarget(leader, memberG1), true, "leader can edit member");
 assert.equal(canAdminManageTarget(leader, targetAdminPaladin), true, "leader keeps admin edit rights");

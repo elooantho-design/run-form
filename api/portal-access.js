@@ -256,6 +256,73 @@ function normalizeGuildCode(value) {
   return cleanText(value).toUpperCase().replace(/\s+/g, "_");
 }
 
+function normalizePortalGuildCodeValue(value) {
+  return cleanText(value).replace(/\s+/g, " ");
+}
+
+function findPortalGuildRowByCode(guildCode, guildRows = []) {
+  const requestedGuildCode = normalizeGuildCode(guildCode);
+  if (!requestedGuildCode) return null;
+  return (
+    (guildRows || []).find(
+      (row) => normalizeGuildCode(row?.guild_code ?? row?.guildCode) === requestedGuildCode,
+    ) || null
+  );
+}
+
+export function findCanonicalPortalGuildCode(guildCode, guildRows = []) {
+  const guild = findPortalGuildRowByCode(guildCode, guildRows);
+  return normalizePortalGuildCodeValue(guild?.guild_code ?? guild?.guildCode);
+}
+
+async function loadActivePortalGuildByCode(guildCode) {
+  const requestedGuildCode = normalizeGuildCode(guildCode);
+  if (!requestedGuildCode) return null;
+
+  const { data, error } = await supabase
+    .from("portal_guilds")
+    .select("id, organization_id, guild_code, is_active")
+    .eq("is_active", true)
+    .order("guild_code", { ascending: true });
+
+  if (error) {
+    const nextError = new Error(error.message || "Chargement guildes Portal impossible.");
+    nextError.statusCode = 500;
+    throw nextError;
+  }
+
+  return findPortalGuildRowByCode(requestedGuildCode, data || []);
+}
+
+async function resolveCanonicalPortalGuildCode(guildCode) {
+  const requestedGuildCode = normalizePortalGuildCodeValue(guildCode);
+  if (!requestedGuildCode) {
+    const error = new Error("Guild code obligatoire.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const guild = await loadActivePortalGuildByCode(requestedGuildCode);
+  if (!guild?.guild_code) {
+    const error = new Error(`Guilde Portal inconnue : ${requestedGuildCode}.`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return guild.guild_code;
+}
+
+async function canonicalizeMemberPatchGuildCode(patch, { allowNull = false } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(patch || {}, "guild_code")) return patch;
+  if (patch.guild_code === null || normalizePortalGuildCodeValue(patch.guild_code) === "") {
+    if (allowNull) return { ...patch, guild_code: null };
+    const error = new Error("Guild code obligatoire.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return { ...patch, guild_code: await resolveCanonicalPortalGuildCode(patch.guild_code) };
+}
+
 function isPaladinGuildCode(value) {
   return /^G[1-7]$/.test(normalizeGuildCode(value));
 }
@@ -911,7 +978,7 @@ function normalizeMemberPatch(patch) {
     payload[dbKey] = typeof value === "string" ? cleanText(value) : value;
   });
 
-  if (payload.guild_code !== undefined) payload.guild_code = normalizeGuildCode(payload.guild_code);
+  if (payload.guild_code !== undefined) payload.guild_code = normalizePortalGuildCodeValue(payload.guild_code);
   if (payload.defense_1 === "") payload.defense_1 = EMPTY_DEFENSE_SLOT;
   if (payload.defense_2 === "") payload.defense_2 = EMPTY_DEFENSE_SLOT;
   if (payload.status && !DEFENSE_STATUSES.has(payload.status)) {
@@ -1059,22 +1126,11 @@ export function applyMemberEditUpdatePolicy({ admin, target, patch, editableScop
 }
 
 async function resolveGuildManagementActorScope(actor) {
-  const actorGuildCode = normalizeGuildCode(actor?.guild_code);
+  const actorGuildCode = normalizePortalGuildCodeValue(actor?.guild_code);
   const emptyScope = { organizationId: "", organizationKey: "", paladinGlobalAdmin: false, allowedGuildCodes: [] };
   if (!actorGuildCode || isCommunityAccount(actor)) return emptyScope;
 
-  const { data: guild, error: guildError } = await supabase
-    .from("portal_guilds")
-    .select("id, organization_id, guild_code, is_active")
-    .eq("guild_code", actorGuildCode)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (guildError) {
-    const error = new Error(guildError.message || "Resolution organisation impossible.");
-    error.statusCode = 500;
-    throw error;
-  }
+  const guild = await loadActivePortalGuildByCode(actorGuildCode);
 
   if (!guild?.organization_id) return emptyScope;
 
@@ -2588,6 +2644,7 @@ async function handleGuildMemberUpdate(body, res) {
   }
 
   try {
+    patch = await canonicalizeMemberPatchGuildCode(patch);
     patch = applyMemberEditUpdatePolicy({ admin: adminCheck.admin, target, patch, allowLeaderTarget: true });
   } catch (error) {
     sendJson(res, error?.statusCode || 403, { error: error?.message || "Modification refusee." });
@@ -2661,7 +2718,7 @@ function normalizeMemberEditPatch(patch) {
   });
 
   if (payload.guild_code !== undefined) {
-    payload.guild_code = payload.guild_code ? normalizeGuildCode(payload.guild_code) : null;
+    payload.guild_code = payload.guild_code ? normalizePortalGuildCodeValue(payload.guild_code) : null;
   }
 
   if (payload.roster_status !== undefined) {
@@ -2782,6 +2839,7 @@ async function handleMemberEditUpdate(body, res) {
     if (patch.guild_code) {
       patch.guild_code = getCanonicalEditableGuildCode(patch.guild_code, actorScope);
     }
+    patch = await canonicalizeMemberPatchGuildCode(patch, { allowNull: true });
 
     const target = await loadEditableMemberById(memberId);
     if (!target) {
@@ -3263,15 +3321,17 @@ async function handleGuildMemberConvertCommunity(body, res) {
 async function createOrAttachGuildMember({ actor, name, discordId, guildCode, role = "member", forumPostUrl = "" }) {
   const watcherName = cleanText(name);
   const cleanDiscordId = cleanText(discordId);
-  const cleanGuildCode = normalizeGuildCode(guildCode);
+  const requestedGuildCode = normalizePortalGuildCodeValue(guildCode);
   const cleanRole = cleanText(role) || "member";
   const cleanForumUrl = cleanText(forumPostUrl);
 
-  if (!watcherName || !cleanDiscordId || !cleanGuildCode) {
+  if (!watcherName || !cleanDiscordId || !requestedGuildCode) {
     const error = new Error("Nom, ID Discord et guild code obligatoires.");
     error.statusCode = 400;
     throw error;
   }
+
+  const cleanGuildCode = await resolveCanonicalPortalGuildCode(requestedGuildCode);
 
   if (!canViewGuildCode(actor, cleanGuildCode, { leaderSeesAll: true })) {
     const error = new Error("Guilde hors perimetre.");
@@ -3449,7 +3509,7 @@ async function handleGuildsCreateOrAttachMember(body, res) {
 
 async function handleGuildsUpdateMember(body, res) {
   const memberId = cleanText(body.memberId || body.member_id);
-  const patch = normalizeMemberPatch(body.patch || body);
+  let patch = normalizeMemberPatch(body.patch || body);
   const leaderCheck = await requireLeaderById(res._portalReq);
 
   if (leaderCheck.error) {
@@ -3469,6 +3529,13 @@ async function handleGuildsUpdateMember(body, res) {
 
   if (Object.keys(patch).length === 0) {
     sendJson(res, 400, { error: "Modification non autorisee." });
+    return;
+  }
+
+  try {
+    patch = await canonicalizeMemberPatchGuildCode(patch);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 400, { error: error?.message || "Modification invalide." });
     return;
   }
 
