@@ -1,3 +1,4 @@
+/* global process */
 import crypto from "node:crypto";
 import {
   normalizeGuildCode,
@@ -6,8 +7,11 @@ import {
 } from "../src/lib/guildScope.js";
 
 export const GVG_ENEMY_DEFENSE_BANK_MESSAGE = "Banque de defenses adverses non initialisee.";
-export const GVG_ENEMY_DEFENSE_IMAGE_BUCKET = "gvg-images";
 export const GVG_ENEMY_DEFENSE_IMAGE_PREFIX = "enemy-defense-bank";
+export const GVG_ENEMY_DEFENSE_ARCHIVE_ENDPOINT = "/api/v1/enemy-defense-bank/archive";
+
+const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
+const DEFAULT_GVG_PUBLIC_ROOT_URL = "https://vps-aad12be0.vps.ovh.net";
 
 const GVG_POSITION_GRIDS = {
   tower: { rows: 7, cols: 10 },
@@ -242,28 +246,163 @@ export function buildSourceGvgKey(guild, defenses = []) {
   );
 }
 
-export function extractGvgStoragePathFromPublicUrl(url) {
-  if (!url) return null;
-  const marker = "/storage/v1/object/public/gvg-images/";
-  const index = String(url).indexOf(marker);
-  if (index === -1) return null;
-
-  try {
-    return decodeURIComponent(String(url).slice(index + marker.length));
-  } catch {
-    return String(url).slice(index + marker.length);
-  }
-}
-
 function getStorageExtension(storagePath) {
   const match = String(storagePath || "").match(/\.([a-z0-9]+)(?:\?.*)?$/i);
   const extension = match?.[1]?.toLowerCase();
-  if (["webp", "png", "jpg", "jpeg"].includes(extension)) return extension === "jpeg" ? "jpg" : extension;
+  if (extension === "webp") return "webp";
   return "webp";
 }
 
 export function getPermanentEnemyDefenseImagePath(fingerprint, sourceStoragePath = "") {
   return `${GVG_ENEMY_DEFENSE_IMAGE_PREFIX}/${fingerprint}.${getStorageExtension(sourceStoragePath)}`;
+}
+
+export function getGvgServerConfig() {
+  const serverUrl = String(
+    process.env.GVG_SERVER_URL ||
+      process.env.GVG_VPS_URL ||
+      DEFAULT_GVG_SERVER_URL,
+  ).replace(/\/$/, "");
+  const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
+
+  return { serverUrl, token };
+}
+
+export function getGvgPublicRootUrl() {
+  const raw = String(
+    process.env.GVG_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VPS_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VITE_GVG_PUBLIC_ASSETS_BASE_URL ||
+      process.env.VITE_ASSETS_BASE_URL ||
+      DEFAULT_GVG_PUBLIC_ROOT_URL,
+  ).trim();
+
+  if (!raw || /^(0|false|off|disabled)$/i.test(raw)) return DEFAULT_GVG_PUBLIC_ROOT_URL;
+
+  const withoutTrailingSlash = raw.replace(/\/+$/, "");
+  return withoutTrailingSlash.replace(/\/assets$/i, "");
+}
+
+function encodeUrlPath(path) {
+  return String(path || "")
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+}
+
+export function getPermanentEnemyDefenseImageUrl(imageStoragePath) {
+  const cleanedPath = String(imageStoragePath || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/^assets\//i, "");
+  if (!cleanedPath) return "";
+  return `${getGvgPublicRootUrl()}/assets/${encodeUrlPath(cleanedPath)}`;
+}
+
+function getAllowedVpsOrigins() {
+  return [
+    getGvgPublicRootUrl(),
+    DEFAULT_GVG_PUBLIC_ROOT_URL,
+    getGvgServerConfig().serverUrl,
+  ]
+    .map((value) => {
+      try {
+        return new URL(value).origin;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function normalizeVpsPreviewSourcePath(pathname) {
+  let decodedPath = "";
+  try {
+    decodedPath = decodeURIComponent(String(pathname || "").trim()).replace(/\\/g, "/");
+  } catch {
+    return null;
+  }
+  const match = /^\/?public\/jobs\/([^/]+)\/([^/]+)\/previews\/([^/]+\.webp)$/i.exec(decodedPath);
+  if (!match) return null;
+
+  const [, guild, jobId, file] = match;
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(guild)) return null;
+  if (!/^[A-Za-z0-9._-]{1,160}$/.test(jobId)) return null;
+  if (!/^[A-Za-z0-9._-]{1,180}\.webp$/i.test(file)) return null;
+
+  return `/public/jobs/${guild}/${jobId}/previews/${file}`;
+}
+
+function extractPreviewSourceFromGvgServerProxy(parsed) {
+  const action = parsed.searchParams.get("action");
+  if (action !== "preview") return null;
+
+  const guild = parsed.searchParams.get("guild") || parsed.searchParams.get("sourceGuild");
+  const jobId = parsed.searchParams.get("jobId") || parsed.searchParams.get("job_id");
+  const file = parsed.searchParams.get("file");
+
+  if (!guild || !jobId || !file) return null;
+  return normalizeVpsPreviewSourcePath(`/public/jobs/${guild}/${jobId}/previews/${file}`);
+}
+
+function extractPreviewSourceFromApiRoute(pathname) {
+  let decodedPath = "";
+  try {
+    decodedPath = decodeURIComponent(String(pathname || "").trim()).replace(/\\/g, "/");
+  } catch {
+    return null;
+  }
+  const match = /^\/api\/v1\/jobs\/([^/]+)\/([^/]+)\/preview\/([^/]+\.webp)$/i.exec(decodedPath);
+  if (!match) return null;
+  return normalizeVpsPreviewSourcePath(`/public/jobs/${match[1]}/${match[2]}/previews/${match[3]}`);
+}
+
+export function extractGvgVpsPreviewSourcePath(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return null;
+
+  const relativeSource = normalizeVpsPreviewSourcePath(raw);
+  if (relativeSource) return relativeSource;
+
+  try {
+    const parsed = new URL(raw, "https://portal.local");
+    if (parsed.origin === "https://portal.local" && parsed.pathname === "/api/gvg-server") {
+      return extractPreviewSourceFromGvgServerProxy(parsed);
+    }
+
+    const allowedOrigins = new Set(getAllowedVpsOrigins());
+    if (!allowedOrigins.has(parsed.origin)) return null;
+
+    return (
+      normalizeVpsPreviewSourcePath(parsed.pathname) ||
+      extractPreviewSourceFromApiRoute(parsed.pathname)
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function isPermanentEnemyDefenseImagePath(imageStoragePath, fingerprint = "") {
+  const cleanPath = String(imageStoragePath || "").trim().replace(/^\/+/, "").replace(/^assets\//i, "");
+  const expectedFingerprint = String(fingerprint || "").trim().toLowerCase();
+  const match = /^enemy-defense-bank\/([0-9a-f]{64})\.webp$/i.exec(cleanPath);
+  if (!match) return false;
+  return !expectedFingerprint || match[1].toLowerCase() === expectedFingerprint;
+}
+
+export function isPermanentEnemyDefenseImageUrl(imageUrl, fingerprint = "") {
+  if (!imageUrl) return false;
+
+  try {
+    const parsed = new URL(String(imageUrl));
+    if (!getAllowedVpsOrigins().includes(parsed.origin)) return false;
+    const path = decodeURIComponent(parsed.pathname || "").replace(/^\/+/, "");
+    const expectedPath = getPermanentEnemyDefenseImagePath(String(fingerprint || "").toLowerCase(), "webp");
+    return path === `assets/${expectedPath}`;
+  } catch {
+    return false;
+  }
 }
 
 export function isEnemyDefenseBankSchemaMissing(error) {
@@ -284,6 +423,18 @@ export function createBankNotInitializedError() {
   const error = new Error(GVG_ENEMY_DEFENSE_BANK_MESSAGE);
   error.statusCode = 428;
   return error;
+}
+
+function createSupabaseArchiveError(error) {
+  if (error instanceof Error) return error;
+
+  const wrapped = new Error(error?.message || "Archivage banque de defenses adverses impossible.");
+  wrapped.statusCode = error?.statusCode || 500;
+  wrapped.code = error?.code;
+  wrapped.details = error?.details;
+  wrapped.hint = error?.hint;
+  wrapped.data = error;
+  return wrapped;
 }
 
 export async function resolvePortalGuildForGvgGuild(supabase, gvgGuild) {
@@ -321,28 +472,88 @@ export function normalizePortalGuildLookupKey(value) {
   return normalizeGvgGuildCode(value || normalizeGuildCodeKey(value));
 }
 
-async function copyPermanentImageIfNeeded(supabase, sourcePath, destinationPath) {
-  if (!sourcePath || !destinationPath) {
-    const error = new Error("Image source ou destination manquante.");
+export async function requestGvgVps(pathname, options = {}) {
+  const { serverUrl, token } = getGvgServerConfig();
+
+  if (!token) {
+    const error = new Error("GVG_API_TOKEN manquant cote serveur");
     error.statusCode = 500;
     throw error;
   }
 
-  const { error } = await supabase.storage
-    .from(GVG_ENEMY_DEFENSE_IMAGE_BUCKET)
-    .copy(sourcePath, destinationPath);
+  const body = options.body !== undefined ? JSON.stringify(options.body) : undefined;
+  const response = await fetch(new URL(pathname, `${serverUrl}/`).toString(), {
+    method: options.method || "GET",
+    headers: {
+      "X-GVG-Token": token,
+      "Content-Type": "application/json",
+    },
+    body,
+  });
 
-  if (!error) return { copied: true };
-
-  const message = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  if (message.includes("already") || message.includes("exists") || error?.statusCode === 409) {
-    return { copied: false, alreadyExists: true };
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
   }
 
-  throw error;
+  if (!response.ok) {
+    const error = new Error(data?.detail || data?.error || `Erreur VPS ${response.status}`);
+    error.statusCode = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
 }
 
-export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defenses = [] } = {}) {
+export async function archiveEnemyDefenseImageOnVps({ sourcePath, fingerprint, extension = "webp" }, requestVps = requestGvgVps) {
+  if (!sourcePath || !fingerprint) {
+    const error = new Error("Image source ou fingerprint manquant.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const data = await requestVps(GVG_ENEMY_DEFENSE_ARCHIVE_ENDPOINT, {
+    method: "POST",
+    body: {
+      source_path: sourcePath,
+      fingerprint,
+      extension,
+    },
+  });
+
+  const imageStoragePath =
+    data?.image_storage_path ||
+    data?.storage_path ||
+    data?.permanent_path ||
+    getPermanentEnemyDefenseImagePath(fingerprint, sourcePath);
+  const imageUrl =
+    data?.image_url ||
+    data?.public_url ||
+    data?.url ||
+    getPermanentEnemyDefenseImageUrl(imageStoragePath);
+
+  if (!imageUrl || !imageStoragePath) {
+    const error = new Error(`Archive VPS incomplete pour la defense ${fingerprint}.`);
+    error.statusCode = 502;
+    error.data = data;
+    throw error;
+  }
+
+  return {
+    image_url: imageUrl,
+    image_storage_path: imageStoragePath,
+    copied: Boolean(data?.copied),
+    already_exists: Boolean(data?.already_exists),
+    size: data?.size ?? null,
+    source_path: data?.source_path || sourcePath,
+  };
+}
+
+export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defenses = [], archiveImageOnVps = archiveEnemyDefenseImageOnVps } = {}) {
   const enemyDefenses = (defenses || []).filter((defense) => defense?.is_ally !== true);
 
   if (!enemyDefenses.length) {
@@ -390,30 +601,35 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
 
   for (const entry of aggregated.entries) {
     const existing = existingByFingerprint.get(entry.defense_fingerprint);
-    const sourceStoragePath = extractGvgStoragePathFromPublicUrl(entry.source_image_url);
-    const imageStoragePath = existing?.image_storage_path || getPermanentEnemyDefenseImagePath(
-      entry.defense_fingerprint,
-      sourceStoragePath || entry.source_image_url || "",
-    );
-
-    let imageUrl = existing?.image_url || null;
+    const existingImageReady =
+      existing &&
+      isPermanentEnemyDefenseImagePath(existing.image_storage_path, entry.defense_fingerprint) &&
+      isPermanentEnemyDefenseImageUrl(existing.image_url, entry.defense_fingerprint);
+    let imageStoragePath = existingImageReady
+      ? existing.image_storage_path
+      : getPermanentEnemyDefenseImagePath(entry.defense_fingerprint, entry.source_image_url || "webp");
+    let imageUrl = existingImageReady
+      ? existing.image_url
+      : getPermanentEnemyDefenseImageUrl(imageStoragePath);
     let imageArchived = false;
 
-    if (!existing) {
-      if (!sourceStoragePath) {
+    if (!existingImageReady) {
+      const sourcePath = extractGvgVpsPreviewSourcePath(entry.source_image_url);
+      if (!sourcePath) {
         const error = new Error(`Image temporaire introuvable pour la defense ${entry.defense_fingerprint}.`);
         error.statusCode = 500;
         throw error;
       }
 
-      const copyResult = await copyPermanentImageIfNeeded(supabase, sourceStoragePath, imageStoragePath);
+      const copyResult = await archiveImageOnVps({
+        sourcePath,
+        fingerprint: entry.defense_fingerprint,
+        extension: getStorageExtension(sourcePath),
+      });
+      imageStoragePath = copyResult.image_storage_path || imageStoragePath;
+      imageUrl = copyResult.image_url || imageUrl;
       imageArchived = Boolean(copyResult.copied);
       if (imageArchived) imagesArchived += 1;
-
-      const { data: publicUrlData } = supabase.storage
-        .from(GVG_ENEMY_DEFENSE_IMAGE_BUCKET)
-        .getPublicUrl(imageStoragePath);
-      imageUrl = publicUrlData?.publicUrl || null;
 
       if (!imageUrl) {
         const error = new Error(`URL permanente introuvable pour la defense ${entry.defense_fingerprint}.`);
@@ -446,7 +662,7 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
 
   if (error) {
     if (isEnemyDefenseBankSchemaMissing(error)) throw createBankNotInitializedError();
-    throw error;
+    throw createSupabaseArchiveError(error);
   }
 
   return {

@@ -121,10 +121,10 @@ from (
 
   select
     80,
-    'gvg_images_bucket',
-    'present',
-    case when exists (select 1 from storage.buckets where id = 'gvg-images') then 'present' else 'missing' end,
-    case when exists (select 1 from storage.buckets where id = 'gvg-images') then 'OK' else 'ERROR' end
+    'vps_image_storage_policy',
+    'metadata only; WebP files stay on VPS under assets/enemy-defense-bank/',
+    'Supabase Storage bucket not required for enemy defense bank',
+    'OK'
 
   union all
 

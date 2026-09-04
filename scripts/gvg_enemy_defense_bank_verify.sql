@@ -175,10 +175,21 @@ with checks as (
 
   select
     'permanent_images_prefix',
-    'all populated image paths use enemy-defense-bank/',
+    'all populated image paths use enemy-defense-bank/<sha256>.webp',
     count(*) filter (
       where image_storage_path is not null
-        and image_storage_path not like 'enemy-defense-bank/%'
+        and image_storage_path !~ '^enemy-defense-bank/[0-9a-f]{64}\.webp$'
+    )::text
+  from public.gvg_enemy_defenses
+
+  union all
+
+  select
+    'permanent_images_vps_url',
+    'all populated image URLs use https://vps-aad12be0.vps.ovh.net/assets/enemy-defense-bank/',
+    count(*) filter (
+      where image_url is not null
+        and image_url !~ '^https://vps-aad12be0\.vps\.ovh\.net/assets/enemy-defense-bank/[0-9a-f]{64}\.webp$'
     )::text
   from public.gvg_enemy_defenses
 )
@@ -188,6 +199,7 @@ select
   actual_value,
   case
     when check_name = 'permanent_images_prefix' and actual_value = '0' then 'OK'
+    when check_name = 'permanent_images_vps_url' and actual_value = '0' then 'OK'
     when actual_value = expected_value then 'OK'
     else 'ERROR'
   end as status
