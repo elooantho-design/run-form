@@ -1,5 +1,8 @@
 import React, { useMemo, useState } from "react";
-import { Ban, CheckCircle2, ClipboardPaste, Download, Library, Pencil, Plus, Search, Shield, Trash2 } from "lucide-react";
+import { Ban, CheckCircle2, ClipboardPaste, Download, Library, Pencil, Plus, Search, Shield, ShieldAlert, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import GvgEnemyDefenseBankTab from "@/components/GvgEnemyDefenseBankTab";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { normalizeGuildCodeKey } from "@/lib/guildScope";
 
@@ -53,7 +56,9 @@ export default function AdminDefensesTab({
   const { t } = usePortalLanguage();
   const [typeFilter, setTypeFilter] = useState("all");
 const [query, setQuery] = useState("");
-const [showLibrary, setShowLibrary] = useState(false);
+const [viewMode, setViewMode] = useState("local");
+const showLibrary = viewMode === "library";
+const showEnemyBank = viewMode === "enemy";
 const [importTargetByDefenseId, setImportTargetByDefenseId] = useState({});
 const [importingKey, setImportingKey] = useState("");
 const [blocksModalOpen, setBlocksModalOpen] = useState(false);
@@ -451,7 +456,7 @@ const pasteImageBlockFromClipboard = async () => {
         <button
           type="button"
           onClick={onAdd}
-          disabled={showLibrary}
+          disabled={showLibrary || showEnemyBank}
           className="flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800"
         >
           <Plus className="h-4 w-4" />
@@ -460,6 +465,21 @@ const pasteImageBlockFromClipboard = async () => {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setViewMode("local")}
+          className={`rounded-xl border px-3 py-1.5 text-sm ${
+            viewMode === "local"
+              ? "border-emerald-600 bg-emerald-950/50 text-emerald-200"
+              : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+          }`}
+        >
+          <Shield className="mr-1.5 inline h-4 w-4 align-[-3px]" />
+          Défenses locales
+        </button>
+
+        {!showEnemyBank ? (
+          <>
         <button
           type="button"
           onClick={() => setTypeFilter("all")}
@@ -491,10 +511,12 @@ const pasteImageBlockFromClipboard = async () => {
         >
           {t("defenses.bubble", "Bulle")}
         </button>
+          </>
+        ) : null}
 
         <button
           type="button"
-          onClick={() => setShowLibrary((value) => !value)}
+          onClick={() => setViewMode(showLibrary ? "local" : "library")}
           className={`rounded-xl border px-3 py-1.5 text-sm ${
             showLibrary
               ? "border-cyan-500 bg-cyan-950/50 text-cyan-100"
@@ -505,6 +527,20 @@ const pasteImageBlockFromClipboard = async () => {
           {t("adminDefenses.library", "Bibliotheque")}
         </button>
 
+        <button
+          type="button"
+          onClick={() => setViewMode(showEnemyBank ? "local" : "enemy")}
+          className={`rounded-xl border px-3 py-1.5 text-sm ${
+            showEnemyBank
+              ? "border-red-500 bg-red-950/50 text-red-100"
+              : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+          }`}
+        >
+          <ShieldAlert className="mr-1.5 inline h-4 w-4 align-[-3px]" />
+          Défenses adverses
+        </button>
+
+        {!showEnemyBank ? (
         <label className="relative min-w-[220px] flex-1 sm:max-w-xs">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
           <input
@@ -515,6 +551,7 @@ const pasteImageBlockFromClipboard = async () => {
             className="h-9 w-full rounded-xl border border-zinc-700 bg-zinc-900 pl-9 pr-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
           />
         </label>
+        ) : null}
       </div>
 
       {showLibrary ? (
@@ -535,6 +572,9 @@ const pasteImageBlockFromClipboard = async () => {
         </div>
       ) : null}
 
+      {showEnemyBank ? (
+        <GvgEnemyDefenseBankTab activeGuildCode={activeGuildCode} />
+      ) : (
       <div className="grid gap-3">
         {displayedDefenses.length === 0 ? (
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
@@ -749,6 +789,7 @@ const pasteImageBlockFromClipboard = async () => {
           })
         )}
       </div>
+      )}
  {blocksModalOpen && selectedDefenseForBlocks && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
     <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white">

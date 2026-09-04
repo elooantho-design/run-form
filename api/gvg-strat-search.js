@@ -163,7 +163,7 @@ async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 100
   return all;
 }
 
-async function searchDefenceStrict(
+export async function searchDefenceStrict(
   supabaseClient,
   queryItems,
   { limit = 10, maxCandidates = 50000, scope = null, targetGuildCode = "", mapType = "tower" } = {}

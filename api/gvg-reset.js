@@ -1,3 +1,4 @@
+/* global process */
 import { createClient } from "@supabase/supabase-js";
 import { purgeDiscordReproChannelForGuild } from "../src/lib/discordReproServer.js";
 import {
@@ -8,6 +9,7 @@ import {
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
 import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
+import { archiveEnemyDefensesBeforeGvgReset } from "./_gvg-enemy-defense-bank.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -33,6 +35,7 @@ async function logGvgReset({
   storagePaths,
   discordReproCleanup,
   recordServerReset,
+  enemyDefenseArchive,
 }) {
   const { error } = await supabase.from("portal_activity_logs").insert({
     actor_member_id: actor.memberId,
@@ -49,6 +52,7 @@ async function logGvgReset({
       deletedImages: storagePaths.length,
       discordReproCleanup,
       recordServerReset,
+      enemyDefenseArchive,
     },
   });
 
@@ -158,7 +162,24 @@ export default async function handler(req, res) {
     // 1) Lire les défenses AVANT suppression
     const { data: defenses, error: readError } = await supabase
       .from("gvg_defense")
-      .select("id, image_url")
+      .select(`
+        id,
+        guild,
+        bastion,
+        type,
+        tower,
+        team,
+        defense_key,
+        raw_name,
+        heroes,
+        image_url,
+        status,
+        repro_by,
+        is_ally,
+        record_status,
+        created_at,
+        updated_at
+      `)
       .eq("guild", guild);
 
     if (readError) {
@@ -167,6 +188,10 @@ export default async function handler(req, res) {
     }
 
     const defenseIds = (defenses || []).map((row) => row.id).filter(Boolean);
+    const enemyDefenseArchive = await archiveEnemyDefensesBeforeGvgReset(supabase, {
+      guild,
+      defenses: defenses || [],
+    });
     let discordReproCleanup = null;
     let discordReproWarning = null;
 
@@ -244,6 +269,7 @@ export default async function handler(req, res) {
         storagePaths,
         discordReproCleanup,
         recordServerReset,
+        enemyDefenseArchive,
       });
     } catch (activityError) {
       console.error("[gvg-reset] activity log error:", activityError);
@@ -255,6 +281,7 @@ export default async function handler(req, res) {
       guild,
       deleted_defenses: defenseIds.length,
       deleted_images: storagePaths.length,
+      enemy_defense_archive: enemyDefenseArchive,
       discord_repro_cleanup: discordReproCleanup,
       discord_repro_warning: discordReproWarning,
       record_server_reset: recordServerReset,
