@@ -1282,8 +1282,7 @@ export async function detectEnemyDefenseSimilaritiesForArchive(
         }
       }
 
-      rowsToUpsert.push({
-        id: existing?.id,
+      const reviewRow = {
         enemy_defense_id: enemy.id,
         local_defense_id: localDefense.id,
         organization_id: organizationId,
@@ -1296,7 +1295,13 @@ export async function detectEnemyDefenseSimilaritiesForArchive(
         enemy_identity_signature: enemy.similarity_signature,
         local_identity_signature: localReviewSignature,
         updated_at: new Date().toISOString(),
-      });
+      };
+
+      if (existing?.id) {
+        reviewRow.id = existing.id;
+      }
+
+      rowsToUpsert.push(reviewRow);
 
       if (isTraceImportantLocalDefense(localDefense) || pairTrace.length < 12) {
         pairTrace.push({

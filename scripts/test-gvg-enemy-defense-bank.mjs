@@ -590,6 +590,7 @@ function createSimilaritySupabaseStub({
 
   assert.equal(result.pendingCreated, 1, "one same-org local candidate creates one pending similarity review");
   assert.equal(supabaseStub.upserts.length, 1, "similarity detection upserts only the new candidate pair");
+  assert.equal(Object.hasOwn(supabaseStub.upserts[0], "id"), false, "new similarity review creation lets Postgres generate the id");
   assert.equal(supabaseStub.upserts[0].status, "pending", "new similarity reviews start as pending");
   assert.equal(supabaseStub.upserts[0].local_guild_code, "G2", "candidate review keeps the local guild code");
   assert.equal(
@@ -635,6 +636,7 @@ function createSimilaritySupabaseStub({
   assert.equal(result.pendingCreated, 1, "targeted TestSimi recalculation creates exactly one pending review");
   assert.equal(result.enemyDefensesScanned, 1, "targeted recalculation scans only the requested enemy defense");
   assert.equal(supabaseStub.upserts.length, 1, "targeted recalculation creates one review row");
+  assert.equal(Object.hasOwn(supabaseStub.upserts[0], "id"), false, "targeted review creation lets Postgres generate the id");
   assert.equal(supabaseStub.upserts[0].status, "pending", "targeted recalculation keeps no-layout TestSimi pending");
   assert.equal(
     supabaseStub.calls.some((call) => call.type === "upsert" && call.table === "gvg_enemy_defense_guild_stats"),
