@@ -19,6 +19,7 @@ const supabase = createClient(
 );
 
 const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
+const GVG_RESET_SIMILARITY_TRACE_PREFIX = "[gvg-reset-similarity-trace]";
 
 function normalizeGuildCode(value) {
   const code = String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
@@ -27,6 +28,48 @@ function normalizeGuildCode(value) {
 
 function isValidGuild(value) {
   return normalizeGuildCode(value) !== null;
+}
+
+function traceGvgResetSimilarity(event, details = {}) {
+  try {
+    console.info(`${GVG_RESET_SIMILARITY_TRACE_PREFIX} ${event} ${JSON.stringify(details)}`);
+  } catch {
+    console.info(GVG_RESET_SIMILARITY_TRACE_PREFIX, event, details);
+  }
+}
+
+function traceGvgResetSimilarityError(event, error, details = {}) {
+  const payload = {
+    ...details,
+    code: error?.code || null,
+    message: error?.message || String(error || ""),
+    details: error?.details || null,
+    hint: error?.hint || null,
+  };
+
+  try {
+    console.error(`${GVG_RESET_SIMILARITY_TRACE_PREFIX} ${event} ${JSON.stringify(payload)}`);
+  } catch {
+    console.error(GVG_RESET_SIMILARITY_TRACE_PREFIX, event, payload);
+  }
+}
+
+function summarizeResetDefenseForTrace(defense) {
+  return {
+    id: defense?.id || null,
+    guild: defense?.guild || null,
+    bastion: defense?.bastion ?? null,
+    type: defense?.type || null,
+    tower: defense?.tower ?? null,
+    team: defense?.team ?? null,
+    defense_key: defense?.defense_key || null,
+    raw_name: defense?.raw_name || null,
+    is_ally: defense?.is_ally === true,
+    record_status: defense?.record_status || null,
+    heroes: (Array.isArray(defense?.heroes) ? defense.heroes : [])
+      .map((hero) => hero?.champion || hero?.name || hero?.hero || hero)
+      .filter(Boolean),
+  };
 }
 
 async function logGvgReset({
@@ -155,6 +198,14 @@ export default async function handler(req, res) {
       return sendPortalJson(res, 403, { error: "acces gvg refuse" }, req);
     }
 
+    traceGvgResetSimilarity("reset_start", {
+      guild,
+      actor_member_id: sessionCheck.member.id,
+      actor_role: sessionCheck.member.role || null,
+      actor_guild_code: sessionCheck.member.guild_code || null,
+      organization_id: runScope.organizationId || null,
+    });
+
     const actor = {
       memberId: sessionCheck.member.id,
       name: sessionCheck.member.watcher_name || sessionCheck.member.discord_id || "Inconnu",
@@ -186,15 +237,39 @@ export default async function handler(req, res) {
       .eq("guild", guild);
 
     if (readError) {
+      traceGvgResetSimilarityError("reset_defenses_read_error", readError, { guild });
       console.error("[gvg-reset] read error:", readError);
       return sendPortalJson(res, 500, { error: "erreur lecture gvg" }, req);
     }
 
-    const defenseIds = (defenses || []).map((row) => row.id).filter(Boolean);
-    const enemyDefenseArchive = await archiveEnemyDefensesBeforeGvgReset(supabase, {
+    traceGvgResetSimilarity("reset_defenses_read_done", {
       guild,
-      defenses: defenses || [],
+      defenses: defenses?.length || 0,
+      ally_defenses: (defenses || []).filter((row) => row.is_ally === true).length,
+      enemy_defenses: (defenses || []).filter((row) => row.is_ally !== true).length,
+      sample: (defenses || []).slice(0, 16).map(summarizeResetDefenseForTrace),
     });
+
+    const defenseIds = (defenses || []).map((row) => row.id).filter(Boolean);
+    let enemyDefenseArchive = null;
+    try {
+      traceGvgResetSimilarity("reset_archive_start", {
+        guild,
+        defense_ids: defenseIds.length,
+        enemy_defenses: (defenses || []).filter((row) => row.is_ally !== true).length,
+      });
+      enemyDefenseArchive = await archiveEnemyDefensesBeforeGvgReset(supabase, {
+        guild,
+        defenses: defenses || [],
+      });
+      traceGvgResetSimilarity("reset_archive_done", {
+        guild,
+        result: enemyDefenseArchive,
+      });
+    } catch (archiveError) {
+      traceGvgResetSimilarityError("reset_archive_error", archiveError, { guild });
+      throw archiveError;
+    }
     let enemyStratAvailability = null;
     let enemyStratAvailabilityWarning = null;
 
