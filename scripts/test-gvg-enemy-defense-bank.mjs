@@ -12,7 +12,9 @@ import {
   createEnemyDefenseFingerprint,
   createEnemyDefenseSimilaritySignature,
   createLocalDefenseSimilaritySignature,
+  createLocalDefenseReviewSignature,
   detectEnemyDefenseSimilaritiesForArchive,
+  enrichEnemyDefenseCompatibleLineage,
   extractGvgVpsPreviewSourcePath,
   getEnemyDefenseRateTone,
   getEnemyDefenseSuccessRate,
@@ -20,7 +22,9 @@ import {
   getPermanentEnemyDefenseImageUrl,
   isPermanentEnemyDefenseImagePath,
   isPermanentEnemyDefenseImageUrl,
+  isEnemyDefenseLinksSchemaMissing,
   normalizeGvgDirection,
+  normalizeGvgChampionSimilarityKey,
   normalizeGvgPosition,
   sortEnemyDefenseBankRows,
   stableStringify,
@@ -169,6 +173,65 @@ assert.notEqual(
   }),
   fiveHeroSimilarity,
   "changing one hero removes the similarity candidate",
+);
+
+const testSimiEnemy = {
+  id: "enemy-testsimi",
+  map_type: "tower",
+  canonical_definition: {
+    map_type: "tower",
+    heroes: [
+      { champion: "Count Dracula", position: "A1", direction: "E" },
+      { champion: "Erlis", position: "A2", direction: "S" },
+      { champion: "Brokkir", position: "B3", direction: "N" },
+      { champion: "Oren", position: "C4", direction: "O" },
+      { champion: "Valara", position: "D5", direction: "E" },
+    ],
+  },
+};
+const testSimiLocalWithoutLayout = {
+  id: "local-testsimi",
+  type: "Tour",
+  name: "TestSimi",
+  guild_code: "G3",
+  organization_id: "org-paladin",
+  is_hidden: false,
+  guild_defense_slots: [
+    { slot_index: 1, champions: { name: "Comte Dracula" } },
+    { slot_index: 2, champions: { name: "Erlis" } },
+    { slot_index: 3, champions: { name: "Brokkir" } },
+    { slot_index: 4, champions: { name: "Oren" } },
+    { slot_index: 5, champions: { name: "Valara" } },
+  ],
+};
+const testSimiEnemySignature = createEnemyDefenseSimilaritySignature(testSimiEnemy);
+assert.equal(normalizeGvgChampionSimilarityKey("Comte Dracula"), "countdracula", "similarity aliases handle French Dracula naming");
+assert.equal(
+  createLocalDefenseSimilaritySignature(testSimiLocalWithoutLayout),
+  testSimiEnemySignature,
+  "TestSimi local no-layout defense is detected by type plus the same five heroes",
+);
+assert.equal(
+  createLocalDefenseReviewSignature(testSimiLocalWithoutLayout) !== testSimiEnemySignature,
+  true,
+  "review signatures include layout confidence instead of collapsing no-layout locals into canonical identity",
+);
+
+assert.equal(
+  isEnemyDefenseLinksSchemaMissing({
+    code: "PGRST204",
+    message: "Could not find the 'position' column of 'guild_defense_slots' in the schema cache",
+  }),
+  true,
+  "missing guild_defense_slots.position still reports the links migration as missing",
+);
+assert.equal(
+  isEnemyDefenseLinksSchemaMissing({
+    code: "PGRST204",
+    message: "Could not find the 'direction' column of 'defence_slot' in the schema cache",
+  }),
+  false,
+  "unrelated strat/search column errors are not masked as enemy-link migration errors",
 );
 
 const fiveOccurrences = Array.from({ length: 5 }, (_, index) => ({
@@ -328,15 +391,16 @@ function createArchiveSupabaseStub({ existingRows = [], rpcError = null } = {}) 
   };
 }
 
-function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
+function createSimilaritySupabaseStub({ existingReviews = [], localDefenseRows = null } = {}) {
   const calls = [];
   const upserts = [];
+  const updates = [];
   const portalGuilds = [
     { id: "guild-g1", organization_id: "org-paladin", guild_code: "G1", display_name: "G1", is_active: true },
     { id: "guild-g2", organization_id: "org-paladin", guild_code: "G2", display_name: "G2", is_active: true },
     { id: "guild-mad", organization_id: "org-mad", guild_code: "MAD G1", display_name: "Mad G1", is_active: true },
   ];
-  const localDefenses = [
+  const localDefenses = localDefenseRows || [
     fiveHeroLocalDifferentOrder,
     {
       ...fiveHeroLocalDifferentOrder,
@@ -362,6 +426,7 @@ function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
   return {
     calls,
     upserts,
+    updates,
     from(table) {
       const filters = {};
       const query = {
@@ -374,6 +439,10 @@ function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
         },
         in(column, values) {
           filters[column] = values;
+          return query;
+        },
+        update(payload) {
+          query.updatePayload = payload;
           return query;
         },
         or() {
@@ -389,7 +458,7 @@ function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
         },
         then(resolve, reject) {
           try {
-            return Promise.resolve(resolve(resolveQuery(table, filters)));
+            return Promise.resolve(resolve(resolveQuery(table, filters, query.updatePayload)));
           } catch (error) {
             if (reject) return Promise.resolve(reject(error));
             return Promise.reject(error);
@@ -400,8 +469,13 @@ function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
     },
   };
 
-  function resolveQuery(table, filters) {
+  function resolveQuery(table, filters, updatePayload = null) {
     calls.push({ type: "select", table, filters: { ...filters } });
+
+    if (updatePayload) {
+      updates.push({ table, filters: { ...filters }, payload: updatePayload });
+      return { data: null, error: null };
+    }
 
     if (table === "portal_guilds") {
       return {
@@ -453,13 +527,80 @@ function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
 
 {
   const supabaseStub = createSimilaritySupabaseStub({
+    localDefenseRows: [testSimiLocalWithoutLayout],
+  });
+  const result = await detectEnemyDefenseSimilaritiesForArchive(supabaseStub, {
+    organizationId: "org-paladin",
+    enemyDefenses: [testSimiEnemy],
+  });
+
+  assert.equal(result.pendingCreated, 1, "manual TestSimi no-layout defense creates a pending similarity review");
+  assert.equal(supabaseStub.upserts[0].status, "pending", "no-layout same heroes never auto-link as identical");
+}
+
+{
+  const exactLayoutLocal = {
+    ...fiveHeroLocalDifferentOrder,
+    id: "local-exact-layout",
+    guild_defense_slots: [
+      { slot_index: 1, champions: { name: "Khadgrim" }, position: "A5", direction: "E" },
+      { slot_index: 2, champions: { name: "Valara" }, position: "B4", direction: "S" },
+      { slot_index: 3, champions: { name: "Dame Alexandra" }, position: "C3", direction: "N" },
+      { slot_index: 4, champions: { name: "Aurelius Gale" }, position: "D6", direction: "O" },
+      { slot_index: 5, champions: { name: "Captain Rêve" }, position: "E2", direction: "E" },
+    ],
+  };
+  const supabaseStub = createSimilaritySupabaseStub({
+    localDefenseRows: [exactLayoutLocal],
+  });
+  const result = await detectEnemyDefenseSimilaritiesForArchive(supabaseStub, {
+    organizationId: "org-paladin",
+    enemyDefenses: [fiveHeroEnemy],
+    sourcePortalGuild: { id: "guild-g2", guild_code: "G2" },
+  });
+
+  assert.equal(result.autoIdenticalCreated, 1, "complete exact layout auto-links as identical");
+  assert.equal(supabaseStub.upserts[0].status, "identical", "auto-match stores an identical review");
+  assert.equal(
+    supabaseStub.updates.filter((update) => update.table === "guild_defense_slots").length,
+    5,
+    "auto-match writes only the five structural slot layout rows",
+  );
+}
+
+{
+  const completeLayoutDifferent = {
+    ...fiveHeroLocalDifferentOrder,
+    id: "local-different-layout",
+    guild_defense_slots: [
+      { slot_index: 1, champions: { name: "Khadgrim" }, position: "A6", direction: "E" },
+      { slot_index: 2, champions: { name: "Valara" }, position: "B4", direction: "S" },
+      { slot_index: 3, champions: { name: "Dame Alexandra" }, position: "C3", direction: "N" },
+      { slot_index: 4, champions: { name: "Aurelius Gale" }, position: "D6", direction: "O" },
+      { slot_index: 5, champions: { name: "Captain Rêve" }, position: "E2", direction: "E" },
+    ],
+  };
+  const supabaseStub = createSimilaritySupabaseStub({
+    localDefenseRows: [completeLayoutDifferent],
+  });
+  const result = await detectEnemyDefenseSimilaritiesForArchive(supabaseStub, {
+    organizationId: "org-paladin",
+    enemyDefenses: [fiveHeroEnemy],
+  });
+
+  assert.equal(result.autoIdenticalCreated, 0, "complete but different layout is not auto-linked");
+  assert.equal(result.pendingCreated, 1, "complete but different layout remains a human-review candidate");
+}
+
+{
+  const supabaseStub = createSimilaritySupabaseStub({
     existingReviews: [
       {
         id: "review-existing",
         enemy_defense_id: fiveHeroEnemy.id,
         local_defense_id: fiveHeroLocalDifferentOrder.id,
         status: "different",
-        local_identity_signature: fiveHeroSimilarity,
+        local_identity_signature: createLocalDefenseReviewSignature(fiveHeroLocalDifferentOrder),
       },
     ],
   });
@@ -493,6 +634,68 @@ function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
   assert.equal(result.pendingUpdated, 1, "local identity changes invalidate the old review into a fresh pending review");
   assert.equal(supabaseStub.upserts[0].id, "review-obsolete", "obsolete reviews are updated instead of duplicated");
   assert.equal(supabaseStub.upserts[0].status, "pending", "obsolete reviews return to pending");
+}
+
+{
+  const sourceDefense = {
+    ...testSimiLocalWithoutLayout,
+    id: "source-a",
+    name: "Source A",
+    guild_code: "G2",
+    source_defense_id: null,
+  };
+  const childG3 = {
+    ...testSimiLocalWithoutLayout,
+    id: "child-g3",
+    name: "Copy G3",
+    guild_code: "G3",
+    source_defense_id: "source-a",
+  };
+  const childG4 = {
+    ...testSimiLocalWithoutLayout,
+    id: "child-g4",
+    name: "Copy G4",
+    guild_code: "G4",
+    source_defense_id: "source-a",
+  };
+  const divergedChild = {
+    ...testSimiLocalWithoutLayout,
+    id: "child-diverged",
+    name: "Copy diverged",
+    guild_code: "G1",
+    source_defense_id: "source-a",
+    guild_defense_slots: [
+      ...testSimiLocalWithoutLayout.guild_defense_slots.slice(0, 4),
+      { slot_index: 5, champions: { name: "Volka" } },
+    ],
+  };
+  const supabaseStub = createSimilaritySupabaseStub({
+    localDefenseRows: [sourceDefense, childG3, childG4, divergedChild],
+  });
+  const result = await enrichEnemyDefenseCompatibleLineage(supabaseStub, {
+    organizationId: "org-paladin",
+    localDefenseId: "child-g3",
+    enemyDefense: testSimiEnemy,
+    sourcePortalGuild: { id: "guild-g3", guild_code: "G3" },
+    reviewer: { memberId: "admin-1", name: "Admin" },
+  });
+
+  assert.deepEqual(
+    new Set(result.updatedIds),
+    new Set(["source-a", "child-g3", "child-g4"]),
+    "human identical validation enriches source and compatible child copies in the same organization",
+  );
+  assert.equal(result.skipped.some((row) => row.id === "child-diverged" && row.reason === "diverged"), true, "diverged child is skipped");
+  assert.equal(
+    supabaseStub.upserts.filter((row) => row.status === "identical").length,
+    3,
+    "compatible lineage receives identical reviews so G4 will not ask for another validation",
+  );
+  assert.equal(
+    supabaseStub.updates.some((update) => ["guild_defense_conditions", "guild_defense_blocks"].includes(update.table)),
+    false,
+    "lineage propagation never touches local conditions or info blocks",
+  );
 }
 
 function getArchiveRpcCall(supabaseStub) {
@@ -742,5 +945,13 @@ assert.match(bankUi, /Similarites detectees/, "UI exposes a clickable similarity
 assert.match(bankUi, /Voir la strat/, "UI exposes the active strat lookup entry point");
 assert.match(bankUi, /Aucune strat/, "UI exposes the immediate no-strat state");
 assert.match(bankUi, /Importer/, "UI exposes enemy defense import as a separate action");
+assert.match(bankUi, /getYoutubeEmbedUrl/, "enemy strat modal embeds YouTube videos inside Portal");
+assert.match(bankUi, /<iframe/, "enemy strat modal renders an embedded video player");
+assert.match(bankUi, /imagePreview/, "enemy defense images can be opened in a large preview lightbox");
+assert.match(bankUi, /onPointerMove=\{moveImagePan\}/, "image preview supports panning while zoomed");
+assert.match(bankUi, /setPreviewZoom/, "image preview supports zoom controls");
+assert.match(bankUi, /Deja presente en/, "UI marks enemy defenses already present in the active guild");
+assert.match(bankUi, /Importer ailleurs/, "UI still allows importing a linked enemy defense to another guild");
+assert.match(bankUi, /onDataChanged\?\.\(\)/, "enemy bank mutations notify the parent defense list for refresh without F5");
 
 console.log("gvg enemy defense bank tests passed");

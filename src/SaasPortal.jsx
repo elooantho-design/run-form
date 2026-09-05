@@ -5590,6 +5590,7 @@ function PortalAdminDefensesView({ session }) {
           onRemoveCondition={openRemoveConditionDialog}
           onEnsureEditable={ensureEditableDefense}
           onImportDefense={importDefense}
+          onDataChanged={() => setRefreshTick((value) => value + 1)}
         />
       )}
 

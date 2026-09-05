@@ -89,6 +89,7 @@ export default function AdminDefensesTab({
   onRemoveCondition,
   onEnsureEditable,
   onImportDefense,
+  onDataChanged,
 }) {
   const { t } = usePortalLanguage();
   const [typeFilter, setTypeFilter] = useState("all");
@@ -647,7 +648,7 @@ const pasteImageBlockFromClipboard = async () => {
       ) : null}
 
       {showEnemyBank ? (
-        <GvgEnemyDefenseBankTab activeGuildCode={activeGuildCode} />
+        <GvgEnemyDefenseBankTab activeGuildCode={activeGuildCode} onDataChanged={onDataChanged} />
       ) : (
       <div className="grid gap-3">
         {displayedDefenses.length === 0 ? (

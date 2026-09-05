@@ -22,13 +22,15 @@ import {
   buildEnemyDefenseCanonicalDefinition,
   createEnemyDefenseSimilaritySignature,
   createLocalDefenseSimilaritySignature,
+  createLocalDefenseReviewSignature,
   detectEnemyDefenseSimilaritiesForArchive,
-  getEnemyDefenseHeroLayoutByChampion,
+  enrichEnemyDefenseCompatibleLineage,
   getEnemyDefenseRateTone,
   getEnemyDefenseSuccessRate,
   isEnemyDefenseBankSchemaMissing,
   isEnemyDefenseLinksSchemaMissing,
   normalizeGvgChampionName,
+  normalizeGvgChampionSimilarityKey,
   normalizeGvgDirection,
   normalizeGvgMapType,
   normalizeGvgPosition,
@@ -54,6 +56,9 @@ const LOCAL_DEFENSE_SELECT_WITH_LINKS = `
   is_hidden,
   organization_id,
   image_url,
+  source_defense_id,
+  source_guild_code,
+  source_defense_name,
   source_enemy_defense_id,
   source_enemy_defense_fingerprint,
   source_enemy_portal_guild_id,
@@ -94,6 +99,9 @@ const LOCAL_DEFENSE_SELECT_FALLBACK = `
   is_hidden,
   organization_id,
   image_url,
+  source_defense_id,
+  source_guild_code,
+  source_defense_name,
   guild_defense_slots (
     slot_index,
     champion_id,
@@ -241,6 +249,12 @@ function mapLocalDefenseRow(row, review = null) {
     is_hidden: Boolean(row.is_hidden),
     imageUrl: row.image_url || "",
     image_url: row.image_url || "",
+    sourceDefenseId: row.source_defense_id || null,
+    source_defense_id: row.source_defense_id || null,
+    sourceGuildCode: row.source_guild_code || "",
+    source_guild_code: row.source_guild_code || "",
+    sourceDefenseName: row.source_defense_name || "",
+    source_defense_name: row.source_defense_name || "",
     sourceEnemyDefenseId: row.source_enemy_defense_id || null,
     source_enemy_defense_id: row.source_enemy_defense_id || null,
     sourceEnemyDefenseFingerprint: row.source_enemy_defense_fingerprint || "",
@@ -786,66 +800,6 @@ async function loadSimilarities(req, res, sessionMember) {
   }, req);
 }
 
-async function enrichLocalDefenseFromEnemy({ localDefenseId, enemyDefense, portalGuild }) {
-  const { rows, linksSchemaReady } = await loadLocalDefenseRowsByIds([localDefenseId], { requireLinksSchema: true });
-  if (!linksSchemaReady) requireLinksMigration();
-
-  const localDefense = rows[0];
-  if (!localDefense || localDefense.is_hidden) {
-    const error = new Error("Defense locale introuvable.");
-    error.statusCode = 404;
-    throw error;
-  }
-
-  if (String(localDefense.organization_id) !== String(portalGuild.organization_id)) {
-    const error = new Error("Defense locale hors organisation.");
-    error.statusCode = 403;
-    throw error;
-  }
-
-  const layoutByChampion = getEnemyDefenseHeroLayoutByChampion(enemyDefense);
-  const slotUpdates = (localDefense.guild_defense_slots || [])
-    .map((slot) => {
-      const layout = layoutByChampion.get(normalizeGvgChampionName(readChampionNameFromSlot(slot)));
-      if (!layout) return null;
-      return {
-        slotIndex: slot.slot_index,
-        position: layout.position,
-        direction: layout.direction,
-      };
-    })
-    .filter((slot) => slot?.slotIndex !== null && (slot.position || slot.direction));
-
-  const updateResults = await Promise.all(
-    slotUpdates.map((slot) =>
-      supabase
-        .from("guild_defense_slots")
-        .update({
-          position: slot.position,
-          direction: slot.direction,
-        })
-        .eq("defense_id", localDefenseId)
-        .eq("slot_index", slot.slotIndex),
-    ),
-  );
-
-  const slotError = updateResults.find((result) => result.error)?.error;
-  if (slotError) throw slotError;
-
-  const { error: defenseUpdateError } = await supabase
-    .from("guild_defenses")
-    .update({
-      source_enemy_defense_id: enemyDefense.id,
-      source_enemy_defense_fingerprint: enemyDefense.defense_fingerprint,
-      source_enemy_portal_guild_id: portalGuild.id,
-      source_enemy_label: `Defense adverse ${portalGuild.guild_code}`,
-      source_enemy_imported_at: new Date().toISOString(),
-    })
-    .eq("id", localDefenseId);
-
-  if (defenseUpdateError) throw defenseUpdateError;
-}
-
 async function markSimilarityReview(req, res, sessionMember) {
   const { portalGuild } = await resolveBankScope(req, sessionMember);
   const reviewId = String(req.body?.reviewId || req.body?.review_id || "").trim();
@@ -871,12 +825,26 @@ async function markSimilarityReview(req, res, sessionMember) {
   }
 
   const enemyDefense = await loadEnemyDefenseInOrganization(review.enemy_defense_id, portalGuild.organization_id);
+  let propagation = null;
 
   if (status === "identical") {
-    await enrichLocalDefenseFromEnemy({
+    propagation = await enrichEnemyDefenseCompatibleLineage(supabase, {
+      organizationId: portalGuild.organization_id,
       localDefenseId: review.local_defense_id,
       enemyDefense,
-      portalGuild,
+      sourcePortalGuild: portalGuild,
+      reviewer: {
+        memberId: sessionMember.id || null,
+        name: sessionMember.watcher_name || sessionMember.display_name || sessionMember.name || "",
+      },
+    });
+    console.info("[gvg-enemy-defense-bank] identical lineage propagated", {
+      reviewer: sessionMember.watcher_name || sessionMember.display_name || sessionMember.name || "",
+      enemyDefenseId: enemyDefense.id,
+      localDefenseId: review.local_defense_id,
+      rootDefenseId: propagation.rootDefenseId,
+      updatedIds: propagation.updatedIds,
+      skipped: propagation.skipped,
     });
   }
 
@@ -895,14 +863,16 @@ async function markSimilarityReview(req, res, sessionMember) {
   return sendPortalJson(res, 200, {
     ok: true,
     status,
+    propagation,
   }, req);
 }
 
-async function ensureFreshSimilarityCandidates(enemyDefense, organizationId) {
+async function ensureFreshSimilarityCandidates(enemyDefense, organizationId, sourcePortalGuild = null) {
   try {
     return await detectEnemyDefenseSimilaritiesForArchive(supabase, {
       organizationId,
       enemyDefenses: [enemyDefense],
+      sourcePortalGuild,
     });
   } catch (error) {
     if (isEnemyDefenseLinksSchemaMissing(error)) requireLinksMigration();
@@ -923,6 +893,8 @@ async function loadChampionsByNormalizedName() {
     for (const name of [champion.name, champion.portal_name, champion.english_name]) {
       const key = normalizeGvgChampionName(name);
       if (key && !byName.has(key)) byName.set(key, champion);
+      const similarityKey = normalizeGvgChampionSimilarityKey(name);
+      if (similarityKey && !byName.has(similarityKey)) byName.set(similarityKey, champion);
     }
   }
 
@@ -946,7 +918,7 @@ async function importEnemyDefense(req, res, sessionMember) {
   }
 
   const enemyDefense = await loadEnemyDefenseInOrganization(defenseId, portalGuild.organization_id);
-  await ensureFreshSimilarityCandidates(enemyDefense, portalGuild.organization_id);
+  await ensureFreshSimilarityCandidates(enemyDefense, portalGuild.organization_id, portalGuild);
 
   const { data: existingCopies, error: existingCopyError } = await supabase
     .from("guild_defenses")
@@ -1015,7 +987,7 @@ async function importEnemyDefense(req, res, sessionMember) {
 
   const championsByName = await loadChampionsByNormalizedName();
   const slotRows = enemyHeroes.map((hero, index) => {
-    const champion = championsByName.get(normalizeGvgChampionName(hero.champion));
+    const champion = championsByName.get(normalizeGvgChampionSimilarityKey(hero.champion)) || championsByName.get(normalizeGvgChampionName(hero.champion));
     return {
       champion,
       position: normalizeGvgPosition(hero.position, canonicalDefinition.map_type),
@@ -1072,8 +1044,20 @@ async function importEnemyDefense(req, res, sessionMember) {
 
   const localSignature = createLocalDefenseSimilaritySignature({
     type: mapType,
-    guild_defense_slots: slotRows.map((slot) => ({ champions: slot.champion })),
+    guild_defense_slots: slotRows.map((slot) => ({
+      champions: slot.champion,
+      position: slot.position,
+      direction: slot.direction,
+    })),
   });
+  const localReviewSignature = createLocalDefenseReviewSignature({
+    type: mapType,
+    guild_defense_slots: slotRows.map((slot) => ({
+      champions: slot.champion,
+      position: slot.position,
+      direction: slot.direction,
+    })),
+  }) || localSignature;
   const enemySignature = createEnemyDefenseSimilaritySignature(enemyDefense);
 
   const { error: reviewUpsertError } = await supabase
@@ -1089,7 +1073,7 @@ async function importEnemyDefense(req, res, sessionMember) {
       reviewed_by_name: sessionMember.watcher_name || sessionMember.display_name || sessionMember.name || "",
       reviewed_at: new Date().toISOString(),
       enemy_identity_signature: enemySignature,
-      local_identity_signature: localSignature,
+      local_identity_signature: localReviewSignature,
     }, { onConflict: "enemy_defense_id,local_defense_id" });
 
   if (reviewUpsertError) throw reviewUpsertError;

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Ban, CheckCircle2, Download, Link2, RefreshCw, Search, ShieldCheck, Swords, XCircle } from "lucide-react";
+import { Ban, CheckCircle2, Download, Link2, Maximize2, Minus, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Swords, X, XCircle } from "lucide-react";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
 function getApiBase() {
@@ -74,6 +74,10 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
+function normalizeGuildKey(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
+}
+
 function formatHeroName(value) {
   return String(value || "")
     .split(/[\s_-]+/)
@@ -108,7 +112,67 @@ function getLocalImage(defense) {
   return defense?.imageUrl || defense?.image_url || defense?.image || "";
 }
 
-export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
+function getLinkedDefenses(item) {
+  return item?.linkedLocalDefenses || item?.linked_local_defenses || [];
+}
+
+function isLinkedToGuild(item, guildCode) {
+  const targetKey = normalizeGuildKey(guildCode);
+  return getLinkedDefenses(item).some((defense) => normalizeGuildKey(getLocalGuildCode(defense)) === targetKey);
+}
+
+function getLinkedDefenseLabel(defense) {
+  const guildCode = getLocalGuildCode(defense) || "-";
+  const name = defense?.name ? ` · ${defense.name}` : "";
+  return `Liee a ${guildCode}${name}`;
+}
+
+function parseYoutubeTimeToSeconds(value) {
+  if (!value) return 0;
+  const raw = String(value).trim().toLowerCase();
+  if (/^\d+$/.test(raw)) return Number(raw);
+
+  const match = raw.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+  if (!match) return 0;
+
+  return Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0);
+}
+
+function getYoutubeEmbedUrl(url) {
+  if (!url) return null;
+
+  try {
+    const parsed = new URL(url);
+    let videoId = null;
+    let startSeconds = 0;
+
+    if (parsed.hostname.includes("youtu.be")) {
+      videoId = parsed.pathname.replace("/", "").trim();
+      startSeconds =
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("t")) ||
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("start")) ||
+        parseYoutubeTimeToSeconds(parsed.hash.replace(/^#t=/, ""));
+    }
+
+    if (parsed.hostname.includes("youtube.com") || parsed.hostname.includes("www.youtube.com")) {
+      videoId = parsed.searchParams.get("v");
+      startSeconds =
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("t")) ||
+        parseYoutubeTimeToSeconds(parsed.searchParams.get("start")) ||
+        parseYoutubeTimeToSeconds(parsed.hash.replace(/^#t=/, ""));
+    }
+
+    if (!videoId) return null;
+
+    const embed = new URL(`https://www.youtube.com/embed/${videoId}`);
+    if (startSeconds > 0) embed.searchParams.set("start", String(startSeconds));
+    return embed.toString();
+  } catch {
+    return null;
+  }
+}
+
+export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataChanged = null }) {
   const { t } = usePortalLanguage();
   const [items, setItems] = useState([]);
   const [guilds, setGuilds] = useState([]);
@@ -125,6 +189,68 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
   const [similarityLoading, setSimilarityLoading] = useState(false);
   const [importModal, setImportModal] = useState(null);
   const [importLoading, setImportLoading] = useState(false);
+  const [imagePreview, setImagePreview] = useState(null);
+
+  function notifyDataChanged() {
+    setRefreshTick((value) => value + 1);
+    onDataChanged?.();
+  }
+
+  function openImagePreview(src, title = "Defense") {
+    if (!src) return;
+    setImagePreview({
+      src,
+      title,
+      zoom: 1,
+      offsetX: 0,
+      offsetY: 0,
+      dragStart: null,
+    });
+  }
+
+  function setPreviewZoom(nextZoom) {
+    setImagePreview((previous) => {
+      if (!previous) return previous;
+      const zoom = Math.min(4, Math.max(1, nextZoom));
+      return {
+        ...previous,
+        zoom,
+        offsetX: zoom === 1 ? 0 : previous.offsetX,
+        offsetY: zoom === 1 ? 0 : previous.offsetY,
+        dragStart: null,
+      };
+    });
+  }
+
+  function startImagePan(event) {
+    if (!imagePreview || imagePreview.zoom <= 1) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setImagePreview((previous) => previous ? {
+      ...previous,
+      dragStart: {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        offsetX: previous.offsetX,
+        offsetY: previous.offsetY,
+      },
+    } : previous);
+  }
+
+  function moveImagePan(event) {
+    setImagePreview((previous) => {
+      if (!previous?.dragStart || previous.dragStart.pointerId !== event.pointerId) return previous;
+      return {
+        ...previous,
+        offsetX: previous.dragStart.offsetX + event.clientX - previous.dragStart.x,
+        offsetY: previous.dragStart.offsetY + event.clientY - previous.dragStart.y,
+      };
+    });
+  }
+
+  function stopImagePan() {
+    setImagePreview((previous) => previous ? { ...previous, dragStart: null } : previous);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +293,17 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
     };
   }, [activeGuildCode, refreshTick]);
 
+  useEffect(() => {
+    if (!imagePreview) return undefined;
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") setImagePreview(null);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [imagePreview]);
+
   const mapTypes = useMemo(
     () => [...new Set(items.map((item) => String(item.mapType || item.map_type || "").toLowerCase()).filter(Boolean))],
     [items],
@@ -176,6 +313,10 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
     const rows = guilds.length ? guilds : [{ guild_code: activeGuildCode, display_name: activeGuildCode }];
     return rows.filter((guild) => guild?.guild_code);
   }, [activeGuildCode, guilds]);
+
+  function getAvailableImportGuilds(item) {
+    return targetGuilds.filter((guild) => !isLinkedToGuild(item, guild.guild_code));
+  }
 
   const filteredItems = useMemo(() => {
     const normalizedQuery = normalizeText(query);
@@ -265,7 +406,7 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
             }
           : previous,
       );
-      setRefreshTick((value) => value + 1);
+      notifyDataChanged();
     } catch (error) {
       setSimilarityModal((previous) => previous ? { ...previous, error: error?.message || "Validation similarite impossible." } : previous);
     } finally {
@@ -274,7 +415,13 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
   }
 
   function openImport(item) {
-    const defaultGuild = targetGuilds.find((guild) => guild.guild_code === activeGuildCode)?.guild_code || targetGuilds[0]?.guild_code || activeGuildCode;
+    const availableGuilds = getAvailableImportGuilds(item);
+    const defaultGuild =
+      availableGuilds.find((guild) => normalizeGuildKey(guild.guild_code) === normalizeGuildKey(activeGuildCode))?.guild_code ||
+      availableGuilds[0]?.guild_code ||
+      targetGuilds.find((guild) => normalizeGuildKey(guild.guild_code) === normalizeGuildKey(activeGuildCode))?.guild_code ||
+      targetGuilds[0]?.guild_code ||
+      activeGuildCode;
     setImportModal({
       item,
       targetGuildCode: defaultGuild,
@@ -312,7 +459,7 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
             }
           : previous,
       );
-      setRefreshTick((value) => value + 1);
+      notifyDataChanged();
       return data;
     } catch (error) {
       if (error?.data?.requiresReview || error?.data?.requires_review) {
@@ -345,7 +492,7 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
         }),
       });
       await readJsonResponse(response, "Retrait defense locale impossible.");
-      setRefreshTick((value) => value + 1);
+      notifyDataChanged();
     } catch (error) {
       setMessage(error?.message || "Retrait defense locale impossible.");
     }
@@ -452,6 +599,9 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
             const linkedDefenses = item.linkedLocalDefenses || item.linked_local_defenses || [];
             const stratCount = Number(item.stratCount ?? item.strat_count) || 0;
             const hasAvailableStrat = item.hasAvailableStrat || item.has_available_strat || stratCount > 0;
+            const activeGuildAlreadyLinked = isLinkedToGuild(item, activeGuildCode);
+            const canImportElsewhere = getAvailableImportGuilds(item).length > 0;
+            const imageUrl = item.imageUrl || item.image_url;
 
             return (
               <article
@@ -459,12 +609,22 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
                 className={`grid gap-4 rounded-2xl border p-4 lg:grid-cols-[minmax(180px,280px)_minmax(0,1fr)_auto] ${getRateToneClass(successRate)}`}
               >
                 <div className="flex h-[170px] items-center justify-center overflow-hidden rounded-xl border border-black/30 bg-zinc-950/80">
-                  {item.imageUrl || item.image_url ? (
-                    <img
-                      src={item.imageUrl || item.image_url}
-                      alt="Defense adverse"
-                      className="h-full w-full object-cover"
-                    />
+                  {imageUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => openImagePreview(imageUrl, `${formatMapType(item.mapType || item.map_type)} adverse`)}
+                      className="group relative h-full w-full"
+                      title="Agrandir l'image"
+                    >
+                      <img
+                        src={imageUrl}
+                        alt="Defense adverse"
+                        className="h-full w-full object-contain"
+                      />
+                      <span className="absolute right-2 top-2 rounded-lg border border-white/15 bg-black/60 p-1 text-white opacity-0 transition group-hover:opacity-100">
+                        <Maximize2 className="h-4 w-4" />
+                      </span>
+                    </button>
                   ) : (
                     <div className="text-xs text-zinc-500">{t("common.noImage", "Aucune image")}</div>
                   )}
@@ -498,7 +658,7 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
                           className="inline-flex items-center gap-1 rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-2 py-1 text-xs text-emerald-100"
                         >
                           <Link2 className="h-3.5 w-3.5" />
-                          Liee a {getLocalGuildCode(defense) || "-"}
+                          {getLinkedDefenseLabel(defense)}
                           <button
                             type="button"
                             onClick={() => removeLinkedDefense(item, defense)}
@@ -569,14 +729,34 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
                     </div>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={() => openImport(item)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25"
-                  >
-                    <Download className="h-4 w-4" />
-                    Importer
-                  </button>
+                  {activeGuildAlreadyLinked ? (
+                    <>
+                      <div className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/50 bg-emerald-300/15 px-3 py-2 text-xs font-semibold uppercase text-emerald-100">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Deja presente en {activeGuildCode}
+                      </div>
+                      {canImportElsewhere ? (
+                        <button
+                          type="button"
+                          onClick={() => openImport(item)}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25"
+                        >
+                          <Download className="h-4 w-4" />
+                          Importer ailleurs
+                        </button>
+                      ) : null}
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openImport(item)}
+                      disabled={!canImportElsewhere}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Download className="h-4 w-4" />
+                      Importer
+                    </button>
+                  )}
                 </div>
               </article>
             );
@@ -612,30 +792,82 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
                 Aucune strat
               </div>
             ) : (
-              <div className="space-y-3">
-                {stratModal.items.map((strat) => (
-                  <div key={strat.strat_id} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="font-semibold text-zinc-100">Strat #{strat.strat_id}</div>
+              <div className="space-y-4">
+                {stratModal.items.map((strat, index) => {
+                  const embedUrl = getYoutubeEmbedUrl(strat.youtube_url);
+                  const slots = Array.isArray(strat.slots) ? strat.slots : [];
+
+                  return (
+                    <div key={strat.strat_id || index} className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-semibold text-zinc-100">
+                            Strat {index + 1} / {stratModal.items.length}
+                          </div>
+                          <div className="text-xs text-zinc-500">ID {strat.strat_id}</div>
+                        </div>
+                        {strat.youtube_url ? (
+                          <a
+                            href={strat.youtube_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
+                          >
+                            Ouvrir YouTube
+                          </a>
+                        ) : null}
+                      </div>
+
                       {strat.youtube_url ? (
-                        <a
-                          href={strat.youtube_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-lg border border-cyan-500/50 bg-cyan-500/15 px-3 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-500/25"
-                        >
-                          Video
-                        </a>
+                        <div className="mt-3 space-y-2">
+                          {embedUrl ? (
+                            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-black">
+                              <iframe
+                                src={embedUrl}
+                                title={`Strat video ${strat.strat_id || index + 1}`}
+                                className="h-64 w-full"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allowFullScreen
+                              />
+                            </div>
+                          ) : (
+                            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                              Video non integrable, utilise le lien YouTube.
+                            </div>
+                          )}
+                        </div>
                       ) : null}
+
+                      <div className="mt-3 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 text-sm">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Code attaque</div>
+                          <div className="mt-1 font-semibold text-zinc-100">{strat.attack_code || "Pas de code"}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Consignes</div>
+                          <div className="mt-1 whitespace-pre-wrap text-zinc-200">
+                            {strat.commentaire || "Pas de consigne particuliere"}
+                          </div>
+                        </div>
+                        {slots.length ? (
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Composition</div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {slots.map((slot, slotIndex) => (
+                                <span
+                                  key={`${strat.strat_id || index}-${slot.champion}-${slotIndex}`}
+                                  className="rounded-lg border border-zinc-700 bg-black/30 px-2 py-1 text-xs text-zinc-100"
+                                >
+                                  {renderHeroLine(slot, slotIndex)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
-                    {strat.attack_code ? (
-                      <div className="mt-2 text-xs text-zinc-300">Code attaque : {strat.attack_code}</div>
-                    ) : null}
-                    {strat.commentaire ? (
-                      <div className="mt-2 whitespace-pre-wrap text-sm text-zinc-200">{strat.commentaire}</div>
-                    ) : null}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -669,11 +901,26 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
               <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
                 <div className="mb-2 text-sm font-semibold text-zinc-100">Defense adverse</div>
                 {similarityModal.enemyDefense?.imageUrl || similarityModal.enemyDefense?.image_url ? (
-                  <img
-                    src={similarityModal.enemyDefense.imageUrl || similarityModal.enemyDefense.image_url}
-                    alt="Defense adverse"
-                    className="h-52 w-full rounded-lg border border-zinc-800 object-cover"
-                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openImagePreview(
+                        similarityModal.enemyDefense.imageUrl || similarityModal.enemyDefense.image_url,
+                        "Defense adverse",
+                      )
+                    }
+                    className="group relative h-52 w-full rounded-lg border border-zinc-800 bg-zinc-950"
+                    title="Agrandir l'image"
+                  >
+                    <img
+                      src={similarityModal.enemyDefense.imageUrl || similarityModal.enemyDefense.image_url}
+                      alt="Defense adverse"
+                      className="h-full w-full rounded-lg object-contain"
+                    />
+                    <span className="absolute right-2 top-2 rounded-lg border border-white/15 bg-black/60 p-1 text-white opacity-0 transition group-hover:opacity-100">
+                      <Maximize2 className="h-4 w-4" />
+                    </span>
+                  </button>
                 ) : null}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {(similarityModal.enemyDefense?.heroes || []).map((hero, index) => (
@@ -700,7 +947,21 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
                       <div key={candidate.review?.id} className="grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 md:grid-cols-[220px_minmax(0,1fr)_auto]">
                         <div className="flex h-36 items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950">
                           {getLocalImage(localDefense) ? (
-                            <img src={getLocalImage(localDefense)} alt={localDefense.name || "Defense locale"} className="h-full w-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => openImagePreview(getLocalImage(localDefense), localDefense.name || "Defense locale")}
+                              className="group relative h-full w-full"
+                              title="Agrandir l'image"
+                            >
+                              <img
+                                src={getLocalImage(localDefense)}
+                                alt={localDefense.name || "Defense locale"}
+                                className="h-full w-full object-contain"
+                              />
+                              <span className="absolute right-2 top-2 rounded-lg border border-white/15 bg-black/60 p-1 text-white opacity-0 transition group-hover:opacity-100">
+                                <Maximize2 className="h-4 w-4" />
+                              </span>
+                            </button>
                           ) : (
                             <span className="text-xs text-zinc-500">Aucune image</span>
                           )}
@@ -793,11 +1054,14 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
                   onChange={(event) => setImportModal((previous) => ({ ...previous, targetGuildCode: event.target.value }))}
                   className="mt-1 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
                 >
-                  {targetGuilds.map((guild) => (
-                    <option key={guild.id || guild.guild_code} value={guild.guild_code}>
-                      {guild.display_name || guild.guild_code}
-                    </option>
-                  ))}
+                  {targetGuilds.map((guild) => {
+                    const alreadyLinked = isLinkedToGuild(importModal.item, guild.guild_code);
+                    return (
+                      <option key={guild.id || guild.guild_code} value={guild.guild_code} disabled={alreadyLinked}>
+                        {guild.display_name || guild.guild_code}{alreadyLinked ? " - deja presente" : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
 
@@ -823,7 +1087,7 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
               </button>
               <button
                 type="submit"
-                disabled={importLoading}
+                disabled={importLoading || isLinkedToGuild(importModal.item, importModal.targetGuildCode)}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/20 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/30 disabled:cursor-wait disabled:opacity-60"
               >
                 <Download className="h-4 w-4" />
@@ -831,6 +1095,72 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "" }) {
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {imagePreview ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 text-white">
+          <div className="flex h-full w-full max-w-7xl flex-col">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 text-sm font-semibold text-zinc-100">{imagePreview.title}</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom(imagePreview.zoom - 0.25)}
+                  className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 hover:bg-zinc-800"
+                  title="Zoom -"
+                >
+                  <Minus className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom(imagePreview.zoom + 0.25)}
+                  className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 hover:bg-zinc-800"
+                  title="Zoom +"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImagePreview((previous) => previous ? { ...previous, zoom: 1, offsetX: 0, offsetY: 0, dragStart: null } : previous)}
+                  className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 hover:bg-zinc-800"
+                  title="Reset zoom"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImagePreview(null)}
+                  className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-zinc-100 hover:bg-zinc-800"
+                  title="Fermer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div
+              className={`min-h-0 flex-1 overflow-hidden rounded-2xl border border-zinc-800 bg-black ${
+                imagePreview.zoom > 1 ? "cursor-grab active:cursor-grabbing" : ""
+              }`}
+              onPointerDown={startImagePan}
+              onPointerMove={moveImagePan}
+              onPointerUp={stopImagePan}
+              onPointerCancel={stopImagePan}
+            >
+              <img
+                src={imagePreview.src}
+                alt={imagePreview.title}
+                draggable={false}
+                className="h-full w-full object-contain"
+                style={{
+                  transform: `translate(${imagePreview.offsetX}px, ${imagePreview.offsetY}px) scale(${imagePreview.zoom})`,
+                  transformOrigin: "center",
+                  transition: imagePreview.dragStart ? "none" : "transform 120ms ease-out",
+                }}
+              />
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
