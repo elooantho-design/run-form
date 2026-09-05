@@ -34,7 +34,9 @@ import {
   normalizeGvgDirection,
   normalizeGvgMapType,
   normalizeGvgPosition,
+  recalculateEnemyDefenseSimilarities,
   resolvePortalGuildForGvgGuild,
+  serializeEnemySimilarityError,
   sortEnemyDefenseBankRows,
 } from "./_gvg-enemy-defense-bank.js";
 
@@ -880,6 +882,61 @@ async function ensureFreshSimilarityCandidates(enemyDefense, organizationId, sou
   }
 }
 
+function readRequestValue(req, names = []) {
+  for (const name of names) {
+    const value = req.body?.[name] ?? req.query?.[name];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+async function recalculateSimilarities(req, res, sessionMember) {
+  if (req.method !== "POST") {
+    return sendPortalJson(res, 405, { error: "method not allowed" }, req);
+  }
+
+  const { guild, portalGuild } = await resolveBankScope(req, sessionMember);
+  const enemyDefenseId = validatePortalInput(readRequestValue(req, ["enemyDefenseId", "enemy_defense_id", "defenseId", "defense_id"]), 80);
+  const localDefenseId = validatePortalInput(readRequestValue(req, ["localDefenseId", "local_defense_id"]), 80);
+
+  try {
+    const result = await recalculateEnemyDefenseSimilarities(supabase, {
+      organizationId: portalGuild.organization_id,
+      portalGuild,
+      enemyDefenseId,
+      localDefenseIds: localDefenseId ? [localDefenseId] : [],
+    });
+
+    return sendPortalJson(res, 200, {
+      ok: true,
+      action: "recalculate-similarities",
+      guild,
+      guild_code: portalGuild.guild_code,
+      portalGuildId: portalGuild.id,
+      portal_guild_id: portalGuild.id,
+      ...result,
+    }, req);
+  } catch (error) {
+    const serialized = serializeEnemySimilarityError(error);
+    const schemaMissing = isEnemyDefenseLinksSchemaMissing(error);
+    console.error("[gvg-enemy-defense-bank] recalculate similarities failed", serialized);
+
+    return sendPortalJson(res, schemaMissing ? 428 : error?.statusCode || 500, {
+      ok: false,
+      action: "recalculate-similarities",
+      error: schemaMissing ? "Migration liaisons defenses adverses requise." : serialized.message,
+      stage: serialized.stage,
+      supabaseError: {
+        code: serialized.code,
+        message: serialized.message,
+        details: serialized.details,
+        hint: serialized.hint,
+      },
+      context: serialized.context,
+    }, req);
+  }
+}
+
 async function loadChampionsByNormalizedName() {
   const { data, error } = await supabase
     .from("champions")
@@ -1162,6 +1219,7 @@ export default async function handler(req, res) {
     if (action === "strats") return await loadStrats(req, res, sessionCheck.member);
     if (action === "similarities") return await loadSimilarities(req, res, sessionCheck.member);
     if (action === "review-similarity") return await markSimilarityReview(req, res, sessionCheck.member);
+    if (action === "recalculate-similarities") return await recalculateSimilarities(req, res, sessionCheck.member);
     if (action === "import") return await importEnemyDefense(req, res, sessionCheck.member);
     if (action === "remove-local") return await removeLinkedLocalDefense(req, res, sessionCheck.member);
     return await loadBankItems(req, res, sessionCheck.member);

@@ -697,23 +697,23 @@ function mentionsMissingLinksColumn(message, tableName, columnName) {
   );
 }
 
+function hasMissingSchemaText(message) {
+  return (
+    message.includes("does not exist") ||
+    message.includes("doesn't exist") ||
+    message.includes("could not find") ||
+    message.includes("not found") ||
+    message.includes("schema cache")
+  );
+}
+
 export function isEnemyDefenseLinksSchemaMissing(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
-  const missingTable =
-    error?.code === "42P01" ||
-    error?.code === "PGRST205" ||
-    message.includes("relation") ||
-    message.includes("table");
-  const missingFunction =
-    error?.code === "42883" ||
-    error?.code === "PGRST202" ||
-    message.includes("function") ||
-    message.includes("rpc");
-  const missingColumn =
-    error?.code === "42703" ||
-    error?.code === "PGRST204" ||
-    message.includes("schema cache") ||
-    message.includes("column");
+  const code = String(error?.code || "");
+  const missingSchemaText = hasMissingSchemaText(message);
+  const missingTable = ["42P01", "PGRST205"].includes(code) && missingSchemaText;
+  const missingFunction = ["42883", "PGRST202"].includes(code) && missingSchemaText;
+  const missingColumn = ["42703", "PGRST204"].includes(code) && missingSchemaText;
 
   return (
     (missingTable && (
@@ -731,6 +731,28 @@ export function isEnemyDefenseLinksSchemaMissing(error) {
       mentionsMissingLinksColumn(message, "guild_defense_slots", "direction")
     ))
   );
+}
+
+function markEnemySimilarityError(error, stage, context = {}) {
+  if (error && typeof error === "object") {
+    error.enemySimilarityStage = error.enemySimilarityStage || stage;
+    error.enemySimilarityContext = {
+      ...(error.enemySimilarityContext || {}),
+      ...context,
+    };
+  }
+  return error;
+}
+
+export function serializeEnemySimilarityError(error) {
+  return {
+    stage: error?.enemySimilarityStage || null,
+    code: error?.code || null,
+    message: error?.message || String(error || ""),
+    details: error?.details || null,
+    hint: error?.hint || null,
+    context: error?.enemySimilarityContext || null,
+  };
 }
 
 export function createBankNotInitializedError() {
@@ -833,7 +855,9 @@ async function loadLocalDefenseSimilarityRows(supabase, organizationId) {
 
   if (error) {
     traceEnemySimilarityError("local_similarity_rows_select_error", error, { organization_id: organizationId || null });
-    throw error;
+    throw markEnemySimilarityError(error, "local_similarity_rows_select", {
+      organization_id: organizationId || null,
+    });
   }
 
   const rows = data || [];
@@ -1067,7 +1091,17 @@ export async function enrichEnemyDefenseCompatibleLineage(
   };
 }
 
-export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organizationId, enemyDefenses = [], sourcePortalGuild = null } = {}) {
+export async function detectEnemyDefenseSimilaritiesForArchive(
+  supabase,
+  {
+    organizationId,
+    enemyDefenses = [],
+    sourcePortalGuild = null,
+    localDefenseIds = [],
+    applyAutoIdenticalLineage = true,
+  } = {},
+) {
+  const localDefenseIdFilter = new Set((localDefenseIds || []).map(String).filter(Boolean));
   const enemies = (enemyDefenses || [])
     .filter((defense) => defense?.id)
     .map((defense) => ({
@@ -1082,6 +1116,8 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
     source_portal_guild_code: sourcePortalGuild?.guild_code || null,
     input_enemy_defenses: (enemyDefenses || []).length,
     signed_enemy_defenses: enemies.length,
+    local_defense_ids: traceSample([...localDefenseIdFilter]),
+    apply_auto_identical_lineage: Boolean(applyAutoIdenticalLineage),
     signed_enemy_sample: traceSample(enemies, summarizeEnemyDefenseForTrace, 12),
   });
 
@@ -1119,7 +1155,10 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
     enemiesBySignature.get(enemy.similarity_signature).push(enemy);
   }
 
-  const localRowsWithSignatures = localRows
+  const scopedLocalRows = localDefenseIdFilter.size
+    ? localRows.filter((defense) => localDefenseIdFilter.has(String(defense.id)))
+    : localRows;
+  const localRowsWithSignatures = scopedLocalRows
     .map((defense) => ({
       ...defense,
       similarity_signature: createLocalDefenseSimilaritySignature(defense),
@@ -1137,6 +1176,8 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
       lookup_key: normalizePortalGuildLookupKey(guild.guild_code),
     }), 20),
     local_rows: localRows.length,
+    scoped_local_rows: scopedLocalRows.length,
+    local_defense_ids: traceSample([...localDefenseIdFilter]),
     enemy_signature_count: enemiesBySignature.size,
     enemy_signatures: Array.from(enemiesBySignature.entries()).slice(0, 12).map(([signature, rows]) => ({
       signature: shortTraceHash(signature),
@@ -1190,7 +1231,11 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
       enemy_ids: traceSample(enemyIds),
       local_ids: traceSample(localIds),
     });
-    throw existingError;
+    throw markEnemySimilarityError(existingError, "detect_existing_reviews_select", {
+      organization_id: organizationId || null,
+      enemy_ids: traceSample(enemyIds),
+      local_ids: traceSample(localIds),
+    });
   }
 
   traceEnemySimilarity("detect_existing_reviews_select_done", {
@@ -1307,7 +1352,11 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
         rows_to_upsert: rowsToUpsert.length,
         upsert_rows: traceSample(rowsToUpsert, summarizeReviewForTrace, 20),
       });
-      throw upsertError;
+      throw markEnemySimilarityError(upsertError, "detect_upsert", {
+        organization_id: organizationId || null,
+        rows_to_upsert: rowsToUpsert.length,
+        upsert_rows: traceSample(rowsToUpsert, summarizeReviewForTrace, 20),
+      });
     }
 
     traceEnemySimilarity("detect_upsert_done", {
@@ -1321,7 +1370,18 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
     });
   }
 
-  for (const pair of autoIdenticalPairs) {
+  if (!applyAutoIdenticalLineage && autoIdenticalPairs.length) {
+    traceEnemySimilarity("detect_auto_lineage_skipped", {
+      organization_id: organizationId || null,
+      reason: "disabled_for_recalculation",
+      pairs: traceSample(autoIdenticalPairs, (pair) => ({
+        local: summarizeLocalDefenseForTrace(pair.localDefense),
+        enemy: summarizeEnemyDefenseForTrace(pair.enemy),
+      }), 20),
+    });
+  }
+
+  for (const pair of applyAutoIdenticalLineage ? autoIdenticalPairs : []) {
     traceEnemySimilarity("detect_auto_lineage_start", {
       organization_id: organizationId || null,
       local: summarizeLocalDefenseForTrace(pair.localDefense),
@@ -1348,7 +1408,11 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
         local: summarizeLocalDefenseForTrace(pair.localDefense),
         enemy: summarizeEnemyDefenseForTrace(pair.enemy),
       });
-      throw lineageError;
+      throw markEnemySimilarityError(lineageError, "lineage", {
+        organization_id: organizationId || null,
+        local: summarizeLocalDefenseForTrace(pair.localDefense),
+        enemy: summarizeEnemyDefenseForTrace(pair.enemy),
+      });
     }
   }
 
@@ -1367,7 +1431,84 @@ export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organ
     pendingUpdated,
     autoIdenticalCreated,
     autoIdenticalUpdated,
+    autoIdenticalLineageApplied: Boolean(applyAutoIdenticalLineage),
+    autoIdenticalLineageSkipped: !applyAutoIdenticalLineage ? autoIdenticalPairs.length : 0,
     candidatesScanned: rowsToUpsert.length,
+  };
+}
+
+export async function recalculateEnemyDefenseSimilarities(
+  supabase,
+  { organizationId, portalGuild = null, enemyDefenseId = "", localDefenseIds = [] } = {},
+) {
+  if (!organizationId) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "missing_organization",
+      enemyDefensesScanned: 0,
+      enemy_defenses_scanned: 0,
+    };
+  }
+
+  let statsQuery = supabase
+    .from("gvg_enemy_defense_guild_stats")
+    .select("enemy_defense_id, organization_id, portal_guild_id, encounters, opened")
+    .eq("organization_id", organizationId);
+
+  if (portalGuild?.id) statsQuery = statsQuery.eq("portal_guild_id", portalGuild.id);
+  if (enemyDefenseId) statsQuery = statsQuery.eq("enemy_defense_id", enemyDefenseId);
+
+  const { data: statsRows, error: statsError } = await statsQuery;
+  if (statsError) {
+    throw markEnemySimilarityError(statsError, "recalculate_enemy_stats_select", {
+      organization_id: organizationId || null,
+      portal_guild_id: portalGuild?.id || null,
+      enemy_defense_id: enemyDefenseId || null,
+    });
+  }
+
+  const enemyIds = [...new Set((statsRows || []).map((row) => row.enemy_defense_id).filter(Boolean))];
+  if (!enemyIds.length) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "no_enemy_defenses",
+      enemyDefensesScanned: 0,
+      enemy_defenses_scanned: 0,
+    };
+  }
+
+  const { data: enemyRows, error: enemyError } = await supabase
+    .from("gvg_enemy_defenses")
+    .select("id, defense_fingerprint, canonical_definition, map_type")
+    .in("id", enemyIds);
+
+  if (enemyError) {
+    throw markEnemySimilarityError(enemyError, "recalculate_enemy_defenses_select", {
+      organization_id: organizationId || null,
+      portal_guild_id: portalGuild?.id || null,
+      enemy_ids: traceSample(enemyIds),
+    });
+  }
+
+  const result = await detectEnemyDefenseSimilaritiesForArchive(supabase, {
+    organizationId,
+    enemyDefenses: enemyRows || [],
+    sourcePortalGuild: portalGuild,
+    localDefenseIds,
+    applyAutoIdenticalLineage: false,
+  });
+
+  return {
+    ...result,
+    ok: result.ok !== false,
+    enemyDefensesScanned: (enemyRows || []).length,
+    enemy_defenses_scanned: (enemyRows || []).length,
+    targetEnemyDefenseId: enemyDefenseId || null,
+    target_enemy_defense_id: enemyDefenseId || null,
+    targetLocalDefenseIds: localDefenseIds || [],
+    target_local_defense_ids: localDefenseIds || [],
   };
 }
 
