@@ -690,6 +690,8 @@ assert.match(
   /\.from\("gvg_defense"\)[\s\S]*?\.delete\(\)[\s\S]*?\.eq\("guild", guild\)/,
   "archive happens before gvg_defense cleanup",
 );
+assert.match(resetApi, /refreshEnemyDefenseStratAvailabilityForGuild/, "reset refreshes enemy strat availability as non-critical post-processing");
+assert.match(resetApi, /enemy_strat_availability_warning/, "reset reports non-critical enemy strat availability warnings");
 assert.doesNotMatch(importApi, /archiveEnemyDefensesBeforeGvgReset|gvg_enemy_defense/i, "import path never feeds the bank");
 assert.match(migrationSql, /gvg_enemy_defense_processed_resets_unique/, "migration creates a processed reset unique guard");
 assert.match(migrationSql, /on conflict \(portal_guild_id, source_gvg_key\) do nothing/, "RPC is idempotent per guild/reset key");

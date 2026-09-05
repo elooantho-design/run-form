@@ -10,6 +10,7 @@ import {
 } from "./_portal-auth.js";
 import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
 import { archiveEnemyDefensesBeforeGvgReset } from "./_gvg-enemy-defense-bank.js";
+import { refreshEnemyDefenseStratAvailabilityForGuild } from "./gvg-enemy-defense-bank.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -36,6 +37,7 @@ async function logGvgReset({
   discordReproCleanup,
   recordServerReset,
   enemyDefenseArchive,
+  enemyStratAvailability,
 }) {
   const { error } = await supabase.from("portal_activity_logs").insert({
     actor_member_id: actor.memberId,
@@ -53,6 +55,7 @@ async function logGvgReset({
       discordReproCleanup,
       recordServerReset,
       enemyDefenseArchive,
+      enemyStratAvailability,
     },
   });
 
@@ -192,6 +195,20 @@ export default async function handler(req, res) {
       guild,
       defenses: defenses || [],
     });
+    let enemyStratAvailability = null;
+    let enemyStratAvailabilityWarning = null;
+
+    try {
+      enemyStratAvailability = await refreshEnemyDefenseStratAvailabilityForGuild({
+        scope: runScope,
+        targetGuildCode: guild,
+      });
+    } catch (availabilityError) {
+      console.error("[gvg-reset] enemy strat availability refresh error:", availabilityError);
+      enemyStratAvailabilityWarning =
+        availabilityError?.message || "mise a jour availability strats adverses impossible";
+    }
+
     let discordReproCleanup = null;
     let discordReproWarning = null;
 
@@ -270,6 +287,7 @@ export default async function handler(req, res) {
         discordReproCleanup,
         recordServerReset,
         enemyDefenseArchive,
+        enemyStratAvailability,
       });
     } catch (activityError) {
       console.error("[gvg-reset] activity log error:", activityError);
@@ -282,6 +300,8 @@ export default async function handler(req, res) {
       deleted_defenses: defenseIds.length,
       deleted_images: storagePaths.length,
       enemy_defense_archive: enemyDefenseArchive,
+      enemy_strat_availability: enemyStratAvailability,
+      enemy_strat_availability_warning: enemyStratAvailabilityWarning,
       discord_repro_cleanup: discordReproCleanup,
       discord_repro_warning: discordReproWarning,
       record_server_reset: recordServerReset,
