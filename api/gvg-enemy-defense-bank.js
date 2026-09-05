@@ -10,6 +10,7 @@ import {
 } from "./_portal-auth.js";
 import {
   canUseRunTargetGuild,
+  getRunScopeForGvgGuild,
   isMissingGuildCodeColumn,
   isMissingRunBoycottTable,
   resolveRunScope,
@@ -542,6 +543,58 @@ async function loadStratAvailabilityCounts(defenseRows = [], { scope, targetGuil
   return countsByDefenseId;
 }
 
+export async function refreshEnemyDefenseStratAvailabilityForGuild({ scope, targetGuildCode } = {}) {
+  const guildCode = normalizeGuild(targetGuildCode || scope?.guildCode);
+  if (!guildCode) return { ok: true, skipped: true, reason: "missing_guild" };
+
+  const portalGuild = await resolvePortalGuildForGvgGuild(supabase, guildCode);
+  if (scope && !canUseRunTargetGuild(scope, portalGuild.guild_code)) {
+    return { ok: true, skipped: true, reason: "guild_out_of_scope" };
+  }
+
+  const { data: statsRows, error: statsError } = await supabase
+    .from("gvg_enemy_defense_guild_stats")
+    .select("enemy_defense_id")
+    .eq("organization_id", portalGuild.organization_id)
+    .eq("portal_guild_id", portalGuild.id);
+
+  if (statsError) {
+    if (isEnemyDefenseBankSchemaMissing(statsError) || isEnemyDefenseLinksSchemaMissing(statsError)) {
+      return { ok: true, skipped: true, reason: "enemy_bank_schema_missing" };
+    }
+    throw statsError;
+  }
+
+  const defenseIds = [...new Set((statsRows || []).map((row) => row.enemy_defense_id).filter(Boolean))];
+  if (!defenseIds.length) return { ok: true, refreshed: 0 };
+
+  const { data: defenseRows, error: defenseError } = await supabase
+    .from("gvg_enemy_defenses")
+    .select("id, defense_fingerprint, canonical_definition, map_type, heroes_count, image_url, image_storage_path, created_at, updated_at")
+    .in("id", defenseIds);
+
+  if (defenseError) {
+    if (isEnemyDefenseBankSchemaMissing(defenseError)) {
+      return { ok: true, skipped: true, reason: "enemy_bank_schema_missing" };
+    }
+    throw defenseError;
+  }
+
+  const targetScope = getRunScopeForGvgGuild(portalGuild.guild_code);
+  const counts = await loadStratAvailabilityCounts(defenseRows || [], {
+    scope: targetScope,
+    targetGuildCode: guildCode,
+    portalGuild,
+  });
+
+  return {
+    ok: true,
+    refreshed: counts.size,
+    guildCode: portalGuild.guild_code,
+    guild_code: portalGuild.guild_code,
+  };
+}
+
 async function loadBankItems(req, res, sessionMember) {
   const { guild, runScope, portalGuild } = await resolveBankScope(req, sessionMember);
 
@@ -660,7 +713,7 @@ async function loadBankItems(req, res, sessionMember) {
 }
 
 async function loadStrats(req, res, sessionMember) {
-  const { guild, runScope, portalGuild } = await resolveBankScope(req, sessionMember, { requireSearch: true });
+  const { guild, portalGuild } = await resolveBankScope(req, sessionMember, { requireSearch: true });
   const defenseId = String(req.query?.defenseId || req.body?.defenseId || "").trim();
   if (!defenseId) return sendPortalJson(res, 400, { error: "defenseId manquant" }, req);
 
@@ -678,7 +731,7 @@ async function loadStrats(req, res, sessionMember) {
 
   const items = await searchDefenceStrict(supabase, queryItems, {
     limit: 10,
-    scope: runScope,
+    scope: getRunScopeForGvgGuild(guild),
     targetGuildCode: guild,
     mapType: normalizeGvgMapType(defense.map_type || canonicalDefinition?.map_type),
   });

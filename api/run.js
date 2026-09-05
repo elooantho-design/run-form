@@ -1,3 +1,4 @@
+/* global process */
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
@@ -14,6 +15,7 @@ import {
   stratMatchesRunReadScope,
   stratMatchesRunScope,
 } from "../src/lib/runScopeServer.js";
+import { refreshEnemyDefenseStratAvailabilityForGuild } from "./gvg-enemy-defense-bank.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -90,6 +92,18 @@ function makeMissingBoycottTableError() {
   );
   error.statusCode = 500;
   return error;
+}
+
+async function refreshEnemyBankAvailability(scope, targetGuildCode) {
+  try {
+    return await refreshEnemyDefenseStratAvailabilityForGuild({
+      scope,
+      targetGuildCode: targetGuildCode || scope?.guildCode,
+    });
+  } catch (error) {
+    console.warn("[run] enemy defense bank availability refresh skipped:", error?.message || error);
+    return { ok: false, skipped: true, error: error?.message || "refresh_failed" };
+  }
 }
 
 async function fetchBoycottedStratIds(supabaseClient, stratIds, targetGuildCode) {
@@ -429,9 +443,12 @@ async function handleAdd(req, res) {
     });
   }
 
+  const enemyBankAvailability = await refreshEnemyBankAvailability(scope, scope.guildCode);
+
   return res.status(200).json({
     ok: true,
     strat_id: stratRow.id,
+    enemy_bank_availability: enemyBankAvailability,
   });
 }
 
@@ -614,6 +631,7 @@ async function handleBoycott(req, res) {
   }
 
   const gvgStatus = await refreshGvgDefenseStatus(supabase, gvgDefenseId, boycottGuildCode);
+  const enemyBankAvailability = await refreshEnemyBankAvailability(scope, boycottGuildCode);
 
   return res.status(200).json({
     success: true,
@@ -621,6 +639,7 @@ async function handleBoycott(req, res) {
     guild_code: boycottGuildCode,
     boycott: boycott === true,
     gvg_status: gvgStatus?.status || null,
+    enemy_bank_availability: enemyBankAvailability,
   });
 }
 
@@ -700,9 +719,12 @@ async function handleUpdate(req, res) {
     return res.status(500).json({ error: "erreur insertion slots" });
   }
 
+  const enemyBankAvailability = await refreshEnemyBankAvailability(scope, existingStrat.guild_code || scope.guildCode);
+
   return res.status(200).json({
     success: true,
     strat_id,
+    enemy_bank_availability: enemyBankAvailability,
   });
 }
 
@@ -749,11 +771,16 @@ async function handleDelete(req, res) {
   const gvgStatus = targetGuild
     ? await refreshGvgDefenseStatus(supabase, gvgDefenseId, targetGuild)
     : null;
+  const enemyBankAvailability = await refreshEnemyBankAvailability(
+    scope,
+    targetGuild || existingStrat.guild_code || scope.guildCode,
+  );
 
   return res.status(200).json({
     success: true,
     strat_id,
     gvg_status: gvgStatus?.status || null,
+    enemy_bank_availability: enemyBankAvailability,
   });
 }
 

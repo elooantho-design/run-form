@@ -1,3 +1,4 @@
+/* global Buffer, process */
 import { createClient } from "@supabase/supabase-js";
 import fs from "fs";
 import path from "path";
@@ -21,6 +22,7 @@ import {
   notifyDiscordReproRequestsForDefenses,
   reopenDiscordReproRequestForDefense,
 } from "../src/lib/discordReproServer.js";
+import { refreshEnemyDefenseStratAvailabilityForGuild } from "./gvg-enemy-defense-bank.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -2224,10 +2226,22 @@ async function handlePushToBase(req, res) {
     }
   }
 
+  let enemyBankAvailability = null;
+  try {
+    enemyBankAvailability = await refreshEnemyDefenseStratAvailabilityForGuild({
+      scope: runScope,
+      targetGuildCode: normalizedGuild,
+    });
+  } catch (availabilityError) {
+    console.warn("[gvg-data:push_to_base] enemy defense bank availability refresh skipped:", availabilityError?.message || availabilityError);
+    enemyBankAvailability = { ok: false, skipped: true };
+  }
+
   return res.status(200).json({
     success: true,
     pushed: results.length,
     items: results,
+    enemy_bank_availability: enemyBankAvailability,
   });
 }
 

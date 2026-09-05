@@ -651,6 +651,8 @@ const [
   importApi,
   bankApi,
   bankHelperApi,
+  runApi,
+  gvgDataApi,
   adminDefensesApi,
   stratSearchApi,
   migrationSql,
@@ -665,6 +667,8 @@ const [
   readFile(new URL("../api/gvg-import.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-enemy-defense-bank.js", import.meta.url), "utf8"),
   readFile(new URL("../api/_gvg-enemy-defense-bank.js", import.meta.url), "utf8"),
+  readFile(new URL("../api/run.js", import.meta.url), "utf8"),
+  readFile(new URL("../api/gvg-data.js", import.meta.url), "utf8"),
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-strat-search.js", import.meta.url), "utf8"),
   readFile(new URL("../scripts/gvg_enemy_defense_bank.sql", import.meta.url), "utf8"),
@@ -717,6 +721,10 @@ assert.match(linksPreflightSql, /vps_only_no_supabase_storage/, "links preflight
 assert.match(linksVerifySql, /local_enemy_fk_on_delete/, "links verify checks non-destructive local enemy FK behavior");
 assert.match(bankApi, /detectEnemyDefenseSimilaritiesForArchive/, "bank API refreshes similarity candidates in batch");
 assert.match(bankApi, /available_strat_count/, "bank API returns cached/batch strat availability counts");
+assert.match(bankApi, /refreshEnemyDefenseStratAvailabilityForGuild/, "bank API exposes a targeted strat availability refresh");
+assert.match(bankApi, /getRunScopeForGvgGuild\(guild\)/, "bank strat lookup uses target-guild scope instead of broad admin read scope");
+assert.match(runApi, /refreshEnemyDefenseStratAvailabilityForGuild/, "run mutations refresh enemy defense strat availability");
+assert.match(gvgDataApi, /enemy defense bank availability refresh skipped/, "record push keeps availability refresh non-critical");
 assert.match(bankApi, /requiresReview/, "bank import blocks while similar local candidates are pending");
 assert.match(bankApi, /review-similarity/, "bank API exposes human similarity validation");
 assert.match(bankApi, /remove-local/, "bank API exposes non-destructive local linked defense removal");
