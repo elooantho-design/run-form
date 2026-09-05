@@ -65,6 +65,37 @@ function getEnemyRateToneClass(stat) {
   return "border-red-400/45 bg-red-500/15 text-red-100";
 }
 
+function cleanLayoutValue(value) {
+  const clean = String(value || "").trim();
+  return clean && clean !== "--" ? clean : "";
+}
+
+function getDefenseHeroRows(defense) {
+  const detailedSlots = Array.isArray(defense?.detailedSlots)
+    ? defense.detailedSlots
+    : Array.isArray(defense?.detailed_slots)
+      ? defense.detailed_slots
+      : [];
+  const fallbackSlots = Array.isArray(defense?.slots) ? defense.slots : [];
+  const rows = detailedSlots.length
+    ? detailedSlots
+    : fallbackSlots.map((champion, index) => ({ slotIndex: index + 1, champion }));
+
+  return rows
+    .map((slot, index) => ({
+      key: `${slot?.slotIndex ?? slot?.slot_index ?? index}-${slot?.champion || fallbackSlots[index] || index}`,
+      champion: cleanLayoutValue(slot?.portalName || slot?.portal_name || slot?.champion || fallbackSlots[index]),
+      position: cleanLayoutValue(slot?.position),
+      direction: cleanLayoutValue(slot?.direction),
+    }))
+    .filter((slot) => slot.champion);
+}
+
+function hasCompleteDefenseLayout(heroRows) {
+  const firstFiveSlots = heroRows.slice(0, 5);
+  return firstFiveSlots.length === 5 && firstFiveSlots.every((slot) => slot.position && slot.direction);
+}
+
 function formatEnemyHeroLine(hero, index) {
   const champion = String(hero?.champion || hero || `Hero ${index + 1}`)
     .split(/[\s_-]+/)
@@ -139,6 +170,32 @@ const getDefenseInfoBlocks = (defense) =>
 const getDefenseEnemyLinkId = (defense) =>
   defense?.sourceEnemyDefenseId || defense?.source_enemy_defense_id || "";
 
+const renderEnemyDefenseLinkBadge = (defense) => {
+  if (!getDefenseEnemyLinkId(defense)) return null;
+
+  const stat = defense.enemyStats || defense.enemy_stats || null;
+
+  return (
+    <button
+      type="button"
+      onClick={() => openEnemyHistoryModal(defense)}
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-semibold hover:bg-white/10 ${
+        stat
+          ? getEnemyRateToneClass(stat)
+          : "border-red-400/45 bg-red-500/15 text-red-100"
+      }`}
+    >
+      <Link2 className="h-3.5 w-3.5" />
+      DÉFENSE ADVERSE
+      {stat ? (
+        <span>
+          · Taux de défaite {formatEnemyPercent(stat.successRate ?? stat.success_rate)}
+        </span>
+      ) : null}
+    </button>
+  );
+};
+
 const openEnemyHistoryModal = async (defense) => {
   if (!getDefenseEnemyLinkId(defense)) return;
 
@@ -148,7 +205,7 @@ const openEnemyHistoryModal = async (defense) => {
   try {
     const data = await callPortalAdminDefenses({
       action: "enemy-history",
-      guildCode: activeGuildCode,
+      guildCode: defense.guildCode || defense.guild_code || activeGuildCode,
       defenseId: defense.id,
     });
     setEnemyHistoryModal({
@@ -663,6 +720,9 @@ const pasteImageBlockFromClipboard = async () => {
             const targetStatus = getImportTargetStatus(defense, selectedTarget);
             const importKey = `${defense.id}:${selectedTarget}`;
             const canImport = showLibrary && !migrationRequired && targetStatus === "available";
+            const heroRows = getDefenseHeroRows(defense);
+            const hasAnyLayout = heroRows.some((slot) => slot.position && slot.direction);
+            const hasCompleteLayout = hasCompleteDefenseLayout(heroRows);
 
             return (
               <div
@@ -688,25 +748,7 @@ const pasteImageBlockFromClipboard = async () => {
                           Importee depuis {defense.sourceGuildCode}
                         </span>
                       ) : null}
-                      {!showLibrary && getDefenseEnemyLinkId(defense) ? (
-                        <button
-                          type="button"
-                          onClick={() => openEnemyHistoryModal(defense)}
-                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-semibold hover:bg-white/10 ${
-                            defense.enemyStats || defense.enemy_stats
-                              ? getEnemyRateToneClass(defense.enemyStats || defense.enemy_stats)
-                              : "border-red-400/45 bg-red-500/15 text-red-100"
-                          }`}
-                        >
-                          <Link2 className="h-3.5 w-3.5" />
-                          DÉFENSE ADVERSE
-                          {defense.enemyStats || defense.enemy_stats ? (
-                            <span>
-                              · Taux de défaite {formatEnemyPercent((defense.enemyStats || defense.enemy_stats).successRate ?? (defense.enemyStats || defense.enemy_stats).success_rate)}
-                            </span>
-                          ) : null}
-                        </button>
-                      ) : null}
+                      {renderEnemyDefenseLinkBadge(defense)}
                     </div>
                     <div className="mt-1 text-xs text-zinc-300">
                       {defense.tier} · {formatDefenseTypeLabel(defense.type)}
@@ -714,9 +756,37 @@ const pasteImageBlockFromClipboard = async () => {
                   </div>
 
                   <div className="mt-3 text-sm text-zinc-200">
-                    {t("common.heroes", "Heros")} :{" "}
-                    {(defense.slots || []).filter(Boolean).join(", ") ||
-                      t("common.notFilled", "Non renseigne")}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>{t("common.heroes", "Heros")} :</span>
+                      {hasCompleteLayout ? (
+                        <span className="rounded-md border border-emerald-300/30 bg-emerald-300/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-100">
+                          LAYOUT VALIDÉ
+                        </span>
+                      ) : null}
+                    </div>
+                    {hasAnyLayout ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {heroRows.map((slot) => (
+                          <span
+                            key={slot.key}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700/70 bg-zinc-950/60 px-2 py-1 text-xs text-zinc-100"
+                          >
+                            <span className="font-medium">{slot.champion}</span>
+                            {slot.position && slot.direction ? (
+                              <span className="font-semibold text-cyan-200">
+                                {slot.position} {slot.direction}
+                              </span>
+                            ) : null}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span>
+                        {" "}
+                        {(defense.slots || []).filter(Boolean).join(", ") ||
+                          t("common.notFilled", "Non renseigne")}
+                      </span>
+                    )}
                   </div>
 
                   <div className="mt-2 text-sm text-zinc-300">

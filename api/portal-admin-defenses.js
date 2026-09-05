@@ -403,6 +403,10 @@ function mapDefenseRow(row, blocksByDefenseId = new Map()) {
       championId: slot.champion_id || null,
       champion_id: slot.champion_id || null,
       champion: slot.champions?.name || slot.champions?.portal_name || slot.champions?.english_name || "",
+      portalName: slot.champions?.portal_name || "",
+      portal_name: slot.champions?.portal_name || "",
+      englishName: slot.champions?.english_name || "",
+      english_name: slot.champions?.english_name || "",
       position: slot.position || null,
       direction: slot.direction || null,
     }));
@@ -684,12 +688,13 @@ async function loadDefenseLibraryPayload(scope, guildCode) {
   );
   const nativeDefenses = defenses.filter((defense) => !defense.sourceDefenseId && !defense.isHidden);
   const visibleDefensesWithEnemyStats = await attachEnemyStatsToDefenses(visibleDefenses, scope);
+  const nativeDefensesWithEnemyStats = await attachEnemyStatsToDefenses(nativeDefenses, scope);
 
   return {
     schemaReady,
     enemyLinksSchemaReady,
     defenses: sortDefenses(visibleDefensesWithEnemyStats),
-    libraryDefenses: buildLibraryEntries(nativeDefenses, defenses, scope, guildCode),
+    libraryDefenses: buildLibraryEntries(nativeDefensesWithEnemyStats, defenses, scope, guildCode),
   };
 }
 

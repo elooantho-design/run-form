@@ -1050,6 +1050,7 @@ const [
   linksPreflightSql,
   linksVerifySql,
   bankUi,
+  adminDefensesUi,
 ] = await Promise.all([
   readFile(new URL("../api/gvg-reset.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-import.js", import.meta.url), "utf8"),
@@ -1066,6 +1067,7 @@ const [
   readFile(new URL("../scripts/gvg_enemy_defense_links_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/gvg_enemy_defense_links_verify.sql", import.meta.url), "utf8"),
   readFile(new URL("../src/components/GvgEnemyDefenseBankTab.jsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/components/AdminDefensesTab.jsx", import.meta.url), "utf8"),
 ]);
 
 assert.match(resetApi, /archiveEnemyDefensesBeforeGvgReset/, "reset calls the enemy defense archive helper");
@@ -1123,6 +1125,11 @@ assert.match(bankApi, /review-similarity/, "bank API exposes human similarity va
 assert.match(bankApi, /remove-local/, "bank API exposes non-destructive local linked defense removal");
 assert.match(adminDefensesApi, /action === "enemy-history"/, "admin defense API exposes linked enemy history");
 assert.match(adminDefensesApi, /Taux de defaite|source_enemy_defense_id|getEnemyDefenseSuccessRate/, "admin defense API returns linked enemy defeat-rate stats without inverting the rate");
+assert.match(adminDefensesApi, /nativeDefensesWithEnemyStats/, "admin defense API attaches enemy stats to linked native library defenses");
+assert.doesNotMatch(adminDefensesUi, /!showLibrary && getDefenseEnemyLinkId/, "library defenses can show linked enemy-defense badges");
+assert.match(adminDefensesUi, /renderEnemyDefenseLinkBadge\(defense\)/, "local and library defense cards share the linked enemy badge renderer");
+assert.match(adminDefensesUi, /getDefenseHeroRows/, "defense cards can render detailed hero layout rows");
+assert.match(adminDefensesUi, /LAYOUT VALIDÉ/, "defense cards mark fully enriched five-slot layouts");
 assert.match(bankUi, /0-20 %/, "UI exposes the 0-20% filter/legend");
 assert.match(bankUi, /50-80 %/, "UI exposes the 50-80% filter/legend");
 assert.match(bankUi, /SOLIDE/, "UI labels 0-20% as SOLIDE");
