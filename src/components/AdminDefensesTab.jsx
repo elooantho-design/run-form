@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Ban, CheckCircle2, ClipboardPaste, Download, Library, Pencil, Plus, Search, Shield, ShieldAlert, Trash2 } from "lucide-react";
+import { Ban, CheckCircle2, ClipboardPaste, Download, Library, Link2, Pencil, Plus, Search, Shield, ShieldAlert, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import GvgEnemyDefenseBankTab from "@/components/GvgEnemyDefenseBankTab";
@@ -39,6 +39,43 @@ function fileToDataUrl(file) {
   });
 }
 
+function formatEnemyPercent(value) {
+  const number = Number(value) || 0;
+  return `${number.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
+}
+
+function formatEnemyDate(value) {
+  if (!value) return "Jamais";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Jamais";
+  return date.toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getEnemyRateToneClass(stat) {
+  const tone = stat?.rateTone || stat?.rate_tone;
+  if (tone === "solid") return "border-emerald-400/45 bg-emerald-500/15 text-emerald-100";
+  if (tone === "warning") return "border-yellow-400/45 bg-yellow-500/15 text-yellow-100";
+  if (tone === "danger") return "border-orange-400/45 bg-orange-500/15 text-orange-100";
+  return "border-red-400/45 bg-red-500/15 text-red-100";
+}
+
+function formatEnemyHeroLine(hero, index) {
+  const champion = String(hero?.champion || hero || `Hero ${index + 1}`)
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+  const position = hero?.position || "--";
+  const direction = hero?.direction || "--";
+  return `${champion} ${position} ${direction}`;
+}
+
 export default function AdminDefensesTab({
   defenses = [],
   libraryDefenses = [],
@@ -69,6 +106,8 @@ const [newTextBlock, setNewTextBlock] = useState("");
 const [infoBlocksByDefenseId, setInfoBlocksByDefenseId] = useState({});
 const [blockImageMessage, setBlockImageMessage] = useState("");
 const [blockImageUploading, setBlockImageUploading] = useState(false);
+const [enemyHistoryModal, setEnemyHistoryModal] = useState(null);
+const [enemyHistoryLoading, setEnemyHistoryLoading] = useState(false);
 
 const normalizeInfoBlock = (block) => ({
   ...block,
@@ -95,6 +134,41 @@ const cacheDefenseInfoBlocks = (defenseId, blocks) => {
 const getDefenseInfoBlocks = (defense) =>
   infoBlocksByDefenseId[String(defense.id)] ||
   sortInfoBlocks(defense.infoBlocks || []);
+
+const getDefenseEnemyLinkId = (defense) =>
+  defense?.sourceEnemyDefenseId || defense?.source_enemy_defense_id || "";
+
+const openEnemyHistoryModal = async (defense) => {
+  if (!getDefenseEnemyLinkId(defense)) return;
+
+  setEnemyHistoryModal({ defense, error: "", enemyDefense: null, primaryStat: defense.enemyStats || defense.enemy_stats || null, crossGuildStats: [] });
+  setEnemyHistoryLoading(true);
+
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "enemy-history",
+      guildCode: activeGuildCode,
+      defenseId: defense.id,
+    });
+    setEnemyHistoryModal({
+      defense: data.defense || defense,
+      error: "",
+      enemyDefense: data.enemyDefense || data.enemy_defense || null,
+      primaryStat: data.primaryStat || data.primary_stat || null,
+      crossGuildStats: data.crossGuildStats || data.cross_guild_stats || [],
+    });
+  } catch (error) {
+    setEnemyHistoryModal({
+      defense,
+      error: error?.message || "Historique defense adverse indisponible.",
+      enemyDefense: null,
+      primaryStat: defense.enemyStats || defense.enemy_stats || null,
+      crossGuildStats: defense.enemyCrossGuildStats || defense.enemy_cross_guild_stats || [],
+    });
+  } finally {
+    setEnemyHistoryLoading(false);
+  }
+};
 
 const openDefenseBlocksModal = async (defense) => {
   const editableDefense = onEnsureEditable ? await onEnsureEditable(defense) : defense;
@@ -613,6 +687,25 @@ const pasteImageBlockFromClipboard = async () => {
                           Importee depuis {defense.sourceGuildCode}
                         </span>
                       ) : null}
+                      {!showLibrary && getDefenseEnemyLinkId(defense) ? (
+                        <button
+                          type="button"
+                          onClick={() => openEnemyHistoryModal(defense)}
+                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-semibold hover:bg-white/10 ${
+                            defense.enemyStats || defense.enemy_stats
+                              ? getEnemyRateToneClass(defense.enemyStats || defense.enemy_stats)
+                              : "border-red-400/45 bg-red-500/15 text-red-100"
+                          }`}
+                        >
+                          <Link2 className="h-3.5 w-3.5" />
+                          DÉFENSE ADVERSE
+                          {defense.enemyStats || defense.enemy_stats ? (
+                            <span>
+                              · Taux de défaite {formatEnemyPercent((defense.enemyStats || defense.enemy_stats).successRate ?? (defense.enemyStats || defense.enemy_stats).success_rate)}
+                            </span>
+                          ) : null}
+                        </button>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-xs text-zinc-300">
                       {defense.tier} · {formatDefenseTypeLabel(defense.type)}
@@ -790,6 +883,111 @@ const pasteImageBlockFromClipboard = async () => {
         )}
       </div>
       )}
+ {enemyHistoryModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white shadow-2xl">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-lg font-bold">Défense adverse liée</div>
+          <div className="text-sm text-zinc-400">
+            {enemyHistoryModal.defense?.name || "Defense locale"}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setEnemyHistoryModal(null)}
+          className="rounded-xl border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
+        >
+          {t("common.close", "Fermer")}
+        </button>
+      </div>
+
+      {enemyHistoryModal.error ? (
+        <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {enemyHistoryModal.error}
+        </div>
+      ) : null}
+
+      {enemyHistoryLoading ? (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
+          {t("common.loading", "Chargement...")}
+        </div>
+      ) : (
+        <div className="grid min-h-0 gap-4 overflow-y-auto lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
+            <div className="mb-2 text-sm font-semibold text-zinc-100">Source adverse</div>
+            {enemyHistoryModal.enemyDefense?.imageUrl || enemyHistoryModal.enemyDefense?.image_url ? (
+              <img
+                src={enemyHistoryModal.enemyDefense.imageUrl || enemyHistoryModal.enemyDefense.image_url}
+                alt="Defense adverse"
+                className="h-52 w-full rounded-lg border border-zinc-800 object-cover"
+              />
+            ) : (
+              <div className="flex h-52 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-xs text-zinc-500">
+                Image adverse indisponible
+              </div>
+            )}
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(enemyHistoryModal.enemyDefense?.heroes || []).map((hero, index) => (
+                <span
+                  key={`${hero.champion || "hero"}-${index}`}
+                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100"
+                >
+                  {formatEnemyHeroLine(hero, index)}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {enemyHistoryModal.primaryStat ? (
+              <div className={`rounded-xl border p-4 ${getEnemyRateToneClass(enemyHistoryModal.primaryStat)}`}>
+                <div className="text-xs uppercase tracking-[0.16em] opacity-75">Taux de défaite</div>
+                <div className="mt-1 text-3xl font-bold">
+                  {formatEnemyPercent(enemyHistoryModal.primaryStat.successRate ?? enemyHistoryModal.primaryStat.success_rate)}
+                </div>
+                <div className="mt-2 text-sm">
+                  {(enemyHistoryModal.primaryStat.displayName || enemyHistoryModal.primaryStat.guildCode || "Guilde source")} ·{" "}
+                  {Number(enemyHistoryModal.primaryStat.opened) || 0}/{Number(enemyHistoryModal.primaryStat.encounters) || 0} ouvertes · derniere rencontre{" "}
+                  {formatEnemyDate(enemyHistoryModal.primaryStat.lastSeenAt || enemyHistoryModal.primaryStat.last_seen_at)}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
+                Aucune statistique disponible pour cette defense adverse.
+              </div>
+            )}
+
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4">
+              <div className="mb-3 text-sm font-semibold text-zinc-100">Stats par guilde</div>
+              {(enemyHistoryModal.crossGuildStats || []).length === 0 ? (
+                <div className="text-sm text-zinc-400">Aucune autre guilde rencontree.</div>
+              ) : (
+                <div className="grid gap-2">
+                  {(enemyHistoryModal.crossGuildStats || []).map((stat) => (
+                    <div
+                      key={`${stat.portalGuildId || stat.portal_guild_id}-${stat.guildCode || stat.guild_code}`}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm"
+                    >
+                      <span className="font-semibold text-zinc-100">
+                        {stat.displayName || stat.display_name || stat.guildCode || stat.guild_code || "Guilde"}
+                      </span>
+                      <span className="text-zinc-300">
+                        {Number(stat.opened) || 0}/{Number(stat.encounters) || 0} · {formatEnemyPercent(stat.successRate ?? stat.success_rate)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
+)}
  {blocksModalOpen && selectedDefenseForBlocks && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
     <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white">

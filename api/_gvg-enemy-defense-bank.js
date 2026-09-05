@@ -19,10 +19,11 @@ const GVG_POSITION_GRIDS = {
 };
 
 const OPENED_RECORD_STATUSES = new Set(["open", "a_record", "pas_record", "record", "push"]);
+const SIMILARITY_HERO_COUNT = 5;
 
 export function normalizeGvgMapType(mapType) {
   const value = String(mapType || "").trim().toLowerCase();
-  if (value === "fortress" || value === "bastion") return "fortress";
+  if (value === "fortress" || value === "forteresse" || value === "bastion") return "fortress";
   if (value === "tower" || value === "tour") return "tower";
   return "tower";
 }
@@ -125,6 +126,78 @@ export function createEnemyDefenseFingerprint(defense) {
   const canonicalDefinition = buildEnemyDefenseCanonicalDefinition(defense);
   if (!canonicalDefinition) return null;
   return sha256Hex(stableStringify(canonicalDefinition));
+}
+
+function readLocalDefenseSlotChampion(slot) {
+  return (
+    slot?.champions?.name ||
+    slot?.champions?.portal_name ||
+    slot?.champions?.english_name ||
+    slot?.champion ||
+    slot?.name ||
+    slot?.hero ||
+    slot
+  );
+}
+
+export function createDefenseSimilaritySignature({ mapType = "tower", heroes = [] } = {}) {
+  const normalizedMapType = normalizeGvgMapType(mapType);
+  const heroNames = (heroes || [])
+    .map((hero) => (typeof hero === "string" ? hero : hero?.champion || hero?.name || hero?.hero || readLocalDefenseSlotChampion(hero)))
+    .map(normalizeGvgChampionName)
+    .filter(Boolean)
+    .sort();
+
+  if (heroNames.length !== SIMILARITY_HERO_COUNT) return null;
+
+  return sha256Hex(
+    stableStringify({
+      version: 1,
+      map_type: normalizedMapType,
+      heroes: heroNames,
+    }),
+  );
+}
+
+export function createEnemyDefenseSimilaritySignature(defense) {
+  const definition = defense?.canonical_definition || defense?.canonicalDefinition || buildEnemyDefenseCanonicalDefinition(defense);
+  const heroes = Array.isArray(definition?.heroes) ? definition.heroes : [];
+  return createDefenseSimilaritySignature({
+    mapType: defense?.map_type || defense?.mapType || definition?.map_type,
+    heroes,
+  });
+}
+
+export function createLocalDefenseSimilaritySignature(defense) {
+  const slots = Array.isArray(defense?.guild_defense_slots) ? defense.guild_defense_slots : defense?.slots || [];
+  return createDefenseSimilaritySignature({
+    mapType: defense?.type || defense?.map_type || defense?.mapType,
+    heroes: slots.map(readLocalDefenseSlotChampion),
+  });
+}
+
+export function getEnemyDefenseHeroLayouts(defense) {
+  const definition = defense?.canonical_definition || defense?.canonicalDefinition || buildEnemyDefenseCanonicalDefinition(defense);
+  const mapType = normalizeGvgMapType(defense?.map_type || defense?.mapType || definition?.map_type);
+
+  return (Array.isArray(definition?.heroes) ? definition.heroes : [])
+    .map((hero) => ({
+      champion: normalizeGvgChampionName(hero?.champion || hero?.name || hero?.hero),
+      label: hero?.champion || hero?.name || hero?.hero || "",
+      position: normalizeGvgPosition(hero?.position || hero?.pos, mapType),
+      direction: normalizeGvgDirection(hero?.direction || hero?.dir),
+    }))
+    .filter((hero) => hero.champion);
+}
+
+export function getEnemyDefenseHeroLayoutByChampion(defense) {
+  const layoutsByChampion = new Map();
+
+  for (const layout of getEnemyDefenseHeroLayouts(defense)) {
+    if (!layoutsByChampion.has(layout.champion)) layoutsByChampion.set(layout.champion, layout);
+  }
+
+  return layoutsByChampion;
 }
 
 export function isEnemyDefenseOpened(defense) {
@@ -419,6 +492,26 @@ export function isEnemyDefenseBankSchemaMissing(error) {
   );
 }
 
+export function isEnemyDefenseLinksSchemaMissing(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    error?.code === "42883" ||
+    error?.code === "PGRST202" ||
+    error?.code === "PGRST204" ||
+    error?.code === "PGRST205" ||
+    message.includes("gvg_enemy_defense_similarity_reviews") ||
+    message.includes("gvg_enemy_defense_strat_availability") ||
+    message.includes("source_enemy_defense_id") ||
+    message.includes("source_enemy_defense_fingerprint") ||
+    message.includes("source_enemy_portal_guild_id") ||
+    message.includes("source_enemy_label") ||
+    message.includes("position") ||
+    message.includes("direction")
+  );
+}
+
 export function createBankNotInitializedError() {
   const error = new Error(GVG_ENEMY_DEFENSE_BANK_MESSAGE);
   error.statusCode = 428;
@@ -470,6 +563,162 @@ export async function resolvePortalGuildForGvgGuild(supabase, gvgGuild) {
 
 export function normalizePortalGuildLookupKey(value) {
   return normalizeGvgGuildCode(value || normalizeGuildCodeKey(value));
+}
+
+async function loadPortalGuildsByOrganization(supabase, organizationId) {
+  const { data, error } = await supabase
+    .from("portal_guilds")
+    .select("id, guild_code, display_name, organization_id, is_active")
+    .eq("organization_id", organizationId)
+    .eq("is_active", true);
+
+  if (error) throw error;
+
+  return data || [];
+}
+
+async function loadLocalDefenseSimilarityRows(supabase, organizationId) {
+  const { data, error } = await supabase
+    .from("guild_defenses")
+    .select(`
+      id,
+      name,
+      type,
+      guild_code,
+      organization_id,
+      is_hidden,
+      image_url,
+      guild_defense_slots (
+        slot_index,
+        champion_id,
+        champions (
+          id,
+          name,
+          portal_name,
+          english_name
+        )
+      )
+    `)
+    .eq("organization_id", organizationId)
+    .or("is_hidden.is.null,is_hidden.eq.false")
+    .limit(5000);
+
+  if (error) throw error;
+
+  return data || [];
+}
+
+export async function detectEnemyDefenseSimilaritiesForArchive(supabase, { organizationId, enemyDefenses = [] } = {}) {
+  const enemies = (enemyDefenses || [])
+    .filter((defense) => defense?.id)
+    .map((defense) => ({
+      ...defense,
+      similarity_signature: createEnemyDefenseSimilaritySignature(defense),
+    }))
+    .filter((defense) => defense.similarity_signature);
+
+  if (!organizationId || !enemies.length) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: !organizationId ? "missing_organization" : "no_enemy_defenses",
+      pendingCreated: 0,
+      pendingUpdated: 0,
+      candidatesScanned: 0,
+    };
+  }
+
+  const [portalGuildRows, localRows] = await Promise.all([
+    loadPortalGuildsByOrganization(supabase, organizationId),
+    loadLocalDefenseSimilarityRows(supabase, organizationId),
+  ]);
+  const portalGuildByKey = new Map(
+    portalGuildRows.map((guild) => [normalizePortalGuildLookupKey(guild.guild_code), guild]),
+  );
+  const enemiesBySignature = new Map();
+
+  for (const enemy of enemies) {
+    if (!enemiesBySignature.has(enemy.similarity_signature)) enemiesBySignature.set(enemy.similarity_signature, []);
+    enemiesBySignature.get(enemy.similarity_signature).push(enemy);
+  }
+
+  const localCandidates = localRows
+    .map((defense) => ({
+      ...defense,
+      similarity_signature: createLocalDefenseSimilaritySignature(defense),
+    }))
+    .filter((defense) => defense.similarity_signature && enemiesBySignature.has(defense.similarity_signature));
+
+  if (!localCandidates.length) {
+    return {
+      ok: true,
+      pendingCreated: 0,
+      pendingUpdated: 0,
+      candidatesScanned: 0,
+    };
+  }
+
+  const enemyIds = enemies.map((enemy) => enemy.id);
+  const localIds = localCandidates.map((defense) => defense.id).filter(Boolean);
+  const { data: existingRows, error: existingError } = await supabase
+    .from("gvg_enemy_defense_similarity_reviews")
+    .select("id, enemy_defense_id, local_defense_id, status, local_identity_signature")
+    .in("enemy_defense_id", enemyIds)
+    .in("local_defense_id", localIds);
+
+  if (existingError) throw existingError;
+
+  const existingByPair = new Map(
+    (existingRows || []).map((row) => [`${row.enemy_defense_id}:${row.local_defense_id}`, row]),
+  );
+  const rowsToUpsert = [];
+  let pendingCreated = 0;
+  let pendingUpdated = 0;
+
+  for (const localDefense of localCandidates) {
+    const matchingEnemies = enemiesBySignature.get(localDefense.similarity_signature) || [];
+    const localGuild = portalGuildByKey.get(normalizePortalGuildLookupKey(localDefense.guild_code));
+
+    for (const enemy of matchingEnemies) {
+      const pairKey = `${enemy.id}:${localDefense.id}`;
+      const existing = existingByPair.get(pairKey);
+      if (existing?.local_identity_signature === localDefense.similarity_signature) continue;
+
+      rowsToUpsert.push({
+        id: existing?.id,
+        enemy_defense_id: enemy.id,
+        local_defense_id: localDefense.id,
+        organization_id: organizationId,
+        local_portal_guild_id: localGuild?.id || null,
+        local_guild_code: localDefense.guild_code || localGuild?.guild_code || "",
+        status: "pending",
+        reviewed_by_member_id: null,
+        reviewed_by_name: null,
+        reviewed_at: null,
+        enemy_identity_signature: enemy.similarity_signature,
+        local_identity_signature: localDefense.similarity_signature,
+        updated_at: new Date().toISOString(),
+      });
+
+      if (existing) pendingUpdated += 1;
+      else pendingCreated += 1;
+    }
+  }
+
+  if (rowsToUpsert.length) {
+    const { error: upsertError } = await supabase
+      .from("gvg_enemy_defense_similarity_reviews")
+      .upsert(rowsToUpsert, { onConflict: "enemy_defense_id,local_defense_id" });
+
+    if (upsertError) throw upsertError;
+  }
+
+  return {
+    ok: true,
+    pendingCreated,
+    pendingUpdated,
+    candidatesScanned: rowsToUpsert.length,
+  };
 }
 
 export async function requestGvgVps(pathname, options = {}) {
@@ -665,6 +914,40 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
     throw createSupabaseArchiveError(error);
   }
 
+  let similarityDetection = {
+    ok: true,
+    skipped: true,
+    reason: "not_run",
+  };
+
+  try {
+    const { data: archivedDefenseRows, error: archivedDefenseError } = await supabase
+      .from("gvg_enemy_defenses")
+      .select("id, defense_fingerprint, canonical_definition, map_type")
+      .in("defense_fingerprint", fingerprints);
+
+    if (archivedDefenseError) throw archivedDefenseError;
+
+    similarityDetection = await detectEnemyDefenseSimilaritiesForArchive(supabase, {
+      organizationId: portalGuild.organization_id,
+      enemyDefenses: archivedDefenseRows || [],
+    });
+  } catch (postProcessError) {
+    similarityDetection = isEnemyDefenseLinksSchemaMissing(postProcessError)
+      ? {
+          ok: false,
+          skipped: true,
+          migrationRequired: true,
+          reason: "enemy_links_schema_missing",
+        }
+      : {
+          ok: false,
+          skipped: true,
+          reason: "post_process_failed",
+          error: postProcessError?.message || "Post-traitement defenses adverses impossible.",
+        };
+  }
+
   return {
     ...(data || {}),
     portal_guild_id: portalGuild.id,
@@ -676,5 +959,6 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
     images_archived: imagesArchived,
     skipped_invalid: aggregated.skippedInvalid,
     skipped_ally: aggregated.skippedAlly,
+    similarity_detection: similarityDetection,
   };
 }

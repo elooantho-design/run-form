@@ -9,6 +9,12 @@ import {
   validatePortalInput,
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
+import {
+  getEnemyDefenseRateTone,
+  getEnemyDefenseSuccessRate,
+  isEnemyDefenseBankSchemaMissing,
+  isEnemyDefenseLinksSchemaMissing,
+} from "./_gvg-enemy-defense-bank.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -92,6 +98,52 @@ const DEFENSE_SELECT_WITH_LIBRARY = `
     )
   )
 `;
+const DEFENSE_SELECT_WITH_ENEMY_LINKS = `
+  id,
+  name,
+  tier,
+  type,
+  faction,
+  guild_code,
+  is_global,
+  is_hidden,
+  source_defense_id,
+  source_guild_code,
+  source_defense_name,
+  imported_at,
+  organization_id,
+  source_enemy_defense_id,
+  source_enemy_defense_fingerprint,
+  source_enemy_portal_guild_id,
+  source_enemy_label,
+  source_enemy_imported_at,
+  sort_order,
+  image_url,
+  created_at,
+  guild_defense_slots (
+    slot_index,
+    champion_id,
+    position,
+    direction,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  ),
+  guild_defense_conditions (
+    id,
+    champion_id,
+    min_awakening,
+    champions (
+      id,
+      name,
+      portal_name,
+      english_name
+    )
+  )
+`;
 const CHAMPION_SAFE_SELECT = "id, name, portal_name, english_name, rarity, faction, role, lord";
 const BLOCK_SAFE_SELECT = "id, defense_id, block_type, content, sort_order";
 
@@ -112,6 +164,10 @@ function normalizeText(value) {
 
 function normalizeGuildCode(value) {
   return cleanText(value).toUpperCase().replace(/\s+/g, "_");
+}
+
+function normalizePortalGuildCodeValue(value) {
+  return cleanText(value).replace(/\s+/g, " ");
 }
 
 function isPaladinGuildCode(value) {
@@ -146,6 +202,19 @@ function isMissingGuildLibrarySchema(error) {
   );
 }
 
+function isMissingDefenseEnemyLinksSchema(error) {
+  return (
+    isEnemyDefenseLinksSchemaMissing(error) ||
+    isMissingColumn(error, "source_enemy_defense_id") ||
+    isMissingColumn(error, "source_enemy_defense_fingerprint") ||
+    isMissingColumn(error, "source_enemy_portal_guild_id") ||
+    isMissingColumn(error, "source_enemy_label") ||
+    isMissingColumn(error, "source_enemy_imported_at") ||
+    isMissingColumn(error, "position") ||
+    isMissingColumn(error, "direction")
+  );
+}
+
 function getGuildSpaceKey(value) {
   const code = normalizeGuildCode(value);
   if (!code) return "";
@@ -162,7 +231,21 @@ function sameGuildSpace(left, right) {
 }
 
 function normalizeAllowedGuildCodes(guildCodes = []) {
-  return [...new Set(guildCodes.map(normalizeGuildCode).filter(Boolean))];
+  const byKey = new Map();
+
+  guildCodes.forEach((guildCode) => {
+    const value = normalizePortalGuildCodeValue(guildCode);
+    const key = normalizeGuildCode(value || guildCode);
+    if (key && !byKey.has(key)) byKey.set(key, value || key);
+  });
+
+  return [...byKey.values()];
+}
+
+function findPortalGuildByCode(guildRows = [], guildCode) {
+  const requested = normalizeGuildCode(guildCode);
+  if (!requested) return null;
+  return (guildRows || []).find((row) => normalizeGuildCode(row?.guild_code) === requested) || null;
 }
 
 async function resolveDefenseLibraryScope(actor, requestedGuildCode) {
@@ -184,24 +267,22 @@ async function resolveDefenseLibraryScope(actor, requestedGuildCode) {
 
   if (!actor || isCommunityAccount(actor)) return fallback;
 
-  const { data: actorGuild, error: actorGuildError } = await supabase
+  const { data: portalGuildRows, error: portalGuildRowsError } = await supabase
     .from("portal_guilds")
     .select("guild_code, organization_id, is_active")
-    .eq("guild_code", normalizeGuildCode(actor.guild_code))
     .eq("is_active", true)
-    .maybeSingle();
+    .order("guild_code", { ascending: true });
 
-  if (actorGuildError) return fallback;
+  if (portalGuildRowsError) return fallback;
+
+  const actorGuild = findPortalGuildByCode(portalGuildRows || [], actor.guild_code);
   if (!actorGuild?.organization_id) return fallback;
 
-  const { data: targetGuild, error: targetGuildError } = await supabase
-    .from("portal_guilds")
-    .select("guild_code, organization_id, is_active")
-    .eq("guild_code", requested)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (targetGuildError || !targetGuild?.organization_id || targetGuild.organization_id !== actorGuild.organization_id) {
+  const targetGuild = findPortalGuildByCode(
+    (portalGuildRows || []).filter((row) => row.organization_id === actorGuild.organization_id),
+    requested,
+  );
+  if (!targetGuild?.organization_id || targetGuild.organization_id !== actorGuild.organization_id) {
     const error = new Error("Acces guilde refuse.");
     error.statusCode = 403;
     throw error;
@@ -314,10 +395,18 @@ function mapConditionRow(condition) {
 }
 
 function mapDefenseRow(row, blocksByDefenseId = new Map()) {
-  const slots = [...(row.guild_defense_slots || [])]
+  const detailedSlots = [...(row.guild_defense_slots || [])]
     .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
-    .map((slot) => slot.champions?.name || "")
-    .filter(Boolean);
+    .map((slot) => ({
+      slotIndex: slot.slot_index ?? null,
+      slot_index: slot.slot_index ?? null,
+      championId: slot.champion_id || null,
+      champion_id: slot.champion_id || null,
+      champion: slot.champions?.name || slot.champions?.portal_name || slot.champions?.english_name || "",
+      position: slot.position || null,
+      direction: slot.direction || null,
+    }));
+  const slots = detailedSlots.map((slot) => slot.champion).filter(Boolean);
 
   return {
     id: row.id,
@@ -341,11 +430,23 @@ function mapDefenseRow(row, blocksByDefenseId = new Map()) {
     originDefenseName: row.source_defense_name || row.name || "",
     organizationId: row.organization_id || "",
     organization_id: row.organization_id || "",
+    sourceEnemyDefenseId: row.source_enemy_defense_id || null,
+    source_enemy_defense_id: row.source_enemy_defense_id || null,
+    sourceEnemyDefenseFingerprint: row.source_enemy_defense_fingerprint || "",
+    source_enemy_defense_fingerprint: row.source_enemy_defense_fingerprint || "",
+    sourceEnemyPortalGuildId: row.source_enemy_portal_guild_id || null,
+    source_enemy_portal_guild_id: row.source_enemy_portal_guild_id || null,
+    sourceEnemyLabel: row.source_enemy_label || "",
+    source_enemy_label: row.source_enemy_label || "",
+    sourceEnemyImportedAt: row.source_enemy_imported_at || null,
+    source_enemy_imported_at: row.source_enemy_imported_at || null,
     importedAt: row.imported_at || null,
     imported_at: row.imported_at || null,
     sortOrder: row.sort_order ?? 9999,
     sort_order: row.sort_order ?? 9999,
     slots,
+    detailedSlots,
+    detailed_slots: detailedSlots,
     conditions: (row.guild_defense_conditions || []).map(mapConditionRow),
     infoBlocks: blocksByDefenseId.get(String(row.id)) || [],
     image: row.image_url || "",
@@ -455,12 +556,21 @@ async function loadBlocksArray(defenseId) {
 async function loadDefenseRow(defenseId) {
   const { data, error } = await supabase
     .from("guild_defenses")
+    .select(DEFENSE_SELECT_WITH_ENEMY_LINKS)
+    .eq("id", defenseId)
+    .maybeSingle();
+
+  if (!error) return { row: data || null, schemaReady: true, enemyLinksSchemaReady: true };
+  if (!isMissingDefenseEnemyLinksSchema(error) && !isMissingGuildLibrarySchema(error)) throw error;
+
+  const libraryResult = await supabase
+    .from("guild_defenses")
     .select(DEFENSE_SELECT_WITH_LIBRARY)
     .eq("id", defenseId)
     .maybeSingle();
 
-  if (!error) return { row: data || null, schemaReady: true };
-  if (!isMissingGuildLibrarySchema(error)) throw error;
+  if (!libraryResult.error) return { row: libraryResult.data || null, schemaReady: true, enemyLinksSchemaReady: false };
+  if (!isMissingGuildLibrarySchema(libraryResult.error)) throw libraryResult.error;
 
   const fallback = await supabase
     .from("guild_defenses")
@@ -469,18 +579,27 @@ async function loadDefenseRow(defenseId) {
     .maybeSingle();
 
   if (fallback.error) throw fallback.error;
-  return { row: fallback.data || null, schemaReady: false };
+  return { row: fallback.data || null, schemaReady: false, enemyLinksSchemaReady: false };
 }
 
 async function loadDefenseRows() {
   const { data, error } = await supabase
     .from("guild_defenses")
+    .select(DEFENSE_SELECT_WITH_ENEMY_LINKS)
+    .order("created_at", { ascending: true })
+    .limit(MAX_DEFENSE_ROWS);
+
+  if (!error) return { rows: data || [], schemaReady: true, enemyLinksSchemaReady: true };
+  if (!isMissingDefenseEnemyLinksSchema(error) && !isMissingGuildLibrarySchema(error)) throw error;
+
+  const libraryResult = await supabase
+    .from("guild_defenses")
     .select(DEFENSE_SELECT_WITH_LIBRARY)
     .order("created_at", { ascending: true })
     .limit(MAX_DEFENSE_ROWS);
 
-  if (!error) return { rows: data || [], schemaReady: true };
-  if (!isMissingGuildLibrarySchema(error)) throw error;
+  if (!libraryResult.error) return { rows: libraryResult.data || [], schemaReady: true, enemyLinksSchemaReady: false };
+  if (!isMissingGuildLibrarySchema(libraryResult.error)) throw libraryResult.error;
 
   const fallback = await supabase
     .from("guild_defenses")
@@ -489,7 +608,7 @@ async function loadDefenseRows() {
     .limit(MAX_DEFENSE_ROWS);
 
   if (fallback.error) throw fallback.error;
-  return { rows: fallback.data || [], schemaReady: false };
+  return { rows: fallback.data || [], schemaReady: false, enemyLinksSchemaReady: false };
 }
 
 async function hasGuildDefenseLibrarySchema() {
@@ -504,13 +623,14 @@ async function hasGuildDefenseLibrarySchema() {
 }
 
 async function loadMappedDefenseRowsInScope(scope) {
-  const { rows, schemaReady } = await loadDefenseRows();
+  const { rows, schemaReady, enemyLinksSchemaReady } = await loadDefenseRows();
   const scopedRows = rows.filter((row) => isGuildInScope(scope, row.guild_code));
   const blocksByDefenseId = await loadBlocksByDefenseIds(scopedRows.map((row) => row.id).filter(Boolean));
 
   return {
     defenses: scopedRows.map((row) => mapDefenseRow(row, blocksByDefenseId)),
     schemaReady,
+    enemyLinksSchemaReady,
   };
 }
 
@@ -557,17 +677,176 @@ function buildLibraryEntries(nativeDefenses, localDefenses, scope, activeGuildCo
 }
 
 async function loadDefenseLibraryPayload(scope, guildCode) {
-  const { defenses, schemaReady } = await loadMappedDefenseRowsInScope(scope);
+  const { defenses, schemaReady, enemyLinksSchemaReady } = await loadMappedDefenseRowsInScope(scope);
   const activeGuildKey = normalizeGuildCode(guildCode);
   const visibleDefenses = defenses.filter(
     (defense) => normalizeGuildCode(defense.guildCode) === activeGuildKey && !defense.isHidden,
   );
   const nativeDefenses = defenses.filter((defense) => !defense.sourceDefenseId && !defense.isHidden);
+  const visibleDefensesWithEnemyStats = await attachEnemyStatsToDefenses(visibleDefenses, scope);
 
   return {
     schemaReady,
-    defenses: sortDefenses(visibleDefenses),
+    enemyLinksSchemaReady,
+    defenses: sortDefenses(visibleDefensesWithEnemyStats),
     libraryDefenses: buildLibraryEntries(nativeDefenses, defenses, scope, guildCode),
+  };
+}
+
+function mapEnemyGuildStat(row, guildsById = new Map()) {
+  const encounters = Number(row?.encounters) || 0;
+  const opened = Number(row?.opened) || 0;
+  const successRate = getEnemyDefenseSuccessRate(opened, encounters);
+  const guild = guildsById.get(String(row?.portal_guild_id || ""));
+
+  return {
+    portalGuildId: row?.portal_guild_id || null,
+    portal_guild_id: row?.portal_guild_id || null,
+    guildCode: guild?.guild_code || "",
+    guild_code: guild?.guild_code || "",
+    displayName: guild?.display_name || guild?.guild_code || "",
+    display_name: guild?.display_name || guild?.guild_code || "",
+    encounters,
+    opened,
+    successRate,
+    success_rate: successRate,
+    rateTone: getEnemyDefenseRateTone(successRate),
+    rate_tone: getEnemyDefenseRateTone(successRate),
+    firstSeenAt: row?.first_seen_at || null,
+    first_seen_at: row?.first_seen_at || null,
+    lastSeenAt: row?.last_seen_at || null,
+    last_seen_at: row?.last_seen_at || null,
+  };
+}
+
+function selectPrimaryEnemyStat(stats = [], linkedDefense = {}, guildsById = new Map()) {
+  const defenseGuildKey = normalizeGuildCode(linkedDefense?.guild_code);
+  const sourceGuildId = String(linkedDefense?.source_enemy_portal_guild_id || "");
+
+  const localStat = stats.find((row) => {
+    const guild = guildsById.get(String(row?.portal_guild_id || ""));
+    return guild && normalizeGuildCode(guild.guild_code) === defenseGuildKey;
+  });
+  if (localStat) return localStat;
+
+  const sourceStat = stats.find((row) => sourceGuildId && String(row?.portal_guild_id || "") === sourceGuildId);
+  if (sourceStat) return sourceStat;
+
+  return stats[0] || null;
+}
+
+async function attachEnemyStatsToDefenses(defenses = [], scope = {}) {
+  const linkedDefenses = defenses.filter((defense) => defense.sourceEnemyDefenseId || defense.source_enemy_defense_id);
+  if (!linkedDefenses.length || !scope.organizationId) return defenses;
+
+  const enemyIds = [...new Set(linkedDefenses.map((defense) => defense.sourceEnemyDefenseId || defense.source_enemy_defense_id).filter(Boolean))];
+
+  try {
+    const [{ data: statsRows, error: statsError }, { data: guildRows, error: guildRowsError }] = await Promise.all([
+      supabase
+        .from("gvg_enemy_defense_guild_stats")
+        .select("enemy_defense_id, organization_id, portal_guild_id, encounters, opened, first_seen_at, last_seen_at, updated_at")
+        .eq("organization_id", scope.organizationId)
+        .in("enemy_defense_id", enemyIds),
+      supabase
+        .from("portal_guilds")
+        .select("id, guild_code, display_name, organization_id, is_active")
+        .eq("organization_id", scope.organizationId)
+        .eq("is_active", true),
+    ]);
+
+    if (statsError) throw statsError;
+    if (guildRowsError) throw guildRowsError;
+
+    const guildsById = new Map((guildRows || []).map((row) => [String(row.id), row]));
+    const statsByEnemyId = new Map();
+    (statsRows || []).forEach((row) => {
+      const enemyId = String(row.enemy_defense_id || "");
+      if (!statsByEnemyId.has(enemyId)) statsByEnemyId.set(enemyId, []);
+      statsByEnemyId.get(enemyId).push(row);
+    });
+
+    return defenses.map((defense) => {
+      const enemyId = String(defense.sourceEnemyDefenseId || defense.source_enemy_defense_id || "");
+      if (!enemyId) return defense;
+
+      const scopedStats = statsByEnemyId.get(enemyId) || [];
+      const primaryStat = selectPrimaryEnemyStat(scopedStats, {
+        guild_code: defense.guildCode || defense.guild_code,
+        source_enemy_portal_guild_id: defense.sourceEnemyPortalGuildId || defense.source_enemy_portal_guild_id,
+      }, guildsById);
+      const mappedPrimaryStat = primaryStat ? mapEnemyGuildStat(primaryStat, guildsById) : null;
+      const mappedCrossStats = scopedStats.map((row) => mapEnemyGuildStat(row, guildsById));
+
+      return {
+        ...defense,
+        enemyStats: mappedPrimaryStat,
+        enemy_stats: mappedPrimaryStat,
+        enemyCrossGuildStats: mappedCrossStats,
+        enemy_cross_guild_stats: mappedCrossStats,
+      };
+    });
+  } catch (error) {
+    if (isEnemyDefenseBankSchemaMissing(error) || isMissingDefenseEnemyLinksSchema(error)) return defenses;
+    throw error;
+  }
+}
+
+async function loadEnemyHistoryForLocalDefense(linkedDefense) {
+  const enemyDefenseId = linkedDefense?.source_enemy_defense_id;
+  if (!enemyDefenseId) return null;
+
+  const [
+    { data: enemyDefense, error: enemyDefenseError },
+    { data: statsRows, error: statsError },
+    { data: guildRows, error: guildRowsError },
+  ] = await Promise.all([
+    supabase
+      .from("gvg_enemy_defenses")
+      .select("id, defense_fingerprint, canonical_definition, map_type, heroes_count, image_url, image_storage_path, created_at, updated_at")
+      .eq("id", enemyDefenseId)
+      .maybeSingle(),
+    supabase
+      .from("gvg_enemy_defense_guild_stats")
+      .select("enemy_defense_id, organization_id, portal_guild_id, encounters, opened, first_seen_at, last_seen_at, updated_at")
+      .eq("organization_id", linkedDefense.organization_id)
+      .eq("enemy_defense_id", enemyDefenseId),
+    supabase
+      .from("portal_guilds")
+      .select("id, guild_code, display_name, organization_id, is_active")
+      .eq("organization_id", linkedDefense.organization_id)
+      .eq("is_active", true),
+  ]);
+
+  if (enemyDefenseError) throw enemyDefenseError;
+  if (statsError) throw statsError;
+  if (guildRowsError) throw guildRowsError;
+
+  const guildsById = new Map((guildRows || []).map((row) => [String(row.id), row]));
+  const scopedStats = (statsRows || []).filter((row) => String(row.organization_id) === String(linkedDefense.organization_id));
+  const primaryStat = selectPrimaryEnemyStat(scopedStats, linkedDefense, guildsById);
+
+  return {
+    enemyDefense: enemyDefense
+      ? {
+          id: enemyDefense.id,
+          defenseFingerprint: enemyDefense.defense_fingerprint || "",
+          defense_fingerprint: enemyDefense.defense_fingerprint || "",
+          mapType: enemyDefense.map_type || enemyDefense.canonical_definition?.map_type || "tower",
+          map_type: enemyDefense.map_type || enemyDefense.canonical_definition?.map_type || "tower",
+          heroes: Array.isArray(enemyDefense.canonical_definition?.heroes)
+            ? enemyDefense.canonical_definition.heroes
+            : [],
+          imageUrl: enemyDefense.image_url || "",
+          image_url: enemyDefense.image_url || "",
+          canonicalDefinition: enemyDefense.canonical_definition || {},
+          canonical_definition: enemyDefense.canonical_definition || {},
+        }
+      : null,
+    primaryStat: primaryStat ? mapEnemyGuildStat(primaryStat, guildsById) : null,
+    primary_stat: primaryStat ? mapEnemyGuildStat(primaryStat, guildsById) : null,
+    crossGuildStats: scopedStats.map((row) => mapEnemyGuildStat(row, guildsById)),
+    cross_guild_stats: scopedStats.map((row) => mapEnemyGuildStat(row, guildsById)),
   };
 }
 
@@ -788,8 +1067,67 @@ async function handleLoad(body, req, res) {
       (!payload.schemaReady
         ? "Migration bibliotheque defenses non executee : imports et IDs d'attribution indisponibles."
         : ""),
+    enemyLinksMigrationRequired: payload.enemyLinksSchemaReady === false,
+    enemy_links_migration_required: payload.enemyLinksSchemaReady === false,
     champions,
   });
+}
+
+async function handleEnemyHistory(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  const defenseId = validatePortalInput(body.defenseId, 80);
+  if (!defenseId) {
+    sendJson(res, 400, { error: "Defense locale requise." });
+    return;
+  }
+
+  const { row: defense, schemaReady, enemyLinksSchemaReady } = await loadDefenseRow(defenseId);
+  if (!schemaReady || !enemyLinksSchemaReady) {
+    sendJson(res, 428, { error: "Migration liaisons defenses adverses requise." });
+    return;
+  }
+  if (!defense || !canViewDefense(actor, defense, scope.activeGuildCode)) {
+    sendJson(res, 404, { error: "Defense locale introuvable." });
+    return;
+  }
+  if (!defense.source_enemy_defense_id) {
+    sendJson(res, 404, { error: "Aucune defense adverse liee a cette defense locale." });
+    return;
+  }
+
+  try {
+    const history = await loadEnemyHistoryForLocalDefense(defense);
+    if (!history?.enemyDefense) {
+      sendJson(res, 404, {
+        error: "La defense adverse saisonniere n'est plus disponible.",
+        sourceEnemyDefenseFingerprint: defense.source_enemy_defense_fingerprint || "",
+        source_enemy_defense_fingerprint: defense.source_enemy_defense_fingerprint || "",
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      defense: mapDefenseRow(defense, await loadBlocksByDefenseIds([defense.id])),
+      ...history,
+    });
+  } catch (error) {
+    if (isEnemyDefenseBankSchemaMissing(error) || isMissingDefenseEnemyLinksSchema(error)) {
+      sendJson(res, 428, { error: "Migration liaisons defenses adverses requise." });
+      return;
+    }
+    throw error;
+  }
 }
 
 async function handleEnsureLocal(body, req, res) {
@@ -958,10 +1296,12 @@ async function handleSave(body, req, res) {
   const defenseId = validatePortalInput(draft.id, 80);
   const isEditMode = defenseId && defenseId !== "0";
   let existing = null;
+  let existingLinksSchemaReady = false;
 
   if (isEditMode) {
     const existingResult = await loadDefenseRow(defenseId);
     existing = existingResult.row;
+    existingLinksSchemaReady = Boolean(existingResult.enemyLinksSchemaReady);
     if (!existing) throw new Error("Defense introuvable.");
     if (!canManageDefense(actor, existing, guildCode)) throw new Error("Acces defense refuse.");
   }
@@ -995,13 +1335,30 @@ async function handleSave(body, req, res) {
     if (deleteSlotsError) throw deleteSlotsError;
   }
 
-  const { error: slotsError } = await supabase.from("guild_defense_slots").insert(
-    slotChampions.map((champion, index) => ({
+  const existingLayoutByChampion = new Map(
+    (existing?.guild_defense_slots || []).map((slot) => [
+      normalizeText(slot.champions?.name || slot.champions?.portal_name || slot.champions?.english_name || ""),
+      {
+        position: slot.position || null,
+        direction: slot.direction || null,
+      },
+    ]),
+  );
+  const slotInsertRows = slotChampions.map((champion, index) => {
+    const row = {
       defense_id: savedDefense.id,
       champion_id: champion.id,
       slot_index: index + 1,
-    })),
-  );
+    };
+    const existingLayout = existingLayoutByChampion.get(normalizeText(champion.name));
+    if (existingLinksSchemaReady && existingLayout) {
+      row.position = existingLayout.position;
+      row.direction = existingLayout.direction;
+    }
+    return row;
+  });
+
+  const { error: slotsError } = await supabase.from("guild_defense_slots").insert(slotInsertRows);
   if (slotsError) throw slotsError;
 
   const { row: reloadedDefense } = await loadDefenseRow(savedDefense.id);
@@ -1283,6 +1640,7 @@ export default async function handler(req, res) {
     const action = cleanText(body.action);
 
     if (action === "load") return await handleLoad(body, req, res);
+    if (action === "enemy-history") return await handleEnemyHistory(body, req, res);
     if (action === "ensure-local") return await handleEnsureLocal(body, req, res);
     if (action === "upload-image") return await handleUploadImage(body, req, res);
     if (action === "import") return await handleImport(body, req, res);

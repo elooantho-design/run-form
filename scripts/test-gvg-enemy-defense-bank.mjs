@@ -8,7 +8,11 @@ import {
   aggregateEnemyDefenseOccurrences,
   buildEnemyDefenseCanonicalDefinition,
   buildSourceGvgKey,
+  createDefenseSimilaritySignature,
   createEnemyDefenseFingerprint,
+  createEnemyDefenseSimilaritySignature,
+  createLocalDefenseSimilaritySignature,
+  detectEnemyDefenseSimilaritiesForArchive,
   extractGvgVpsPreviewSourcePath,
   getEnemyDefenseRateTone,
   getEnemyDefenseSuccessRate,
@@ -101,6 +105,71 @@ assert.equal(
 assert.equal(normalizeGvgPosition("G10", "tower"), "G10", "tower positions support A1 -> G10");
 assert.equal(normalizeGvgPosition("H11", "fortress"), "H11", "fortress positions support A1 -> H11");
 assert.equal(normalizeGvgDirection("west"), "O", "west direction normalizes to the existing O convention");
+
+const fiveHeroEnemy = {
+  id: "enemy-five",
+  map_type: "tower",
+  canonical_definition: {
+    map_type: "tower",
+    heroes: [
+      { champion: "Khadgrim", position: "A5", direction: "E" },
+      { champion: "Valara", position: "B4", direction: "S" },
+      { champion: "Dame Alexandra", position: "C3", direction: "N" },
+      { champion: "Aurelius Gale", position: "D6", direction: "O" },
+      { champion: "Captain Reve", position: "E2", direction: "E" },
+    ],
+  },
+};
+const fiveHeroLocalDifferentOrder = {
+  id: "local-five",
+  type: "Tour",
+  guild_code: "G2",
+  organization_id: "org-paladin",
+  is_hidden: false,
+  guild_defense_slots: [
+    { slot_index: 3, champions: { name: "Dame Alexandra" } },
+    { slot_index: 1, champions: { name: "Khadgrim" } },
+    { slot_index: 5, champions: { name: "Captain Rêve" } },
+    { slot_index: 4, champions: { name: "Aurelius Gale" } },
+    { slot_index: 2, champions: { name: "Valara" } },
+  ],
+};
+const fiveHeroSimilarity = createEnemyDefenseSimilaritySignature(fiveHeroEnemy);
+assert.equal(typeof fiveHeroSimilarity, "string", "five hero enemy defense receives a similarity signature");
+assert.equal(
+  createLocalDefenseSimilaritySignature(fiveHeroLocalDifferentOrder),
+  fiveHeroSimilarity,
+  "similarity uses map type plus the same five heroes, independent of order and accents",
+);
+assert.equal(
+  createDefenseSimilaritySignature({ mapType: "Forteresse", heroes: fiveHeroEnemy.canonical_definition.heroes }),
+  createDefenseSimilaritySignature({ mapType: "Bastion", heroes: fiveHeroEnemy.canonical_definition.heroes }),
+  "forteresse and bastion are the same structural type",
+);
+assert.notEqual(
+  createDefenseSimilaritySignature({ mapType: "Forteresse", heroes: fiveHeroEnemy.canonical_definition.heroes }),
+  fiveHeroSimilarity,
+  "tower and fortress never match for similarity",
+);
+assert.equal(
+  createDefenseSimilaritySignature({
+    mapType: "tower",
+    heroes: fiveHeroEnemy.canonical_definition.heroes.slice(0, 4),
+  }),
+  null,
+  "similarity requires exactly five heroes",
+);
+assert.notEqual(
+  createLocalDefenseSimilaritySignature({
+    ...fiveHeroLocalDifferentOrder,
+    guild_defense_slots: [
+      ...fiveHeroLocalDifferentOrder.guild_defense_slots.slice(0, 4),
+      { slot_index: 5, champions: { name: "Volka" } },
+    ],
+  }),
+  fiveHeroSimilarity,
+  "changing one hero removes the similarity candidate",
+);
 
 const fiveOccurrences = Array.from({ length: 5 }, (_, index) => ({
   ...baseDefense,
@@ -259,6 +328,173 @@ function createArchiveSupabaseStub({ existingRows = [], rpcError = null } = {}) 
   };
 }
 
+function createSimilaritySupabaseStub({ existingReviews = [] } = {}) {
+  const calls = [];
+  const upserts = [];
+  const portalGuilds = [
+    { id: "guild-g1", organization_id: "org-paladin", guild_code: "G1", display_name: "G1", is_active: true },
+    { id: "guild-g2", organization_id: "org-paladin", guild_code: "G2", display_name: "G2", is_active: true },
+    { id: "guild-mad", organization_id: "org-mad", guild_code: "MAD G1", display_name: "Mad G1", is_active: true },
+  ];
+  const localDefenses = [
+    fiveHeroLocalDifferentOrder,
+    {
+      ...fiveHeroLocalDifferentOrder,
+      id: "local-hidden",
+      is_hidden: true,
+    },
+    {
+      ...fiveHeroLocalDifferentOrder,
+      id: "local-cross-tenant",
+      organization_id: "org-mad",
+      guild_code: "MAD G1",
+    },
+    {
+      ...fiveHeroLocalDifferentOrder,
+      id: "local-wrong-hero",
+      guild_defense_slots: [
+        ...fiveHeroLocalDifferentOrder.guild_defense_slots.slice(0, 4),
+        { slot_index: 5, champions: { name: "Volka" } },
+      ],
+    },
+  ];
+
+  return {
+    calls,
+    upserts,
+    from(table) {
+      const filters = {};
+      const query = {
+        select() {
+          return query;
+        },
+        eq(column, value) {
+          filters[column] = value;
+          return query;
+        },
+        in(column, values) {
+          filters[column] = values;
+          return query;
+        },
+        or() {
+          return query;
+        },
+        limit() {
+          return query;
+        },
+        upsert(rows, options) {
+          calls.push({ type: "upsert", table, rows, options });
+          upserts.push(...(Array.isArray(rows) ? rows : [rows]));
+          return Promise.resolve({ data: null, error: null });
+        },
+        then(resolve, reject) {
+          try {
+            return Promise.resolve(resolve(resolveQuery(table, filters)));
+          } catch (error) {
+            if (reject) return Promise.resolve(reject(error));
+            return Promise.reject(error);
+          }
+        },
+      };
+      return query;
+    },
+  };
+
+  function resolveQuery(table, filters) {
+    calls.push({ type: "select", table, filters: { ...filters } });
+
+    if (table === "portal_guilds") {
+      return {
+        data: portalGuilds.filter(
+          (guild) =>
+            (!filters.organization_id || guild.organization_id === filters.organization_id) &&
+            (filters.is_active === undefined || guild.is_active === filters.is_active),
+        ),
+        error: null,
+      };
+    }
+
+    if (table === "guild_defenses") {
+      return {
+        data: localDefenses.filter(
+          (defense) =>
+            defense.organization_id === filters.organization_id &&
+            defense.is_hidden !== true,
+        ),
+        error: null,
+      };
+    }
+
+    if (table === "gvg_enemy_defense_similarity_reviews") {
+      return { data: existingReviews, error: null };
+    }
+
+    return { data: [], error: null };
+  }
+}
+
+{
+  const supabaseStub = createSimilaritySupabaseStub();
+  const result = await detectEnemyDefenseSimilaritiesForArchive(supabaseStub, {
+    organizationId: "org-paladin",
+    enemyDefenses: [fiveHeroEnemy],
+  });
+
+  assert.equal(result.pendingCreated, 1, "one same-org local candidate creates one pending similarity review");
+  assert.equal(supabaseStub.upserts.length, 1, "similarity detection upserts only the new candidate pair");
+  assert.equal(supabaseStub.upserts[0].status, "pending", "new similarity reviews start as pending");
+  assert.equal(supabaseStub.upserts[0].local_guild_code, "G2", "candidate review keeps the local guild code");
+  assert.equal(
+    supabaseStub.calls.filter((call) => call.table === "guild_defenses").length,
+    1,
+    "similarity detection loads local defenses in one batch query",
+  );
+}
+
+{
+  const supabaseStub = createSimilaritySupabaseStub({
+    existingReviews: [
+      {
+        id: "review-existing",
+        enemy_defense_id: fiveHeroEnemy.id,
+        local_defense_id: fiveHeroLocalDifferentOrder.id,
+        status: "different",
+        local_identity_signature: fiveHeroSimilarity,
+      },
+    ],
+  });
+  const result = await detectEnemyDefenseSimilaritiesForArchive(supabaseStub, {
+    organizationId: "org-paladin",
+    enemyDefenses: [fiveHeroEnemy],
+  });
+
+  assert.equal(result.pendingCreated, 0, "reviewed pairs are not proposed again when local identity is unchanged");
+  assert.equal(result.pendingUpdated, 0, "unchanged different/identical reviews are not overwritten");
+  assert.equal(supabaseStub.upserts.length, 0, "no upsert happens for an unchanged reviewed pair");
+}
+
+{
+  const supabaseStub = createSimilaritySupabaseStub({
+    existingReviews: [
+      {
+        id: "review-obsolete",
+        enemy_defense_id: fiveHeroEnemy.id,
+        local_defense_id: fiveHeroLocalDifferentOrder.id,
+        status: "different",
+        local_identity_signature: "old-local-signature",
+      },
+    ],
+  });
+  const result = await detectEnemyDefenseSimilaritiesForArchive(supabaseStub, {
+    organizationId: "org-paladin",
+    enemyDefenses: [fiveHeroEnemy],
+  });
+
+  assert.equal(result.pendingUpdated, 1, "local identity changes invalidate the old review into a fresh pending review");
+  assert.equal(supabaseStub.upserts[0].id, "review-obsolete", "obsolete reviews are updated instead of duplicated");
+  assert.equal(supabaseStub.upserts[0].status, "pending", "obsolete reviews return to pending");
+}
+
 function getArchiveRpcCall(supabaseStub) {
   return supabaseStub.calls.find((call) => call.type === "rpc" && call.name === "archive_gvg_enemy_defense_bank");
 }
@@ -410,15 +646,33 @@ const keyOnce = buildSourceGvgKey("MAD_G1", [
 const keyTwice = buildSourceGvgKey("MAD G1", [{ id: "a" }, { id: "b" }]);
 assert.equal(keyOnce, keyTwice, "reset idempotency key is stable across MAD_G1/MAD G1 and ignores ally rows");
 
-const [resetApi, importApi, bankApi, bankHelperApi, stratSearchApi, migrationSql, preflightSql, verifySql, bankUi] = await Promise.all([
+const [
+  resetApi,
+  importApi,
+  bankApi,
+  bankHelperApi,
+  adminDefensesApi,
+  stratSearchApi,
+  migrationSql,
+  preflightSql,
+  verifySql,
+  linksMigrationSql,
+  linksPreflightSql,
+  linksVerifySql,
+  bankUi,
+] = await Promise.all([
   readFile(new URL("../api/gvg-reset.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-import.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-enemy-defense-bank.js", import.meta.url), "utf8"),
   readFile(new URL("../api/_gvg-enemy-defense-bank.js", import.meta.url), "utf8"),
+  readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-strat-search.js", import.meta.url), "utf8"),
   readFile(new URL("../scripts/gvg_enemy_defense_bank.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/gvg_enemy_defense_bank_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/gvg_enemy_defense_bank_verify.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/gvg_enemy_defense_links.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/gvg_enemy_defense_links_preflight.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/gvg_enemy_defense_links_verify.sql", import.meta.url), "utf8"),
   readFile(new URL("../src/components/GvgEnemyDefenseBankTab.jsx", import.meta.url), "utf8"),
 ]);
 
@@ -450,9 +704,33 @@ assert.match(preflightSql, /vps_image_storage_policy/, "preflight documents that
 assert.match(preflightSql, /union all/i, "preflight returns a consolidated multi-row diagnostic");
 assert.match(verifySql, /check_name[\s\S]*expected_value[\s\S]*actual_value[\s\S]*status/i, "verify returns check_name/expected/actual/status rows");
 assert.match(verifySql, /permanent_images_vps_url/, "verify checks permanent VPS image URLs");
+assert.match(linksMigrationSql, /gvg_enemy_defense_similarity_reviews/, "links migration creates the similarity review table");
+assert.match(linksMigrationSql, /gvg_enemy_defense_strat_availability/, "links migration creates the strat availability table");
+assert.match(linksMigrationSql, /references public\.gvg_enemy_defenses\(id\) on delete set null/, "local enemy links are kept non-destructive on seasonal enemy purge");
+assert.match(linksMigrationSql, /unique \(enemy_defense_id, local_defense_id\)/, "similarity reviews are unique per enemy/local pair");
+assert.match(linksMigrationSql, /check \(status in \('pending', 'identical', 'different'\)\)/, "similarity reviews track pending/identical/different statuses");
+assert.match(linksMigrationSql, /add column if not exists position text null/, "migration adds optional local slot positions");
+assert.match(linksMigrationSql, /add column if not exists direction text null/, "migration adds optional local slot directions");
+assert.doesNotMatch(linksMigrationSql, /supabase\.storage|storage bucket|create bucket/i, "links migration does not introduce Supabase Storage images");
+assert.match(linksPreflightSql, /row_estimates/, "links preflight avoids direct table counts before migration");
+assert.match(linksPreflightSql, /vps_only_no_supabase_storage/, "links preflight documents VPS-only image policy");
+assert.match(linksVerifySql, /local_enemy_fk_on_delete/, "links verify checks non-destructive local enemy FK behavior");
+assert.match(bankApi, /detectEnemyDefenseSimilaritiesForArchive/, "bank API refreshes similarity candidates in batch");
+assert.match(bankApi, /available_strat_count/, "bank API returns cached/batch strat availability counts");
+assert.match(bankApi, /requiresReview/, "bank import blocks while similar local candidates are pending");
+assert.match(bankApi, /review-similarity/, "bank API exposes human similarity validation");
+assert.match(bankApi, /remove-local/, "bank API exposes non-destructive local linked defense removal");
+assert.match(adminDefensesApi, /action === "enemy-history"/, "admin defense API exposes linked enemy history");
+assert.match(adminDefensesApi, /Taux de defaite|source_enemy_defense_id|getEnemyDefenseSuccessRate/, "admin defense API returns linked enemy defeat-rate stats without inverting the rate");
 assert.match(bankUi, /0-20 %/, "UI exposes the 0-20% filter/legend");
 assert.match(bankUi, /50-80 %/, "UI exposes the 50-80% filter/legend");
-assert.match(bankUi, /Voir les strats/, "UI exposes the existing strats lookup entry point");
-assert.match(bankUi, /Aucune strat/, "UI handles empty strat results");
+assert.match(bankUi, /SOLIDE/, "UI labels 0-20% as SOLIDE");
+assert.match(bankUi, /À SURVEILLER/, "UI labels 20-50% as À SURVEILLER");
+assert.match(bankUi, /FRAGILE/, "UI labels 50-80% as FRAGILE");
+assert.match(bankUi, /FACILE/, "UI labels 80-100% as FACILE");
+assert.match(bankUi, /Similarites detectees/, "UI exposes a clickable similarity badge");
+assert.match(bankUi, /Voir la strat/, "UI exposes the active strat lookup entry point");
+assert.match(bankUi, /Aucune strat/, "UI exposes the immediate no-strat state");
+assert.match(bankUi, /Importer/, "UI exposes enemy defense import as a separate action");
 
 console.log("gvg enemy defense bank tests passed");
