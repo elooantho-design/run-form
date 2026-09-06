@@ -57,6 +57,7 @@ function makeDefense({
   sourceEnemyDefenseId = null,
   sourceEnemyDefenseFingerprint = null,
   tier = "S",
+  type = "Tour",
   faction = "",
   layout = TEST_SIMI_LAYOUT,
   includeLayout = true,
@@ -71,7 +72,7 @@ function makeDefense({
     id,
     name,
     tier,
-    type: "Tour",
+    type,
     faction,
     guild_code: guildCode,
     organization_id: organizationId,
@@ -328,6 +329,53 @@ assert.equal(
   createLocalDefenseSimilaritySignature(rootB),
   TEST_SIMI_SIMILARITY_SIGNATURE,
   "Test simi 2 keeps the same signature with a different hero order",
+);
+const bastionSignatureA = createLocalDefenseSimilaritySignature(makeDefense({
+  id: "signature-bastion-a",
+  type: "Bastion",
+  guildCode: "G1",
+  includeLayout: false,
+}));
+const bastionSignatureB = createLocalDefenseSimilaritySignature(makeDefense({
+  id: "signature-fortress-b",
+  type: "Forteresse",
+  guildCode: "G2",
+  layout: TEST_SIMI_REORDERED_LAYOUT,
+  includeLayout: false,
+}));
+assert.equal(bastionSignatureA, bastionSignatureB, "Bastion, Forteresse and fortress normalize to the same library similarity type");
+assert.notEqual(
+  bastionSignatureA,
+  createLocalDefenseSimilaritySignature(makeDefense({
+    id: "signature-different-hero",
+    type: "Bastion",
+    guildCode: "G3",
+    layout: [
+      ["comtedracula", null, null],
+      ["brokkir", null, null],
+      ["eirlys", null, null],
+      ["oren", null, null],
+      ["volka", null, null],
+    ],
+    includeLayout: false,
+  })),
+  "changing one hero still invalidates a library similarity signature",
+);
+assert.notEqual(
+  createLocalDefenseReviewSignature(rootA),
+  createLocalDefenseReviewSignature(makeDefense({
+    id: "signature-obsolete-direction",
+    guildCode: "G1",
+    layout: [
+      ["comtedracula", "A2", "N"],
+      ["brokkir", "A5", "E"],
+      ["eirlys", "B3", "E"],
+      ["oren", "A3", "E"],
+      ["valara", "B4", "E"],
+    ],
+    includeLayout: true,
+  })),
+  "changing a validated direction still makes the review identity obsolete",
 );
 assert.equal(
   createLocalDefenseSimilaritySignature(mappedRootA),
@@ -950,6 +998,9 @@ const [
   mergeV2PreflightSql,
   mergeV2Sql,
   mergeV2VerifySql,
+  mergeV3PreflightSql,
+  mergeV3Sql,
+  mergeV3VerifySql,
 ] = await Promise.all([
   readFile(new URL("../api/_guild-defense-library-equivalence.js", import.meta.url), "utf8"),
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
@@ -963,6 +1014,9 @@ const [
   readFile(new URL("../scripts/guild_defense_library_merge_v2_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge_v2.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge_v2_verify.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v3_preflight.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v3.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v3_verify.sql", import.meta.url), "utf8"),
 ]);
 
 assert.match(helperSource, /guild_defense_library_similarity_reviews/, "helper uses a dedicated library equivalence review table");
@@ -1014,5 +1068,18 @@ assert.match(mergeV2Sql, /if not v_absorbed_root_handled then[\s\S]*guild_defens
 assert.match(mergeV2Sql, /v_absorbed_root_preserved := true[\s\S]*v_root_reference_result := jsonb_build_object\([\s\S]*absorbed_root_preserved_as_local_copy/, "merge V2 skips root reference repointing when the absorbed root is kept as local copy");
 assert.match(mergeV2VerifySql, /active_absorbed_rows_still_native_after_merge/, "merge V2 verify detects absorbed roots that incorrectly remain native");
 assert.match(mergeV2VerifySql, /active_absorbed_rows_with_wrong_source_after_merge/, "merge V2 verify audits converted absorbed roots");
+assert.match(mergeV3PreflightSql, /read-only/i, "merge V3 preflight is explicitly read-only");
+assert.match(mergeV3PreflightSql, /review_similarity_signatures_are_sha256/, "merge V3 preflight verifies review signatures are stored as JS SHA-256 hashes");
+assert.match(mergeV3Sql, /guild_defense_library_js_sha256/, "merge V3 computes SQL signatures as SHA-256 like the JS matcher");
+assert.match(mergeV3Sql, /guild_defense_library_js_map_type/, "merge V3 centralizes JS-compatible map type normalization");
+assert.match(mergeV3Sql, /'fortress', 'forteresse', 'bastion'/, "merge V3 keeps fortress, forteresse and bastion equivalent");
+assert.match(mergeV3Sql, /'comtedracula', 'countdracula'/, "merge V3 keeps the Count Dracula alias used by JS");
+assert.match(mergeV3Sql, /'capitainereve', 'captainreve'/, "merge V3 keeps the Captain Reve alias used by JS");
+assert.match(mergeV3Sql, /create or replace function public\.guild_defense_library_review_signature/, "merge V3 adds a SQL review identity signature with layout fields");
+assert.doesNotMatch(mergeV3Sql, /champion_id::text/, "merge V3 signatures use JS champion names instead of old champion_id text signatures");
+assert.match(mergeV3Sql, /coalesce\(to_json\(slots\.direction\)::text, 'null'\)/, "merge V3 identity signatures preserve null directions like JS");
+assert.match(mergeV3Sql, /coalesce\(to_json\(slots\.position\)::text, 'null'\)/, "merge V3 identity signatures preserve null positions like JS");
+assert.match(mergeV3VerifySql, /identical_reviews_similarity_mismatch/, "merge V3 verify detects false or stale similarity mismatches");
+assert.match(mergeV3VerifySql, /identical_reviews_identity_mismatch/, "merge V3 verify detects genuinely obsolete identical reviews");
 
 console.log("Guild defense library equivalence tests passed");
