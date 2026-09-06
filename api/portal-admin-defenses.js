@@ -15,6 +15,16 @@ import {
   isEnemyDefenseBankSchemaMissing,
   isEnemyDefenseLinksSchemaMissing,
 } from "./_gvg-enemy-defense-bank.js";
+import {
+  GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE,
+  buildLibraryEquivalenceState,
+  detectLibraryDefenseSimilarities,
+  getEquivalentImportTargetStatus,
+  isLibraryEquivalenceSchemaMissing,
+  loadLibrarySimilarityCandidates,
+  loadLibrarySimilarityReviews,
+  markLibrarySimilarityReview,
+} from "./_guild-defense-library-equivalence.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -638,7 +648,7 @@ async function loadMappedDefenseRowsInScope(scope) {
   };
 }
 
-function buildLibraryEntries(nativeDefenses, localDefenses, scope, activeGuildCode) {
+function buildLibraryEntries(nativeDefenses, localDefenses, scope, activeGuildCode, equivalenceState = null) {
   const activeGuildKey = normalizeGuildCode(activeGuildCode);
   const activeSourceIds = new Set(
     localDefenses
@@ -655,26 +665,40 @@ function buildLibraryEntries(nativeDefenses, localDefenses, scope, activeGuildCo
     const sourceId = String(defense.id || "");
     const sourceGuildKey = normalizeGuildCode(defense.guildCode);
     const importTargets = (scope.manageableGuildCodes || []).map((guildCode) => {
-      const guildKey = normalizeGuildCode(guildCode);
-      const nativeInGuild = guildKey === sourceGuildKey;
-      const importedInGuild = localDefenses.some(
-        (candidate) =>
-          String(candidate.sourceDefenseId || "") === sourceId &&
-          normalizeGuildCode(candidate.guildCode) === guildKey &&
-          !candidate.isHidden,
-      );
+      const target = getEquivalentImportTargetStatus(defense, guildCode, localDefenses, equivalenceState);
 
       return {
         guildCode,
-        status: nativeInGuild ? "native" : importedInGuild ? "imported" : "available",
+        status: target.status,
+        viaDefenseId: target.viaDefenseId || null,
+        via_defense_id: target.viaDefenseId || null,
+        viaDefenseName: target.viaDefenseName || "",
+        via_defense_name: target.viaDefenseName || "",
       };
     });
+    const activeTarget = getEquivalentImportTargetStatus(defense, activeGuildCode, localDefenses, equivalenceState);
+    const state = equivalenceState?.byDefenseId?.get(sourceId) || {};
 
     return {
       ...defense,
       originGuildCode: defense.guildCode,
       libraryTargetStatus:
-        sourceGuildKey === activeGuildKey ? "native" : activeSourceIds.has(sourceId) ? "imported" : "available",
+        activeTarget.status ||
+        (sourceGuildKey === activeGuildKey ? "native" : activeSourceIds.has(sourceId) ? "imported" : "available"),
+      libraryTargetViaDefenseId: activeTarget.viaDefenseId || null,
+      library_target_via_defense_id: activeTarget.viaDefenseId || null,
+      libraryTargetViaDefenseName: activeTarget.viaDefenseName || "",
+      library_target_via_defense_name: activeTarget.viaDefenseName || "",
+      librarySimilarityPendingCount: state.pendingCount || state.pending_count || 0,
+      library_similarity_pending_count: state.pendingCount || state.pending_count || 0,
+      libraryEquivalenceCount: state.equivalenceCount || state.equivalence_count || 0,
+      library_equivalence_count: state.equivalenceCount || state.equivalence_count || 0,
+      equivalentDefenses: state.equivalentDefenses || state.equivalent_defenses || [],
+      equivalent_defenses: state.equivalentDefenses || state.equivalent_defenses || [],
+      familyRootIds: state.familyRootIds || state.family_root_ids || [sourceId],
+      family_root_ids: state.familyRootIds || state.family_root_ids || [sourceId],
+      presentGuilds: state.presentGuilds || state.present_guilds || [],
+      present_guilds: state.presentGuilds || state.present_guilds || [],
       importTargets,
     };
   });
@@ -689,12 +713,25 @@ async function loadDefenseLibraryPayload(scope, guildCode) {
   const nativeDefenses = defenses.filter((defense) => !defense.sourceDefenseId && !defense.isHidden);
   const visibleDefensesWithEnemyStats = await attachEnemyStatsToDefenses(visibleDefenses, scope);
   const nativeDefensesWithEnemyStats = await attachEnemyStatsToDefenses(nativeDefenses, scope);
+  let libraryEquivalenceSchemaReady = true;
+  let equivalenceState = null;
+
+  if (scope.organizationId) {
+    try {
+      const reviews = await loadLibrarySimilarityReviews(supabase, scope.organizationId);
+      equivalenceState = buildLibraryEquivalenceState(defenses, reviews);
+    } catch (error) {
+      if (!isLibraryEquivalenceSchemaMissing(error)) throw error;
+      libraryEquivalenceSchemaReady = false;
+    }
+  }
 
   return {
     schemaReady,
     enemyLinksSchemaReady,
+    libraryEquivalenceSchemaReady,
     defenses: sortDefenses(visibleDefensesWithEnemyStats),
-    libraryDefenses: buildLibraryEntries(nativeDefensesWithEnemyStats, defenses, scope, guildCode),
+    libraryDefenses: buildLibraryEntries(nativeDefensesWithEnemyStats, defenses, scope, guildCode, equivalenceState),
   };
 }
 
@@ -1074,6 +1111,8 @@ async function handleLoad(body, req, res) {
         : ""),
     enemyLinksMigrationRequired: payload.enemyLinksSchemaReady === false,
     enemy_links_migration_required: payload.enemyLinksSchemaReady === false,
+    libraryEquivalenceMigrationRequired: payload.libraryEquivalenceSchemaReady === false,
+    library_equivalence_migration_required: payload.libraryEquivalenceSchemaReady === false,
     champions,
   });
 }
@@ -1129,6 +1168,203 @@ async function handleEnemyHistory(body, req, res) {
   } catch (error) {
     if (isEnemyDefenseBankSchemaMissing(error) || isMissingDefenseEnemyLinksSchema(error)) {
       sendJson(res, 428, { error: "Migration liaisons defenses adverses requise." });
+      return;
+    }
+    throw error;
+  }
+}
+
+function canViewLibraryDefenseInScope(scope, defense) {
+  return Boolean(
+    defense?.id &&
+      !defense.is_hidden &&
+      !defense.source_defense_id &&
+      isGuildInScope(scope, defense.guild_code),
+  );
+}
+
+function mapLibrarySimilarityReview(review) {
+  return {
+    id: review?.id || "",
+    organizationId: review?.organization_id || "",
+    organization_id: review?.organization_id || "",
+    leftDefenseId: review?.left_defense_id || "",
+    left_defense_id: review?.left_defense_id || "",
+    rightDefenseId: review?.right_defense_id || "",
+    right_defense_id: review?.right_defense_id || "",
+    status: review?.status || "pending",
+    reviewedByName: review?.reviewed_by_name || "",
+    reviewed_by_name: review?.reviewed_by_name || "",
+    reviewedAt: review?.reviewed_at || null,
+    reviewed_at: review?.reviewed_at || null,
+  };
+}
+
+async function handleLibrarySimilarities(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  const defenseId = validatePortalInput(body.defenseId, 80);
+  if (!defenseId) {
+    sendJson(res, 400, { error: "Defense bibliotheque requise." });
+    return;
+  }
+
+  const { row: defense, schemaReady } = await loadDefenseRow(defenseId);
+  if (!schemaReady) {
+    sendJson(res, 428, { error: "Migration bibliotheque defenses requise." });
+    return;
+  }
+  if (!canViewLibraryDefenseInScope(scope, defense)) {
+    sendJson(res, 404, { error: "Defense bibliotheque introuvable." });
+    return;
+  }
+
+  try {
+    await detectLibraryDefenseSimilarities(supabase, {
+      organizationId: scope.organizationId,
+      rootDefenseIds: [defenseId],
+    });
+    const { candidates, rootId } = await loadLibrarySimilarityCandidates(supabase, {
+      organizationId: scope.organizationId,
+      defenseId,
+    });
+    const blocksByDefenseId = await loadBlocksByDefenseIds(
+      candidates
+        .flatMap((candidate) => [candidate.leftDefense?.id, candidate.rightDefense?.id])
+        .filter(Boolean),
+    );
+
+    sendJson(res, 200, {
+      ok: true,
+      defenseId: rootId,
+      defense_id: rootId,
+      candidates: candidates.map((candidate) => ({
+        review: mapLibrarySimilarityReview(candidate.review),
+        leftDefense: mapDefenseRow(candidate.leftDefense, blocksByDefenseId),
+        left_defense: mapDefenseRow(candidate.leftDefense, blocksByDefenseId),
+        rightDefense: mapDefenseRow(candidate.rightDefense, blocksByDefenseId),
+        right_defense: mapDefenseRow(candidate.rightDefense, blocksByDefenseId),
+      })),
+    });
+  } catch (error) {
+    if (isLibraryEquivalenceSchemaMissing(error)) {
+      sendJson(res, 428, { error: GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function handleLibraryEquivalenceDetails(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  const defenseId = validatePortalInput(body.defenseId, 80);
+  if (!defenseId) {
+    sendJson(res, 400, { error: "Defense bibliotheque requise." });
+    return;
+  }
+
+  try {
+    const { defenses } = await loadMappedDefenseRowsInScope(scope);
+    const reviews = await loadLibrarySimilarityReviews(supabase, scope.organizationId);
+    const state = buildLibraryEquivalenceState(defenses, reviews);
+    const family = state.byDefenseId.get(String(defenseId));
+    if (!family) {
+      sendJson(res, 404, { error: "Famille bibliotheque introuvable." });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      defenseId,
+      defense_id: defenseId,
+      familyRootIds: family.familyRootIds || family.family_root_ids || [],
+      family_root_ids: family.familyRootIds || family.family_root_ids || [],
+      equivalentDefenses: family.equivalentDefenses || family.equivalent_defenses || [],
+      equivalent_defenses: family.equivalentDefenses || family.equivalent_defenses || [],
+      presentGuilds: family.presentGuilds || family.present_guilds || [],
+      present_guilds: family.presentGuilds || family.present_guilds || [],
+    });
+  } catch (error) {
+    if (isLibraryEquivalenceSchemaMissing(error)) {
+      sendJson(res, 428, { error: GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function handleLibrarySimilarityReview(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  try {
+    const result = await markLibrarySimilarityReview(supabase, {
+      organizationId: scope.organizationId,
+      reviewId: validatePortalInput(body.reviewId || body.review_id, 80),
+      status: validatePortalInput(body.status, 40),
+      reviewer: {
+        memberId: actor.id || null,
+        name: actor.watcher_name || actor.display_name || actor.name || "",
+      },
+    });
+    sendJson(res, 200, result);
+  } catch (error) {
+    if (isLibraryEquivalenceSchemaMissing(error)) {
+      sendJson(res, 428, { error: GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE });
+      return;
+    }
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Validation similarite bibliotheque impossible." });
+  }
+}
+
+async function handleLibrarySimilarityRecalculate(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  try {
+    const result = await detectLibraryDefenseSimilarities(supabase, {
+      organizationId: scope.organizationId,
+      rootDefenseIds: validatePortalInput(body.defenseId, 80) ? [validatePortalInput(body.defenseId, 80)] : [],
+    });
+    sendJson(res, 200, result);
+  } catch (error) {
+    if (isLibraryEquivalenceSchemaMissing(error)) {
+      sendJson(res, 428, { error: GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE });
       return;
     }
     throw error;
@@ -1227,6 +1463,33 @@ async function handleImport(body, req, res) {
   if (normalizeGuildCode(source.guild_code) === normalizeGuildCode(targetGuildCode)) {
     sendJson(res, 409, { error: `Cette defense est deja native dans ${targetGuildCode}.` });
     return;
+  }
+
+  try {
+    const { defenses: scopedDefenses } = await loadMappedDefenseRowsInScope(scope);
+    const reviews = await loadLibrarySimilarityReviews(supabase, scope.organizationId);
+    const equivalenceState = buildLibraryEquivalenceState(scopedDefenses, reviews);
+    const mappedSource = scopedDefenses.find((defense) => String(defense.id) === String(source.id)) || mapDefenseRow(source);
+    const targetStatus = getEquivalentImportTargetStatus(mappedSource, targetGuildCode, scopedDefenses, equivalenceState);
+
+    if (targetStatus.status !== "available") {
+      const viaLabel = targetStatus.viaDefenseName ? ` via ${targetStatus.viaDefenseName}` : "";
+      sendJson(res, 409, {
+        ok: false,
+        alreadyPresent: true,
+        already_present: true,
+        equivalentPresent: targetStatus.status.startsWith("equivalent"),
+        equivalent_present: targetStatus.status.startsWith("equivalent"),
+        viaDefenseId: targetStatus.viaDefenseId || null,
+        via_defense_id: targetStatus.viaDefenseId || null,
+        viaDefenseName: targetStatus.viaDefenseName || "",
+        via_defense_name: targetStatus.viaDefenseName || "",
+        error: `Cette defense est deja presente dans ${targetGuildCode}${viaLabel}.`,
+      });
+      return;
+    }
+  } catch (error) {
+    if (!isLibraryEquivalenceSchemaMissing(error)) throw error;
   }
 
   const { data: existingImport, error: existingImportError } = await supabase
@@ -1365,6 +1628,17 @@ async function handleSave(body, req, res) {
 
   const { error: slotsError } = await supabase.from("guild_defense_slots").insert(slotInsertRows);
   if (slotsError) throw slotsError;
+
+  if (scope.organizationId) {
+    try {
+      await detectLibraryDefenseSimilarities(supabase, {
+        organizationId: scope.organizationId,
+        rootDefenseIds: [savedDefense.id],
+      });
+    } catch (error) {
+      if (!isLibraryEquivalenceSchemaMissing(error)) throw error;
+    }
+  }
 
   const { row: reloadedDefense } = await loadDefenseRow(savedDefense.id);
   sendJson(res, 200, {
@@ -1646,6 +1920,10 @@ export default async function handler(req, res) {
 
     if (action === "load") return await handleLoad(body, req, res);
     if (action === "enemy-history") return await handleEnemyHistory(body, req, res);
+    if (action === "library-similarities") return await handleLibrarySimilarities(body, req, res);
+    if (action === "library-equivalence-details") return await handleLibraryEquivalenceDetails(body, req, res);
+    if (action === "library-review") return await handleLibrarySimilarityReview(body, req, res);
+    if (action === "library-recalculate") return await handleLibrarySimilarityRecalculate(body, req, res);
     if (action === "ensure-local") return await handleEnsureLocal(body, req, res);
     if (action === "upload-image") return await handleUploadImage(body, req, res);
     if (action === "import") return await handleImport(body, req, res);

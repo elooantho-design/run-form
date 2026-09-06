@@ -4942,6 +4942,7 @@ function PortalAdminDefensesView({ session }) {
   const [errorMessage, setErrorMessage] = useState("");
   const [migrationMessage, setMigrationMessage] = useState("");
   const [migrationRequired, setMigrationRequired] = useState(false);
+  const [libraryEquivalenceMigrationRequired, setLibraryEquivalenceMigrationRequired] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [draftOpen, setDraftOpen] = useState(false);
   const [draft, setDraft] = useState(emptyPortalDefenseDraft);
@@ -5021,6 +5022,7 @@ function PortalAdminDefensesView({ session }) {
           sameGuildCodeList(previous, nextManageableGuilds) ? previous : nextManageableGuilds
         );
         setMigrationRequired(Boolean(data.migrationRequired));
+        setLibraryEquivalenceMigrationRequired(Boolean(data.libraryEquivalenceMigrationRequired || data.library_equivalence_migration_required));
         setMigrationMessage(data.migrationMessage || "");
         setChampions(data.champions || []);
       } catch (error) {
@@ -5030,6 +5032,7 @@ function PortalAdminDefensesView({ session }) {
         setLibraryDefenses([]);
         setChampions([]);
         setMigrationRequired(false);
+        setLibraryEquivalenceMigrationRequired(false);
         setMigrationMessage("");
         setErrorMessage(error?.message || "Impossible de charger les defenses admin pour le moment.");
       } finally {
@@ -5583,6 +5586,7 @@ function PortalAdminDefensesView({ session }) {
           activeGuildCode={activeGuildCode}
           manageableGuildCodes={manageableDefenseGuildCodes}
           migrationRequired={migrationRequired}
+          libraryEquivalenceMigrationRequired={libraryEquivalenceMigrationRequired}
           onAdd={openAddDefense}
           onEdit={openEditDefense}
           onDelete={deleteDefense}

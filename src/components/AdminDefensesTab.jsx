@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Ban, CheckCircle2, ClipboardPaste, Download, Library, Link2, Pencil, Plus, Search, Shield, ShieldAlert, Trash2 } from "lucide-react";
+import { Ban, CheckCircle2, ClipboardPaste, Download, GitCompareArrows, Library, Link2, Maximize2, Pencil, Plus, RefreshCw, Search, Shield, ShieldAlert, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import GvgEnemyDefenseBankTab from "@/components/GvgEnemyDefenseBankTab";
@@ -113,6 +113,7 @@ export default function AdminDefensesTab({
   activeGuildCode = "",
   manageableGuildCodes = [],
   migrationRequired = false,
+  libraryEquivalenceMigrationRequired = false,
   onEdit,
   onDelete,
   onAdd,
@@ -140,6 +141,11 @@ const [blockImageMessage, setBlockImageMessage] = useState("");
 const [blockImageUploading, setBlockImageUploading] = useState(false);
 const [enemyHistoryModal, setEnemyHistoryModal] = useState(null);
 const [enemyHistoryLoading, setEnemyHistoryLoading] = useState(false);
+const [librarySimilarityModal, setLibrarySimilarityModal] = useState(null);
+const [librarySimilarityLoading, setLibrarySimilarityLoading] = useState(false);
+const [libraryReviewingId, setLibraryReviewingId] = useState("");
+const [libraryRecalculateLoading, setLibraryRecalculateLoading] = useState(false);
+const [imagePreview, setImagePreview] = useState(null);
 
 const normalizeInfoBlock = (block) => ({
   ...block,
@@ -169,6 +175,23 @@ const getDefenseInfoBlocks = (defense) =>
 
 const getDefenseEnemyLinkId = (defense) =>
   defense?.sourceEnemyDefenseId || defense?.source_enemy_defense_id || "";
+
+const getLibraryPendingCount = (defense) =>
+  Number(defense?.librarySimilarityPendingCount ?? defense?.library_similarity_pending_count) || 0;
+
+const getLibraryEquivalenceCount = (defense) =>
+  Number(defense?.libraryEquivalenceCount ?? defense?.library_equivalence_count) || 0;
+
+const getLibraryPresentGuilds = (defense) =>
+  defense?.presentGuilds || defense?.present_guilds || [];
+
+const getLibraryEquivalentDefenses = (defense) =>
+  defense?.equivalentDefenses || defense?.equivalent_defenses || [];
+
+const getImportTargetDetail = (defense, targetGuildCode) =>
+  (defense?.importTargets || []).find(
+    (entry) => normalizeGuildCodeKey(entry.guildCode || entry.guild_code) === normalizeGuildCodeKey(targetGuildCode)
+  ) || null;
 
 const renderEnemyDefenseLinkBadge = (defense) => {
   if (!getDefenseEnemyLinkId(defense)) return null;
@@ -225,6 +248,135 @@ const openEnemyHistoryModal = async (defense) => {
     });
   } finally {
     setEnemyHistoryLoading(false);
+  }
+};
+
+const openImagePreview = (src, title = "Defense") => {
+  if (!src) return;
+  setImagePreview({ src, title });
+};
+
+const openLibrarySimilaritiesModal = async (defense) => {
+  if (libraryEquivalenceMigrationRequired) return;
+
+  setLibrarySimilarityModal({
+    mode: "pending",
+    defense,
+    candidates: [],
+    equivalents: [],
+    presentGuilds: getLibraryPresentGuilds(defense),
+    error: "",
+  });
+  setLibrarySimilarityLoading(true);
+
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "library-similarities",
+      guildCode: activeGuildCode,
+      defenseId: defense.id,
+    });
+    setLibrarySimilarityModal({
+      mode: "pending",
+      defense,
+      candidates: data.candidates || [],
+      equivalents: [],
+      presentGuilds: getLibraryPresentGuilds(defense),
+      error: "",
+    });
+  } catch (error) {
+    setLibrarySimilarityModal({
+      mode: "pending",
+      defense,
+      candidates: [],
+      equivalents: [],
+      presentGuilds: getLibraryPresentGuilds(defense),
+      error: error?.message || "Similarites bibliotheque indisponibles.",
+    });
+  } finally {
+    setLibrarySimilarityLoading(false);
+  }
+};
+
+const openLibraryEquivalenceDetailsModal = async (defense) => {
+  setLibrarySimilarityModal({
+    mode: "equivalents",
+    defense,
+    candidates: [],
+    equivalents: getLibraryEquivalentDefenses(defense),
+    presentGuilds: getLibraryPresentGuilds(defense),
+    error: "",
+  });
+  setLibrarySimilarityLoading(true);
+
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "library-equivalence-details",
+      guildCode: activeGuildCode,
+      defenseId: defense.id,
+    });
+    setLibrarySimilarityModal({
+      mode: "equivalents",
+      defense,
+      candidates: [],
+      equivalents: data.equivalentDefenses || data.equivalent_defenses || [],
+      presentGuilds: data.presentGuilds || data.present_guilds || [],
+      error: "",
+    });
+  } catch (error) {
+    setLibrarySimilarityModal({
+      mode: "equivalents",
+      defense,
+      candidates: [],
+      equivalents: getLibraryEquivalentDefenses(defense),
+      presentGuilds: getLibraryPresentGuilds(defense),
+      error: error?.message || "Equivalences bibliotheque indisponibles.",
+    });
+  } finally {
+    setLibrarySimilarityLoading(false);
+  }
+};
+
+const reviewLibrarySimilarity = async (candidate, status) => {
+  const reviewId = candidate?.review?.id || candidate?.review_id;
+  if (!reviewId) return;
+
+  setLibraryReviewingId(reviewId);
+  try {
+    await callPortalAdminDefenses({
+      action: "library-review",
+      guildCode: activeGuildCode,
+      reviewId,
+      status,
+    });
+    setLibrarySimilarityModal((previous) => previous ? {
+      ...previous,
+      candidates: (previous.candidates || []).filter((item) => (item.review?.id || item.review_id) !== reviewId),
+    } : previous);
+    onDataChanged?.();
+  } catch (error) {
+    setLibrarySimilarityModal((previous) => previous ? {
+      ...previous,
+      error: error?.message || "Validation similarite bibliotheque impossible.",
+    } : previous);
+  } finally {
+    setLibraryReviewingId("");
+  }
+};
+
+const recalculateLibrarySimilarities = async () => {
+  if (libraryEquivalenceMigrationRequired) return;
+
+  setLibraryRecalculateLoading(true);
+  try {
+    await callPortalAdminDefenses({
+      action: "library-recalculate",
+      guildCode: activeGuildCode,
+    });
+    onDataChanged?.();
+  } catch (error) {
+    console.error("Erreur recalcul similarites bibliotheque:", error);
+  } finally {
+    setLibraryRecalculateLoading(false);
   }
 };
 
@@ -331,6 +483,8 @@ const openDefenseBlocksModal = async (defense) => {
 
   const getImportActionLabel = (status, targetGuildCode) => {
     if (status === "native") return `Deja dans ${targetGuildCode}`;
+    if (status === "equivalent-native") return `Deja presente dans ${targetGuildCode}`;
+    if (status === "equivalent-imported") return `Deja presente dans ${targetGuildCode}`;
     if (status === "imported") return `Deja importee dans ${targetGuildCode}`;
     return t("adminDefenses.import", "Importer");
   };
@@ -572,6 +726,60 @@ const pasteImageBlockFromClipboard = async () => {
   }
 };
 
+const renderLibraryDefensePanel = (defense, title) => {
+  const heroRows = getDefenseHeroRows(defense);
+  const hasAnyLayout = heroRows.some((slot) => slot.position && slot.direction);
+  const imageSrc = defense?.image || defense?.image_url || defense?.imageUrl || "";
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
+      <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">{title}</div>
+      <div className="mt-1 text-base font-semibold text-zinc-50">{defense?.name || "Defense"}</div>
+      <div className="mt-1 text-xs text-zinc-400">
+        {(defense?.guildCode || defense?.guild_code || "-")} · {formatDefenseTypeLabel(defense?.type)}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => openImagePreview(imageSrc, defense?.name || "Defense")}
+        disabled={!imageSrc}
+        className="group mt-3 flex h-44 w-full items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 text-xs text-zinc-500 disabled:cursor-not-allowed"
+      >
+        {imageSrc ? (
+          <span className="relative h-full w-full">
+            <img
+              src={imageSrc}
+              alt={defense?.name || "Defense"}
+              className="h-full w-full object-cover"
+            />
+            <span className="absolute right-2 top-2 rounded-lg border border-zinc-700 bg-black/70 p-1 text-zinc-100 opacity-0 transition group-hover:opacity-100">
+              <Maximize2 className="h-3.5 w-3.5" />
+            </span>
+          </span>
+        ) : (
+          t("common.noImage", "Aucune image")
+        )}
+      </button>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {heroRows.map((slot) => (
+          <span
+            key={slot.key}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700/70 bg-zinc-950/60 px-2 py-1 text-xs text-zinc-100"
+          >
+            <span className="font-medium">{slot.champion}</span>
+            {hasAnyLayout && slot.position && slot.direction ? (
+              <span className="font-semibold text-cyan-200">
+                {slot.position} {slot.direction}
+              </span>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+};
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between gap-3">
@@ -659,6 +867,18 @@ const pasteImageBlockFromClipboard = async () => {
           {t("adminDefenses.library", "Bibliotheque")}
         </button>
 
+        {showLibrary ? (
+          <button
+            type="button"
+            onClick={recalculateLibrarySimilarities}
+            disabled={libraryEquivalenceMigrationRequired || libraryRecalculateLoading}
+            className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw className="mr-1.5 inline h-4 w-4 align-[-3px]" />
+            {libraryRecalculateLoading ? t("common.loading", "Chargement...") : "Recalculer similarites"}
+          </button>
+        ) : null}
+
         <button
           type="button"
           onClick={() => setViewMode(showEnemyBank ? "local" : "enemy")}
@@ -704,6 +924,12 @@ const pasteImageBlockFromClipboard = async () => {
         </div>
       ) : null}
 
+      {showLibrary && libraryEquivalenceMigrationRequired ? (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          Migration equivalences bibliotheque requise avant de valider les similarites entre modeles.
+        </div>
+      ) : null}
+
       {showEnemyBank ? (
         <GvgEnemyDefenseBankTab activeGuildCode={activeGuildCode} onDataChanged={onDataChanged} />
       ) : (
@@ -723,6 +949,9 @@ const pasteImageBlockFromClipboard = async () => {
             const heroRows = getDefenseHeroRows(defense);
             const hasAnyLayout = heroRows.some((slot) => slot.position && slot.direction);
             const hasCompleteLayout = hasCompleteDefenseLayout(heroRows);
+            const libraryPendingCount = getLibraryPendingCount(defense);
+            const libraryEquivalenceCount = getLibraryEquivalenceCount(defense);
+            const presentGuilds = getLibraryPresentGuilds(defense);
 
             return (
               <div
@@ -749,10 +978,36 @@ const pasteImageBlockFromClipboard = async () => {
                         </span>
                       ) : null}
                       {renderEnemyDefenseLinkBadge(defense)}
+                      {showLibrary && libraryPendingCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => openLibrarySimilaritiesModal(defense)}
+                          className="inline-flex items-center gap-1 rounded-md border border-violet-300/35 bg-violet-400/10 px-2 py-0.5 text-xs font-semibold text-violet-100 hover:bg-violet-400/20"
+                        >
+                          <GitCompareArrows className="h-3.5 w-3.5" />
+                          SIMILARITÉ BIBLIOTHÈQUE · {libraryPendingCount}
+                        </button>
+                      ) : null}
+                      {showLibrary && libraryEquivalenceCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => openLibraryEquivalenceDetailsModal(defense)}
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-300/35 bg-emerald-400/10 px-2 py-0.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/20"
+                        >
+                          <Link2 className="h-3.5 w-3.5" />
+                          ÉQUIVALENTE · {libraryEquivalenceCount}
+                        </button>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-xs text-zinc-300">
                       {defense.tier} · {formatDefenseTypeLabel(defense.type)}
                     </div>
+                    {showLibrary && presentGuilds.length ? (
+                      <div className="mt-2 text-xs text-zinc-200">
+                        Presente :{" "}
+                        {presentGuilds.map((entry) => entry.guildCode || entry.guild_code).filter(Boolean).join(" · ")}
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="mt-3 text-sm text-zinc-200">
@@ -878,9 +1133,11 @@ const pasteImageBlockFromClipboard = async () => {
                       >
                         {(manageableGuildCodes.length ? manageableGuildCodes : [activeGuildCode]).map((guildCode) => {
                           const optionStatus = getImportTargetStatus(defense, guildCode);
+                          const targetDetail = getImportTargetDetail(defense, guildCode);
+                          const viaLabel = targetDetail?.viaDefenseName || targetDetail?.via_defense_name;
                           return (
                             <option key={guildCode} value={guildCode} disabled={optionStatus !== "available"}>
-                              {guildCode} {optionStatus === "available" ? "" : "- deja presente"}
+                              {guildCode} {optionStatus === "available" ? "" : `- deja presente${viaLabel ? ` via ${viaLabel}` : ""}`}
                             </option>
                           );
                         })}
@@ -954,6 +1211,116 @@ const pasteImageBlockFromClipboard = async () => {
         )}
       </div>
       )}
+ {librarySimilarityModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white shadow-2xl">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-lg font-bold">
+            {librarySimilarityModal.mode === "equivalents" ? "Equivalences bibliotheque" : "Similarites bibliotheque"}
+          </div>
+          <div className="text-sm text-zinc-400">
+            {librarySimilarityModal.defense?.name || "Defense"}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setLibrarySimilarityModal(null)}
+          className="rounded-xl border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
+        >
+          {t("common.close", "Fermer")}
+        </button>
+      </div>
+
+      {librarySimilarityModal.error ? (
+        <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {librarySimilarityModal.error}
+        </div>
+      ) : null}
+
+      {librarySimilarityLoading ? (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
+          {t("common.loading", "Chargement...")}
+        </div>
+      ) : librarySimilarityModal.mode === "equivalents" ? (
+        <div className="min-h-0 overflow-y-auto">
+          <div className="mb-3 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+            Presente : {(librarySimilarityModal.presentGuilds || []).map((entry) => entry.guildCode || entry.guild_code).filter(Boolean).join(" · ") || "-"}
+          </div>
+          {(librarySimilarityModal.equivalents || []).length === 0 ? (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
+              Aucun autre modele equivalent confirme.
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              {(librarySimilarityModal.equivalents || []).map((defense) => renderLibraryDefensePanel(defense, defense.guildCode || defense.guild_code || "Modele lie"))}
+            </div>
+          )}
+        </div>
+      ) : (librarySimilarityModal.candidates || []).length === 0 ? (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
+          Aucune similarite bibliotheque en attente pour ce modele.
+        </div>
+      ) : (
+        <div className="min-h-0 space-y-4 overflow-y-auto">
+          {(librarySimilarityModal.candidates || []).map((candidate) => {
+            const reviewId = candidate.review?.id || candidate.review_id;
+            const leftDefense = candidate.leftDefense || candidate.left_defense;
+            const rightDefense = candidate.rightDefense || candidate.right_defense;
+
+            return (
+              <div key={reviewId} className="rounded-2xl border border-violet-300/20 bg-violet-400/5 p-4">
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {renderLibraryDefensePanel(leftDefense, "Modele A")}
+                  {renderLibraryDefensePanel(rightDefense, "Modele B")}
+                </div>
+
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => reviewLibrarySimilarity(candidate, "different")}
+                    disabled={libraryReviewingId === reviewId}
+                    className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                  >
+                    DIFFERENTE
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => reviewLibrarySimilarity(candidate, "identical")}
+                    disabled={libraryReviewingId === reviewId}
+                    className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
+                  >
+                    IDENTIQUE
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </div>
+)}
+ {imagePreview && (
+  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4">
+    <div className="relative max-h-[94vh] w-full max-w-6xl">
+      <button
+        type="button"
+        onClick={() => setImagePreview(null)}
+        className="absolute right-3 top-3 z-10 rounded-xl border border-zinc-700 bg-black/75 p-2 text-zinc-100 hover:bg-zinc-900"
+        aria-label={t("common.close", "Fermer")}
+      >
+        <X className="h-5 w-5" />
+      </button>
+      <img
+        src={imagePreview.src}
+        alt={imagePreview.title}
+        className="max-h-[94vh] w-full rounded-2xl border border-zinc-800 object-contain"
+      />
+    </div>
+  </div>
+)}
  {enemyHistoryModal && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
     <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white shadow-2xl">

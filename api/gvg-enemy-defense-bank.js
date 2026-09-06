@@ -39,6 +39,10 @@ import {
   serializeEnemySimilarityError,
   sortEnemyDefenseBankRows,
 } from "./_gvg-enemy-defense-bank.js";
+import {
+  isLibraryEquivalenceSchemaMissing,
+  propagateLibraryEquivalenceKnowledge,
+} from "./_guild-defense-library-equivalence.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -848,6 +852,20 @@ async function markSimilarityReview(req, res, sessionMember) {
       updatedIds: propagation.updatedIds,
       skipped: propagation.skipped,
     });
+
+    try {
+      const libraryPropagation = await propagateLibraryEquivalenceKnowledge(supabase, {
+        organizationId: portalGuild.organization_id,
+        seedDefenseIds: [propagation.rootDefenseId || review.local_defense_id],
+      });
+      console.info("[gvg-enemy-defense-bank] library equivalence knowledge propagated", {
+        rootDefenseId: propagation.rootDefenseId,
+        result: libraryPropagation,
+      });
+    } catch (libraryError) {
+      if (!isLibraryEquivalenceSchemaMissing(libraryError)) throw libraryError;
+      console.info("[gvg-enemy-defense-bank] library equivalence propagation skipped: schema missing");
+    }
   }
 
   const { error: updateError } = await supabase
@@ -1134,6 +1152,15 @@ async function importEnemyDefense(req, res, sessionMember) {
     }, { onConflict: "enemy_defense_id,local_defense_id" });
 
   if (reviewUpsertError) throw reviewUpsertError;
+
+  try {
+    await propagateLibraryEquivalenceKnowledge(supabase, {
+      organizationId: targetPortalGuild.organization_id,
+      seedDefenseIds: [createdDefense.id],
+    });
+  } catch (libraryError) {
+    if (!isLibraryEquivalenceSchemaMissing(libraryError)) throw libraryError;
+  }
 
   const { rows: reloadedRows } = await loadLocalDefenseRowsByIds([createdDefense.id], { requireLinksSchema: true });
 
