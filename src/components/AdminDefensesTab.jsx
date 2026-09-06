@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Ban, CheckCircle2, ClipboardPaste, Download, GitCompareArrows, Library, Link2, Maximize2, Pencil, Plus, RefreshCw, Search, Shield, ShieldAlert, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -122,6 +122,7 @@ export default function AdminDefensesTab({
   onEnsureEditable,
   onImportDefense,
   onDataChanged,
+  openLibraryMergeRequest = null,
 }) {
   const { t } = usePortalLanguage();
   const [typeFilter, setTypeFilter] = useState("all");
@@ -516,6 +517,81 @@ const recalculateLibrarySimilarities = async () => {
     setLibraryRecalculateLoading(false);
   }
 };
+
+useEffect(() => {
+  const reviewId = openLibraryMergeRequest?.reviewId || openLibraryMergeRequest?.review_id || "";
+  if (!reviewId) return;
+
+  let cancelled = false;
+  const defenseLabel = openLibraryMergeRequest?.defenseName || openLibraryMergeRequest?.defense_name || "Defense";
+
+  async function openRequestedMergePlan() {
+    setLibrarySimilarityModal({
+      mode: "pending",
+      defense: { name: defenseLabel },
+      candidates: [],
+      equivalents: [],
+      presentGuilds: [],
+      error: "",
+    });
+    setLibrarySimilarityLoading(true);
+
+    try {
+      const data = await callPortalAdminDefenses({
+        action: "library-merge-preview",
+        guildCode: activeGuildCode,
+        reviewId,
+      });
+      if (cancelled) return;
+
+      const mergePlan = data.mergePlan || data.merge_plan || null;
+      setLibrarySimilarityModal({
+        mode: "pending",
+        defense: { name: defenseLabel },
+        candidates: [{
+          review: { id: reviewId, status: "identical" },
+          review_id: reviewId,
+          leftDefense: mergePlan?.canonical || null,
+          left_defense: mergePlan?.canonical || null,
+          rightDefense: mergePlan?.absorbed || null,
+          right_defense: mergePlan?.absorbed || null,
+          mergePlan,
+          merge_plan: mergePlan,
+          showMergePlan: true,
+          show_merge_plan: true,
+        }],
+        equivalents: [],
+        presentGuilds: mergePlan?.guilds || [],
+        error: "",
+      });
+    } catch (error) {
+      if (cancelled) return;
+      setLibrarySimilarityModal({
+        mode: "pending",
+        defense: { name: defenseLabel },
+        candidates: [],
+        equivalents: [],
+        presentGuilds: [],
+        error: error?.message || "Plan de fusion indisponible.",
+      });
+    } finally {
+      if (!cancelled) setLibrarySimilarityLoading(false);
+    }
+  }
+
+  openRequestedMergePlan();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  activeGuildCode,
+  openLibraryMergeRequest?.defenseName,
+  openLibraryMergeRequest?.defense_name,
+  openLibraryMergeRequest?.reviewId,
+  openLibraryMergeRequest?.review_id,
+  openLibraryMergeRequest?.token,
+]);
 
 const openDefenseBlocksModal = async (defense) => {
   const editableDefense = onEnsureEditable ? await onEnsureEditable(defense) : defense;

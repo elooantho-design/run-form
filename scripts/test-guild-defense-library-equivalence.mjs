@@ -9,6 +9,7 @@ import {
   findLibraryDefenseSimilarityCandidates,
   getEquivalentImportTargetStatus,
   markLibrarySimilarityReview,
+  recordLibrarySimilarityDecision,
   scoreGuildDefenseLibraryRoot,
 } from "../api/_guild-defense-library-equivalence.js";
 import {
@@ -494,12 +495,48 @@ const createAnywayRoot = makeDefense({
   includeLayout: false,
 });
 const createAnywayStub = createSupabaseStub({ defenses: [rootA, rootB, createAnywayRoot], reviews: [] });
-const createAnywayResult = await detectLibraryDefenseSimilarities(createAnywayStub.supabase, {
+const createAnywayDecision = await recordLibrarySimilarityDecision(createAnywayStub.supabase, {
+  organizationId: PALADIN_ORG,
+  leftDefenseId: createAnywayRoot.id,
+  rightDefenseId: rootA.id,
+  status: "different",
+  reviewer: { memberId: "member-admin", name: "Admin" },
+});
+assert.equal(createAnywayDecision.ok, true, "create-anyway persists an explicit different review");
+assert.equal(createAnywayStub.state.reviews.length, 1, "one explicit create-anyway decision is stored");
+assert.equal(createAnywayStub.state.reviews[0].status, "different", "create-anyway decision is stored as different");
+assert.equal(createAnywayStub.state.reviews[0].reviewed_by_name, "Admin", "different decisions keep the reviewer name");
+
+const createAnywayAfterOneDecision = await detectLibraryDefenseSimilarities(createAnywayStub.supabase, {
   organizationId: PALADIN_ORG,
   rootDefenseIds: [createAnywayRoot.id],
 });
-assert.equal(createAnywayResult.pendingCreated, 2, "create-anyway stores pending human reviews against existing roots");
-assert.equal(createAnywayStub.state.reviews.length, 2, "create-anyway does not collapse the new root into an import");
+assert.equal(createAnywayAfterOneDecision.pendingCreated, 1, "create-anyway does not recreate pending for the refused root");
+assert.equal(createAnywayStub.state.reviews.length, 2, "unreviewed candidates still get their own pending review");
+assert.equal(
+  createAnywayStub.state.reviews.some((review) => review.status === "pending" && String(review.left_defense_id) !== String(rootA.id) && String(review.right_defense_id) !== String(rootA.id)),
+  true,
+  "rejecting one candidate does not mark every matching root as different",
+);
+
+const createAnywaySecondDecision = await recordLibrarySimilarityDecision(createAnywayStub.supabase, {
+  organizationId: PALADIN_ORG,
+  leftDefenseId: createAnywayRoot.id,
+  rightDefenseId: rootB.id,
+  status: "different",
+  reviewer: { memberId: "member-admin", name: "Admin" },
+});
+assert.equal(createAnywaySecondDecision.ok, true, "create-anyway can persist a second explicit different review");
+const createAnywayAfterAllDecisions = await detectLibraryDefenseSimilarities(createAnywayStub.supabase, {
+  organizationId: PALADIN_ORG,
+  rootDefenseIds: [createAnywayRoot.id],
+});
+assert.equal(createAnywayAfterAllDecisions.pendingCreated, 0, "all refused candidates stay out of pending recalculation");
+assert.equal(
+  findLibraryDefenseSimilarityCandidates(createAnywayStub.state.defenses, createAnywayStub.state.reviews, createAnywayRoot, "G7", { organizationId: PALADIN_ORG }).candidates.length,
+  0,
+  "pre-create warning skips reusable different reviews",
+);
 
 const reviewResult = await markLibrarySimilarityReview(pendingStub.supabase, {
   organizationId: PALADIN_ORG,

@@ -4987,6 +4987,8 @@ function PortalAdminDefensesView({ session }) {
   const [draftImageMessage, setDraftImageMessage] = useState("");
   const [similarDefenseWarning, setSimilarDefenseWarning] = useState(null);
   const [similarDefenseDetailsId, setSimilarDefenseDetailsId] = useState("");
+  const [similarDefenseDecisions, setSimilarDefenseDecisions] = useState({});
+  const [libraryMergeOpenRequest, setLibraryMergeOpenRequest] = useState(null);
   const [conditionOpen, setConditionOpen] = useState(false);
   const [conditionDefenseId, setConditionDefenseId] = useState("");
   const [conditionRemoveOpen, setConditionRemoveOpen] = useState(false);
@@ -5093,6 +5095,7 @@ function PortalAdminDefensesView({ session }) {
     setDraftImageMessage("");
     setSimilarDefenseWarning(null);
     setSimilarDefenseDetailsId("");
+    setSimilarDefenseDecisions({});
     setDraft({
       ...emptyPortalDefenseDraft,
       guildCode: activeGuildCode,
@@ -5110,6 +5113,7 @@ function PortalAdminDefensesView({ session }) {
     setErrorMessage("");
     setSimilarDefenseWarning(null);
     setSimilarDefenseDetailsId("");
+    setSimilarDefenseDecisions({});
     const editableDefense = await ensureEditableDefense(defense);
     if (!editableDefense) return;
 
@@ -5132,6 +5136,7 @@ function PortalAdminDefensesView({ session }) {
   function updateDraftSlot(index, value) {
     setSimilarDefenseWarning(null);
     setSimilarDefenseDetailsId("");
+    setSimilarDefenseDecisions({});
     setDraft((previous) => {
       const nextSlots = [...previous.slots];
       nextSlots[index] = value;
@@ -5265,6 +5270,7 @@ function PortalAdminDefensesView({ session }) {
         action: "save",
         guildCode: activeGuildCode,
         allowSimilarLibraryDuplicate: Boolean(options.allowSimilarLibraryDuplicate),
+        librarySimilarityDecisions: options.librarySimilarityDecisions || [],
         draft: {
           id: isEditMode ? draft.id : null,
           name: cleanName,
@@ -5281,6 +5287,9 @@ function PortalAdminDefensesView({ session }) {
 
       setSimilarDefenseWarning(null);
       setSimilarDefenseDetailsId("");
+      setSimilarDefenseDecisions({});
+      const librarySimilarityDecisionResults = data.librarySimilarityDecisionResults || data.library_similarity_decision_results || [];
+      const identicalDecision = librarySimilarityDecisionResults.find((item) => item?.status === "identical" && (item.reviewId || item.review_id));
       void logPortalActivity(session, {
         actionType: isEditMode ? "admin_defense_update" : "admin_defense_create",
         entityType: "defense",
@@ -5295,12 +5304,24 @@ function PortalAdminDefensesView({ session }) {
       });
 
       setDraftOpen(false);
-      setMessage(`Defense ${isEditMode ? "mise a jour" : "ajoutee"} : ${cleanName}.`);
+      setMessage(
+        identicalDecision
+          ? `Defense mise a jour : ${cleanName}. Plan de fusion ouvert pour controle.`
+          : `Defense ${isEditMode ? "mise a jour" : "ajoutee"} : ${cleanName}.`,
+      );
+      if (isEditMode && identicalDecision) {
+        setLibraryMergeOpenRequest({
+          token: `${identicalDecision.reviewId || identicalDecision.review_id}-${Date.now()}`,
+          reviewId: identicalDecision.reviewId || identicalDecision.review_id,
+          defenseName: cleanName,
+        });
+      }
       setRefreshTick((value) => value + 1);
     } catch (error) {
       if (error?.similarLibraryDefense || error?.similar_library_defense) {
         setSimilarDefenseWarning(error);
         setSimilarDefenseDetailsId(String(error?.candidates?.[0]?.id || ""));
+        setSimilarDefenseDecisions({});
         return;
       }
       setErrorMessage(error?.message || "Sauvegarde de la defense impossible.");
@@ -5317,14 +5338,40 @@ function PortalAdminDefensesView({ session }) {
     return defense?.libraryTargetViaDefenseName || defense?.library_target_via_defense_name || "";
   }
 
-  async function forceCreateSimilarDefense() {
-    await saveDraftDefense(null, { allowSimilarLibraryDuplicate: true });
+  function setSimilarDefenseDecision(candidate, status) {
+    const candidateId = String(candidate?.id || "");
+    if (!candidateId || !["identical", "different"].includes(status)) return;
+    setSimilarDefenseDecisions((previous) => ({
+      ...previous,
+      [candidateId]: status,
+    }));
+  }
+
+  async function saveWithLibrarySimilarityDecisions() {
+    const candidates = similarDefenseWarning?.candidates || [];
+    const decisions = candidates
+      .map((candidate) => ({
+        candidateDefenseId: candidate.id,
+        status: similarDefenseDecisions[String(candidate.id)],
+      }))
+      .filter((decision) => decision.candidateDefenseId && decision.status);
+
+    if (decisions.length !== candidates.length) {
+      setErrorMessage("Choisis une decision pour chaque defense similaire avant de continuer.");
+      return;
+    }
+
+    await saveDraftDefense(null, {
+      allowSimilarLibraryDuplicate: true,
+      librarySimilarityDecisions: decisions,
+    });
   }
 
   async function importSimilarDefense(defense) {
     if (getSimilarDefenseTargetStatus(defense) !== "available") return;
     setSimilarDefenseWarning(null);
     setSimilarDefenseDetailsId("");
+    setSimilarDefenseDecisions({});
     setDraftOpen(false);
     await importDefense(defense, activeGuildCode);
   }
@@ -5674,6 +5721,7 @@ function PortalAdminDefensesView({ session }) {
           onEnsureEditable={ensureEditableDefense}
           onImportDefense={importDefense}
           onDataChanged={() => setRefreshTick((value) => value + 1)}
+          openLibraryMergeRequest={libraryMergeOpenRequest}
         />
       )}
 
@@ -5744,6 +5792,7 @@ function PortalAdminDefensesView({ session }) {
                       onChange={(event) => {
                         setSimilarDefenseWarning(null);
                         setSimilarDefenseDetailsId("");
+                        setSimilarDefenseDecisions({});
                         setDraft((previous) => ({ ...previous, type: event.target.value }));
                       }}
                       className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
@@ -5893,6 +5942,7 @@ function PortalAdminDefensesView({ session }) {
                 onClick={() => {
                   setSimilarDefenseWarning(null);
                   setSimilarDefenseDetailsId("");
+                  setSimilarDefenseDecisions({});
                 }}
                 className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
                 aria-label={t("common.close", "Fermer")}
@@ -5912,6 +5962,8 @@ function PortalAdminDefensesView({ session }) {
                 const enemyStat = candidate.enemyStats || candidate.enemy_stats || null;
                 const expanded = String(similarDefenseDetailsId) === String(candidate.id);
                 const viaName = getSimilarDefenseViaName(candidate);
+                const candidateDecision = similarDefenseDecisions[String(candidate.id)] || "";
+                const isEditSimilarityWarning = (similarDefenseWarning.operation || similarDefenseWarning.mode) === "edit";
 
                 return (
                   <div key={candidate.id} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
@@ -5935,6 +5987,15 @@ function PortalAdminDefensesView({ session }) {
                           {hasCompleteLayout ? (
                             <span className="rounded-md border border-emerald-300/30 bg-emerald-300/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-100">
                               LAYOUT VALIDÉ
+                            </span>
+                          ) : null}
+                          {candidateDecision ? (
+                            <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                              candidateDecision === "identical"
+                                ? "border-emerald-300/40 bg-emerald-400/10 text-emerald-100"
+                                : "border-red-300/40 bg-red-400/10 text-red-100"
+                            }`}>
+                              {candidateDecision === "identical" ? "IDENTIQUE" : "DIFFÉRENTE"}
                             </span>
                           ) : null}
                         </div>
@@ -6010,26 +6071,57 @@ function PortalAdminDefensesView({ session }) {
                       >
                         {expanded ? "Masquer la defense" : "Voir la defense"}
                       </Button>
+                      {!isEditSimilarityWarning ? (
+                        <Button
+                          type="button"
+                          className="rounded-lg bg-cyan-600 text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                          disabled={saving || alreadyPresent}
+                          onClick={() => importSimilarDefense(candidate)}
+                        >
+                          {alreadyPresent ? `Deja presente en ${activeGuildCode}` : `Importer cette defense dans ${activeGuildCode}`}
+                        </Button>
+                      ) : null}
+                      {isEditSimilarityWarning ? (
+                        <Button
+                          type="button"
+                          className="rounded-lg bg-emerald-600 text-white hover:bg-emerald-500"
+                          disabled={saving}
+                          onClick={() => setSimilarDefenseDecision(candidate, "identical")}
+                        >
+                          Marquer identique
+                        </Button>
+                      ) : null}
                       <Button
                         type="button"
-                        className="rounded-lg bg-cyan-600 text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
-                        disabled={saving || alreadyPresent}
-                        onClick={() => importSimilarDefense(candidate)}
-                      >
-                        {alreadyPresent ? `Deja presente en ${activeGuildCode}` : `Importer cette defense dans ${activeGuildCode}`}
-                      </Button>
-                      <Button
-                        type="button"
-                        className="rounded-lg bg-violet-600 text-white hover:bg-violet-500"
+                        className="rounded-lg bg-red-600 text-white hover:bg-red-500"
                         disabled={saving}
-                        onClick={forceCreateSimilarDefense}
+                        onClick={() => setSimilarDefenseDecision(candidate, "different")}
                       >
-                        Creer quand meme comme defense differente
+                        Marquer differente
                       </Button>
                     </div>
                   </div>
                 );
               })}
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4">
+              <div className="text-xs text-zinc-400">
+                {Object.keys(similarDefenseDecisions).length} / {(similarDefenseWarning.candidates || []).length} decision(s) renseignee(s).
+              </div>
+              <Button
+                type="button"
+                className="rounded-lg bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                disabled={
+                  saving ||
+                  Object.keys(similarDefenseDecisions).length !== (similarDefenseWarning.candidates || []).length
+                }
+                onClick={saveWithLibrarySimilarityDecisions}
+              >
+                {(similarDefenseWarning.operation || similarDefenseWarning.mode) === "edit"
+                  ? "Appliquer la modification avec ces decisions"
+                  : "Creer comme defense differente"}
+              </Button>
             </div>
           </div>
         </div>

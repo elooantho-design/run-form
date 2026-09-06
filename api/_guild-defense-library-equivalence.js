@@ -921,6 +921,7 @@ export function findLibraryDefenseSimilarityCandidates(
     .filter((defense) => isNativeLibraryDefense(defense))
     .filter((defense) => String(defense.id) !== draftId)
     .filter((defense) => getDefenseSimilaritySignature(defense) === draftSignature)
+    .filter((defense) => findReusableReviewBetweenDefenses(scopedReviews, draftDefense, defense, organizationKey)?.status !== "different")
     .map((defense) => {
       const state = equivalenceState.byDefenseId.get(String(defense.id)) || {};
       const targetBucketRow = visibleDefenses.find((row) => {
@@ -1015,7 +1016,7 @@ export async function loadLibrarySimilarityReviews(supabase, organizationId) {
   return data || [];
 }
 
-function buildReviewRow({ organizationId, leftDefense, rightDefense, status, reviewerName = null }) {
+function buildReviewRow({ organizationId, leftDefense, rightDefense, status, reviewer = null, reviewerName = null }) {
   const pair = sortPairIds(leftDefense.id, rightDefense.id);
   if (pair.length !== 2) return null;
 
@@ -1027,6 +1028,9 @@ function buildReviewRow({ organizationId, leftDefense, rightDefense, status, rev
   const right = byId.get(pair[1]);
   const similaritySignature = getDefenseSimilaritySignature(left);
   const now = new Date().toISOString();
+  const normalizedReviewer = reviewer || {};
+  const resolvedReviewerName = reviewerName || normalizedReviewer.name || "";
+  const reviewed = status === "identical" || status === "different";
 
   if (!similaritySignature || similaritySignature !== getDefenseSimilaritySignature(right)) return null;
 
@@ -1035,14 +1039,28 @@ function buildReviewRow({ organizationId, leftDefense, rightDefense, status, rev
     left_defense_id: left.id,
     right_defense_id: right.id,
     status,
-    reviewed_by_member_id: null,
-    reviewed_by_name: status === "identical" ? reviewerName : null,
-    reviewed_at: status === "identical" ? now : null,
+    reviewed_by_member_id: reviewed ? normalizedReviewer.memberId || null : null,
+    reviewed_by_name: reviewed ? resolvedReviewerName : null,
+    reviewed_at: reviewed ? now : null,
     left_identity_signature: getDefenseIdentitySignature(left),
     right_identity_signature: getDefenseIdentitySignature(right),
     similarity_signature: similaritySignature,
     updated_at: now,
   };
+}
+
+function findReusableReviewBetweenDefenses(reviews = [], leftDefense, rightDefense, organizationId = "") {
+  const probe = buildReviewRow({
+    organizationId,
+    leftDefense,
+    rightDefense,
+    status: "pending",
+  });
+  if (!probe) return null;
+
+  const pairKey = makePairKey(leftDefense?.id, rightDefense?.id);
+  const existing = (reviews || []).find((review) => reviewPairKey(review) === pairKey);
+  return existing && reviewIsReusable(existing, probe) ? existing : null;
 }
 
 function groupRootsBySimilarity(roots = []) {
@@ -1449,6 +1467,109 @@ export async function detectLibraryDefenseSimilarities(
     autoIdenticalUpdated,
     candidatesScanned: rowsToUpsert.length,
     propagationResults,
+  };
+}
+
+export async function recordLibrarySimilarityDecision(
+  supabase,
+  { organizationId, leftDefenseId, rightDefenseId, status, reviewer = {} } = {},
+) {
+  const normalizedStatus = cleanText(status).toLowerCase();
+  if (!organizationId || !leftDefenseId || !rightDefenseId || !["identical", "different"].includes(normalizedStatus)) {
+    const error = new Error("Decision similarite bibliotheque invalide.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const [defenseRows, existingReviews] = await Promise.all([
+    loadGuildDefenseRowsForEquivalence(supabase, organizationId),
+    loadLibrarySimilarityReviews(supabase, organizationId),
+  ]);
+  const defensesById = new Map(defenseRows.map((row) => [String(row.id), row]));
+  const leftRootId = resolveDefenseRootId(leftDefenseId, defensesById);
+  const rightRootId = resolveDefenseRootId(rightDefenseId, defensesById);
+  const leftDefense = defensesById.get(String(leftRootId));
+  const rightDefense = defensesById.get(String(rightRootId));
+
+  if (!leftDefense || !rightDefense) {
+    const error = new Error("Defense bibliotheque introuvable pour la decision.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (!isNativeLibraryDefense(leftDefense) || !isNativeLibraryDefense(rightDefense)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "non_native_pair",
+      status: normalizedStatus,
+      reviewId: "",
+      review_id: "",
+    };
+  }
+
+  if (normalizedStatus === "identical") {
+    const leftComplete = localDefenseHasCompleteLayout(leftDefense);
+    const rightComplete = localDefenseHasCompleteLayout(rightDefense);
+    if (leftComplete && rightComplete && createLocalDefenseReviewSignature(leftDefense) !== createLocalDefenseReviewSignature(rightDefense)) {
+      const error = new Error("Layouts complets differents : validation identique bloquee.");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const familyContext = buildFamilyKnowledgeContext(defenseRows, existingReviews, [leftDefense.id, rightDefense.id]);
+    if (familyContext.conflicts.length) {
+      const error = new Error("Famille bibliotheque incompatible : validation identique bloquee.");
+      error.statusCode = 409;
+      throw error;
+    }
+    const enemyChoice = await chooseFamilyEnemyLinkSource(supabase, familyContext.candidateRows, organizationId);
+    if (enemyChoice.conflict) {
+      const error = new Error("Liens adverses differents : validation identique bloquee.");
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+
+  const reviewRow = buildReviewRow({
+    organizationId,
+    leftDefense,
+    rightDefense,
+    status: normalizedStatus,
+    reviewer,
+  });
+  if (!reviewRow) {
+    const error = new Error("Decision impossible : les defenses ne partagent pas la meme signature.");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const existing = existingReviews.find((review) => reviewPairKey(review) === makePairKey(leftDefense.id, rightDefense.id));
+  if (existing?.id) reviewRow.id = existing.id;
+
+  const { error: upsertError } = await supabase
+    .from("guild_defense_library_similarity_reviews")
+    .upsert([reviewRow], { onConflict: "left_defense_id,right_defense_id" });
+  if (upsertError) throw upsertError;
+
+  const propagation = normalizedStatus === "identical"
+    ? await propagateLibraryEquivalenceKnowledge(supabase, {
+        organizationId,
+        seedDefenseIds: [leftDefense.id, rightDefense.id],
+      })
+    : null;
+
+  return {
+    ok: true,
+    skipped: false,
+    status: normalizedStatus,
+    reviewId: reviewRow.id || existing?.id || "",
+    review_id: reviewRow.id || existing?.id || "",
+    leftDefenseId: leftDefense.id,
+    left_defense_id: leftDefense.id,
+    rightDefenseId: rightDefense.id,
+    right_defense_id: rightDefense.id,
+    propagation,
   };
 }
 

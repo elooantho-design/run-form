@@ -28,6 +28,7 @@ import {
   loadLibrarySimilarityCandidates,
   loadLibrarySimilarityReviews,
   markLibrarySimilarityReview,
+  recordLibrarySimilarityDecision,
 } from "./_guild-defense-library-equivalence.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -723,9 +724,9 @@ function buildLibraryEntries(nativeDefenses, localDefenses, scope, activeGuildCo
   });
 }
 
-function buildDraftDefenseSimilarityRow({ cleanName, draft, guildCode, organizationId, slotChampions }) {
+function buildDraftDefenseSimilarityRow({ cleanName, draft, guildCode, organizationId, slotChampions, defenseId = null, sourceDefenseId = null }) {
   return {
-    id: null,
+    id: defenseId || null,
     name: cleanName,
     tier: validatePortalInput(draft.tier, 40) || "meta_s",
     type: validatePortalInput(draft.type, 40) || "Tour",
@@ -733,7 +734,7 @@ function buildDraftDefenseSimilarityRow({ cleanName, draft, guildCode, organizat
     organization_id: organizationId || "",
     is_hidden: false,
     is_global: false,
-    source_defense_id: null,
+    source_defense_id: sourceDefenseId || null,
     guild_defense_slots: slotChampions.map((champion, index) => ({
       slot_index: index + 1,
       champion_id: champion.id,
@@ -747,6 +748,23 @@ function buildDraftDefenseSimilarityRow({ cleanName, draft, guildCode, organizat
       direction: null,
     })),
   };
+}
+
+function normalizeLibrarySimilarityDecisions(value) {
+  const input = Array.isArray(value) ? value : [];
+  const decisionsByCandidateId = new Map();
+
+  for (const entry of input) {
+    const candidateDefenseId = validatePortalInput(
+      entry?.candidateDefenseId || entry?.candidate_defense_id || entry?.defenseId || entry?.defense_id,
+      80,
+    );
+    const status = validatePortalInput(entry?.status, 40).toLowerCase();
+    if (!candidateDefenseId || !["identical", "different"].includes(status)) continue;
+    decisionsByCandidateId.set(String(candidateDefenseId), { candidateDefenseId, status });
+  }
+
+  return decisionsByCandidateId;
 }
 
 async function loadPreCreateLibrarySimilarityWarning(scope, targetGuildCode, draftDefense) {
@@ -1813,26 +1831,61 @@ async function handleSave(body, req, res) {
     defensePayload.organization_id = scope.organizationId;
   }
 
+  const proposedSimilarityDefense = buildDraftDefenseSimilarityRow({
+    cleanName,
+    draft,
+    guildCode,
+    organizationId: scope.organizationId,
+    slotChampions,
+    defenseId: isEditMode ? defenseId : null,
+    sourceDefenseId: isEditMode ? existing?.source_defense_id || null : null,
+  });
+  const existingSimilaritySignature = isEditMode ? createLocalDefenseSimilaritySignature(existing) : "";
+  const proposedSimilaritySignature = createLocalDefenseSimilaritySignature(proposedSimilarityDefense);
+  const structureChanged = !isEditMode || existingSimilaritySignature !== proposedSimilaritySignature;
+  const canCreateLibrarySimilarityReview = !isEditMode || !existing?.source_defense_id;
+  const librarySimilarityDecisions = normalizeLibrarySimilarityDecisions(
+    body.librarySimilarityDecisions || body.library_similarity_decisions,
+  );
+  let acceptedLibrarySimilarityDecisions = [];
   const allowSimilarLibraryDuplicate = Boolean(
     body.allowSimilarLibraryDuplicate || body.allow_similar_library_duplicate,
   );
-  if (!isEditMode && defenseLibrarySchemaReady && scope.organizationId && !allowSimilarLibraryDuplicate) {
+  if (
+    defenseLibrarySchemaReady &&
+    scope.organizationId &&
+    structureChanged &&
+    canCreateLibrarySimilarityReview
+  ) {
     try {
       const warning = await loadPreCreateLibrarySimilarityWarning(
         scope,
         guildCode,
-        buildDraftDefenseSimilarityRow({
-          cleanName,
-          draft,
-          guildCode,
-          organizationId: scope.organizationId,
-          slotChampions,
-        }),
+        proposedSimilarityDefense,
       );
 
       if (warning?.candidates?.length) {
-        sendJson(res, 409, warning);
-        return;
+        const matchingDecisions = warning.candidates
+          .map((candidate) => librarySimilarityDecisions.get(String(candidate.id)))
+          .filter(Boolean);
+        const decidedCandidateIds = new Set(matchingDecisions.map((decision) => String(decision.candidateDefenseId)));
+        const undecidedCandidates = warning.candidates.filter((candidate) => !decidedCandidateIds.has(String(candidate.id)));
+        const createIdenticalDecision = !isEditMode && matchingDecisions.some((decision) => decision.status === "identical");
+
+        if (!allowSimilarLibraryDuplicate || undecidedCandidates.length || createIdenticalDecision) {
+          sendJson(res, 409, {
+            ...warning,
+            operation: isEditMode ? "edit" : "create",
+            undecidedCandidates,
+            undecided_candidates: undecidedCandidates,
+            error: createIdenticalDecision
+              ? "Pour creer une defense identique, importe la defense existante au lieu de creer un doublon."
+              : warning.error,
+          });
+          return;
+        }
+
+        acceptedLibrarySimilarityDecisions = matchingDecisions;
       }
     } catch (error) {
       if (isLibraryEquivalenceSchemaMissing(error)) {
@@ -1880,6 +1933,23 @@ async function handleSave(body, req, res) {
   const { error: slotsError } = await supabase.from("guild_defense_slots").insert(slotInsertRows);
   if (slotsError) throw slotsError;
 
+  const librarySimilarityDecisionResults = [];
+  if (scope.organizationId && acceptedLibrarySimilarityDecisions.length) {
+    for (const decision of acceptedLibrarySimilarityDecisions) {
+      const result = await recordLibrarySimilarityDecision(supabase, {
+        organizationId: scope.organizationId,
+        leftDefenseId: savedDefense.id,
+        rightDefenseId: decision.candidateDefenseId,
+        status: decision.status,
+        reviewer: {
+          memberId: actor.id || null,
+          name: actor.watcher_name || actor.display_name || actor.name || "",
+        },
+      });
+      librarySimilarityDecisionResults.push(result);
+    }
+  }
+
   if (scope.organizationId) {
     try {
       await detectLibraryDefenseSimilarities(supabase, {
@@ -1895,6 +1965,8 @@ async function handleSave(body, req, res) {
   sendJson(res, 200, {
     ok: true,
     defense: mapDefenseRow(reloadedDefense || savedDefense, await loadBlocksByDefenseIds([savedDefense.id])),
+    librarySimilarityDecisionResults,
+    library_similarity_decision_results: librarySimilarityDecisionResults,
   });
 }
 
