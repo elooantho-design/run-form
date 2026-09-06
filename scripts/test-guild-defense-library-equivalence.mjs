@@ -1244,6 +1244,8 @@ const [
   mergeV4PreflightSql,
   mergeV4Sql,
   mergeV4VerifySql,
+  mergeV5Sql,
+  mergeV5VerifySql,
 ] = await Promise.all([
   readFile(new URL("../api/_guild-defense-library-equivalence.js", import.meta.url), "utf8"),
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
@@ -1265,6 +1267,8 @@ const [
   readFile(new URL("../scripts/guild_defense_library_merge_v4_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge_v4.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge_v4_verify.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v5.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v5_verify.sql", import.meta.url), "utf8"),
 ]);
 
 assert.match(helperSource, /guild_defense_library_similarity_reviews/, "helper uses a dedicated library equivalence review table");
@@ -1390,5 +1394,35 @@ assert.match(mergeV4VerifySql, /merge_score_multi_condition_sample/, "merge V4 v
 assert.match(mergeV4VerifySql, /real_case_forto_arbitre_dassomi_arbitre_score_type_safe/, "merge V4 verify covers the live Forto Arbitre Dassomi / Arbitre case without mutating it");
 assert.match(mergeV4VerifySql, /identical_reviews_similarity_mismatch/, "merge V4 verify keeps the V3 similarity signature invariant");
 assert.match(mergeV4VerifySql, /active_absorbed_rows_still_native_after_merge/, "merge V4 verify keeps the V2 absorbed-root preservation invariant");
+assert.match(mergeV5Sql, /Correction V5 de la fusion Bibliotheque/, "merge V5 migration is versioned and explicit");
+assert.doesNotMatch(mergeV5Sql, /drop index[\s\S]*guild_defenses_unique_active_import_idx/i, "merge V5 keeps the unique active import index");
+assert.doesNotMatch(mergeV5Sql, /\bdelete\s+from\s+public\.guild_defenses\b/i, "merge V5 never deletes defense rows");
+{
+  const rootCollisionStart = mergeV5Sql.indexOf("v_existing_absorbed_guild_copy.id, v_absorbed.id");
+  const rootCollisionEnd = mergeV5Sql.indexOf("v_absorbed_root_handled := true", rootCollisionStart);
+  const rootCollisionSql = mergeV5Sql.slice(rootCollisionStart, rootCollisionEnd);
+  const rootRepointIndex = rootCollisionSql.indexOf("guild_defense_library_repoint_references");
+  const rootHideIndex = rootCollisionSql.indexOf("is_hidden = true");
+  const rootKeeperImportIndex = rootCollisionSql.indexOf("source_defense_id = v_canonical.id");
+  assert.ok(rootCollisionStart >= 0 && rootCollisionEnd > rootCollisionStart, "merge V5 exposes the absorbed-root local collision block");
+  assert.ok(rootRepointIndex >= 0, "merge V5 root collision repoints references to the kept local defense");
+  assert.ok(rootHideIndex > rootRepointIndex, "merge V5 root collision hides the losing local defense after reference repoint");
+  assert.ok(rootKeeperImportIndex > rootHideIndex, "merge V5 root collision imports the kept defense only after freeing the unique index");
+}
+{
+  const childCollisionStart = mergeV5Sql.indexOf("v_keep_child_id := public.guild_defense_library_preferred_defense(v_existing_child.id, v_child.id)");
+  const childCollisionEnd = mergeV5Sql.indexOf("v_local_collisions := v_local_collisions || jsonb_build_array(jsonb_build_object(", childCollisionStart);
+  const childCollisionSql = mergeV5Sql.slice(childCollisionStart, childCollisionEnd);
+  const childRepointIndex = childCollisionSql.indexOf("guild_defense_library_repoint_references");
+  const childHideIndex = childCollisionSql.indexOf("is_hidden = true");
+  const childKeeperImportIndex = childCollisionSql.indexOf("source_defense_id = v_canonical.id");
+  assert.ok(childCollisionStart >= 0 && childCollisionEnd > childCollisionStart, "merge V5 exposes the descendant local collision block");
+  assert.ok(childRepointIndex >= 0, "merge V5 descendant collision repoints references to the kept local defense");
+  assert.ok(childHideIndex > childRepointIndex, "merge V5 descendant collision hides the losing local defense after reference repoint");
+  assert.ok(childKeeperImportIndex > childHideIndex, "merge V5 descendant collision imports the kept defense only after freeing the unique index");
+}
+assert.match(mergeV5VerifySql, /root_collision_hides_loser_before_keeper_import/, "merge V5 verify checks the absorbed-root collision order");
+assert.match(mergeV5VerifySql, /child_collision_hides_loser_before_keeper_import/, "merge V5 verify checks the descendant collision order");
+assert.match(mergeV5VerifySql, /unique_active_import_index_preserved/, "merge V5 verify confirms the unique active import index is still present");
 
 console.log("Guild defense library equivalence tests passed");
