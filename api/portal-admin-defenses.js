@@ -19,6 +19,7 @@ import {
 import {
   GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE,
   buildLibraryEquivalenceState,
+  buildGuildDefenseLibraryMergePlan,
   detectLibraryDefenseSimilarities,
   findLibraryDefenseSimilarityCandidates,
   getEquivalentImportTargetStatus,
@@ -80,6 +81,9 @@ const DEFENSE_SELECT_WITH_LIBRARY = `
   guild_code,
   is_global,
   is_hidden,
+  merged_into_defense_id,
+  merged_at,
+  merged_by_member_id,
   source_defense_id,
   source_guild_code,
   source_defense_name,
@@ -119,6 +123,9 @@ const DEFENSE_SELECT_WITH_ENEMY_LINKS = `
   guild_code,
   is_global,
   is_hidden,
+  merged_into_defense_id,
+  merged_at,
+  merged_by_member_id,
   source_defense_id,
   source_guild_code,
   source_defense_name,
@@ -210,6 +217,9 @@ function isMissingGuildLibrarySchema(error) {
     isMissingColumn(error, "source_guild_code") ||
     isMissingColumn(error, "source_defense_name") ||
     isMissingColumn(error, "imported_at") ||
+    isMissingColumn(error, "merged_into_defense_id") ||
+    isMissingColumn(error, "merged_at") ||
+    isMissingColumn(error, "merged_by_member_id") ||
     String(error?.message || "").toLowerCase().includes("import_guild_defense_snapshot")
   );
 }
@@ -436,6 +446,12 @@ function mapDefenseRow(row, blocksByDefenseId = new Map()) {
     is_global: Boolean(row.is_global),
     isHidden: Boolean(row.is_hidden),
     is_hidden: Boolean(row.is_hidden),
+    mergedIntoDefenseId: row.merged_into_defense_id || null,
+    merged_into_defense_id: row.merged_into_defense_id || null,
+    mergedAt: row.merged_at || null,
+    merged_at: row.merged_at || null,
+    mergedByMemberId: row.merged_by_member_id || null,
+    merged_by_member_id: row.merged_by_member_id || null,
     sourceDefenseId: row.source_defense_id || null,
     source_defense_id: row.source_defense_id || null,
     sourceGuildCode: row.source_guild_code || "",
@@ -630,7 +646,7 @@ async function loadDefenseRows() {
 async function hasGuildDefenseLibrarySchema() {
   const { error } = await supabase
     .from("guild_defenses")
-    .select("organization_id, source_defense_id, source_guild_code, source_defense_name, imported_at")
+    .select("organization_id, source_defense_id, source_guild_code, source_defense_name, imported_at, merged_into_defense_id, merged_at, merged_by_member_id")
     .limit(1);
 
   if (!error) return true;
@@ -791,7 +807,7 @@ async function loadDefenseLibraryPayload(scope, guildCode) {
   const visibleDefenses = defenses.filter(
     (defense) => normalizeGuildCode(defense.guildCode) === activeGuildKey && !defense.isHidden,
   );
-  const nativeDefenses = defenses.filter((defense) => !defense.sourceDefenseId && !defense.isHidden);
+  const nativeDefenses = defenses.filter((defense) => !defense.sourceDefenseId && !defense.isHidden && !defense.mergedIntoDefenseId);
   const visibleDefensesWithEnemyStats = await attachEnemyStatsToDefenses(visibleDefenses, scope);
   const nativeDefensesWithEnemyStats = await attachEnemyStatsToDefenses(nativeDefenses, scope);
   let libraryEquivalenceSchemaReady = true;
@@ -1259,6 +1275,7 @@ function canViewLibraryDefenseInScope(scope, defense) {
   return Boolean(
     defense?.id &&
       !defense.is_hidden &&
+      !defense.merged_into_defense_id &&
       !defense.source_defense_id &&
       isGuildInScope(scope, defense.guild_code),
   );
@@ -1422,6 +1439,94 @@ async function handleLibrarySimilarityReview(body, req, res) {
       return;
     }
     sendJson(res, error?.statusCode || 500, { error: error?.message || "Validation similarite bibliotheque impossible." });
+  }
+}
+
+async function handleLibraryMergePreview(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  try {
+    const [{ defenses }, reviews] = await Promise.all([
+      loadMappedDefenseRowsInScope(scope),
+      loadLibrarySimilarityReviews(supabase, scope.organizationId),
+    ]);
+    const plan = buildGuildDefenseLibraryMergePlan(defenses, reviews, {
+      organizationId: scope.organizationId,
+      reviewId: validatePortalInput(body.reviewId || body.review_id, 80),
+      leftDefenseId: validatePortalInput(body.leftDefenseId || body.left_defense_id, 80),
+      rightDefenseId: validatePortalInput(body.rightDefenseId || body.right_defense_id, 80),
+    });
+
+    sendJson(res, 200, { ok: true, mergePlan: plan, merge_plan: plan });
+  } catch (error) {
+    if (isLibraryEquivalenceSchemaMissing(error) || isMissingGuildLibrarySchema(error)) {
+      sendJson(res, 428, { error: "Migration fusion bibliotheque defenses requise." });
+      return;
+    }
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Plan de fusion indisponible." });
+  }
+}
+
+async function handleLibraryMerge(body, req, res) {
+  const actor = await requireAdmin(req, res);
+  if (!actor) return;
+
+  let scope;
+  try {
+    scope = await resolveDefenseLibraryScope(actor, validatePortalInput(body.guildCode, 40) || actor.guild_code);
+  } catch (error) {
+    sendJson(res, error?.statusCode || 403, { error: error?.message || "Acces guilde refuse." });
+    return;
+  }
+
+  try {
+    const [{ defenses }, reviews] = await Promise.all([
+      loadMappedDefenseRowsInScope(scope),
+      loadLibrarySimilarityReviews(supabase, scope.organizationId),
+    ]);
+    const plan = buildGuildDefenseLibraryMergePlan(defenses, reviews, {
+      organizationId: scope.organizationId,
+      reviewId: validatePortalInput(body.reviewId || body.review_id, 80),
+    });
+
+    if (!plan.canMerge || !plan.canonical?.id || !plan.absorbed?.id) {
+      sendJson(res, 409, { ok: false, error: "Fusion bloquee par le plan de controle.", mergePlan: plan, merge_plan: plan });
+      return;
+    }
+
+    const { data, error } = await supabase.rpc("merge_guild_defense_library_roots", {
+      p_review_id: plan.reviewId || plan.review_id,
+      p_canonical_defense_id: plan.canonical.id,
+      p_absorbed_defense_id: plan.absorbed.id,
+      p_actor_member_id: actor.id || null,
+      p_actor_name: actor.watcher_name || actor.display_name || actor.name || "",
+      p_merge_plan: plan,
+    });
+
+    if (error) throw error;
+
+    sendJson(res, 200, {
+      ok: true,
+      mergeResult: data || null,
+      merge_result: data || null,
+      mergePlan: plan,
+      merge_plan: plan,
+    });
+  } catch (error) {
+    if (isLibraryEquivalenceSchemaMissing(error) || isMissingGuildLibrarySchema(error)) {
+      sendJson(res, 428, { error: "Migration fusion bibliotheque defenses requise." });
+      return;
+    }
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Fusion bibliotheque impossible." });
   }
 }
 
@@ -2034,6 +2139,8 @@ export default async function handler(req, res) {
     if (action === "library-similarities") return await handleLibrarySimilarities(body, req, res);
     if (action === "library-equivalence-details") return await handleLibraryEquivalenceDetails(body, req, res);
     if (action === "library-review") return await handleLibrarySimilarityReview(body, req, res);
+    if (action === "library-merge-preview") return await handleLibraryMergePreview(body, req, res);
+    if (action === "library-merge") return await handleLibraryMerge(body, req, res);
     if (action === "library-recalculate") return await handleLibrarySimilarityRecalculate(body, req, res);
     if (action === "ensure-local") return await handleEnsureLocal(body, req, res);
     if (action === "upload-image") return await handleUploadImage(body, req, res);

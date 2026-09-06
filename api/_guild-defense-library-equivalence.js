@@ -22,8 +22,12 @@ const LIBRARY_DEFENSE_SELECT = `
   guild_code,
   is_global,
   is_hidden,
+  merged_into_defense_id,
+  merged_at,
+  merged_by_member_id,
   organization_id,
   image_url,
+  created_at,
   source_defense_id,
   source_guild_code,
   source_defense_name,
@@ -78,8 +82,12 @@ function getDefenseSourceId(defense) {
   return defense?.source_defense_id || defense?.sourceDefenseId || null;
 }
 
+function getDefenseMergedIntoId(defense) {
+  return defense?.merged_into_defense_id || defense?.mergedIntoDefenseId || null;
+}
+
 function isHiddenDefense(defense) {
-  return Boolean(defense?.is_hidden || defense?.isHidden);
+  return Boolean(defense?.is_hidden || defense?.isHidden || getDefenseMergedIntoId(defense));
 }
 
 function isNativeLibraryDefense(defense) {
@@ -185,6 +193,391 @@ function mapDefenseSummary(defense) {
     image_url: defense?.image_url || defense?.imageUrl || defense?.image || "",
     sourceEnemyDefenseId: defense?.source_enemy_defense_id || defense?.sourceEnemyDefenseId || null,
     source_enemy_defense_id: defense?.source_enemy_defense_id || defense?.sourceEnemyDefenseId || null,
+    mergedIntoDefenseId: getDefenseMergedIntoId(defense),
+    merged_into_defense_id: getDefenseMergedIntoId(defense),
+  };
+}
+
+function readDefenseConditions(defense) {
+  return Array.isArray(defense?.guild_defense_conditions)
+    ? defense.guild_defense_conditions
+    : Array.isArray(defense?.conditions)
+      ? defense.conditions
+      : [];
+}
+
+function readDefenseBlocks(defense) {
+  return Array.isArray(defense?.guild_defense_blocks)
+    ? defense.guild_defense_blocks
+    : Array.isArray(defense?.infoBlocks)
+      ? defense.infoBlocks
+      : Array.isArray(defense?.info_blocks)
+        ? defense.info_blocks
+        : [];
+}
+
+function getDefenseImageUrl(defense) {
+  return cleanText(defense?.image_url || defense?.imageUrl || defense?.image);
+}
+
+function getDefenseGuildCode(defense) {
+  return cleanText(defense?.guild_code || defense?.guildCode);
+}
+
+function hasDefenseEnemyLink(defense) {
+  return Boolean(defense?.source_enemy_defense_id || defense?.sourceEnemyDefenseId || defense?.source_enemy_defense_fingerprint || defense?.sourceEnemyDefenseFingerprint);
+}
+
+function getEnemyLinkIdentity(defense) {
+  const enemyId = cleanText(defense?.source_enemy_defense_id || defense?.sourceEnemyDefenseId);
+  const fingerprint = cleanText(defense?.source_enemy_defense_fingerprint || defense?.sourceEnemyDefenseFingerprint);
+  if (!enemyId && !fingerprint) return "";
+  return fingerprint || `id:${enemyId}`;
+}
+
+function normalizeComparableText(value) {
+  return cleanText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function getConditionKey(condition) {
+  const championId = cleanText(condition?.champion_id || condition?.championId);
+  const championName = normalizeGvgChampionSimilarityKey(
+    condition?.champions?.name ||
+      condition?.champions?.portal_name ||
+      condition?.champions?.english_name ||
+      condition?.champion ||
+      condition?.hero,
+  );
+  const minAwakening = Number(condition?.min_awakening ?? condition?.minAwakening ?? 0) || 0;
+  return `${championId || championName}:a${minAwakening}`;
+}
+
+function getBlockKey(block) {
+  return [
+    normalizeComparableText(block?.block_type || block?.blockType || "text"),
+    normalizeComparableText(block?.content),
+  ].join(":");
+}
+
+function hasUsefulMetadata(value) {
+  const text = normalizeComparableText(value);
+  return Boolean(text && text !== "none" && text !== "aucun" && text !== "--" && text !== "meta_s");
+}
+
+function hasDescriptiveTitle(name) {
+  const normalized = normalizeComparableText(name);
+  if (normalized.length < 7) return false;
+  return !["test", "defense", "def", "tour", "bastion", "copy", "copie"].some((token) => normalized === token || normalized.startsWith(`${token} `));
+}
+
+function getCreatedTime(defense) {
+  const time = Date.parse(defense?.created_at || defense?.createdAt || "");
+  return Number.isNaN(time) ? Number.MAX_SAFE_INTEGER : time;
+}
+
+function getActiveDescendants(defenseRows = [], rootId = "") {
+  const rootKey = String(rootId || "");
+  return (defenseRows || []).filter(
+    (defense) => String(getDefenseSourceId(defense) || "") === rootKey && !isHiddenDefense(defense),
+  );
+}
+
+function getPresentGuildsForRoots(defenseRows = [], rootIds = []) {
+  const rootSet = new Set((rootIds || []).map(String));
+  const presentByGuild = new Map();
+
+  for (const defense of defenseRows || []) {
+    if (!defense?.id || isHiddenDefense(defense)) continue;
+    const rowRootId = getDefenseSourceId(defense) ? String(getDefenseSourceId(defense)) : String(defense.id);
+    if (!rootSet.has(rowRootId)) continue;
+    const guildCode = getDefenseGuildCode(defense);
+    const guildKey = normalizeGuildCodeKey(guildCode);
+    if (!guildKey || presentByGuild.has(guildKey)) continue;
+    presentByGuild.set(guildKey, {
+      guildCode,
+      guild_code: guildCode,
+      viaDefenseId: defense.id,
+      via_defense_id: defense.id,
+      viaDefenseName: defense.name || "",
+      via_defense_name: defense.name || "",
+      status: getDefenseSourceId(defense) ? "imported" : "native",
+    });
+  }
+
+  return [...presentByGuild.values()];
+}
+
+export function scoreGuildDefenseLibraryRoot(defense, defenseRows = []) {
+  const descendants = getActiveDescendants(defenseRows, defense?.id);
+  const presentGuilds = getPresentGuildsForRoots(defenseRows, [defense?.id]);
+  const conditionCount = new Set(readDefenseConditions(defense).map(getConditionKey).filter(Boolean)).size;
+  const blockCount = new Set(readDefenseBlocks(defense).map(getBlockKey).filter(Boolean)).size;
+  const hasLayout = localDefenseHasCompleteLayout(defense);
+  const hasEnemy = hasDefenseEnemyLink(defense);
+  const hasImage = Boolean(getDefenseImageUrl(defense));
+  const descriptiveTitle = hasDescriptiveTitle(defense?.name);
+  const tierUseful = hasUsefulMetadata(defense?.tier);
+  const factionUseful = hasUsefulMetadata(defense?.faction);
+
+  const metrics = {
+    layoutComplete: hasLayout,
+    enemyLink: hasEnemy,
+    image: hasImage,
+    blockCount,
+    conditionCount,
+    activeCopyCount: descendants.length,
+    presentGuildCount: presentGuilds.length,
+    descriptiveTitle,
+    tierUseful,
+    factionUseful,
+  };
+  const score =
+    (hasLayout ? 400 : 0) +
+    (hasEnemy ? 250 : 0) +
+    (hasImage ? 180 : 0) +
+    Math.min(blockCount, 8) * 20 +
+    Math.min(conditionCount, 8) * 15 +
+    Math.min(presentGuilds.length, 10) * 12 +
+    Math.min(descendants.length, 12) * 8 +
+    (descriptiveTitle ? 30 : 0) +
+    (tierUseful ? 10 : 0) +
+    (factionUseful ? 10 : 0);
+
+  const reasons = [];
+  if (hasLayout) reasons.push("layout complet");
+  if (hasEnemy) reasons.push("lien defense adverse");
+  if (hasImage) reasons.push("image presente");
+  if (blockCount) reasons.push(`${blockCount} bloc(s) info`);
+  if (conditionCount) reasons.push(`${conditionCount} condition(s)`);
+  if (presentGuilds.length) reasons.push(`${presentGuilds.length} guilde(s) concernee(s)`);
+  if (descriptiveTitle) reasons.push("titre descriptif");
+  if (tierUseful || factionUseful) reasons.push("tier/faction renseignes");
+  if (!reasons.length) reasons.push("donnees minimales");
+
+  return { score, reasons, metrics };
+}
+
+function compareScoredDefenses(left, right, defenseRows = []) {
+  const leftScore = scoreGuildDefenseLibraryRoot(left, defenseRows);
+  const rightScore = scoreGuildDefenseLibraryRoot(right, defenseRows);
+  if (leftScore.score !== rightScore.score) return leftScore.score > rightScore.score ? -1 : 1;
+
+  const leftCreated = getCreatedTime(left);
+  const rightCreated = getCreatedTime(right);
+  if (leftCreated !== rightCreated) return leftCreated < rightCreated ? -1 : 1;
+
+  return String(left?.id || "").localeCompare(String(right?.id || ""));
+}
+
+function chooseCanonicalDefense(left, right, defenseRows = []) {
+  const ordered = [left, right].sort((a, b) => compareScoredDefenses(a, b, defenseRows));
+  const canonical = ordered[0];
+  const absorbed = ordered[1];
+  return {
+    canonical,
+    absorbed,
+    canonicalScore: scoreGuildDefenseLibraryRoot(canonical, defenseRows),
+    absorbedScore: scoreGuildDefenseLibraryRoot(absorbed, defenseRows),
+  };
+}
+
+function hasSameCompleteLayout(left, right) {
+  if (!localDefenseHasCompleteLayout(left) || !localDefenseHasCompleteLayout(right)) return true;
+  return createLocalDefenseReviewSignature(left) === createLocalDefenseReviewSignature(right);
+}
+
+function hasCompatibleEnemyLink(left, right) {
+  const leftEnemy = getEnemyLinkIdentity(left);
+  const rightEnemy = getEnemyLinkIdentity(right);
+  return !leftEnemy || !rightEnemy || leftEnemy === rightEnemy;
+}
+
+function buildTransferPlan(canonical, absorbed) {
+  const transfers = [];
+
+  if (!localDefenseHasCompleteLayout(canonical) && localDefenseHasCompleteLayout(absorbed)) {
+    transfers.push({ type: "layout", label: "layout", action: "copy_from_absorbed" });
+  }
+  if (!hasDefenseEnemyLink(canonical) && hasDefenseEnemyLink(absorbed)) {
+    transfers.push({ type: "enemy", label: "lien enemy", action: "copy_from_absorbed" });
+  }
+  if (!getDefenseImageUrl(canonical) && getDefenseImageUrl(absorbed)) {
+    transfers.push({ type: "image", label: "image", action: "copy_from_absorbed" });
+  } else if (getDefenseImageUrl(canonical) && getDefenseImageUrl(absorbed) && getDefenseImageUrl(canonical) !== getDefenseImageUrl(absorbed)) {
+    transfers.push({ type: "image", label: "image absorbed conservee en audit", action: "audit_only" });
+  }
+
+  const canonicalConditions = new Set(readDefenseConditions(canonical).map(getConditionKey).filter(Boolean));
+  const absorbedConditions = readDefenseConditions(absorbed).map(getConditionKey).filter(Boolean);
+  const newConditionCount = absorbedConditions.filter((key) => !canonicalConditions.has(key)).length;
+  if (newConditionCount) transfers.push({ type: "conditions", label: `${newConditionCount} condition(s)`, action: "union" });
+
+  const canonicalBlocks = new Set(readDefenseBlocks(canonical).map(getBlockKey).filter(Boolean));
+  const absorbedBlocks = readDefenseBlocks(absorbed).map(getBlockKey).filter(Boolean);
+  const newBlockCount = absorbedBlocks.filter((key) => !canonicalBlocks.has(key)).length;
+  if (newBlockCount) transfers.push({ type: "blocks", label: `${newBlockCount} bloc(s) info`, action: "union" });
+
+  if (!hasUsefulMetadata(canonical?.tier) && hasUsefulMetadata(absorbed?.tier)) {
+    transfers.push({ type: "tier", label: "tier", action: "copy_from_absorbed" });
+  }
+  if (!hasUsefulMetadata(canonical?.faction) && hasUsefulMetadata(absorbed?.faction)) {
+    transfers.push({ type: "faction", label: "faction", action: "copy_from_absorbed" });
+  }
+
+  return transfers;
+}
+
+function buildLocalCollisionPlans(canonical, absorbed, defenseRows = []) {
+  const canonicalChildrenByGuild = new Map();
+  for (const child of getActiveDescendants(defenseRows, canonical?.id)) {
+    const guildKey = normalizeGuildCodeKey(getDefenseGuildCode(child));
+    if (guildKey && !canonicalChildrenByGuild.has(guildKey)) canonicalChildrenByGuild.set(guildKey, child);
+  }
+
+  const collisions = [];
+  const directRepointed = [];
+  for (const absorbedChild of getActiveDescendants(defenseRows, absorbed?.id)) {
+    const guildKey = normalizeGuildCodeKey(getDefenseGuildCode(absorbedChild));
+    const canonicalChild = guildKey ? canonicalChildrenByGuild.get(guildKey) : null;
+    if (!canonicalChild) {
+      directRepointed.push(absorbedChild);
+      continue;
+    }
+
+    const ordered = [canonicalChild, absorbedChild].sort((a, b) => compareScoredDefenses(a, b, defenseRows));
+    const keep = ordered[0];
+    const hide = ordered[1];
+    const conflicts = [];
+    if (!hasSameCompleteLayout(keep, hide)) conflicts.push("layouts locaux complets differents");
+    if (!hasCompatibleEnemyLink(keep, hide)) conflicts.push("liens enemy locaux incompatibles");
+
+    collisions.push({
+      guildCode: getDefenseGuildCode(absorbedChild),
+      guild_code: getDefenseGuildCode(absorbedChild),
+      keepDefenseId: keep.id,
+      keep_defense_id: keep.id,
+      hideDefenseId: hide.id,
+      hide_defense_id: hide.id,
+      canonicalCopyId: canonicalChild.id,
+      canonical_copy_id: canonicalChild.id,
+      absorbedCopyId: absorbedChild.id,
+      absorbed_copy_id: absorbedChild.id,
+      canResolve: conflicts.length === 0,
+      can_resolve: conflicts.length === 0,
+      conflicts,
+    });
+  }
+
+  return { collisions, directRepointed };
+}
+
+export function buildGuildDefenseLibraryMergePlan(
+  defenseRows = [],
+  reviews = [],
+  { organizationId = "", reviewId = "", leftDefenseId = "", rightDefenseId = "" } = {},
+) {
+  const organizationKey = String(organizationId || "");
+  const rowsById = new Map((defenseRows || []).filter((row) => row?.id).map((row) => [String(row.id), row]));
+  const requestedPairKey = leftDefenseId && rightDefenseId ? makePairKey(leftDefenseId, rightDefenseId) : "";
+  const review = (reviews || []).find((row) => {
+    if (reviewId && String(row?.id || "") === String(reviewId)) return true;
+    return requestedPairKey && makePairKey(row?.left_defense_id, row?.right_defense_id) === requestedPairKey;
+  });
+  const conflicts = [];
+
+  if (!review) {
+    conflicts.push({ type: "review_missing", message: "Review bibliotheque introuvable." });
+    return { ok: true, canMerge: false, can_merge: false, conflicts, transfers: [], localCollisions: [], local_collisions: [] };
+  }
+
+  const left = rowsById.get(String(review.left_defense_id || leftDefenseId || ""));
+  const right = rowsById.get(String(review.right_defense_id || rightDefenseId || ""));
+  if (!left || !right) conflicts.push({ type: "root_missing", message: "Une des deux roots est introuvable." });
+  if (organizationKey && String(review.organization_id || "") !== organizationKey) {
+    conflicts.push({ type: "review_tenant_mismatch", message: "Review hors organisation." });
+  }
+  if (review.status !== "identical") {
+    conflicts.push({ type: "review_not_identical", message: "La paire doit d'abord etre validee IDENTIQUE." });
+  }
+
+  if (left && right) {
+    const leftOrganization = String(left.organization_id || left.organizationId || "");
+    const rightOrganization = String(right.organization_id || right.organizationId || "");
+    if (!leftOrganization || !rightOrganization || leftOrganization !== rightOrganization) {
+      conflicts.push({ type: "cross_tenant", message: "Fusion inter-organisation refusee." });
+    }
+    if (organizationKey && (leftOrganization !== organizationKey || rightOrganization !== organizationKey)) {
+      conflicts.push({ type: "organization_mismatch", message: "Defense hors organisation active." });
+    }
+    if (getDefenseSourceId(left) || getDefenseSourceId(right)) {
+      conflicts.push({ type: "non_native_root", message: "Seules deux roots natives peuvent etre fusionnees." });
+    }
+    if (isHiddenDefense(left) || isHiddenDefense(right)) {
+      conflicts.push({ type: "inactive_root", message: "Une root est deja masquee ou fusionnee." });
+    }
+    const leftSignature = getDefenseSimilaritySignature(left);
+    const rightSignature = getDefenseSimilaritySignature(right);
+    if (!leftSignature || leftSignature !== rightSignature || leftSignature !== review.similarity_signature) {
+      conflicts.push({ type: "signature_mismatch", message: "Signature structurelle differente ou obsolete." });
+    }
+    if (!reviewIsCurrent(review, rowsById)) {
+      conflicts.push({ type: "review_obsolete", message: "Review obsolete apres changement de defense." });
+    }
+    if (!hasSameCompleteLayout(left, right)) {
+      conflicts.push({ type: "layout_conflict", message: "Layouts complets differents." });
+    }
+    if (!hasCompatibleEnemyLink(left, right)) {
+      conflicts.push({ type: "enemy_link_conflict", message: "Liens enemy incompatibles." });
+    }
+  }
+
+  const choice = left && right ? chooseCanonicalDefense(left, right, defenseRows) : {};
+  const { canonical, absorbed, canonicalScore, absorbedScore } = choice;
+  const { collisions = [], directRepointed = [] } = canonical && absorbed
+    ? buildLocalCollisionPlans(canonical, absorbed, defenseRows)
+    : {};
+  const unresolvedCollisions = collisions.filter((collision) => !collision.canResolve);
+  for (const collision of unresolvedCollisions) {
+    conflicts.push({
+      type: "local_collision_conflict",
+      message: `Collision locale impossible a resoudre sans arbitrage dans ${collision.guildCode || collision.guild_code}.`,
+      guildCode: collision.guildCode || collision.guild_code,
+      conflicts: collision.conflicts,
+    });
+  }
+
+  const transfers = canonical && absorbed ? buildTransferPlan(canonical, absorbed) : [];
+  const guilds = canonical && absorbed ? getPresentGuildsForRoots(defenseRows, [canonical.id, absorbed.id]) : [];
+  const canMerge = conflicts.length === 0;
+
+  return {
+    ok: true,
+    canMerge,
+    can_merge: canMerge,
+    reviewId: review.id || "",
+    review_id: review.id || "",
+    canonical: canonical ? mapDefenseSummary(canonical) : null,
+    absorbed: absorbed ? mapDefenseSummary(absorbed) : null,
+    canonicalScore,
+    canonical_score: canonicalScore,
+    absorbedScore,
+    absorbed_score: absorbedScore,
+    reasons: canonicalScore?.reasons || [],
+    guilds,
+    descendants: {
+      repointedCount: directRepointed.length,
+      repointed_count: directRepointed.length,
+      repointedDefenseIds: directRepointed.map((defense) => defense.id),
+      repointed_defense_ids: directRepointed.map((defense) => defense.id),
+    },
+    localCollisions: collisions,
+    local_collisions: collisions,
+    transfers,
+    conflicts,
   };
 }
 
@@ -377,6 +770,11 @@ export function isLibraryEquivalenceSchemaMissing(error) {
     code === "PGRST204" ||
     code === "42703" ||
     message.includes("guild_defense_library_similarity_reviews") ||
+    message.includes("guild_defense_library_merges") ||
+    message.includes("merge_guild_defense_library_roots") ||
+    message.includes("merged_into_defense_id") ||
+    message.includes("merged_at") ||
+    message.includes("merged_by_member_id") ||
     message.includes("guild_defense_library_equivalence_touch_updated_at")
   );
 }
@@ -868,7 +1266,7 @@ export async function loadLibrarySimilarityCandidates(
   const candidates = [];
 
   for (const review of reviews || []) {
-    if (review.status !== "pending" || !reviewIsCurrent(review, defensesById)) continue;
+    if (!["pending", "identical"].includes(review.status) || !reviewIsCurrent(review, defensesById)) continue;
     if (String(review.left_defense_id) !== rootId && String(review.right_defense_id) !== rootId) continue;
     const leftDefense = defensesById.get(String(review.left_defense_id));
     const rightDefense = defensesById.get(String(review.right_defense_id));

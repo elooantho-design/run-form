@@ -3,10 +3,12 @@ import { readFile } from "node:fs/promises";
 
 import {
   buildLibraryEquivalenceState,
+  buildGuildDefenseLibraryMergePlan,
   detectLibraryDefenseSimilarities,
   findLibraryDefenseSimilarityCandidates,
   getEquivalentImportTargetStatus,
   markLibrarySimilarityReview,
+  scoreGuildDefenseLibraryRoot,
 } from "../api/_guild-defense-library-equivalence.js";
 import {
   createLocalDefenseReviewSignature,
@@ -53,25 +55,54 @@ function makeDefense({
   sourceDefenseId = null,
   sourceEnemyDefenseId = null,
   sourceEnemyDefenseFingerprint = null,
+  tier = "S",
+  faction = "",
   layout = TEST_SIMI_LAYOUT,
   includeLayout = true,
+  imageUrl = "",
+  conditions = [],
+  infoBlocks = [],
+  mergedIntoDefenseId = null,
+  isHidden = false,
+  createdAt = "2026-08-24T12:00:00.000Z",
 } = {}) {
   return {
     id,
     name,
-    tier: "S",
+    tier,
     type: "Tour",
+    faction,
     guild_code: guildCode,
     organization_id: organizationId,
-    is_hidden: false,
+    is_hidden: isHidden,
     is_global: true,
     source_defense_id: sourceDefenseId,
+    merged_into_defense_id: mergedIntoDefenseId,
+    merged_at: mergedIntoDefenseId ? "2026-08-25T12:00:00.000Z" : null,
+    merged_by_member_id: mergedIntoDefenseId ? "member-admin" : null,
     source_enemy_defense_id: sourceEnemyDefenseId,
     source_enemy_defense_fingerprint: sourceEnemyDefenseFingerprint,
     source_enemy_portal_guild_id: sourceEnemyDefenseId ? "portal-guild-g3" : null,
     source_enemy_label: sourceEnemyDefenseId ? "G3 - Taux de defaite 14,3 %" : null,
     source_enemy_imported_at: sourceEnemyDefenseId ? "2026-08-24T12:00:00.000Z" : null,
+    image_url: imageUrl,
+    created_at: createdAt,
     guild_defense_slots: makeSlots(layout, { includeLayout }),
+    guild_defense_conditions: conditions,
+    guild_defense_blocks: infoBlocks,
+  };
+}
+
+function makeLibraryReview(leftDefense, rightDefense, { status = "identical", organizationId = PALADIN_ORG, id = "review-merge" } = {}) {
+  return {
+    id,
+    organization_id: organizationId,
+    left_defense_id: leftDefense.id,
+    right_defense_id: rightDefense.id,
+    status,
+    left_identity_signature: createLocalDefenseReviewSignature(leftDefense) || createLocalDefenseSimilaritySignature(leftDefense),
+    right_identity_signature: createLocalDefenseReviewSignature(rightDefense) || createLocalDefenseSimilaritySignature(rightDefense),
+    similarity_signature: createLocalDefenseSimilaritySignature(leftDefense),
   };
 }
 
@@ -103,6 +134,8 @@ function mapDefenseLikePortal(row) {
     organization_id: row.organization_id || "",
     sourceDefenseId: row.source_defense_id || null,
     source_defense_id: row.source_defense_id || null,
+    mergedIntoDefenseId: row.merged_into_defense_id || null,
+    merged_into_defense_id: row.merged_into_defense_id || null,
     sourceEnemyDefenseId: row.source_enemy_defense_id || null,
     source_enemy_defense_id: row.source_enemy_defense_id || null,
     isHidden: Boolean(row.is_hidden),
@@ -110,6 +143,10 @@ function mapDefenseLikePortal(row) {
     slots: detailedSlots.map((slot) => slot.champion).filter(Boolean),
     detailedSlots,
     detailed_slots: detailedSlots,
+    image: row.image_url || "",
+    image_url: row.image_url || "",
+    conditions: row.guild_defense_conditions || [],
+    infoBlocks: row.guild_defense_blocks || [],
   };
 }
 
@@ -535,6 +572,238 @@ await assert.rejects(
   "manual identical validation is blocked when enemy fingerprints conflict",
 );
 
+const emptyMergeA = makeDefense({
+  id: "merge-empty-a",
+  name: "Alpha",
+  guildCode: "G1",
+  includeLayout: false,
+  tier: "meta_s",
+  createdAt: "2026-08-24T09:00:00.000Z",
+});
+const emptyMergeB = makeDefense({
+  id: "merge-empty-b",
+  name: "Beta",
+  guildCode: "G2",
+  includeLayout: false,
+  tier: "meta_s",
+  createdAt: "2026-08-24T10:00:00.000Z",
+});
+const emptyRowsBeforePreview = structuredClone([emptyMergeA, emptyMergeB]);
+const emptyPlan = buildGuildDefenseLibraryMergePlan(emptyRowsBeforePreview, [makeLibraryReview(emptyMergeA, emptyMergeB)], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-merge",
+});
+assert.equal(emptyPlan.canMerge, true, "two identical empty native roots can be merged after human identical review");
+assert.equal(emptyPlan.canonical.id, emptyMergeA.id, "oldest root wins deterministic tie-breaker when scores are equal");
+assert.deepEqual(emptyRowsBeforePreview, [emptyMergeA, emptyMergeB], "merge preview does not mutate defense rows");
+
+const richMergeA = makeDefense({
+  id: "merge-rich-a",
+  name: "Test",
+  guildCode: "G1",
+  includeLayout: false,
+  tier: "meta_s",
+  createdAt: "2026-08-24T09:00:00.000Z",
+});
+const richMergeB = makeDefense({
+  id: "merge-rich-b",
+  name: "Arbitre complet",
+  guildCode: "G3",
+  includeLayout: true,
+  imageUrl: "https://example.test/image.png",
+  sourceEnemyDefenseId: "enemy-shared",
+  sourceEnemyDefenseFingerprint: "enemy-shared-fp",
+  conditions: [{ champion_id: "champ-brokkir", min_awakening: 1 }],
+  infoBlocks: [{ block_type: "note", content: "Rotation precise" }],
+  faction: "Infernal",
+  createdAt: "2026-08-24T10:00:00.000Z",
+});
+const richPlan = buildGuildDefenseLibraryMergePlan([richMergeA, richMergeB], [makeLibraryReview(richMergeA, richMergeB, { id: "review-rich" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-rich",
+});
+assert.equal(richPlan.canMerge, true, "empty root plus complete root can be merged");
+assert.equal(richPlan.canonical.id, richMergeB.id, "complete root is selected as canonical even if newer");
+assert.ok(richPlan.canonicalScore.score > richPlan.absorbedScore.score, "canonical score explains why the complete root wins");
+
+const imageRoot = makeDefense({
+  id: "merge-image-root",
+  name: "Image root",
+  guildCode: "G1",
+  includeLayout: false,
+  imageUrl: "https://example.test/image-a.png",
+});
+const blockRoot = makeDefense({
+  id: "merge-block-root",
+  name: "Block root",
+  guildCode: "G2",
+  includeLayout: false,
+  infoBlocks: [{ block_type: "note", content: "Do not lose this block" }],
+});
+const imageBlockPlan = buildGuildDefenseLibraryMergePlan([imageRoot, blockRoot], [makeLibraryReview(imageRoot, blockRoot, { id: "review-image-block" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-image-block",
+});
+assert.equal(imageBlockPlan.canMerge, true, "image root plus block root can be merged without loss");
+assert.equal(imageBlockPlan.canonical.id, imageRoot.id, "image is a stronger canonical signal than a single info block");
+assert.ok(imageBlockPlan.transfers.some((transfer) => transfer.type === "blocks"), "absorbed info blocks are listed for conservative union");
+
+const layoutRoot = makeDefense({
+  id: "merge-layout-root",
+  name: "Layout root",
+  guildCode: "G1",
+  includeLayout: true,
+});
+const noLayoutRoot = makeDefense({
+  id: "merge-no-layout-root",
+  name: "No layout root",
+  guildCode: "G2",
+  includeLayout: false,
+});
+const layoutPlan = buildGuildDefenseLibraryMergePlan([layoutRoot, noLayoutRoot], [makeLibraryReview(layoutRoot, noLayoutRoot, { id: "review-layout" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-layout",
+});
+assert.equal(layoutPlan.canMerge, true, "complete layout root can absorb a no-layout duplicate");
+assert.equal(layoutPlan.canonical.id, layoutRoot.id, "complete layout stays on the canonical root");
+
+const sameEnemyLeft = makeDefense({
+  id: "merge-same-enemy-left",
+  name: "Same enemy left",
+  guildCode: "G1",
+  sourceEnemyDefenseId: "enemy-same",
+  sourceEnemyDefenseFingerprint: "enemy-same-fp",
+});
+const sameEnemyRight = makeDefense({
+  id: "merge-same-enemy-right",
+  name: "Same enemy right",
+  guildCode: "G2",
+  sourceEnemyDefenseId: "enemy-same",
+  sourceEnemyDefenseFingerprint: "enemy-same-fp",
+});
+const sameEnemyPlan = buildGuildDefenseLibraryMergePlan([sameEnemyLeft, sameEnemyRight], [makeLibraryReview(sameEnemyLeft, sameEnemyRight, { id: "review-same-enemy" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-same-enemy",
+});
+assert.equal(sameEnemyPlan.canMerge, true, "same enemy link stays compatible");
+
+const enemyConflictPlan = buildGuildDefenseLibraryMergePlan([conflictRootA, conflictRootB], [makeLibraryReview(conflictRootA, conflictRootB, { id: "review-enemy-conflict" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-enemy-conflict",
+});
+assert.equal(enemyConflictPlan.canMerge, false, "different enemy links block library root merge");
+assert.ok(enemyConflictPlan.conflicts.some((conflict) => conflict.type === "enemy_link_conflict"), "enemy conflict is explicit in the plan");
+
+const layoutConflictB = makeDefense({
+  id: "merge-layout-conflict-b",
+  name: "Layout conflict B",
+  guildCode: "G2",
+  layout: [
+    ["comtedracula", "A2", "N"],
+    ["brokkir", "A5", "E"],
+    ["eirlys", "B3", "E"],
+    ["oren", "A3", "E"],
+    ["valara", "B4", "E"],
+  ],
+  includeLayout: true,
+});
+const layoutConflictPlan = buildGuildDefenseLibraryMergePlan([layoutRoot, layoutConflictB], [makeLibraryReview(layoutRoot, layoutConflictB, { id: "review-layout-conflict" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-layout-conflict",
+});
+assert.equal(layoutConflictPlan.canMerge, false, "different complete layouts block library root merge");
+assert.ok(layoutConflictPlan.conflicts.some((conflict) => conflict.type === "layout_conflict"), "layout conflict is explicit in the plan");
+
+const fleetRootA = makeDefense({ id: "merge-fleet-a", name: "Fleet A", guildCode: "G1", includeLayout: false, createdAt: "2026-08-24T09:00:00.000Z" });
+const fleetRootB = makeDefense({ id: "merge-fleet-b", name: "Fleet B", guildCode: "G3", includeLayout: false, createdAt: "2026-08-24T10:00:00.000Z" });
+const fleetAChildG2 = makeDefense({ id: "merge-fleet-a-g2", name: "Fleet A G2", guildCode: "G2", sourceDefenseId: fleetRootA.id, includeLayout: false });
+const fleetBChildG4 = makeDefense({ id: "merge-fleet-b-g4", name: "Fleet B G4", guildCode: "G4", sourceDefenseId: fleetRootB.id, includeLayout: false });
+const fleetPlan = buildGuildDefenseLibraryMergePlan(
+  [fleetRootA, fleetRootB, fleetAChildG2, fleetBChildG4],
+  [makeLibraryReview(fleetRootA, fleetRootB, { id: "review-fleet" })],
+  { organizationId: PALADIN_ORG, reviewId: "review-fleet" },
+);
+assert.equal(fleetPlan.canMerge, true, "roots with distinct local copies can be merged");
+assert.deepEqual(
+  fleetPlan.guilds.map((entry) => entry.guildCode).sort(),
+  ["G1", "G2", "G3", "G4"],
+  "merge plan reports every guild that will remain present through canonical family",
+);
+assert.deepEqual(fleetPlan.descendants.repointedDefenseIds, [fleetBChildG4.id], "absorbed descendants without collision are repointed");
+
+const collisionRootA = makeDefense({ id: "merge-collision-a", name: "Collision A", guildCode: "G1", includeLayout: false });
+const collisionRootB = makeDefense({ id: "merge-collision-b", name: "Collision B", guildCode: "G2", includeLayout: false, createdAt: "2026-08-24T10:00:00.000Z" });
+const collisionAChild = makeDefense({ id: "merge-collision-a-g3", name: "Collision A G3", guildCode: "G3", sourceDefenseId: collisionRootA.id, includeLayout: false });
+const collisionBChild = makeDefense({
+  id: "merge-collision-b-g3",
+  name: "Collision B G3",
+  guildCode: "G3",
+  sourceDefenseId: collisionRootB.id,
+  includeLayout: false,
+  imageUrl: "https://example.test/local-b.png",
+});
+const collisionPlan = buildGuildDefenseLibraryMergePlan(
+  [collisionRootA, collisionRootB, collisionAChild, collisionBChild],
+  [makeLibraryReview(collisionRootA, collisionRootB, { id: "review-collision" })],
+  { organizationId: PALADIN_ORG, reviewId: "review-collision" },
+);
+assert.equal(collisionPlan.canMerge, true, "compatible local collision can be resolved conservatively");
+assert.equal(collisionPlan.localCollisions.length, 1, "one same-guild local collision is reported");
+assert.equal(collisionPlan.localCollisions[0].keepDefenseId, collisionBChild.id, "local collision keeps the richer local copy");
+
+const postMergeState = buildLibraryEquivalenceState(
+  [
+    fleetRootA,
+    { ...fleetRootB, is_hidden: true, merged_into_defense_id: fleetRootA.id },
+    fleetAChildG2,
+    { ...fleetBChildG4, source_defense_id: fleetRootA.id },
+  ],
+  [makeLibraryReview(fleetRootA, fleetRootB, { id: "review-post-merge" })],
+);
+assert.equal(postMergeState.byDefenseId.has(fleetRootB.id), false, "absorbed root is excluded from active library state");
+assert.equal(
+  getEquivalentImportTargetStatus(fleetRootA, "G4", [fleetRootA, fleetAChildG2, { ...fleetBChildG4, source_defense_id: fleetRootA.id }], postMergeState).status,
+  "imported",
+  "import after merge resolves former absorbed descendants through the canonical root",
+);
+
+const mergedDetectStub = createSupabaseStub({
+  defenses: [fleetRootA, { ...fleetRootB, merged_into_defense_id: fleetRootA.id }],
+  reviews: [],
+});
+const mergedDetectResult = await detectLibraryDefenseSimilarities(mergedDetectStub.supabase, {
+  organizationId: PALADIN_ORG,
+  rootDefenseIds: [fleetRootA.id],
+});
+assert.equal(mergedDetectResult.pendingCreated, 0, "recalculation ignores merged roots and does not recreate ghost pairs");
+assert.equal(mergedDetectStub.state.reviews.length, 0, "merged roots do not become review candidates again");
+
+const differentPlan = buildGuildDefenseLibraryMergePlan([emptyMergeA, emptyMergeB], [makeLibraryReview(emptyMergeA, emptyMergeB, { status: "different", id: "review-different" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-different",
+});
+assert.equal(differentPlan.canMerge, false, "review DIFFERENT blocks merge");
+assert.ok(differentPlan.conflicts.some((conflict) => conflict.type === "review_not_identical"), "different review conflict is explicit");
+
+const crossTenantPlan = buildGuildDefenseLibraryMergePlan([rootA, madRoot], [makeLibraryReview(rootA, madRoot, { id: "review-cross", organizationId: PALADIN_ORG })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-cross",
+});
+assert.equal(crossTenantPlan.canMerge, false, "cross-tenant library merge is refused");
+assert.ok(crossTenantPlan.conflicts.some((conflict) => conflict.type === "cross_tenant"), "tenant conflict is explicit");
+
+const nonNativePlan = buildGuildDefenseLibraryMergePlan([rootA, childG3FromA], [makeLibraryReview(rootA, childG3FromA, { id: "review-non-native" })], {
+  organizationId: PALADIN_ORG,
+  reviewId: "review-non-native",
+});
+assert.equal(nonNativePlan.canMerge, false, "Bibliotheque root to non-root candidate cannot use the root merge path");
+assert.ok(nonNativePlan.conflicts.some((conflict) => conflict.type === "non_native_root"), "non-root conflict is explicit");
+
+const rootScore = scoreGuildDefenseLibraryRoot(richMergeB, [richMergeB]);
+assert.ok(rootScore.metrics.layoutComplete, "canonical score records complete layout");
+assert.ok(rootScore.metrics.enemyLink, "canonical score records enemy link");
+assert.ok(rootScore.reasons.includes("layout complet"), "canonical score returns human-readable reasons");
+
 const [
   helperSource,
   adminApiSource,
@@ -542,6 +811,9 @@ const [
   preflightSql,
   migrationSql,
   verifySql,
+  mergePreflightSql,
+  mergeMigrationSql,
+  mergeVerifySql,
 ] = await Promise.all([
   readFile(new URL("../api/_guild-defense-library-equivalence.js", import.meta.url), "utf8"),
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
@@ -549,6 +821,9 @@ const [
   readFile(new URL("../scripts/guild_defense_library_equivalence_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence_verify.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_preflight.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_verify.sql", import.meta.url), "utf8"),
 ]);
 
 assert.match(helperSource, /guild_defense_library_similarity_reviews/, "helper uses a dedicated library equivalence review table");
@@ -561,12 +836,34 @@ assert.match(adminApiSource, /action === "library-recalculate"/, "admin API expo
 assert.match(adminApiSource, /getEquivalentImportTargetStatus/, "admin API blocks duplicate imports through equivalence");
 assert.match(adminApiSource, /loadPreCreateLibrarySimilarityWarning/, "admin API performs a pre-create library similarity check");
 assert.match(adminApiSource, /allowSimilarLibraryDuplicate/, "admin API keeps create-anyway explicit");
+assert.match(adminApiSource, /action === "library-merge-preview"/, "admin API exposes merge preview without mutation");
+assert.match(adminApiSource, /action === "library-merge"/, "admin API exposes explicit merge action");
+assert.match(adminApiSource, /merge_guild_defense_library_roots/, "admin API delegates merge mutation to a transactional RPC");
 assert.match(enemyBankSource, /propagateLibraryEquivalenceKnowledge/, "enemy validation shares knowledge back to equivalent library roots");
+assert.doesNotMatch(enemyBankSource, /merge_guild_defense_library_roots/, "Bibliotheque to Enemy validation never calls library root merge RPC");
 assert.match(preflightSql, /guild_defense_library_similarity_reviews/, "preflight mentions the new equivalence table");
 assert.match(migrationSql, /create table if not exists public\.guild_defense_library_similarity_reviews/, "migration creates the dedicated table");
 assert.match(migrationSql, /organization_id uuid not null/, "migration keeps organization tenant isolation mandatory");
 assert.match(migrationSql, /unique \(left_defense_id, right_defense_id\)/, "migration prevents duplicate review pairs");
 assert.match(verifySql, /cross_tenant_review_pairs/, "verify audits cross-tenant review pairs");
 assert.match(verifySql, /non_native_review_pairs/, "verify ensures reviews only connect native roots");
+assert.match(helperSource, /buildGuildDefenseLibraryMergePlan/, "helper centralizes the merge preview plan");
+assert.match(helperSource, /scoreGuildDefenseLibraryRoot/, "helper centralizes deterministic canonical scoring");
+assert.match(helperSource, /merged_into_defense_id/, "helper excludes merged roots from active library state");
+assert.match(mergePreflightSql, /read-only/i, "merge preflight is explicitly read-only");
+assert.match(mergePreflightSql, /guild_defense_library_merges/, "merge preflight checks the audit table state");
+assert.match(mergeMigrationSql, /create table if not exists public\.guild_defense_library_merges/, "merge migration creates the audit table");
+assert.match(mergeMigrationSql, /add column if not exists merged_into_defense_id/, "merge migration adds the soft merge pointer");
+assert.match(mergeMigrationSql, /merge_guild_defense_library_roots/, "merge migration defines the transactional RPC");
+assert.match(mergeMigrationSql, /for update/, "merge RPC locks roots and review rows");
+assert.match(mergeMigrationSql, /guild_members/, "merge RPC repoints member assignments");
+assert.match(mergeMigrationSql, /cluster_defense_likes/, "merge RPC preserves likes when the table exists");
+assert.match(mergeMigrationSql, /gvg_enemy_defense_similarity_reviews/, "merge RPC repoints enemy similarity reviews when the table exists");
+assert.doesNotMatch(mergeMigrationSql, /\bdelete\s+from\s+public\.guild_defenses\b/i, "merge migration never physically deletes historical roots");
+assert.match(mergeMigrationSql, /raise exception/, "merge RPC aborts the transaction on blocking conflicts");
+assert.match(mergeVerifySql, /guild_defense_library_merge_columns/, "merge verify checks soft merge columns");
+assert.match(mergeVerifySql, /absorbed_roots_still_visible/, "merge verify detects visible absorbed roots");
+assert.match(mergeVerifySql, /cross_tenant_merge_rows/, "merge verify audits tenant isolation");
+assert.match(mergeVerifySql, /duplicate_active_imports_after_merge/, "merge verify audits duplicate active imports after merge");
 
 console.log("Guild defense library equivalence tests passed");

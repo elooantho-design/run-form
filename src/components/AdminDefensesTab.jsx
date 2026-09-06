@@ -144,6 +144,8 @@ const [enemyHistoryLoading, setEnemyHistoryLoading] = useState(false);
 const [librarySimilarityModal, setLibrarySimilarityModal] = useState(null);
 const [librarySimilarityLoading, setLibrarySimilarityLoading] = useState(false);
 const [libraryReviewingId, setLibraryReviewingId] = useState("");
+const [libraryMergeLoadingId, setLibraryMergeLoadingId] = useState("");
+const [libraryMergingId, setLibraryMergingId] = useState("");
 const [libraryRecalculateLoading, setLibraryRecalculateLoading] = useState(false);
 const [imagePreview, setImagePreview] = useState(null);
 
@@ -336,22 +338,75 @@ const openLibraryEquivalenceDetailsModal = async (defense) => {
   }
 };
 
+const updateLibrarySimilarityCandidate = (reviewId, updater) => {
+  setLibrarySimilarityModal((previous) => previous ? {
+    ...previous,
+    candidates: (previous.candidates || []).map((item) => {
+      const itemReviewId = item.review?.id || item.review_id;
+      return itemReviewId === reviewId ? updater(item) : item;
+    }),
+  } : previous);
+};
+
+const loadLibraryMergePreview = async (candidate) => {
+  const reviewId = candidate?.review?.id || candidate?.review_id;
+  if (!reviewId) return null;
+
+  setLibraryMergeLoadingId(reviewId);
+  try {
+    const data = await callPortalAdminDefenses({
+      action: "library-merge-preview",
+      guildCode: activeGuildCode,
+      reviewId,
+    });
+    const mergePlan = data.mergePlan || data.merge_plan || null;
+    updateLibrarySimilarityCandidate(reviewId, (item) => ({
+      ...item,
+      mergePlan,
+      merge_plan: mergePlan,
+      mergeError: "",
+      merge_error: "",
+    }));
+    return mergePlan;
+  } catch (error) {
+    updateLibrarySimilarityCandidate(reviewId, (item) => ({
+      ...item,
+      mergeError: error?.message || "Plan de fusion indisponible.",
+      merge_error: error?.message || "Plan de fusion indisponible.",
+    }));
+    return null;
+  } finally {
+    setLibraryMergeLoadingId("");
+  }
+};
+
 const reviewLibrarySimilarity = async (candidate, status) => {
   const reviewId = candidate?.review?.id || candidate?.review_id;
   if (!reviewId) return;
 
   setLibraryReviewingId(reviewId);
   try {
-    await callPortalAdminDefenses({
+    const result = await callPortalAdminDefenses({
       action: "library-review",
       guildCode: activeGuildCode,
       reviewId,
       status,
     });
-    setLibrarySimilarityModal((previous) => previous ? {
-      ...previous,
-      candidates: (previous.candidates || []).filter((item) => (item.review?.id || item.review_id) !== reviewId),
-    } : previous);
+
+    if (status === "identical") {
+      updateLibrarySimilarityCandidate(reviewId, (item) => ({
+        ...item,
+        review: { ...(item.review || {}), status: "identical" },
+        mergePlan: result.mergePlan || result.merge_plan || item.mergePlan || null,
+        merge_plan: result.mergePlan || result.merge_plan || item.merge_plan || null,
+      }));
+      await loadLibraryMergePreview(candidate);
+    } else {
+      setLibrarySimilarityModal((previous) => previous ? {
+        ...previous,
+        candidates: (previous.candidates || []).filter((item) => (item.review?.id || item.review_id) !== reviewId),
+      } : previous);
+    }
     onDataChanged?.();
   } catch (error) {
     setLibrarySimilarityModal((previous) => previous ? {
@@ -360,6 +415,34 @@ const reviewLibrarySimilarity = async (candidate, status) => {
     } : previous);
   } finally {
     setLibraryReviewingId("");
+  }
+};
+
+const mergeLibraryRoots = async (candidate) => {
+  const reviewId = candidate?.review?.id || candidate?.review_id;
+  if (!reviewId) return;
+
+  setLibraryMergingId(reviewId);
+  try {
+    await callPortalAdminDefenses({
+      action: "library-merge",
+      guildCode: activeGuildCode,
+      reviewId,
+    });
+    setLibrarySimilarityModal((previous) => previous ? {
+      ...previous,
+      notice: "Fusion bibliotheque effectuee.",
+      candidates: (previous.candidates || []).filter((item) => (item.review?.id || item.review_id) !== reviewId),
+    } : previous);
+    onDataChanged?.();
+  } catch (error) {
+    updateLibrarySimilarityCandidate(reviewId, (item) => ({
+      ...item,
+      mergeError: error?.message || "Fusion bibliotheque impossible.",
+      merge_error: error?.message || "Fusion bibliotheque impossible.",
+    }));
+  } finally {
+    setLibraryMergingId("");
   }
 };
 
@@ -776,6 +859,151 @@ const renderLibraryDefensePanel = (defense, title) => {
           </span>
         ))}
       </div>
+    </div>
+  );
+};
+
+const renderLibraryMergePlan = (candidate) => {
+  const reviewId = candidate?.review?.id || candidate?.review_id;
+  const reviewStatus = candidate?.review?.status || candidate?.status || "";
+  const mergePlan = candidate?.mergePlan || candidate?.merge_plan || null;
+  const mergeError = candidate?.mergeError || candidate?.merge_error || "";
+
+  if (reviewStatus !== "identical" && !mergePlan && !mergeError) return null;
+
+  const canonical = mergePlan?.canonical || null;
+  const absorbed = mergePlan?.absorbed || null;
+  const canonicalScore = mergePlan?.canonicalScore || mergePlan?.canonical_score || {};
+  const absorbedScore = mergePlan?.absorbedScore || mergePlan?.absorbed_score || {};
+  const transfers = mergePlan?.transfers || [];
+  const conflicts = mergePlan?.conflicts || [];
+  const guilds = mergePlan?.guilds || [];
+  const descendants = mergePlan?.descendants || {};
+  const localCollisions = mergePlan?.localCollisions || mergePlan?.local_collisions || [];
+  const canMerge = Boolean(mergePlan?.canMerge ?? mergePlan?.can_merge);
+  const isBusy = libraryMergeLoadingId === reviewId || libraryMergingId === reviewId;
+
+  return (
+    <div className="mt-4 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-bold text-emerald-50">Plan de fusion</div>
+          <div className="mt-1 text-xs text-emerald-100/80">
+            La review est marquee IDENTIQUE. La fusion conserve une seule root active sans supprimer physiquement l'historique.
+          </div>
+        </div>
+
+        {!mergePlan && (
+          <button
+            type="button"
+            onClick={() => loadLibraryMergePreview(candidate)}
+            disabled={isBusy}
+            className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
+          >
+            {libraryMergeLoadingId === reviewId ? "Chargement..." : "Charger le plan"}
+          </button>
+        )}
+      </div>
+
+      {mergeError ? (
+        <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+          {mergeError}
+        </div>
+      ) : null}
+
+      {mergePlan ? (
+        <>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="rounded-xl border border-zinc-700/70 bg-zinc-950/60 p-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Defense conservee</div>
+              <div className="mt-1 font-semibold text-zinc-50">{canonical?.name || "Defense"}</div>
+              <div className="mt-1 text-xs text-zinc-400">
+                {canonical?.guildCode || canonical?.guild_code || "-"} · score {canonicalScore.score ?? "-"}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {(canonicalScore.reasons || []).map((reason) => (
+                  <span key={reason} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-200">
+                    {reason}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-zinc-700/70 bg-zinc-950/60 p-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Defense absorbee</div>
+              <div className="mt-1 font-semibold text-zinc-50">{absorbed?.name || "Defense"}</div>
+              <div className="mt-1 text-xs text-zinc-400">
+                {absorbed?.guildCode || absorbed?.guild_code || "-"} · score {absorbedScore.score ?? "-"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 text-sm text-zinc-200 md:grid-cols-2">
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Guildes concernees</div>
+              <div className="mt-1">
+                {guilds.map((entry) => entry.guildCode || entry.guild_code).filter(Boolean).join(" · ") || "-"}
+              </div>
+            </div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Descendants</div>
+              <div className="mt-1">
+                {descendants.repointedCount ?? descendants.repointed_count ?? 0} repointe(s) · {localCollisions.length} collision(s) locale(s)
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-sm">
+            <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Donnees recuperees</div>
+            {transfers.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {transfers.map((transfer) => (
+                  <span key={`${transfer.type}-${transfer.label}`} className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-2 py-0.5 text-xs text-cyan-100">
+                    {transfer.label}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-1 text-zinc-400">Aucune donnee complementaire a transferer.</div>
+            )}
+          </div>
+
+          {conflicts.length ? (
+            <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
+              <div className="font-semibold">Conflits bloquants</div>
+              <ul className="mt-1 space-y-1">
+                {conflicts.map((conflict, index) => (
+                  <li key={`${conflict.type || "conflict"}-${index}`}>
+                    {conflict.message || conflict.type || "Conflit"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="mt-3 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
+              Conflits : aucun.
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => updateLibrarySimilarityCandidate(reviewId, (item) => ({ ...item, mergePlan: null, merge_plan: null }))}
+              className="rounded-xl border border-zinc-700 px-3 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-800"
+            >
+              ANNULER
+            </button>
+            <button
+              type="button"
+              onClick={() => mergeLibraryRoots(candidate)}
+              disabled={!canMerge || isBusy}
+              className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {libraryMergingId === reviewId ? "Fusion..." : "FUSIONNER"}
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 };
@@ -1238,6 +1466,11 @@ const renderLibraryDefensePanel = (defense, title) => {
           {librarySimilarityModal.error}
         </div>
       ) : null}
+      {librarySimilarityModal.notice ? (
+        <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+          {librarySimilarityModal.notice}
+        </div>
+      ) : null}
 
       {librarySimilarityLoading ? (
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-400">
@@ -1276,24 +1509,28 @@ const renderLibraryDefensePanel = (defense, title) => {
                   {renderLibraryDefensePanel(rightDefense, "Modele B")}
                 </div>
 
-                <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => reviewLibrarySimilarity(candidate, "different")}
-                    disabled={libraryReviewingId === reviewId}
-                    className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
-                  >
-                    DIFFERENTE
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => reviewLibrarySimilarity(candidate, "identical")}
-                    disabled={libraryReviewingId === reviewId}
-                    className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
-                  >
-                    IDENTIQUE
-                  </button>
-                </div>
+                {renderLibraryMergePlan(candidate)}
+
+                {(candidate.review?.status || candidate.status) !== "identical" ? (
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => reviewLibrarySimilarity(candidate, "different")}
+                      disabled={libraryReviewingId === reviewId}
+                      className="rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                    >
+                      DIFFERENTE
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => reviewLibrarySimilarity(candidate, "identical")}
+                      disabled={libraryReviewingId === reviewId}
+                      className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
+                    >
+                      {libraryReviewingId === reviewId ? "Validation..." : "IDENTIQUE"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             );
           })}
