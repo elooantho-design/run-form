@@ -10,6 +10,7 @@ import {
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
 import {
+  createLocalDefenseSimilaritySignature,
   getEnemyDefenseRateTone,
   getEnemyDefenseSuccessRate,
   isEnemyDefenseBankSchemaMissing,
@@ -19,6 +20,7 @@ import {
   GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE,
   buildLibraryEquivalenceState,
   detectLibraryDefenseSimilarities,
+  findLibraryDefenseSimilarityCandidates,
   getEquivalentImportTargetStatus,
   isLibraryEquivalenceSchemaMissing,
   loadLibrarySimilarityCandidates,
@@ -702,6 +704,85 @@ function buildLibraryEntries(nativeDefenses, localDefenses, scope, activeGuildCo
       importTargets,
     };
   });
+}
+
+function buildDraftDefenseSimilarityRow({ cleanName, draft, guildCode, organizationId, slotChampions }) {
+  return {
+    id: null,
+    name: cleanName,
+    tier: validatePortalInput(draft.tier, 40) || "meta_s",
+    type: validatePortalInput(draft.type, 40) || "Tour",
+    guild_code: guildCode,
+    organization_id: organizationId || "",
+    is_hidden: false,
+    is_global: false,
+    source_defense_id: null,
+    guild_defense_slots: slotChampions.map((champion, index) => ({
+      slot_index: index + 1,
+      champion_id: champion.id,
+      champions: {
+        id: champion.id,
+        name: champion.name,
+        portal_name: champion.portal_name || "",
+        english_name: champion.english_name || "",
+      },
+      position: null,
+      direction: null,
+    })),
+  };
+}
+
+async function loadPreCreateLibrarySimilarityWarning(scope, targetGuildCode, draftDefense) {
+  const draftSignature = createLocalDefenseSimilaritySignature(draftDefense);
+  if (!draftSignature) return null;
+
+  const [{ defenses: scopedDefenses }, reviews] = await Promise.all([
+    loadMappedDefenseRowsInScope(scope),
+    loadLibrarySimilarityReviews(supabase, scope.organizationId),
+  ]);
+  const similarityResult = findLibraryDefenseSimilarityCandidates(
+    scopedDefenses,
+    reviews,
+    draftDefense,
+    targetGuildCode,
+  );
+
+  if (!similarityResult.candidates.length) return null;
+
+  const candidatesWithStats = await attachEnemyStatsToDefenses(
+    similarityResult.candidates.map((candidate) => candidate.defense),
+    scope,
+  );
+  const candidatesById = new Map(candidatesWithStats.map((defense) => [String(defense.id), defense]));
+
+  return {
+    ok: false,
+    similarLibraryDefense: true,
+    similar_library_defense: true,
+    error: "Une defense similaire existe deja dans la Bibliotheque.",
+    draftSignature: similarityResult.draftSignature,
+    draft_signature: similarityResult.draft_signature,
+    targetGuildCode,
+    target_guild_code: targetGuildCode,
+    candidates: similarityResult.candidates.map((candidate) => {
+      const defense = candidatesById.get(String(candidate.defense.id)) || candidate.defense;
+      return {
+        ...defense,
+        originGuildCode: defense.originGuildCode || defense.guildCode || defense.guild_code || "",
+        origin_guild_code: defense.originGuildCode || defense.guildCode || defense.guild_code || "",
+        libraryTargetStatus: candidate.targetStatus,
+        library_target_status: candidate.targetStatus,
+        libraryTargetViaDefenseId: candidate.viaDefenseId || null,
+        library_target_via_defense_id: candidate.viaDefenseId || null,
+        libraryTargetViaDefenseName: candidate.viaDefenseName || "",
+        library_target_via_defense_name: candidate.viaDefenseName || "",
+        presentGuilds: candidate.presentGuilds || [],
+        present_guilds: candidate.presentGuilds || [],
+        familyRootIds: candidate.familyRootIds || [],
+        family_root_ids: candidate.familyRootIds || [],
+      };
+    }),
+  };
 }
 
 async function loadDefenseLibraryPayload(scope, guildCode) {
@@ -1590,6 +1671,36 @@ async function handleSave(body, req, res) {
   }
   if (!isEditMode && defenseLibrarySchemaReady && scope.organizationId) {
     defensePayload.organization_id = scope.organizationId;
+  }
+
+  const allowSimilarLibraryDuplicate = Boolean(
+    body.allowSimilarLibraryDuplicate || body.allow_similar_library_duplicate,
+  );
+  if (!isEditMode && defenseLibrarySchemaReady && scope.organizationId && !allowSimilarLibraryDuplicate) {
+    try {
+      const warning = await loadPreCreateLibrarySimilarityWarning(
+        scope,
+        guildCode,
+        buildDraftDefenseSimilarityRow({
+          cleanName,
+          draft,
+          guildCode,
+          organizationId: scope.organizationId,
+          slotChampions,
+        }),
+      );
+
+      if (warning?.candidates?.length) {
+        sendJson(res, 409, warning);
+        return;
+      }
+    } catch (error) {
+      if (isLibraryEquivalenceSchemaMissing(error)) {
+        sendJson(res, 428, { error: GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE });
+        return;
+      }
+      throw error;
+    }
   }
 
   const { data: savedDefense, error: defenseError } = isEditMode

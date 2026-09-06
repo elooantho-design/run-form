@@ -208,6 +208,26 @@ function readLocalDefenseSlotChampion(slot) {
   );
 }
 
+function isStructuredDefenseSlot(slot) {
+  return Boolean(slot && typeof slot === "object" && !Array.isArray(slot));
+}
+
+function getDefenseHeroSlots(defense) {
+  if (Array.isArray(defense?.guild_defense_slots)) return defense.guild_defense_slots;
+  if (Array.isArray(defense?.detailedSlots)) return defense.detailedSlots;
+  if (Array.isArray(defense?.detailed_slots)) return defense.detailed_slots;
+  if (Array.isArray(defense?.slots)) return defense.slots;
+  return [];
+}
+
+export function getDefenseDetailedSlots(defense) {
+  if (Array.isArray(defense?.guild_defense_slots)) return defense.guild_defense_slots.filter(isStructuredDefenseSlot);
+  if (Array.isArray(defense?.detailedSlots)) return defense.detailedSlots.filter(isStructuredDefenseSlot);
+  if (Array.isArray(defense?.detailed_slots)) return defense.detailed_slots.filter(isStructuredDefenseSlot);
+  if (Array.isArray(defense?.slots) && defense.slots.every(isStructuredDefenseSlot)) return defense.slots;
+  return [];
+}
+
 function readLocalDefenseSlotPosition(slot, mapType) {
   return normalizeGvgPosition(slot?.position || slot?.pos, mapType) || null;
 }
@@ -245,7 +265,7 @@ export function createEnemyDefenseSimilaritySignature(defense) {
 }
 
 export function createLocalDefenseSimilaritySignature(defense) {
-  const slots = Array.isArray(defense?.guild_defense_slots) ? defense.guild_defense_slots : defense?.slots || [];
+  const slots = getDefenseHeroSlots(defense);
   return createDefenseSimilaritySignature({
     mapType: defense?.type || defense?.map_type || defense?.mapType,
     heroes: slots.map(readLocalDefenseSlotChampion),
@@ -254,7 +274,7 @@ export function createLocalDefenseSimilaritySignature(defense) {
 
 export function createLocalDefenseReviewSignature(defense) {
   const mapType = normalizeGvgMapType(defense?.type || defense?.map_type || defense?.mapType);
-  const slots = (Array.isArray(defense?.guild_defense_slots) ? defense.guild_defense_slots : defense?.slots || [])
+  const slots = getDefenseDetailedSlots(defense)
     .map((slot) => {
       const champion = normalizeGvgChampionSimilarityKey(readLocalDefenseSlotChampion(slot));
       if (!champion) return null;
@@ -307,7 +327,7 @@ export function getEnemyDefenseHeroLayoutByChampion(defense) {
 }
 
 function getLocalDefenseHeroKeys(defense) {
-  return (Array.isArray(defense?.guild_defense_slots) ? defense.guild_defense_slots : defense?.slots || [])
+  return getDefenseHeroSlots(defense)
     .map((slot) => normalizeGvgChampionSimilarityKey(readLocalDefenseSlotChampion(slot)))
     .filter(Boolean)
     .sort();
@@ -357,7 +377,7 @@ function summarizeEnemyDefenseForTrace(defense, extra = {}) {
 
 export function localDefenseHasCompleteLayout(defense) {
   const mapType = normalizeGvgMapType(defense?.type || defense?.map_type || defense?.mapType);
-  const slots = Array.isArray(defense?.guild_defense_slots) ? defense.guild_defense_slots : defense?.slots || [];
+  const slots = getDefenseDetailedSlots(defense);
   if (slots.length !== SIMILARITY_HERO_COUNT) return false;
 
   return slots.every((slot) => (
@@ -378,7 +398,7 @@ export function localDefenseLayoutMatchesEnemy(localDefense, enemyDefense) {
   const enemyLayouts = new Map(
     getEnemyDefenseHeroLayouts(enemyDefense).map((layout) => [layout.championKey, layout]),
   );
-  const slots = Array.isArray(localDefense?.guild_defense_slots) ? localDefense.guild_defense_slots : localDefense?.slots || [];
+  const slots = getDefenseDetailedSlots(localDefense);
 
   if (enemyLayouts.size !== SIMILARITY_HERO_COUNT || slots.length !== SIMILARITY_HERO_COUNT) return false;
 

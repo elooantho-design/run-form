@@ -297,6 +297,77 @@ export function getEquivalentImportTargetStatus(defense, targetGuildCode, localD
   return { status: "available", viaDefenseId: null, viaDefenseName: "" };
 }
 
+export function findLibraryDefenseSimilarityCandidates(
+  defenses = [],
+  reviews = [],
+  draftDefense = {},
+  targetGuildCode = "",
+  { organizationId = draftDefense?.organization_id || draftDefense?.organizationId || "" } = {},
+) {
+  const draftSignature = getDefenseSimilaritySignature(draftDefense);
+  if (!draftSignature) {
+    return {
+      draftSignature: null,
+      draft_signature: null,
+      candidates: [],
+    };
+  }
+
+  const organizationKey = String(organizationId || "");
+  const visibleDefenses = (defenses || []).filter((defense) => {
+    if (!defense?.id || isHiddenDefense(defense)) return false;
+    if (!organizationKey) return true;
+    return String(defense.organization_id || defense.organizationId || "") === organizationKey;
+  });
+  const scopedReviews = organizationKey
+    ? (reviews || []).filter((review) => String(review.organization_id || review.organizationId || "") === organizationKey)
+    : reviews;
+  const equivalenceState = buildLibraryEquivalenceState(visibleDefenses, scopedReviews);
+  const draftId = String(draftDefense?.id || "");
+  const targetGuildKey = normalizeGuildCodeKey(targetGuildCode);
+  const candidates = visibleDefenses
+    .filter((defense) => isNativeLibraryDefense(defense))
+    .filter((defense) => String(defense.id) !== draftId)
+    .filter((defense) => getDefenseSimilaritySignature(defense) === draftSignature)
+    .map((defense) => {
+      const state = equivalenceState.byDefenseId.get(String(defense.id)) || {};
+      const targetBucketRow = visibleDefenses.find((row) => {
+        if (!row?.id || String(row.id) === draftId || isHiddenDefense(row)) return false;
+        if (normalizeGuildCodeKey(row.guildCode || row.guild_code) !== targetGuildKey) return false;
+        return getDefenseSimilaritySignature(row) === draftSignature;
+      });
+      const target = targetBucketRow
+        ? {
+            status: getDefenseSourceId(targetBucketRow) ? "imported" : "native",
+            viaDefenseId: targetBucketRow.id,
+            viaDefenseName: targetBucketRow.name || "",
+          }
+        : getEquivalentImportTargetStatus(defense, targetGuildCode, visibleDefenses, equivalenceState);
+
+      return {
+        defense,
+        targetStatus: target.status,
+        target_status: target.status,
+        targetGuildCode,
+        target_guild_code: targetGuildCode,
+        viaDefenseId: target.viaDefenseId || null,
+        via_defense_id: target.viaDefenseId || null,
+        viaDefenseName: target.viaDefenseName || "",
+        via_defense_name: target.viaDefenseName || "",
+        presentGuilds: state.presentGuilds || state.present_guilds || [],
+        present_guilds: state.presentGuilds || state.present_guilds || [],
+        familyRootIds: state.familyRootIds || state.family_root_ids || [String(defense.id)],
+        family_root_ids: state.familyRootIds || state.family_root_ids || [String(defense.id)],
+      };
+    });
+
+  return {
+    draftSignature,
+    draft_signature: draftSignature,
+    candidates,
+  };
+}
+
 export function isLibraryEquivalenceSchemaMissing(error) {
   const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
   const code = String(error?.code || "");

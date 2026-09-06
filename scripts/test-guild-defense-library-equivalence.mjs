@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   buildLibraryEquivalenceState,
   detectLibraryDefenseSimilarities,
+  findLibraryDefenseSimilarityCandidates,
   getEquivalentImportTargetStatus,
   markLibrarySimilarityReview,
 } from "../api/_guild-defense-library-equivalence.js";
@@ -18,12 +19,20 @@ const MAD_ORG = "22222222-2222-4222-8222-222222222222";
 const TEST_SIMI_ID = "0a97a0d8-10f1-4752-a683-ca9f2d3b86ff";
 const TEST_SIMI_ENEMY_ID = "0595e39b-c99e-4198-918d-dc88c546e4f3";
 const TEST_SIMI_ENEMY_FINGERPRINT = "ba2edc3509b86aecb7f3658ea68c26d8cbc16b4aa3d63e825d495a8b0c16da4a";
+const TEST_SIMI_SIMILARITY_SIGNATURE = "6b54dd124eb564a74888a45f880c2d3c94a7295a47b0f80cc7d35243d027c0e2";
 const TEST_SIMI_LAYOUT = [
   ["comtedracula", "A2", "E"],
   ["brokkir", "A5", "E"],
   ["eirlys", "B3", "E"],
   ["oren", "A3", "E"],
   ["valara", "B4", "E"],
+];
+const TEST_SIMI_REORDERED_LAYOUT = [
+  ["brokkir", null, null],
+  ["comtedracula", null, null],
+  ["valara", null, null],
+  ["oren", null, null],
+  ["eirlys", null, null],
 ];
 
 function makeSlots(layout, { includeLayout = true } = {}) {
@@ -63,6 +72,44 @@ function makeDefense({
     source_enemy_label: sourceEnemyDefenseId ? "G3 - Taux de defaite 14,3 %" : null,
     source_enemy_imported_at: sourceEnemyDefenseId ? "2026-08-24T12:00:00.000Z" : null,
     guild_defense_slots: makeSlots(layout, { includeLayout }),
+  };
+}
+
+function mapDefenseLikePortal(row) {
+  const detailedSlots = [...(row.guild_defense_slots || [])]
+    .sort((a, b) => (a.slot_index ?? 0) - (b.slot_index ?? 0))
+    .map((slot) => ({
+      slotIndex: slot.slot_index ?? null,
+      slot_index: slot.slot_index ?? null,
+      championId: slot.champion_id || null,
+      champion_id: slot.champion_id || null,
+      champion: slot.champions?.name || slot.champions?.portal_name || slot.champions?.english_name || "",
+      portalName: slot.champions?.portal_name || "",
+      portal_name: slot.champions?.portal_name || "",
+      englishName: slot.champions?.english_name || "",
+      english_name: slot.champions?.english_name || "",
+      position: slot.position || null,
+      direction: slot.direction || null,
+    }));
+
+  return {
+    id: row.id,
+    name: row.name || "",
+    tier: row.tier || "meta_s",
+    type: row.type || "Tour",
+    guildCode: row.guild_code || "",
+    guild_code: row.guild_code || "",
+    organizationId: row.organization_id || "",
+    organization_id: row.organization_id || "",
+    sourceDefenseId: row.source_defense_id || null,
+    source_defense_id: row.source_defense_id || null,
+    sourceEnemyDefenseId: row.source_enemy_defense_id || null,
+    source_enemy_defense_id: row.source_enemy_defense_id || null,
+    isHidden: Boolean(row.is_hidden),
+    is_hidden: Boolean(row.is_hidden),
+    slots: detailedSlots.map((slot) => slot.champion).filter(Boolean),
+    detailedSlots,
+    detailed_slots: detailedSlots,
   };
 }
 
@@ -193,6 +240,7 @@ const rootB = makeDefense({
   id: "44444444-4444-4444-8444-444444444444",
   name: "Test simi copy",
   guildCode: "G4",
+  layout: TEST_SIMI_REORDERED_LAYOUT,
   includeLayout: false,
 });
 const childG3FromA = makeDefense({
@@ -224,6 +272,43 @@ const madRoot = makeDefense({
   includeLayout: false,
 });
 
+const mappedRootA = mapDefenseLikePortal(rootA);
+const mappedRootB = mapDefenseLikePortal(rootB);
+const stringOnlyRootA = {
+  ...mappedRootA,
+  detailedSlots: undefined,
+  detailed_slots: undefined,
+  slots: mappedRootA.slots,
+};
+
+assert.equal(
+  createLocalDefenseSimilaritySignature(rootA),
+  TEST_SIMI_SIMILARITY_SIGNATURE,
+  "Test simi keeps the expected type plus unordered-five-heroes signature",
+);
+assert.equal(
+  createLocalDefenseSimilaritySignature(rootB),
+  TEST_SIMI_SIMILARITY_SIGNATURE,
+  "Test simi 2 keeps the same signature with a different hero order",
+);
+assert.equal(
+  createLocalDefenseSimilaritySignature(mappedRootA),
+  createLocalDefenseSimilaritySignature(rootA),
+  "mapped Portal rows keep the same similarity signature as raw Supabase rows",
+);
+assert.equal(
+  createLocalDefenseReviewSignature(mappedRootA),
+  createLocalDefenseReviewSignature(rootA),
+  "mapped detailedSlots keep the same review signature as raw guild_defense_slots",
+);
+assert.equal(
+  createLocalDefenseReviewSignature(mappedRootB),
+  createLocalDefenseReviewSignature(rootB),
+  "mapped detailedSlots keep null-layout review signatures current",
+);
+assert.equal(createLocalDefenseReviewSignature(stringOnlyRootA), null, "simple name slots do not invent a layout signature");
+assert.equal(localDefenseHasCompleteLayout(stringOnlyRootA), false, "simple name slots never count as complete layout");
+
 const pendingStub = createSupabaseStub({
   defenses: [rootA, rootB, childG3FromA, divergedChildG5, madRoot],
   reviews: [],
@@ -248,6 +333,87 @@ assert.equal(
   "available",
   "pending-only similarities do not block imports through equivalence",
 );
+const mappedPendingState = buildLibraryEquivalenceState(
+  pendingStub.state.defenses.map(mapDefenseLikePortal),
+  pendingStub.state.reviews,
+);
+assert.equal(
+  mappedPendingState.byDefenseId.get(rootA.id)?.pendingCount,
+  1,
+  "existing pending reviews stay current after rows are mapped for the Portal UI",
+);
+assert.equal(
+  mappedPendingState.byDefenseId.get(rootB.id)?.pendingCount,
+  1,
+  "mapped Test simi 2 also exposes the pending library badge",
+);
+
+const secondPendingResult = await detectLibraryDefenseSimilarities(pendingStub.supabase, {
+  organizationId: PALADIN_ORG,
+  rootDefenseIds: [rootA.id],
+});
+assert.equal(secondPendingResult.pendingCreated, 0, "global recalculation does not duplicate existing pending reviews");
+assert.equal(secondPendingResult.pendingUpdated, 0, "global recalculation leaves reusable pending reviews unchanged");
+assert.equal(pendingStub.state.reviews.length, 1, "idempotent recalculation keeps one review row");
+
+const draftG7 = makeDefense({
+  id: "draft-g7",
+  name: "Draft G7",
+  guildCode: "G7",
+  includeLayout: false,
+});
+const preCreateWarning = findLibraryDefenseSimilarityCandidates(
+  pendingStub.state.defenses,
+  pendingStub.state.reviews,
+  draftG7,
+  "G7",
+  { organizationId: PALADIN_ORG },
+);
+assert.equal(preCreateWarning.draftSignature, TEST_SIMI_SIMILARITY_SIGNATURE, "pre-create uses the shared similarity signature");
+assert.equal(preCreateWarning.candidates.length, 2, "pre-create finds matching native roots in the organization");
+assert.equal(
+  preCreateWarning.candidates.every((candidate) => candidate.targetStatus === "available"),
+  true,
+  "pre-create offers import only when the target guild does not already own the family",
+);
+
+const preCreateAlreadyPresent = findLibraryDefenseSimilarityCandidates(
+  pendingStub.state.defenses,
+  pendingStub.state.reviews,
+  { ...draftG7, guild_code: "G4" },
+  "G4",
+  { organizationId: PALADIN_ORG },
+);
+assert.equal(
+  preCreateAlreadyPresent.candidates.some(
+    (candidate) => candidate.targetStatus === "native" && String(candidate.viaDefenseId) === String(rootB.id),
+  ),
+  true,
+  "pre-create marks the target guild as already present instead of proposing a duplicate import",
+);
+const preCreateMad = findLibraryDefenseSimilarityCandidates(
+  pendingStub.state.defenses,
+  pendingStub.state.reviews,
+  makeDefense({ id: "draft-mad", organizationId: MAD_ORG, guildCode: "MAD G2", includeLayout: false }),
+  "MAD G2",
+  { organizationId: MAD_ORG },
+);
+assert.equal(preCreateMad.candidates.length, 1, "pre-create remains tenant-isolated for MAD");
+assert.equal(preCreateMad.candidates[0]?.defense?.id, madRoot.id, "MAD pre-create does not see Paladin roots");
+
+const createAnywayRoot = makeDefense({
+  id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  name: "Create anyway root",
+  guildCode: "G7",
+  includeLayout: false,
+});
+const createAnywayStub = createSupabaseStub({ defenses: [rootA, rootB, createAnywayRoot], reviews: [] });
+const createAnywayResult = await detectLibraryDefenseSimilarities(createAnywayStub.supabase, {
+  organizationId: PALADIN_ORG,
+  rootDefenseIds: [createAnywayRoot.id],
+});
+assert.equal(createAnywayResult.pendingCreated, 2, "create-anyway stores pending human reviews against existing roots");
+assert.equal(createAnywayStub.state.reviews.length, 2, "create-anyway does not collapse the new root into an import");
 
 const reviewResult = await markLibrarySimilarityReview(pendingStub.supabase, {
   organizationId: PALADIN_ORG,
@@ -393,6 +559,8 @@ assert.doesNotMatch(helperSource, /bottom_y\s*=\s*1555/, "library equivalence do
 assert.match(adminApiSource, /action === "library-similarities"/, "admin API exposes library similarity review action");
 assert.match(adminApiSource, /action === "library-recalculate"/, "admin API exposes targeted library recalculation");
 assert.match(adminApiSource, /getEquivalentImportTargetStatus/, "admin API blocks duplicate imports through equivalence");
+assert.match(adminApiSource, /loadPreCreateLibrarySimilarityWarning/, "admin API performs a pre-create library similarity check");
+assert.match(adminApiSource, /allowSimilarLibraryDuplicate/, "admin API keeps create-anyway explicit");
 assert.match(enemyBankSource, /propagateLibraryEquivalenceKnowledge/, "enemy validation shares knowledge back to equivalent library roots");
 assert.match(preflightSql, /guild_defense_library_similarity_reviews/, "preflight mentions the new equivalence table");
 assert.match(migrationSql, /create table if not exists public\.guild_defense_library_similarity_reviews/, "migration creates the dedicated table");

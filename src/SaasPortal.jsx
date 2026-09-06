@@ -760,7 +760,9 @@ async function callPortalAdminDefenses(payload) {
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok || json?.ok === false) {
-    throw new Error(json?.error || "Erreur API gestion defense.");
+    const error = new Error(json?.error || "Erreur API gestion defense.");
+    Object.assign(error, json, { status: response.status });
+    throw error;
   }
   return json;
 }
@@ -4875,6 +4877,42 @@ function normalizeDefenseChampionName(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function cleanDefenseLayoutValue(value) {
+  const clean = String(value || "").trim();
+  return clean && clean !== "--" ? clean : "";
+}
+
+function getDefenseHeroDisplayRows(defense) {
+  const detailedSlots = Array.isArray(defense?.detailedSlots)
+    ? defense.detailedSlots
+    : Array.isArray(defense?.detailed_slots)
+      ? defense.detailed_slots
+      : [];
+  const fallbackSlots = Array.isArray(defense?.slots) ? defense.slots : [];
+  const rows = detailedSlots.length
+    ? detailedSlots
+    : fallbackSlots.map((champion, index) => ({ slotIndex: index + 1, champion }));
+
+  return rows
+    .map((slot, index) => ({
+      key: `${slot?.slotIndex ?? slot?.slot_index ?? index}-${slot?.champion || fallbackSlots[index] || index}`,
+      champion: cleanDefenseLayoutValue(slot?.portalName || slot?.portal_name || slot?.champion || fallbackSlots[index]),
+      position: cleanDefenseLayoutValue(slot?.position),
+      direction: cleanDefenseLayoutValue(slot?.direction),
+    }))
+    .filter((slot) => slot.champion);
+}
+
+function hasCompleteDefenseDisplayLayout(heroRows) {
+  const firstFiveSlots = heroRows.slice(0, 5);
+  return firstFiveSlots.length === 5 && firstFiveSlots.every((slot) => slot.position && slot.direction);
+}
+
+function formatDefenseEnemyPercent(value) {
+  const number = Number(value) || 0;
+  return `${number.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
+}
+
 function compressPortalDefenseImage(file, maxWidth = 1400, quality = 0.86) {
   return new Promise((resolve, reject) => {
     if (!file || !file.type?.startsWith("image/")) {
@@ -4947,6 +4985,8 @@ function PortalAdminDefensesView({ session }) {
   const [draftOpen, setDraftOpen] = useState(false);
   const [draft, setDraft] = useState(emptyPortalDefenseDraft);
   const [draftImageMessage, setDraftImageMessage] = useState("");
+  const [similarDefenseWarning, setSimilarDefenseWarning] = useState(null);
+  const [similarDefenseDetailsId, setSimilarDefenseDetailsId] = useState("");
   const [conditionOpen, setConditionOpen] = useState(false);
   const [conditionDefenseId, setConditionDefenseId] = useState("");
   const [conditionRemoveOpen, setConditionRemoveOpen] = useState(false);
@@ -5051,6 +5091,8 @@ function PortalAdminDefensesView({ session }) {
     setMessage("");
     setErrorMessage("");
     setDraftImageMessage("");
+    setSimilarDefenseWarning(null);
+    setSimilarDefenseDetailsId("");
     setDraft({
       ...emptyPortalDefenseDraft,
       guildCode: activeGuildCode,
@@ -5066,6 +5108,8 @@ function PortalAdminDefensesView({ session }) {
   async function openEditDefense(defense) {
     setMessage("");
     setErrorMessage("");
+    setSimilarDefenseWarning(null);
+    setSimilarDefenseDetailsId("");
     const editableDefense = await ensureEditableDefense(defense);
     if (!editableDefense) return;
 
@@ -5086,6 +5130,8 @@ function PortalAdminDefensesView({ session }) {
   }
 
   function updateDraftSlot(index, value) {
+    setSimilarDefenseWarning(null);
+    setSimilarDefenseDetailsId("");
     setDraft((previous) => {
       const nextSlots = [...previous.slots];
       nextSlots[index] = value;
@@ -5187,7 +5233,7 @@ function PortalAdminDefensesView({ session }) {
     }
   }
 
-  async function saveDraftDefense(event) {
+  async function saveDraftDefense(event, options = {}) {
     event?.preventDefault();
     if (!isAdminUser || saving) return;
 
@@ -5218,6 +5264,7 @@ function PortalAdminDefensesView({ session }) {
       const data = await callPortalAdminDefenses({
         action: "save",
         guildCode: activeGuildCode,
+        allowSimilarLibraryDuplicate: Boolean(options.allowSimilarLibraryDuplicate),
         draft: {
           id: isEditMode ? draft.id : null,
           name: cleanName,
@@ -5232,6 +5279,8 @@ function PortalAdminDefensesView({ session }) {
         },
       });
 
+      setSimilarDefenseWarning(null);
+      setSimilarDefenseDetailsId("");
       void logPortalActivity(session, {
         actionType: isEditMode ? "admin_defense_update" : "admin_defense_create",
         entityType: "defense",
@@ -5249,10 +5298,40 @@ function PortalAdminDefensesView({ session }) {
       setMessage(`Defense ${isEditMode ? "mise a jour" : "ajoutee"} : ${cleanName}.`);
       setRefreshTick((value) => value + 1);
     } catch (error) {
+      if (error?.similarLibraryDefense || error?.similar_library_defense) {
+        setSimilarDefenseWarning(error);
+        setSimilarDefenseDetailsId(String(error?.candidates?.[0]?.id || ""));
+        return;
+      }
       setErrorMessage(error?.message || "Sauvegarde de la defense impossible.");
     } finally {
       setSaving(false);
     }
+  }
+
+  function getSimilarDefenseTargetStatus(defense) {
+    return defense?.libraryTargetStatus || defense?.library_target_status || "available";
+  }
+
+  function getSimilarDefenseViaName(defense) {
+    return defense?.libraryTargetViaDefenseName || defense?.library_target_via_defense_name || "";
+  }
+
+  async function forceCreateSimilarDefense() {
+    await saveDraftDefense(null, { allowSimilarLibraryDuplicate: true });
+  }
+
+  async function importSimilarDefense(defense) {
+    if (getSimilarDefenseTargetStatus(defense) !== "available") return;
+    setSimilarDefenseWarning(null);
+    setSimilarDefenseDetailsId("");
+    setDraftOpen(false);
+    await importDefense(defense, activeGuildCode);
+  }
+
+  function viewSimilarDefense(defense) {
+    const defenseId = String(defense?.id || "");
+    setSimilarDefenseDetailsId((previous) => (previous === defenseId ? "" : defenseId));
   }
 
   async function openConditionDialog(defense) {
@@ -5662,7 +5741,11 @@ function PortalAdminDefensesView({ session }) {
                     Type
                     <select
                       value={draft.type}
-                      onChange={(event) => setDraft((previous) => ({ ...previous, type: event.target.value }))}
+                      onChange={(event) => {
+                        setSimilarDefenseWarning(null);
+                        setSimilarDefenseDetailsId("");
+                        setDraft((previous) => ({ ...previous, type: event.target.value }));
+                      }}
                       className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-emerald-500"
                     >
                       <option value="Tour">{t("defenses.tower", "Tour")}</option>
@@ -5787,6 +5870,168 @@ function PortalAdminDefensesView({ session }) {
               </Button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {similarDefenseWarning ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4">
+          <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-violet-500/40 bg-zinc-950 p-5 text-zinc-100 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-200">
+                  Similarite bibliotheque
+                </div>
+                <h3 className="mt-1 text-lg font-semibold">
+                  Une defense similaire existe deja dans la Bibliotheque.
+                </h3>
+                <p className="mt-1 text-sm text-zinc-400">
+                  Meme type et memes 5 heros detectes, ordre ignore. Choisis si tu veux importer la defense existante ou creer une defense differente.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSimilarDefenseWarning(null);
+                  setSimilarDefenseDetailsId("");
+                }}
+                className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
+                aria-label={t("common.close", "Fermer")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              {(similarDefenseWarning.candidates || []).map((candidate) => {
+                const candidateStatus = getSimilarDefenseTargetStatus(candidate);
+                const alreadyPresent = candidateStatus !== "available";
+                const heroRows = getDefenseHeroDisplayRows(candidate);
+                const hasAnyLayout = heroRows.some((slot) => slot.position && slot.direction);
+                const hasCompleteLayout = hasCompleteDefenseDisplayLayout(heroRows);
+                const presentGuilds = candidate.presentGuilds || candidate.present_guilds || [];
+                const enemyStat = candidate.enemyStats || candidate.enemy_stats || null;
+                const expanded = String(similarDefenseDetailsId) === String(candidate.id);
+                const viaName = getSimilarDefenseViaName(candidate);
+
+                return (
+                  <div key={candidate.id} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="font-semibold text-white">{candidate.name}</div>
+                          <span className="rounded-md border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-xs font-semibold text-cyan-100">
+                            {candidate.originGuildCode || candidate.origin_guild_code || candidate.guildCode || candidate.guild_code || "-"}
+                          </span>
+                          {candidate.sourceEnemyDefenseId || candidate.source_enemy_defense_id ? (
+                            <span className="inline-flex items-center gap-1 rounded-md border border-red-400/45 bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-100">
+                              DÉFENSE ADVERSE
+                              {enemyStat ? (
+                                <span>
+                                  · Taux de defaite {formatDefenseEnemyPercent(enemyStat.successRate ?? enemyStat.success_rate)}
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : null}
+                          {hasCompleteLayout ? (
+                            <span className="rounded-md border border-emerald-300/30 bg-emerald-300/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-100">
+                              LAYOUT VALIDÉ
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="mt-2 text-xs text-zinc-300">
+                          {candidate.tier} · {candidate.type || "Tour"}
+                        </div>
+
+                        {presentGuilds.length ? (
+                          <div className="mt-2 text-xs text-zinc-200">
+                            Presente :{" "}
+                            {presentGuilds.map((entry) => entry.guildCode || entry.guild_code).filter(Boolean).join(" · ")}
+                          </div>
+                        ) : null}
+
+                        {alreadyPresent ? (
+                          <div className="mt-3 inline-flex rounded-lg border border-amber-300/40 bg-amber-400/10 px-3 py-1 text-xs font-semibold text-amber-100">
+                            DÉJÀ PRÉSENTE EN {activeGuildCode}{viaName ? ` via ${viaName}` : ""}
+                          </div>
+                        ) : null}
+
+                        {expanded ? (
+                          <div className="mt-3">
+                            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                              Heros
+                            </div>
+                            {hasAnyLayout ? (
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {heroRows.map((slot) => (
+                                  <span
+                                    key={slot.key}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700/70 bg-zinc-950/60 px-2 py-1 text-xs text-zinc-100"
+                                  >
+                                    <span className="font-medium">{slot.champion}</span>
+                                    {slot.position && slot.direction ? (
+                                      <span className="font-semibold text-cyan-200">
+                                        {slot.position} {slot.direction}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-2 text-sm text-zinc-200">
+                                {heroRows.map((slot) => slot.champion).join(", ") || "Non renseigne"}
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
+                        {candidate.image || candidate.image_url ? (
+                          <img
+                            src={candidate.image || candidate.image_url}
+                            alt={candidate.name || "Defense similaire"}
+                            className="h-40 w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-40 items-center justify-center text-xs text-zinc-500">
+                            {t("common.noImage", "Aucune image")}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-lg border-zinc-700 bg-transparent text-zinc-200"
+                        onClick={() => viewSimilarDefense(candidate)}
+                      >
+                        {expanded ? "Masquer la defense" : "Voir la defense"}
+                      </Button>
+                      <Button
+                        type="button"
+                        className="rounded-lg bg-cyan-600 text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                        disabled={saving || alreadyPresent}
+                        onClick={() => importSimilarDefense(candidate)}
+                      >
+                        {alreadyPresent ? `Deja presente en ${activeGuildCode}` : `Importer cette defense dans ${activeGuildCode}`}
+                      </Button>
+                      <Button
+                        type="button"
+                        className="rounded-lg bg-violet-600 text-white hover:bg-violet-500"
+                        disabled={saving}
+                        onClick={forceCreateSimilarDefense}
+                      >
+                        Creer quand meme comme defense differente
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       ) : null}
 
