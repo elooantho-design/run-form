@@ -25,7 +25,17 @@ async function callPortalAdminDefenses(payload) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error || "Action defense impossible.");
+    const messageParts = [
+      data?.error || "Action defense impossible.",
+      data?.code ? `Code: ${data.code}` : "",
+      data?.details ? `Details: ${data.details}` : "",
+      data?.hint ? `Hint: ${data.hint}` : "",
+    ].filter(Boolean);
+    const error = new Error(messageParts.join("\n"));
+    error.code = data?.code || "";
+    error.details = data?.details || "";
+    error.hint = data?.hint || "";
+    throw error;
   }
   return data;
 }
@@ -1056,7 +1066,7 @@ const renderLibraryMergePlan = (candidate) => {
       </div>
 
       {mergeError ? (
-        <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+        <div className="mt-3 whitespace-pre-line rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-100">
           {mergeError}
         </div>
       ) : null}

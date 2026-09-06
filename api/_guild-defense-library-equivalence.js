@@ -970,22 +970,54 @@ export function findLibraryDefenseSimilarityCandidates(
   };
 }
 
-export function isLibraryEquivalenceSchemaMissing(error) {
-  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+function getSchemaErrorText(error) {
+  return `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+}
+
+function schemaErrorMentionsAny(text, objectNames = []) {
+  const names = (objectNames || []).map((name) => String(name || "").trim().toLowerCase()).filter(Boolean);
+  return !names.length || names.some((name) => text.includes(name));
+}
+
+function isPostgrestMissingObjectError(error, objectNames = []) {
+  const message = getSchemaErrorText(error);
+  if (!/(schema cache|could not find|not found|does not exist|unknown)/i.test(message)) return false;
+  return schemaErrorMentionsAny(message, objectNames);
+}
+
+export function isMissingSchemaObjectError(error, { columns = [], tables = [], functions = [] } = {}) {
+  const message = getSchemaErrorText(error);
   const code = String(error?.code || "");
-  return (
-    code === "42P01" ||
-    code === "PGRST205" ||
-    code === "PGRST204" ||
-    code === "42703" ||
-    message.includes("guild_defense_library_similarity_reviews") ||
-    message.includes("guild_defense_library_merges") ||
-    message.includes("merge_guild_defense_library_roots") ||
-    message.includes("merged_into_defense_id") ||
-    message.includes("merged_at") ||
-    message.includes("merged_by_member_id") ||
-    message.includes("guild_defense_library_equivalence_touch_updated_at")
-  );
+
+  if (code === "42703") return schemaErrorMentionsAny(message, columns);
+  if (code === "42P01") return schemaErrorMentionsAny(message, tables);
+  if (code === "42883") return schemaErrorMentionsAny(message, functions);
+  if (code === "PGRST204") return isPostgrestMissingObjectError(error, columns);
+  if (code === "PGRST205") return isPostgrestMissingObjectError(error, tables);
+  if (code === "PGRST202") return isPostgrestMissingObjectError(error, functions);
+  return false;
+}
+
+export function isLibraryEquivalenceSchemaMissing(error) {
+  return isMissingSchemaObjectError(error, {
+    columns: [
+      "merged_into_defense_id",
+      "merged_at",
+      "merged_by_member_id",
+    ],
+    tables: [
+      "guild_defense_library_similarity_reviews",
+      "guild_defense_library_merges",
+    ],
+    functions: [
+      "merge_guild_defense_library_roots",
+      "guild_defense_library_equivalence_touch_updated_at",
+      "guild_defense_library_similarity_signature",
+      "guild_defense_library_review_signature",
+      "guild_defense_library_identity_signature",
+      "guild_defense_library_condition_key",
+    ],
+  });
 }
 
 export async function loadGuildDefenseRowsForEquivalence(supabase, organizationId) {

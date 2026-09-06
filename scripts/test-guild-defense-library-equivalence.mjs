@@ -8,6 +8,8 @@ import {
   detectLibraryDefenseSimilarities,
   findLibraryDefenseSimilarityCandidates,
   getEquivalentImportTargetStatus,
+  isLibraryEquivalenceSchemaMissing,
+  isMissingSchemaObjectError,
   markLibrarySimilarityReview,
   recordLibrarySimilarityDecision,
   scoreGuildDefenseLibraryRoot,
@@ -108,6 +110,59 @@ function makeLibraryReview(leftDefense, rightDefense, { status = "identical", or
     similarity_signature: createLocalDefenseSimilaritySignature(leftDefense),
   };
 }
+
+assert.equal(
+  isMissingSchemaObjectError(
+    { code: "42703", message: 'column "source_defense_id" does not exist' },
+    { columns: ["source_defense_id"] },
+  ),
+  true,
+  "42703 with a real missing column is classified as schema missing",
+);
+assert.equal(
+  isMissingSchemaObjectError(
+    { code: "42P01", message: 'relation "guild_defense_library_merges" does not exist' },
+    { tables: ["guild_defense_library_merges"] },
+  ),
+  true,
+  "42P01 with a real missing table is classified as schema missing",
+);
+assert.equal(
+  isMissingSchemaObjectError(
+    { code: "42883", message: "function public.merge_guild_defense_library_roots(uuid, uuid) does not exist" },
+    { functions: ["merge_guild_defense_library_roots"] },
+  ),
+  true,
+  "42883 with a real missing RPC is classified as schema missing",
+);
+assert.equal(
+  isMissingSchemaObjectError(
+    {
+      code: "23505",
+      message: 'duplicate key value violates unique constraint "guild_defenses_unique_active_import_idx"',
+      details: "Key (organization_id, guild_code, source_defense_id)=(org, G6, root) already exists.",
+    },
+    { columns: ["source_defense_id"] },
+  ),
+  false,
+  "business constraint errors mentioning source_defense_id are not schema missing",
+);
+assert.equal(
+  isLibraryEquivalenceSchemaMissing({
+    code: "P0001",
+    message: "Collision locale impossible a resoudre: merged_into_defense_id deja renseigne.",
+  }),
+  false,
+  "business errors mentioning merged_into_defense_id keep their original meaning",
+);
+assert.equal(
+  isLibraryEquivalenceSchemaMissing({
+    code: "P0001",
+    message: "Collision locale impossible a resoudre dans G6: source_defense_id present.",
+  }),
+  false,
+  "local collision business errors are not transformed into migration errors",
+);
 
 function mapDefenseLikePortal(row) {
   const detailedSlots = [...(row.guild_defense_slots || [])]
@@ -949,6 +1004,56 @@ assert.deepEqual(
   "existing-copy collision still preserves the absorbed guild after merge",
 );
 
+const canonicalRootWithThinG6Copy = makeDefense({
+  id: "merge-g6-canonical",
+  name: "Oren Dane Fortoresse",
+  guildCode: "G5",
+  includeLayout: false,
+  imageUrl: "https://example.test/oren.webp",
+});
+const absorbedRootG6 = makeDefense({
+  id: "merge-g6-absorbed-root",
+  name: "Test v3",
+  guildCode: "G6",
+  includeLayout: false,
+  imageUrl: "https://example.test/test-v3.webp",
+  createdAt: "2026-08-24T10:00:00.000Z",
+});
+const existingCanonicalCopyG6 = makeDefense({
+  id: "merge-g6-canonical-copy",
+  name: "Test v4",
+  guildCode: "G6",
+  sourceDefenseId: canonicalRootWithThinG6Copy.id,
+  includeLayout: false,
+  createdAt: "2026-08-24T11:00:00.000Z",
+});
+const absorbedRootWinsCollisionPlan = buildGuildDefenseLibraryMergePlan(
+  [canonicalRootWithThinG6Copy, absorbedRootG6, existingCanonicalCopyG6],
+  [makeLibraryReview(canonicalRootWithThinG6Copy, absorbedRootG6, { id: "review-g6-absorbed-root-wins" })],
+  { organizationId: PALADIN_ORG, reviewId: "review-g6-absorbed-root-wins" },
+);
+assert.equal(absorbedRootWinsCollisionPlan.canMerge, true, "Oren/Test v3 style root-local collision remains mergeable in the JS plan");
+assert.equal(
+  absorbedRootWinsCollisionPlan.rootLocalPresence.action,
+  "merge_absorbed_root_with_existing_copy",
+  "absorbed root and existing canonical local copy are treated as one local collision",
+);
+assert.equal(
+  absorbedRootWinsCollisionPlan.localCollisions[0].keepDefenseId,
+  absorbedRootG6.id,
+  "the absorbed root can win the local collision when it carries the richer local data",
+);
+assert.equal(
+  absorbedRootWinsCollisionPlan.localCollisions[0].hideDefenseId,
+  existingCanonicalCopyG6.id,
+  "the weaker existing canonical local copy is the one hidden after references move",
+);
+assert.deepEqual(
+  absorbedRootWinsCollisionPlan.guildsAfter.map((entry) => entry.guildCode).sort(),
+  ["G5", "G6"],
+  "absorbed-root-wins collision still preserves both guild presences",
+);
+
 const collisionRootA = makeDefense({ id: "merge-collision-a", name: "Collision A", guildCode: "G1", includeLayout: false });
 const collisionRootB = makeDefense({ id: "merge-collision-b", name: "Collision B", guildCode: "G2", includeLayout: false, createdAt: "2026-08-24T10:00:00.000Z" });
 const collisionAChild = makeDefense({ id: "merge-collision-a-g3", name: "Collision A G3", guildCode: "G3", sourceDefenseId: collisionRootA.id, includeLayout: false });
@@ -1197,10 +1302,28 @@ assert.match(portalSource, /onLibraryMergeRequestConsumed=\{clearLibraryMergeOpe
 assert.match(adminDefensesTabSource, /onLibraryMergeRequestConsumed = null/, "Admin defenses tab accepts the automatic merge request consume callback");
 assert.match(adminDefensesTabSource, /consumeOpenLibraryMergeRequest\(reviewId\);[\s\S]*onDataChanged\?\.\(\)/, "successful library merge consumes the automatic request before refreshing data");
 assert.match(adminDefensesTabSource, /finally \{[\s\S]*consumeOpenLibraryMergeRequest\(reviewId\);/, "automatic merge preview is consumed after it is opened or fails");
+assert.match(adminDefensesTabSource, /Code: \$\{data\.code\}/, "library merge UI keeps Supabase error codes visible");
+assert.match(adminDefensesTabSource, /Details: \$\{data\.details\}/, "library merge UI keeps Supabase error details visible");
+assert.match(adminDefensesTabSource, /whitespace-pre-line/, "library merge errors preserve code/details/hint line breaks");
 assert.match(adminApiSource, /action === "library-merge-preview"/, "admin API exposes merge preview without mutation");
 assert.match(adminApiSource, /mergeCandidates/, "equivalence details API exposes resumable merge candidates");
 assert.match(adminApiSource, /action === "library-merge"/, "admin API exposes explicit merge action");
 assert.match(adminApiSource, /merge_guild_defense_library_roots/, "admin API delegates merge mutation to a transactional RPC");
+assert.doesNotMatch(
+  adminApiSource,
+  /message\.includes\(columnName\.toLowerCase\(\)\)/,
+  "admin API no longer treats any business message mentioning a column as schema missing",
+);
+assert.match(
+  adminApiSource,
+  /isMissingSchemaObjectError\(error,\s*\{[\s\S]*columns: GUILD_LIBRARY_SCHEMA_COLUMNS/,
+  "admin API classifies missing library schema through strict schema error codes",
+);
+assert.match(
+  adminApiSource,
+  /buildPortalErrorPayload\(error, "Fusion bibliotheque impossible\."\)/,
+  "admin API preserves real merge error code/details/hint for non-schema failures",
+);
 assert.match(enemyBankSource, /propagateLibraryEquivalenceKnowledge/, "enemy validation shares knowledge back to equivalent library roots");
 assert.doesNotMatch(enemyBankSource, /merge_guild_defense_library_roots/, "Bibliotheque to Enemy validation never calls library root merge RPC");
 assert.match(preflightSql, /guild_defense_library_similarity_reviews/, "preflight mentions the new equivalence table");

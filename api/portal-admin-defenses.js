@@ -25,6 +25,7 @@ import {
   findLibraryDefenseSimilarityCandidates,
   getEquivalentImportTargetStatus,
   isLibraryEquivalenceSchemaMissing,
+  isMissingSchemaObjectError,
   loadLibrarySimilarityCandidates,
   loadLibrarySimilarityReviews,
   markLibrarySimilarityReview,
@@ -207,36 +208,66 @@ function isCommunityAccount(member) {
   );
 }
 
+const GUILD_LIBRARY_SCHEMA_COLUMNS = [
+  "organization_id",
+  "source_defense_id",
+  "source_guild_code",
+  "source_defense_name",
+  "imported_at",
+  "merged_into_defense_id",
+  "merged_at",
+  "merged_by_member_id",
+];
+
+const GUILD_LIBRARY_SCHEMA_FUNCTIONS = [
+  "import_guild_defense_snapshot",
+  "merge_guild_defense_library_roots",
+];
+
+const DEFENSE_ENEMY_LINK_SCHEMA_COLUMNS = [
+  "source_enemy_defense_id",
+  "source_enemy_defense_fingerprint",
+  "source_enemy_portal_guild_id",
+  "source_enemy_label",
+  "source_enemy_imported_at",
+  "position",
+  "direction",
+];
+
 function isMissingColumn(error, columnName = "") {
-  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
-  return error?.code === "42703" || error?.code === "PGRST204" || message.includes(columnName.toLowerCase());
+  return isMissingSchemaObjectError(error, { columns: columnName ? [columnName] : [] });
 }
 
 function isMissingGuildLibrarySchema(error) {
-  return (
-    isMissingColumn(error, "organization_id") ||
-    isMissingColumn(error, "source_defense_id") ||
-    isMissingColumn(error, "source_guild_code") ||
-    isMissingColumn(error, "source_defense_name") ||
-    isMissingColumn(error, "imported_at") ||
-    isMissingColumn(error, "merged_into_defense_id") ||
-    isMissingColumn(error, "merged_at") ||
-    isMissingColumn(error, "merged_by_member_id") ||
-    String(error?.message || "").toLowerCase().includes("import_guild_defense_snapshot")
-  );
+  return isMissingSchemaObjectError(error, {
+    columns: GUILD_LIBRARY_SCHEMA_COLUMNS,
+    functions: GUILD_LIBRARY_SCHEMA_FUNCTIONS,
+  });
 }
 
 function isMissingDefenseEnemyLinksSchema(error) {
   return (
     isEnemyDefenseLinksSchemaMissing(error) ||
-    isMissingColumn(error, "source_enemy_defense_id") ||
-    isMissingColumn(error, "source_enemy_defense_fingerprint") ||
-    isMissingColumn(error, "source_enemy_portal_guild_id") ||
-    isMissingColumn(error, "source_enemy_label") ||
-    isMissingColumn(error, "source_enemy_imported_at") ||
-    isMissingColumn(error, "position") ||
-    isMissingColumn(error, "direction")
+    isMissingSchemaObjectError(error, { columns: DEFENSE_ENEMY_LINK_SCHEMA_COLUMNS })
   );
+}
+
+function buildPortalErrorPayload(error, fallbackMessage) {
+  const payload = { error: error?.message || fallbackMessage };
+  if (error?.code) payload.code = error.code;
+  if (error?.details) payload.details = error.details;
+  if (error?.hint) payload.hint = error.hint;
+  return payload;
+}
+
+function logPortalAdminActionError(prefix, error, context = {}) {
+  console.error(prefix, {
+    ...context,
+    code: error?.code || "",
+    message: error?.message || "",
+    details: error?.details || "",
+    hint: error?.hint || "",
+  });
 }
 
 function getGuildSpaceKey(value) {
@@ -1521,11 +1552,14 @@ async function handleLibraryMergePreview(body, req, res) {
 
     sendJson(res, 200, { ok: true, mergePlan: plan, merge_plan: plan });
   } catch (error) {
+    logPortalAdminActionError("[library-merge-preview-error]", error, {
+      reviewId: validatePortalInput(body.reviewId || body.review_id, 80),
+    });
     if (isLibraryEquivalenceSchemaMissing(error) || isMissingGuildLibrarySchema(error)) {
       sendJson(res, 428, { error: "Migration fusion bibliotheque defenses requise." });
       return;
     }
-    sendJson(res, error?.statusCode || 500, { error: error?.message || "Plan de fusion indisponible." });
+    sendJson(res, error?.statusCode || 500, buildPortalErrorPayload(error, "Plan de fusion indisponible."));
   }
 }
 
@@ -1575,11 +1609,14 @@ async function handleLibraryMerge(body, req, res) {
       merge_plan: plan,
     });
   } catch (error) {
+    logPortalAdminActionError("[library-merge-error]", error, {
+      reviewId: validatePortalInput(body.reviewId || body.review_id, 80),
+    });
     if (isLibraryEquivalenceSchemaMissing(error) || isMissingGuildLibrarySchema(error)) {
       sendJson(res, 428, { error: "Migration fusion bibliotheque defenses requise." });
       return;
     }
-    sendJson(res, error?.statusCode || 500, { error: error?.message || "Fusion bibliotheque impossible." });
+    sendJson(res, error?.statusCode || 500, buildPortalErrorPayload(error, "Fusion bibliotheque impossible."));
   }
 }
 
