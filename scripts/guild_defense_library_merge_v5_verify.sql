@@ -1,29 +1,60 @@
 -- Verify V5 de la fusion Bibliotheque.
 -- Read-only: inspecte la RPC, l'index unique et les invariants de merge.
 
-with rpc_source as (
+with rpc_definition as (
   select pg_get_functiondef('public.merge_guild_defense_library_roots(uuid, uuid, uuid, uuid, text, jsonb)'::regprocedure) as body
+),
+rpc_source as (
+  select
+    body,
+    lower(regexp_replace(body, '[[:space:]]+', ' ', 'g')) as normalized_body
+  from rpc_definition
+),
+rpc_markers as (
+  select
+    body,
+    normalized_body,
+    strpos(
+      normalized_body,
+      'v_keep_child_id := public.guild_defense_library_preferred_defense( v_existing_absorbed_guild_copy.id, v_absorbed.id );'
+    ) as root_collision_start,
+    strpos(
+      normalized_body,
+      'v_keep_child_id := public.guild_defense_library_preferred_defense( v_existing_child.id, v_child.id );'
+    ) as child_collision_start
+  from rpc_source
 ),
 rpc_sections as (
   select
     body,
-    strpos(body, 'v_existing_absorbed_guild_copy.id, v_absorbed.id') as root_collision_start,
-    strpos(body, 'v_absorbed_root_handled := true') as root_collision_end,
-    strpos(body, 'v_keep_child_id := public.guild_defense_library_preferred_defense(v_existing_child.id, v_child.id)') as child_collision_start,
-    strpos(body, 'v_local_collisions := v_local_collisions || jsonb_build_array(jsonb_build_object(''guild_code'', v_child.guild_code') as child_collision_end
-  from rpc_source
+    normalized_body,
+    root_collision_start,
+    coalesce(
+      root_collision_start
+        + nullif(strpos(substring(normalized_body from root_collision_start), 'for v_child in'), 0)
+        - 1,
+      0
+    ) as root_collision_end,
+    child_collision_start,
+    coalesce(
+      child_collision_start
+        + nullif(strpos(substring(normalized_body from child_collision_start), 'if not v_absorbed_root_handled then'), 0)
+        - 1,
+      0
+    ) as child_collision_end
+  from rpc_markers
 ),
 rpc_collision_sections as (
   select
     body,
     case
       when root_collision_start > 0 and root_collision_end > root_collision_start
-        then substring(body from root_collision_start for root_collision_end - root_collision_start)
+        then substring(normalized_body from root_collision_start for root_collision_end - root_collision_start)
       else ''
     end as root_collision_body,
     case
       when child_collision_start > 0 and child_collision_end > child_collision_start
-        then substring(body from child_collision_start for child_collision_end - child_collision_start)
+        then substring(normalized_body from child_collision_start for child_collision_end - child_collision_start)
       else ''
     end as child_collision_body
   from rpc_sections

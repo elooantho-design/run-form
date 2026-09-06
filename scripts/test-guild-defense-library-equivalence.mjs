@@ -1424,5 +1424,11 @@ assert.doesNotMatch(mergeV5Sql, /\bdelete\s+from\s+public\.guild_defenses\b/i, "
 assert.match(mergeV5VerifySql, /root_collision_hides_loser_before_keeper_import/, "merge V5 verify checks the absorbed-root collision order");
 assert.match(mergeV5VerifySql, /child_collision_hides_loser_before_keeper_import/, "merge V5 verify checks the descendant collision order");
 assert.match(mergeV5VerifySql, /unique_active_import_index_preserved/, "merge V5 verify confirms the unique active import index is still present");
+assert.match(mergeV5VerifySql, /regexp_replace\(body, '\[\[:space:\]\]\+', ' ', 'g'\)/, "merge V5 verify normalizes PostgreSQL function source whitespace");
+assert.match(mergeV5VerifySql, /v_existing_absorbed_guild_copy\.id, v_absorbed\.id/, "merge V5 verify anchors the root collision on the preferred-defense call");
+assert.match(mergeV5VerifySql, /substring\(normalized_body from root_collision_start\), 'for v_child in'/, "merge V5 verify ends the root collision segment at the descendant loop");
+assert.match(mergeV5VerifySql, /v_existing_child\.id, v_child\.id/, "merge V5 verify anchors the child collision on the preferred-defense call");
+assert.match(mergeV5VerifySql, /substring\(normalized_body from child_collision_start\), 'if not v_absorbed_root_handled then'/, "merge V5 verify ends the child collision segment at the root fallback");
+assert.doesNotMatch(mergeV5VerifySql, /strpos\(body, 'v_absorbed_root_handled := true'\)/, "merge V5 verify does not use the fragile global root handled marker");
 
 console.log("Guild defense library equivalence tests passed");
