@@ -932,6 +932,8 @@ const renderLibraryMergePlan = (candidate) => {
   const transfers = mergePlan?.transfers || [];
   const conflicts = mergePlan?.conflicts || [];
   const guilds = mergePlan?.guilds || [];
+  const guildsAfter = mergePlan?.guildsAfter || mergePlan?.guilds_after || guilds;
+  const rootLocalPresence = mergePlan?.rootLocalPresence || mergePlan?.root_local_presence || null;
   const descendants = mergePlan?.descendants || {};
   const localCollisions = mergePlan?.localCollisions || mergePlan?.local_collisions || [];
   const canMerge = Boolean(mergePlan?.canMerge ?? mergePlan?.can_merge);
@@ -996,7 +998,10 @@ const renderLibraryMergePlan = (candidate) => {
             <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
               <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Guildes concernees</div>
               <div className="mt-1">
-                {guilds.map((entry) => entry.guildCode || entry.guild_code).filter(Boolean).join(" · ") || "-"}
+                Avant : {guilds.map((entry) => entry.guildCode || entry.guild_code).filter(Boolean).join(" · ") || "-"}
+              </div>
+              <div className="mt-1">
+                Apres : {guildsAfter.map((entry) => entry.guildCode || entry.guild_code).filter(Boolean).join(" · ") || "-"}
               </div>
             </div>
             <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
@@ -1006,6 +1011,15 @@ const renderLibraryMergePlan = (candidate) => {
               </div>
             </div>
           </div>
+
+          {rootLocalPresence ? (
+            <div className="mt-3 rounded-xl border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-sm text-cyan-100">
+              <div className="text-xs uppercase tracking-[0.16em] text-cyan-200/80">Presence locale preservee</div>
+              <div className="mt-1">
+                {rootLocalPresence.message || `${rootLocalPresence.guildCode || rootLocalPresence.guild_code || "Guilde"} conserve une defense locale apres fusion.`}
+              </div>
+            </div>
+          ) : null}
 
           <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3 text-sm">
             <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">Donnees recuperees</div>

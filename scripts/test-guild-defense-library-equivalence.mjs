@@ -503,6 +503,19 @@ assert.equal(
   rootB.id,
   "resumable merge candidate is attached to the equivalent root shown in the modal",
 );
+const rootLocalPreservationPlan = buildGuildDefenseLibraryMergePlan(
+  pendingStub.state.defenses,
+  pendingStub.state.reviews,
+  { organizationId: PALADIN_ORG, reviewId: pendingStub.state.reviews[0].id },
+);
+assert.equal(rootLocalPreservationPlan.rootLocalPresence.action, "convert_absorbed_root", "cross-guild absorbed root is preserved as a local copy when no canonical copy exists");
+assert.equal(rootLocalPreservationPlan.rootLocalPresence.guildCode, rootB.guild_code, "absorbed root guild keeps a local presence");
+assert.equal(rootLocalPreservationPlan.rootLocalPresence.keepDefenseId, rootB.id, "absorbed root keeps its own id as the local copy");
+assert.deepEqual(
+  rootLocalPreservationPlan.guildsAfter.map((entry) => entry.guildCode).sort(),
+  ["G2", "G3", "G4"],
+  "preview keeps the same guild presence after root-local conversion",
+);
 assert.equal(
   getEquivalentImportTargetStatus(rootBAfter, "G3", pendingStub.state.defenses, equivalenceState).status,
   "equivalent-imported",
@@ -705,6 +718,21 @@ const sameEnemyPlan = buildGuildDefenseLibraryMergePlan([sameEnemyLeft, sameEnem
 });
 assert.equal(sameEnemyPlan.canMerge, true, "same enemy link stays compatible");
 
+const sameGuildRootA = makeDefense({ id: "merge-same-guild-a", name: "Same Guild A", guildCode: "G1", includeLayout: false });
+const sameGuildRootB = makeDefense({ id: "merge-same-guild-b", name: "Same Guild B", guildCode: "G1", includeLayout: false, createdAt: "2026-08-24T13:00:00.000Z" });
+const sameGuildPlan = buildGuildDefenseLibraryMergePlan(
+  [sameGuildRootA, sameGuildRootB],
+  [makeLibraryReview(sameGuildRootA, sameGuildRootB, { id: "review-same-guild" })],
+  { organizationId: PALADIN_ORG, reviewId: "review-same-guild" },
+);
+assert.equal(sameGuildPlan.canMerge, true, "same-guild roots can still merge into one local defense");
+assert.equal(sameGuildPlan.rootLocalPresence.action, "covered_by_canonical_root", "same-guild absorbed root is covered by the canonical root");
+assert.deepEqual(
+  sameGuildPlan.guildsAfter.map((entry) => entry.guildCode).sort(),
+  ["G1"],
+  "same-guild merge keeps one local guild presence",
+);
+
 const enemyConflictPlan = buildGuildDefenseLibraryMergePlan([conflictRootA, conflictRootB], [makeLibraryReview(conflictRootA, conflictRootB, { id: "review-enemy-conflict" })], {
   organizationId: PALADIN_ORG,
   reviewId: "review-enemy-conflict",
@@ -749,6 +777,35 @@ assert.deepEqual(
 );
 assert.deepEqual(fleetPlan.descendants.repointedDefenseIds, [fleetBChildG4.id], "absorbed descendants without collision are repointed");
 
+const canonicalRootWithG5Copy = makeDefense({ id: "merge-g5-canonical", name: "Canonical G1", guildCode: "G1", includeLayout: false, createdAt: "2026-08-24T09:00:00.000Z" });
+const absorbedRootG5 = makeDefense({ id: "merge-g5-absorbed", name: "Absorbed G5", guildCode: "G5", includeLayout: false, createdAt: "2026-08-24T10:00:00.000Z" });
+const existingCanonicalCopyG5 = makeDefense({
+  id: "merge-g5-canonical-copy",
+  name: "Canonical copy G5",
+  guildCode: "G5",
+  sourceDefenseId: canonicalRootWithG5Copy.id,
+  includeLayout: false,
+  infoBlocks: [
+    { block_type: "text", content: "bloc 1" },
+    { block_type: "text", content: "bloc 2" },
+    { block_type: "text", content: "bloc 3" },
+  ],
+});
+const g5CollisionPlan = buildGuildDefenseLibraryMergePlan(
+  [canonicalRootWithG5Copy, absorbedRootG5, existingCanonicalCopyG5],
+  [makeLibraryReview(canonicalRootWithG5Copy, absorbedRootG5, { id: "review-g5-existing-copy" })],
+  { organizationId: PALADIN_ORG, reviewId: "review-g5-existing-copy" },
+);
+assert.equal(g5CollisionPlan.canMerge, true, "absorbed root can merge when a canonical local copy already exists in its guild");
+assert.equal(g5CollisionPlan.rootLocalPresence.action, "merge_absorbed_root_with_existing_copy", "absorbed root is treated as a local collision when a canonical copy exists");
+assert.equal(g5CollisionPlan.localCollisions[0].absorbedRoot, true, "root-local collision is marked explicitly");
+assert.equal(g5CollisionPlan.localCollisions[0].keepDefenseId, existingCanonicalCopyG5.id, "richer existing canonical copy is kept in the absorbed guild");
+assert.deepEqual(
+  g5CollisionPlan.guildsAfter.map((entry) => entry.guildCode).sort(),
+  ["G1", "G5"],
+  "existing-copy collision still preserves the absorbed guild after merge",
+);
+
 const collisionRootA = makeDefense({ id: "merge-collision-a", name: "Collision A", guildCode: "G1", includeLayout: false });
 const collisionRootB = makeDefense({ id: "merge-collision-b", name: "Collision B", guildCode: "G2", includeLayout: false, createdAt: "2026-08-24T10:00:00.000Z" });
 const collisionAChild = makeDefense({ id: "merge-collision-a-g3", name: "Collision A G3", guildCode: "G3", sourceDefenseId: collisionRootA.id, includeLayout: false });
@@ -768,6 +825,39 @@ const collisionPlan = buildGuildDefenseLibraryMergePlan(
 assert.equal(collisionPlan.canMerge, true, "compatible local collision can be resolved conservatively");
 assert.equal(collisionPlan.localCollisions.length, 1, "one same-guild local collision is reported");
 assert.equal(collisionPlan.localCollisions[0].keepDefenseId, collisionBChild.id, "local collision keeps the richer local copy");
+
+const realFortoRoot = makeDefense({
+  id: "real-forto-root",
+  name: "Forto Arbitre Dassomi",
+  guildCode: "G1",
+  includeLayout: false,
+  infoBlocks: [
+    { block_type: "text", content: "strat 1" },
+    { block_type: "text", content: "strat 2" },
+  ],
+});
+const realArbitreRoot = makeDefense({ id: "real-arbitre-root", name: "Arbitre", guildCode: "G5", includeLayout: false, createdAt: "2026-08-24T13:00:00.000Z" });
+const realArbitreG2 = makeDefense({ id: "real-arbitre-g2", name: "Arbitre", guildCode: "G2", sourceDefenseId: realArbitreRoot.id, includeLayout: false });
+const realFortoG2 = makeDefense({
+  id: "real-forto-g2",
+  name: "Forto Arbitre Dassomi",
+  guildCode: "G2",
+  sourceDefenseId: realFortoRoot.id,
+  includeLayout: false,
+  infoBlocks: [
+    { block_type: "text", content: "strat 1" },
+    { block_type: "text", content: "strat 2" },
+  ],
+});
+const realG2CollisionPlan = buildGuildDefenseLibraryMergePlan(
+  [realFortoRoot, realArbitreRoot, realArbitreG2, realFortoG2],
+  [makeLibraryReview(realFortoRoot, realArbitreRoot, { id: "review-real-g2" })],
+  { organizationId: PALADIN_ORG, reviewId: "review-real-g2" },
+);
+const realG2Collision = realG2CollisionPlan.localCollisions.find((collision) => collision.guildCode === "G2");
+assert.equal(realG2CollisionPlan.canMerge, true, "real G2 collision remains mergeable");
+assert.equal(realG2Collision.keepDefenseId, realFortoG2.id, "G2 keeps the Forto copy because it carries the two info blocks");
+assert.equal(realG2Collision.hideDefenseId, realArbitreG2.id, "G2 hides the empty Arbitre copy after member references are repointed");
 
 const postMergeState = buildLibraryEquivalenceState(
   [
@@ -791,6 +881,19 @@ const postMergeResume = buildLibraryEquivalenceMergeCandidates(
   { organizationId: PALADIN_ORG },
 );
 assert.equal(postMergeResume.mergeCandidates.length, 0, "merged roots no longer expose a resumable merge action");
+const convertedRootImportState = buildLibraryEquivalenceState(
+  [
+    rootA,
+    { ...rootB, source_defense_id: rootA.id },
+    childG3After,
+  ],
+  [makeLibraryReview(rootA, rootB, { id: "review-converted-root" })],
+);
+assert.equal(
+  getEquivalentImportTargetStatus(rootA, rootB.guild_code, [rootA, { ...rootB, source_defense_id: rootA.id }, childG3After], convertedRootImportState).status,
+  "imported",
+  "absorbed guild is detected as already present after root-local conversion",
+);
 assert.equal(
   getEquivalentImportTargetStatus(fleetRootA, "G4", [fleetRootA, fleetAChildG2, { ...fleetBChildG4, source_defense_id: fleetRootA.id }], postMergeState).status,
   "imported",
@@ -844,6 +947,9 @@ const [
   mergePreflightSql,
   mergeMigrationSql,
   mergeVerifySql,
+  mergeV2PreflightSql,
+  mergeV2Sql,
+  mergeV2VerifySql,
 ] = await Promise.all([
   readFile(new URL("../api/_guild-defense-library-equivalence.js", import.meta.url), "utf8"),
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
@@ -854,6 +960,9 @@ const [
   readFile(new URL("../scripts/guild_defense_library_merge_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge_verify.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v2_preflight.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v2.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v2_verify.sql", import.meta.url), "utf8"),
 ]);
 
 assert.match(helperSource, /guild_defense_library_similarity_reviews/, "helper uses a dedicated library equivalence review table");
@@ -896,5 +1005,14 @@ assert.match(mergeVerifySql, /guild_defense_library_merge_columns/, "merge verif
 assert.match(mergeVerifySql, /absorbed_roots_still_visible/, "merge verify detects visible absorbed roots");
 assert.match(mergeVerifySql, /cross_tenant_merge_rows/, "merge verify audits tenant isolation");
 assert.match(mergeVerifySql, /duplicate_active_imports_after_merge/, "merge verify audits duplicate active imports after merge");
+assert.match(mergeV2PreflightSql, /read-only/i, "merge V2 preflight is explicitly read-only");
+assert.match(mergeV2Sql, /create or replace function public\.merge_guild_defense_library_roots/, "merge V2 replaces the existing RPC instead of creating a second workflow");
+assert.match(mergeV2Sql, /absorbed_root_preserved_as_local_copy/, "merge V2 records absorbed-root local preservation");
+assert.match(mergeV2Sql, /source_defense_id = v_canonical\.id/, "merge V2 can convert a cross-guild absorbed root into a canonical local copy");
+assert.match(mergeV2Sql, /guild_defense_library_repoint_references\(\s*v_hide_child_id,\s*v_keep_child_id\s*\)/, "merge V2 repoints members to the kept local defense during collisions");
+assert.match(mergeV2Sql, /if not v_absorbed_root_handled then[\s\S]*guild_defense_library_repoint_references\(\s*v_absorbed\.id,\s*v_canonical\.id\s*\)/, "merge V2 only repoints absorbed root to canonical when it was not preserved locally");
+assert.match(mergeV2Sql, /v_absorbed_root_preserved := true[\s\S]*v_root_reference_result := jsonb_build_object\([\s\S]*absorbed_root_preserved_as_local_copy/, "merge V2 skips root reference repointing when the absorbed root is kept as local copy");
+assert.match(mergeV2VerifySql, /active_absorbed_rows_still_native_after_merge/, "merge V2 verify detects absorbed roots that incorrectly remain native");
+assert.match(mergeV2VerifySql, /active_absorbed_rows_with_wrong_source_after_merge/, "merge V2 verify audits converted absorbed roots");
 
 console.log("Guild defense library equivalence tests passed");

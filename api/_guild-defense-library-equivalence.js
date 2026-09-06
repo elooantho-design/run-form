@@ -431,6 +431,90 @@ function buildTransferPlan(canonical, absorbed) {
   return transfers;
 }
 
+function buildLocalCollisionPlan(canonicalLocal, absorbedLocal, defenseRows = [], options = {}) {
+  const ordered = [canonicalLocal, absorbedLocal].sort((a, b) => compareScoredDefenses(a, b, defenseRows));
+  const keep = ordered[0];
+  const hide = ordered[1];
+  const conflicts = [];
+  if (!hasSameCompleteLayout(keep, hide)) conflicts.push("layouts locaux complets differents");
+  if (!hasCompatibleEnemyLink(keep, hide)) conflicts.push("liens enemy locaux incompatibles");
+
+  return {
+    guildCode: getDefenseGuildCode(absorbedLocal),
+    guild_code: getDefenseGuildCode(absorbedLocal),
+    keepDefenseId: keep.id,
+    keep_defense_id: keep.id,
+    keepDefenseName: keep.name || "",
+    keep_defense_name: keep.name || "",
+    hideDefenseId: hide.id,
+    hide_defense_id: hide.id,
+    hideDefenseName: hide.name || "",
+    hide_defense_name: hide.name || "",
+    canonicalCopyId: canonicalLocal.id,
+    canonical_copy_id: canonicalLocal.id,
+    absorbedCopyId: absorbedLocal.id,
+    absorbed_copy_id: absorbedLocal.id,
+    absorbedRoot: Boolean(options.absorbedRoot),
+    absorbed_root: Boolean(options.absorbedRoot),
+    canResolve: conflicts.length === 0,
+    can_resolve: conflicts.length === 0,
+    conflicts,
+  };
+}
+
+function buildMergeGuildsAfter(canonical, absorbed, defenseRows = [], { rootLocalPresence = null, collisions = [] } = {}) {
+  if (!canonical?.id || !absorbed?.id) return [];
+
+  const canonicalId = String(canonical.id);
+  const absorbedId = String(absorbed.id);
+  const hiddenIds = new Set([absorbedId]);
+  const convertedRootIds = new Set();
+  const familySignature = getDefenseSimilaritySignature(canonical);
+
+  const rootAction = rootLocalPresence?.action || "";
+  if (rootAction === "convert_absorbed_root") {
+    hiddenIds.delete(absorbedId);
+    convertedRootIds.add(absorbedId);
+  }
+
+  for (const collision of collisions || []) {
+    const hideId = String(collision.hideDefenseId || collision.hide_defense_id || "");
+    const keepId = String(collision.keepDefenseId || collision.keep_defense_id || "");
+    if (hideId) hiddenIds.add(hideId);
+    if ((collision.absorbedRoot || collision.absorbed_root) && keepId === absorbedId) {
+      hiddenIds.delete(absorbedId);
+      convertedRootIds.add(absorbedId);
+    }
+  }
+
+  const presentByGuild = new Map();
+  for (const row of defenseRows || []) {
+    const rowId = String(row?.id || "");
+    if (!rowId || hiddenIds.has(rowId)) continue;
+    if (!convertedRootIds.has(rowId) && isHiddenDefense(row)) continue;
+
+    let rowRootId = getDefenseSourceId(row) ? String(getDefenseSourceId(row)) : rowId;
+    if (rowRootId === absorbedId || convertedRootIds.has(rowId)) rowRootId = canonicalId;
+    if (rowRootId !== canonicalId) continue;
+    if (familySignature && getDefenseSimilaritySignature(row) !== familySignature) continue;
+
+    const guildCode = getDefenseGuildCode(row);
+    const guildKey = normalizeGuildCodeKey(guildCode);
+    if (!guildKey || presentByGuild.has(guildKey)) continue;
+    presentByGuild.set(guildKey, {
+      guildCode,
+      guild_code: guildCode,
+      viaDefenseId: row.id,
+      via_defense_id: row.id,
+      viaDefenseName: row.name || "",
+      via_defense_name: row.name || "",
+      status: rowId === canonicalId ? "native" : "imported",
+    });
+  }
+
+  return [...presentByGuild.values()];
+}
+
 function buildLocalCollisionPlans(canonical, absorbed, defenseRows = []) {
   const canonicalChildrenByGuild = new Map();
   for (const child of getActiveDescendants(defenseRows, canonical?.id)) {
@@ -440,6 +524,62 @@ function buildLocalCollisionPlans(canonical, absorbed, defenseRows = []) {
 
   const collisions = [];
   const directRepointed = [];
+  let rootLocalPresence = null;
+  const canonicalGuildCode = getDefenseGuildCode(canonical);
+  const absorbedGuildCode = getDefenseGuildCode(absorbed);
+  const canonicalGuildKey = normalizeGuildCodeKey(canonicalGuildCode);
+  const absorbedGuildKey = normalizeGuildCodeKey(absorbedGuildCode);
+
+  if (absorbedGuildKey) {
+    if (canonicalGuildKey && canonicalGuildKey === absorbedGuildKey) {
+      rootLocalPresence = {
+        action: "covered_by_canonical_root",
+        guildCode: absorbedGuildCode,
+        guild_code: absorbedGuildCode,
+        keepDefenseId: canonical?.id || "",
+        keep_defense_id: canonical?.id || "",
+        absorbedDefenseId: absorbed?.id || "",
+        absorbed_defense_id: absorbed?.id || "",
+        message: `${absorbedGuildCode} reste couverte par la root conservee.`,
+      };
+    } else {
+      const existingCanonicalLocal = canonicalChildrenByGuild.get(absorbedGuildKey) || null;
+      if (existingCanonicalLocal) {
+        const collision = buildLocalCollisionPlan(existingCanonicalLocal, absorbed, defenseRows, { absorbedRoot: true });
+        collisions.push(collision);
+        rootLocalPresence = {
+          action: "merge_absorbed_root_with_existing_copy",
+          guildCode: absorbedGuildCode,
+          guild_code: absorbedGuildCode,
+          keepDefenseId: collision.keepDefenseId,
+          keep_defense_id: collision.keep_defense_id,
+          hideDefenseId: collision.hideDefenseId,
+          hide_defense_id: collision.hide_defense_id,
+          message: `${absorbedGuildCode} possede deja une copie locale de la root conservee : une seule defense locale sera gardee.`,
+        };
+        if (String(collision.keepDefenseId || collision.keep_defense_id || "") === String(absorbed?.id || "")) {
+          canonicalChildrenByGuild.set(absorbedGuildKey, absorbed);
+        }
+      } else {
+        rootLocalPresence = {
+          action: "convert_absorbed_root",
+          guildCode: absorbedGuildCode,
+          guild_code: absorbedGuildCode,
+          keepDefenseId: absorbed?.id || "",
+          keep_defense_id: absorbed?.id || "",
+          sourceDefenseId: canonical?.id || "",
+          source_defense_id: canonical?.id || "",
+          sourceGuildCode: canonicalGuildCode,
+          source_guild_code: canonicalGuildCode,
+          sourceDefenseName: canonical?.name || "",
+          source_defense_name: canonical?.name || "",
+          message: `${absorbedGuildCode} conserve ${absorbed?.name || "la defense"} comme copie locale de ${canonical?.name || "la root conservee"}.`,
+        };
+        canonicalChildrenByGuild.set(absorbedGuildKey, absorbed);
+      }
+    }
+  }
+
   for (const absorbedChild of getActiveDescendants(defenseRows, absorbed?.id)) {
     const guildKey = normalizeGuildCodeKey(getDefenseGuildCode(absorbedChild));
     const canonicalChild = guildKey ? canonicalChildrenByGuild.get(guildKey) : null;
@@ -448,31 +588,14 @@ function buildLocalCollisionPlans(canonical, absorbed, defenseRows = []) {
       continue;
     }
 
-    const ordered = [canonicalChild, absorbedChild].sort((a, b) => compareScoredDefenses(a, b, defenseRows));
-    const keep = ordered[0];
-    const hide = ordered[1];
-    const conflicts = [];
-    if (!hasSameCompleteLayout(keep, hide)) conflicts.push("layouts locaux complets differents");
-    if (!hasCompatibleEnemyLink(keep, hide)) conflicts.push("liens enemy locaux incompatibles");
-
-    collisions.push({
-      guildCode: getDefenseGuildCode(absorbedChild),
-      guild_code: getDefenseGuildCode(absorbedChild),
-      keepDefenseId: keep.id,
-      keep_defense_id: keep.id,
-      hideDefenseId: hide.id,
-      hide_defense_id: hide.id,
-      canonicalCopyId: canonicalChild.id,
-      canonical_copy_id: canonicalChild.id,
-      absorbedCopyId: absorbedChild.id,
-      absorbed_copy_id: absorbedChild.id,
-      canResolve: conflicts.length === 0,
-      can_resolve: conflicts.length === 0,
-      conflicts,
-    });
+    const collision = buildLocalCollisionPlan(canonicalChild, absorbedChild, defenseRows);
+    collisions.push(collision);
+    if (String(collision.keepDefenseId || collision.keep_defense_id || "") === String(absorbedChild.id || "")) {
+      canonicalChildrenByGuild.set(guildKey, absorbedChild);
+    }
   }
 
-  return { collisions, directRepointed };
+  return { collisions, directRepointed, rootLocalPresence };
 }
 
 export function buildGuildDefenseLibraryMergePlan(
@@ -537,7 +660,7 @@ export function buildGuildDefenseLibraryMergePlan(
 
   const choice = left && right ? chooseCanonicalDefense(left, right, defenseRows) : {};
   const { canonical, absorbed, canonicalScore, absorbedScore } = choice;
-  const { collisions = [], directRepointed = [] } = canonical && absorbed
+  const { collisions = [], directRepointed = [], rootLocalPresence = null } = canonical && absorbed
     ? buildLocalCollisionPlans(canonical, absorbed, defenseRows)
     : {};
   const unresolvedCollisions = collisions.filter((collision) => !collision.canResolve);
@@ -552,6 +675,9 @@ export function buildGuildDefenseLibraryMergePlan(
 
   const transfers = canonical && absorbed ? buildTransferPlan(canonical, absorbed) : [];
   const guilds = canonical && absorbed ? getPresentGuildsForRoots(defenseRows, [canonical.id, absorbed.id]) : [];
+  const guildsAfter = canonical && absorbed
+    ? buildMergeGuildsAfter(canonical, absorbed, defenseRows, { rootLocalPresence, collisions })
+    : [];
   const canMerge = conflicts.length === 0;
 
   return {
@@ -568,6 +694,10 @@ export function buildGuildDefenseLibraryMergePlan(
     absorbed_score: absorbedScore,
     reasons: canonicalScore?.reasons || [],
     guilds,
+    guildsAfter,
+    guilds_after: guildsAfter,
+    rootLocalPresence,
+    root_local_presence: rootLocalPresence,
     descendants: {
       repointedCount: directRepointed.length,
       repointed_count: directRepointed.length,
