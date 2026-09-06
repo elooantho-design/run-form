@@ -1001,6 +1001,9 @@ const [
   mergeV3PreflightSql,
   mergeV3Sql,
   mergeV3VerifySql,
+  mergeV4PreflightSql,
+  mergeV4Sql,
+  mergeV4VerifySql,
 ] = await Promise.all([
   readFile(new URL("../api/_guild-defense-library-equivalence.js", import.meta.url), "utf8"),
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
@@ -1017,6 +1020,9 @@ const [
   readFile(new URL("../scripts/guild_defense_library_merge_v3_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge_v3.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_merge_v3_verify.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v4_preflight.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v4.sql", import.meta.url), "utf8"),
+  readFile(new URL("../scripts/guild_defense_library_merge_v4_verify.sql", import.meta.url), "utf8"),
 ]);
 
 assert.match(helperSource, /guild_defense_library_similarity_reviews/, "helper uses a dedicated library equivalence review table");
@@ -1081,5 +1087,21 @@ assert.match(mergeV3Sql, /coalesce\(to_json\(slots\.direction\)::text, 'null'\)/
 assert.match(mergeV3Sql, /coalesce\(to_json\(slots\.position\)::text, 'null'\)/, "merge V3 identity signatures preserve null positions like JS");
 assert.match(mergeV3VerifySql, /identical_reviews_similarity_mismatch/, "merge V3 verify detects false or stale similarity mismatches");
 assert.match(mergeV3VerifySql, /identical_reviews_identity_mismatch/, "merge V3 verify detects genuinely obsolete identical reviews");
+assert.match(mergeV4PreflightSql, /guild_defense_conditions', 'champion_id', 'bigint'/, "merge V4 preflight checks the real condition champion_id bigint type");
+assert.match(mergeV4PreflightSql, /helper_condition_key_signature[\s\S]*bigint, integer/, "merge V4 preflight exposes the condition helper signature mismatch");
+assert.match(mergeV4Sql, /drop function if exists public\.guild_defense_library_condition_key\(uuid, integer\)/, "merge V4 removes the obsolete uuid condition helper signature");
+assert.match(mergeV4Sql, /p_champion_id bigint/, "merge V4 recreates the condition helper with the real bigint champion id type");
+assert.doesNotMatch(mergeV4Sql, /p_champion_id uuid/, "merge V4 does not recreate the faulty uuid condition helper");
+assert.match(mergeV4Sql, /guild_defense_library_condition_key\(bigint, integer\)/, "merge V4 grants and documents the corrected condition helper");
+assert.match(mergeV4PreflightSql, /check_name = 'helper_condition_key_signature' and actual_value = 'uuid, integer' then 'INFO'/, "merge V4 preflight treats the old uuid helper as an expected pre-migration diagnostic");
+assert.match(mergeV4PreflightSql, /sample_defenses_with_multiple_conditions[\s\S]*'informational'[\s\S]*'INFO'/, "merge V4 preflight does not block when live data has no multi-condition defense sample");
+assert.match(mergeV4VerifySql, /condition_key_bigint_literal_call/, "merge V4 verify smoke-tests the corrected helper deterministically");
+assert.match(mergeV4VerifySql, /condition_key_bigint_with_real_condition/, "merge V4 verify smoke-tests the corrected helper on a real condition row");
+assert.match(mergeV4VerifySql, /merge_score_counts_distinct_condition_keys/, "merge V4 verify inspects multi-condition scoring logic without depending on live fixtures");
+assert.match(mergeV4VerifySql, /merge_score_zero_condition_sample/, "merge V4 verify smoke-tests merge_score without conditions");
+assert.match(mergeV4VerifySql, /merge_score_multi_condition_sample/, "merge V4 verify smoke-tests merge_score with multiple conditions");
+assert.match(mergeV4VerifySql, /real_case_forto_arbitre_dassomi_arbitre_score_type_safe/, "merge V4 verify covers the live Forto Arbitre Dassomi / Arbitre case without mutating it");
+assert.match(mergeV4VerifySql, /identical_reviews_similarity_mismatch/, "merge V4 verify keeps the V3 similarity signature invariant");
+assert.match(mergeV4VerifySql, /active_absorbed_rows_still_native_after_merge/, "merge V4 verify keeps the V2 absorbed-root preservation invariant");
 
 console.log("Guild defense library equivalence tests passed");
