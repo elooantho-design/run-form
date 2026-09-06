@@ -1026,6 +1026,7 @@ const [
   helperSource,
   adminApiSource,
   enemyBankSource,
+  portalSource,
   preflightSql,
   migrationSql,
   verifySql,
@@ -1045,6 +1046,7 @@ const [
   readFile(new URL("../api/_guild-defense-library-equivalence.js", import.meta.url), "utf8"),
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-enemy-defense-bank.js", import.meta.url), "utf8"),
+  readFile(new URL("../src/SaasPortal.jsx", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence_verify.sql", import.meta.url), "utf8"),
@@ -1072,6 +1074,22 @@ assert.match(adminApiSource, /action === "library-recalculate"/, "admin API expo
 assert.match(adminApiSource, /getEquivalentImportTargetStatus/, "admin API blocks duplicate imports through equivalence");
 assert.match(adminApiSource, /loadPreCreateLibrarySimilarityWarning/, "admin API performs a pre-create library similarity check");
 assert.match(adminApiSource, /allowSimilarLibraryDuplicate/, "admin API keeps create-anyway explicit");
+assert.match(portalSource, /function getPortalDefenseSimilarityMode/, "Portal UI derives a similarity modal mode");
+assert.match(portalSource, /isExistingPortalDefenseDraft\(draft\) \? "edit" : "create"/, "Portal UI falls back to draft id for edit similarity warnings");
+assert.match(portalSource, /const isEditSimilarityWarning = similarDefenseMode === "edit"/, "Portal UI keeps one edit/create mode per similarity modal");
+assert.match(portalSource, /IDENTIQUE/, "edit similarity modal exposes the IDENTIQUE action");
+assert.match(portalSource, /DIFFÉRENTE/, "edit similarity modal exposes the DIFFERENTE action");
+{
+  const importButtonIndex = portalSource.indexOf("Importer cette defense dans");
+  const importGateIndex = portalSource.lastIndexOf("{!isEditSimilarityWarning ? (", importButtonIndex);
+  assert.ok(importButtonIndex >= 0, "create similarity modal keeps the import action");
+  assert.ok(
+    importGateIndex >= 0 && importButtonIndex - importGateIndex < 1200,
+    "edit similarity modal does not expose the create import action",
+  );
+}
+assert.match(portalSource, /isEditSimilarityWarning \? "ANNULER"/, "edit similarity modal exposes a global ANNULER action");
+assert.match(portalSource, /isEditSimilarityWarning\s*\?\s*"Appliquer la modification"/, "edit similarity modal applies an existing defense edit after all decisions");
 assert.match(adminApiSource, /action === "library-merge-preview"/, "admin API exposes merge preview without mutation");
 assert.match(adminApiSource, /mergeCandidates/, "equivalence details API exposes resumable merge candidates");
 assert.match(adminApiSource, /action === "library-merge"/, "admin API exposes explicit merge action");

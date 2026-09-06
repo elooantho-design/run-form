@@ -4859,6 +4859,16 @@ const emptyPortalDefenseDraft = {
   slots: ["", "", "", "", ""],
 };
 
+function isExistingPortalDefenseDraft(draft) {
+  return Boolean(draft?.id && String(draft.id) !== "0");
+}
+
+function getPortalDefenseSimilarityMode(warning, draft) {
+  const explicitMode = String(warning?.operation || warning?.mode || "").toLowerCase();
+  if (explicitMode === "edit" || explicitMode === "create") return explicitMode;
+  return isExistingPortalDefenseDraft(draft) ? "edit" : "create";
+}
+
 function getPortalSessionGuildCode(session) {
   return normalizeGuildCode(session?.guildCode || session?.guild_code || session?.guild || "G1");
 }
@@ -5261,7 +5271,7 @@ function PortalAdminDefensesView({ session }) {
     setMessage("");
     setErrorMessage("");
 
-    const isEditMode = draft.id && String(draft.id) !== "0";
+    const isEditMode = isExistingPortalDefenseDraft(draft);
     const nextIsGlobal = false;
     const nextGuildCode = activeGuildCode;
 
@@ -5319,7 +5329,12 @@ function PortalAdminDefensesView({ session }) {
       setRefreshTick((value) => value + 1);
     } catch (error) {
       if (error?.similarLibraryDefense || error?.similar_library_defense) {
-        setSimilarDefenseWarning(error);
+        const warningMode = getPortalDefenseSimilarityMode(error, draft);
+        setSimilarDefenseWarning({
+          ...error,
+          operation: warningMode,
+          mode: warningMode,
+        });
         setSimilarDefenseDetailsId(String(error?.candidates?.[0]?.id || ""));
         setSimilarDefenseDecisions({});
         return;
@@ -5347,6 +5362,12 @@ function PortalAdminDefensesView({ session }) {
     }));
   }
 
+  function closeSimilarDefenseWarning() {
+    setSimilarDefenseWarning(null);
+    setSimilarDefenseDetailsId("");
+    setSimilarDefenseDecisions({});
+  }
+
   async function saveWithLibrarySimilarityDecisions() {
     const candidates = similarDefenseWarning?.candidates || [];
     const decisions = candidates
@@ -5369,9 +5390,7 @@ function PortalAdminDefensesView({ session }) {
 
   async function importSimilarDefense(defense) {
     if (getSimilarDefenseTargetStatus(defense) !== "available") return;
-    setSimilarDefenseWarning(null);
-    setSimilarDefenseDetailsId("");
-    setSimilarDefenseDecisions({});
+    closeSimilarDefenseWarning();
     setDraftOpen(false);
     await importDefense(defense, activeGuildCode);
   }
@@ -5636,6 +5655,13 @@ function PortalAdminDefensesView({ session }) {
       </section>
     );
   }
+
+  const similarDefenseCandidates = similarDefenseWarning?.candidates || [];
+  const similarDefenseMode = getPortalDefenseSimilarityMode(similarDefenseWarning, draft);
+  const isEditSimilarityWarning = similarDefenseMode === "edit";
+  const similarDefenseDecisionCount = similarDefenseCandidates.filter((candidate) =>
+    Boolean(similarDefenseDecisions[String(candidate.id)]),
+  ).length;
 
   return (
     <section className="space-y-4">
@@ -5934,16 +5960,14 @@ function PortalAdminDefensesView({ session }) {
                   Une defense similaire existe deja dans la Bibliotheque.
                 </h3>
                 <p className="mt-1 text-sm text-zinc-400">
-                  Meme type et memes 5 heros detectes, ordre ignore. Choisis si tu veux importer la defense existante ou creer une defense differente.
+                  {isEditSimilarityWarning
+                    ? "Cette modification rapproche la defense de plusieurs entrees existantes. Traite chaque candidate avant d'appliquer la modification."
+                    : "Meme type et memes 5 heros detectes, ordre ignore. Choisis si tu veux importer la defense existante ou creer une defense differente."}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setSimilarDefenseWarning(null);
-                  setSimilarDefenseDetailsId("");
-                  setSimilarDefenseDecisions({});
-                }}
+                onClick={closeSimilarDefenseWarning}
                 className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800"
                 aria-label={t("common.close", "Fermer")}
               >
@@ -5952,7 +5976,7 @@ function PortalAdminDefensesView({ session }) {
             </div>
 
             <div className="mt-4 grid gap-3">
-              {(similarDefenseWarning.candidates || []).map((candidate) => {
+              {similarDefenseCandidates.map((candidate) => {
                 const candidateStatus = getSimilarDefenseTargetStatus(candidate);
                 const alreadyPresent = candidateStatus !== "available";
                 const heroRows = getDefenseHeroDisplayRows(candidate);
@@ -5963,7 +5987,6 @@ function PortalAdminDefensesView({ session }) {
                 const expanded = String(similarDefenseDetailsId) === String(candidate.id);
                 const viaName = getSimilarDefenseViaName(candidate);
                 const candidateDecision = similarDefenseDecisions[String(candidate.id)] || "";
-                const isEditSimilarityWarning = (similarDefenseWarning.operation || similarDefenseWarning.mode) === "edit";
 
                 return (
                   <div key={candidate.id} className="rounded-2xl border border-zinc-800 bg-zinc-900/70 p-4">
@@ -6088,7 +6111,7 @@ function PortalAdminDefensesView({ session }) {
                           disabled={saving}
                           onClick={() => setSimilarDefenseDecision(candidate, "identical")}
                         >
-                          Marquer identique
+                          IDENTIQUE
                         </Button>
                       ) : null}
                       <Button
@@ -6097,7 +6120,7 @@ function PortalAdminDefensesView({ session }) {
                         disabled={saving}
                         onClick={() => setSimilarDefenseDecision(candidate, "different")}
                       >
-                        Marquer differente
+                        {isEditSimilarityWarning ? "DIFFÉRENTE" : "Marquer differente"}
                       </Button>
                     </div>
                   </div>
@@ -6107,21 +6130,33 @@ function PortalAdminDefensesView({ session }) {
 
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4">
               <div className="text-xs text-zinc-400">
-                {Object.keys(similarDefenseDecisions).length} / {(similarDefenseWarning.candidates || []).length} decision(s) renseignee(s).
+                {similarDefenseDecisionCount} / {similarDefenseCandidates.length} decision(s) renseignee(s).
               </div>
-              <Button
-                type="button"
-                className="rounded-lg bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
-                disabled={
-                  saving ||
-                  Object.keys(similarDefenseDecisions).length !== (similarDefenseWarning.candidates || []).length
-                }
-                onClick={saveWithLibrarySimilarityDecisions}
-              >
-                {(similarDefenseWarning.operation || similarDefenseWarning.mode) === "edit"
-                  ? "Appliquer la modification avec ces decisions"
-                  : "Creer comme defense differente"}
-              </Button>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-lg border-zinc-700 bg-transparent text-zinc-200"
+                  disabled={saving}
+                  onClick={closeSimilarDefenseWarning}
+                >
+                  {isEditSimilarityWarning ? "ANNULER" : t("common.cancel", "Annuler")}
+                </Button>
+                <Button
+                  type="button"
+                  className="rounded-lg bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                  disabled={
+                    saving ||
+                    !similarDefenseCandidates.length ||
+                    similarDefenseDecisionCount !== similarDefenseCandidates.length
+                  }
+                  onClick={saveWithLibrarySimilarityDecisions}
+                >
+                  {isEditSimilarityWarning
+                    ? "Appliquer la modification"
+                    : "Creer comme defense differente"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>
