@@ -1430,5 +1430,14 @@ assert.match(mergeV5VerifySql, /substring\(normalized_body from root_collision_s
 assert.match(mergeV5VerifySql, /v_existing_child\.id, v_child\.id/, "merge V5 verify anchors the child collision on the preferred-defense call");
 assert.match(mergeV5VerifySql, /substring\(normalized_body from child_collision_start\), 'if not v_absorbed_root_handled then'/, "merge V5 verify ends the child collision segment at the root fallback");
 assert.doesNotMatch(mergeV5VerifySql, /strpos\(body, 'v_absorbed_root_handled := true'\)/, "merge V5 verify does not use the fragile global root handled marker");
+{
+  const normalizedMergeV5Sql = mergeV5Sql.toLowerCase().replace(/\s+/g, " ");
+  const rootVerifyMarker = "guild_defense_library_preferred_defense(v_existing_absorbed_guild_copy.id, v_absorbed.id)";
+  const childVerifyMarker = "guild_defense_library_preferred_defense(v_existing_child.id, v_child.id)";
+  assert.ok(normalizedMergeV5Sql.includes(rootVerifyMarker), "merge V5 normalized source contains the root verify marker");
+  assert.ok(normalizedMergeV5Sql.includes(childVerifyMarker), "merge V5 normalized source contains the child verify marker");
+  assert.ok(mergeV5VerifySql.includes(`'${rootVerifyMarker}'`), "merge V5 verify uses the root marker that exists in normalized source");
+  assert.ok(mergeV5VerifySql.includes(`'${childVerifyMarker}'`), "merge V5 verify uses the child marker that exists in normalized source");
+}
 
 console.log("Guild defense library equivalence tests passed");

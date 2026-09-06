@@ -16,11 +16,11 @@ rpc_markers as (
     normalized_body,
     strpos(
       normalized_body,
-      'v_keep_child_id := public.guild_defense_library_preferred_defense( v_existing_absorbed_guild_copy.id, v_absorbed.id );'
+      'guild_defense_library_preferred_defense(v_existing_absorbed_guild_copy.id, v_absorbed.id)'
     ) as root_collision_start,
     strpos(
       normalized_body,
-      'v_keep_child_id := public.guild_defense_library_preferred_defense( v_existing_child.id, v_child.id );'
+      'guild_defense_library_preferred_defense(v_existing_child.id, v_child.id)'
     ) as child_collision_start
   from rpc_source
 ),
