@@ -4999,6 +4999,9 @@ function PortalAdminDefensesView({ session }) {
   const [similarDefenseDetailsId, setSimilarDefenseDetailsId] = useState("");
   const [similarDefenseDecisions, setSimilarDefenseDecisions] = useState({});
   const [libraryMergeOpenRequest, setLibraryMergeOpenRequest] = useState(null);
+  const clearLibraryMergeOpenRequest = useCallback(() => {
+    setLibraryMergeOpenRequest(null);
+  }, []);
   const [conditionOpen, setConditionOpen] = useState(false);
   const [conditionDefenseId, setConditionDefenseId] = useState("");
   const [conditionRemoveOpen, setConditionRemoveOpen] = useState(false);
@@ -5748,6 +5751,7 @@ function PortalAdminDefensesView({ session }) {
           onImportDefense={importDefense}
           onDataChanged={() => setRefreshTick((value) => value + 1)}
           openLibraryMergeRequest={libraryMergeOpenRequest}
+          onLibraryMergeRequestConsumed={clearLibraryMergeOpenRequest}
         />
       )}
 

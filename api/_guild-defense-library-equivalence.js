@@ -808,12 +808,21 @@ export function buildLibraryEquivalenceMergeCandidates(
 
   const familyRootIds = new Set((family.familyRootIds || family.family_root_ids || [seedId]).map(String));
   const equivalentIds = (family.equivalentDefenseIds || family.equivalent_defense_ids || []).map(String);
-  const rowsById = new Map(visibleDefenses.map((defense) => [String(defense.id), defense]));
+  const nativeRowsById = new Map(
+    visibleDefenses.filter(isNativeLibraryDefense).map((defense) => [String(defense.id), defense]),
+  );
+  if (!nativeRowsById.has(seedId)) {
+    return {
+      family,
+      mergeCandidates: [],
+      merge_candidates: [],
+    };
+  }
   const usableReviews = (scopedReviews || []).filter((review) => {
     if (review?.status !== "identical" || !reviewIsCurrent(review, state.defensesById)) return false;
     const leftId = String(review.left_defense_id || "");
     const rightId = String(review.right_defense_id || "");
-    return familyRootIds.has(leftId) && familyRootIds.has(rightId);
+    return familyRootIds.has(leftId) && familyRootIds.has(rightId) && nativeRowsById.has(leftId) && nativeRowsById.has(rightId);
   });
 
   const mergeCandidates = equivalentIds
@@ -821,9 +830,9 @@ export function buildLibraryEquivalenceMergeCandidates(
       const review =
         usableReviews.find((item) => makePairKey(item.left_defense_id, item.right_defense_id) === makePairKey(seedId, equivalentId)) ||
         usableReviews.find((item) => String(item.left_defense_id || "") === equivalentId || String(item.right_defense_id || "") === equivalentId);
-      const leftDefense = review ? rowsById.get(String(review.left_defense_id || "")) : null;
-      const rightDefense = review ? rowsById.get(String(review.right_defense_id || "")) : null;
-      const equivalentDefense = rowsById.get(equivalentId) || null;
+      const leftDefense = review ? nativeRowsById.get(String(review.left_defense_id || "")) : null;
+      const rightDefense = review ? nativeRowsById.get(String(review.right_defense_id || "")) : null;
+      const equivalentDefense = nativeRowsById.get(equivalentId) || null;
 
       if (!review || !leftDefense || !rightDefense || !equivalentDefense) return null;
 

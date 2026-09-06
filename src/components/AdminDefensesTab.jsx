@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Ban, CheckCircle2, ClipboardPaste, Download, GitCompareArrows, Library, Link2, Maximize2, Pencil, Plus, RefreshCw, Search, Shield, ShieldAlert, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,6 +123,7 @@ export default function AdminDefensesTab({
   onImportDefense,
   onDataChanged,
   openLibraryMergeRequest = null,
+  onLibraryMergeRequestConsumed = null,
 }) {
   const { t } = usePortalLanguage();
   const [typeFilter, setTypeFilter] = useState("all");
@@ -149,6 +150,18 @@ const [libraryMergeLoadingId, setLibraryMergeLoadingId] = useState("");
 const [libraryMergingId, setLibraryMergingId] = useState("");
 const [libraryRecalculateLoading, setLibraryRecalculateLoading] = useState(false);
 const [imagePreview, setImagePreview] = useState(null);
+
+const consumeOpenLibraryMergeRequest = useCallback((reviewId = "") => {
+  const currentReviewId = openLibraryMergeRequest?.reviewId || openLibraryMergeRequest?.review_id || "";
+  if (!currentReviewId) return;
+  if (reviewId && String(currentReviewId) !== String(reviewId)) return;
+  onLibraryMergeRequestConsumed?.(openLibraryMergeRequest);
+}, [onLibraryMergeRequestConsumed, openLibraryMergeRequest]);
+
+const closeLibrarySimilarityModal = () => {
+  consumeOpenLibraryMergeRequest();
+  setLibrarySimilarityModal(null);
+};
 
 const normalizeInfoBlock = (block) => ({
   ...block,
@@ -489,6 +502,7 @@ const mergeLibraryRoots = async (candidate) => {
       }),
       presentGuilds: mergePlan.guilds || mergePlan.presentGuilds || mergePlan.present_guilds || previous.presentGuilds,
     } : previous);
+    consumeOpenLibraryMergeRequest(reviewId);
     onDataChanged?.();
   } catch (error) {
     updateLibrarySimilarityCandidate(reviewId, (item) => ({
@@ -575,7 +589,10 @@ useEffect(() => {
         error: error?.message || "Plan de fusion indisponible.",
       });
     } finally {
-      if (!cancelled) setLibrarySimilarityLoading(false);
+      if (!cancelled) {
+        setLibrarySimilarityLoading(false);
+        consumeOpenLibraryMergeRequest(reviewId);
+      }
     }
   }
 
@@ -591,6 +608,7 @@ useEffect(() => {
   openLibraryMergeRequest?.reviewId,
   openLibraryMergeRequest?.review_id,
   openLibraryMergeRequest?.token,
+  consumeOpenLibraryMergeRequest,
 ]);
 
 const openDefenseBlocksModal = async (defense) => {
@@ -1132,13 +1150,16 @@ const renderLibraryMergePlan = (candidate) => {
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <button
               type="button"
-              onClick={() => updateLibrarySimilarityCandidate(reviewId, (item) => ({
-                ...item,
-                mergePlan: null,
-                merge_plan: null,
-                showMergePlan: false,
-                show_merge_plan: false,
-              }))}
+              onClick={() => {
+                consumeOpenLibraryMergeRequest(reviewId);
+                updateLibrarySimilarityCandidate(reviewId, (item) => ({
+                  ...item,
+                  mergePlan: null,
+                  merge_plan: null,
+                  showMergePlan: false,
+                  show_merge_plan: false,
+                }));
+              }}
               className="rounded-xl border border-zinc-700 px-3 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-800"
             >
               ANNULER
@@ -1604,7 +1625,7 @@ const renderLibraryMergePlan = (candidate) => {
 
         <button
           type="button"
-          onClick={() => setLibrarySimilarityModal(null)}
+          onClick={closeLibrarySimilarityModal}
           className="rounded-xl border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
         >
           {t("common.close", "Fermer")}

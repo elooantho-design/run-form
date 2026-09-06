@@ -1024,6 +1024,44 @@ const postMergeResume = buildLibraryEquivalenceMergeCandidates(
   { organizationId: PALADIN_ORG },
 );
 assert.equal(postMergeResume.mergeCandidates.length, 0, "merged roots no longer expose a resumable merge action");
+const rootLocalCopyAfterMerge = { ...rootB, source_defense_id: rootA.id, sourceDefenseId: rootA.id };
+const remainingNativeRoot = makeDefense({
+  id: "merge-remaining-native-root",
+  name: "Remaining native root",
+  guildCode: "G6",
+  includeLayout: true,
+});
+const multiIdenticalAfterMergeResume = buildLibraryEquivalenceMergeCandidates(
+  [rootA, rootLocalCopyAfterMerge, remainingNativeRoot],
+  [
+    makeLibraryReview(rootA, rootB, { id: "review-root-local-copy-stale" }),
+    makeLibraryReview(rootB, remainingNativeRoot, { id: "review-local-copy-to-root" }),
+    makeLibraryReview(rootA, remainingNativeRoot, { id: "review-remaining-native-root" }),
+  ],
+  rootA.id,
+  { organizationId: PALADIN_ORG },
+);
+assert.deepEqual(
+  multiIdenticalAfterMergeResume.mergeCandidates.map((candidate) => candidate.review.id),
+  ["review-remaining-native-root"],
+  "after one root is converted to a local copy, only the remaining native root can resume a merge",
+);
+assert.equal(
+  multiIdenticalAfterMergeResume.mergeCandidates[0].equivalentDefenseId,
+  remainingNativeRoot.id,
+  "resumable merge candidates never point at the converted local copy",
+);
+const convertedCopyResume = buildLibraryEquivalenceMergeCandidates(
+  [rootA, rootLocalCopyAfterMerge, remainingNativeRoot],
+  [
+    makeLibraryReview(rootA, rootB, { id: "review-root-local-copy-stale" }),
+    makeLibraryReview(rootB, remainingNativeRoot, { id: "review-local-copy-to-root" }),
+    makeLibraryReview(rootA, remainingNativeRoot, { id: "review-remaining-native-root" }),
+  ],
+  rootLocalCopyAfterMerge.id,
+  { organizationId: PALADIN_ORG },
+);
+assert.equal(convertedCopyResume.mergeCandidates.length, 0, "a converted local copy cannot reopen a root merge plan");
 const convertedRootImportState = buildLibraryEquivalenceState(
   [
     rootA,
@@ -1085,6 +1123,7 @@ const [
   adminApiSource,
   enemyBankSource,
   portalSource,
+  adminDefensesTabSource,
   preflightSql,
   migrationSql,
   verifySql,
@@ -1105,6 +1144,7 @@ const [
   readFile(new URL("../api/portal-admin-defenses.js", import.meta.url), "utf8"),
   readFile(new URL("../api/gvg-enemy-defense-bank.js", import.meta.url), "utf8"),
   readFile(new URL("../src/SaasPortal.jsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/components/AdminDefensesTab.jsx", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence_preflight.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence.sql", import.meta.url), "utf8"),
   readFile(new URL("../scripts/guild_defense_library_equivalence_verify.sql", import.meta.url), "utf8"),
@@ -1152,6 +1192,11 @@ assert.match(portalSource, /isEditSimilarityWarning \? "ANNULER"/, "edit similar
 assert.match(portalSource, /isEditSimilarityWarning\s*\?\s*"Appliquer la modification"/, "edit similarity modal applies an existing defense edit after all decisions");
 assert.match(portalSource, /status === "identical" && \(item\.reviewId \|\| item\.review_id\)/, "Portal UI waits for an identical decision with a real review id");
 assert.match(portalSource, /setLibraryMergeOpenRequest\(\{[\s\S]*reviewId: identicalDecision\.reviewId \|\| identicalDecision\.review_id/, "Portal UI opens the merge plan from the returned review id");
+assert.match(portalSource, /const clearLibraryMergeOpenRequest = useCallback\(\(\) => \{[\s\S]*setLibraryMergeOpenRequest\(null\)/, "Portal UI can clear a consumed automatic merge request");
+assert.match(portalSource, /onLibraryMergeRequestConsumed=\{clearLibraryMergeOpenRequest\}/, "Portal UI passes the merge request consume callback to the library modal");
+assert.match(adminDefensesTabSource, /onLibraryMergeRequestConsumed = null/, "Admin defenses tab accepts the automatic merge request consume callback");
+assert.match(adminDefensesTabSource, /consumeOpenLibraryMergeRequest\(reviewId\);[\s\S]*onDataChanged\?\.\(\)/, "successful library merge consumes the automatic request before refreshing data");
+assert.match(adminDefensesTabSource, /finally \{[\s\S]*consumeOpenLibraryMergeRequest\(reviewId\);/, "automatic merge preview is consumed after it is opened or fails");
 assert.match(adminApiSource, /action === "library-merge-preview"/, "admin API exposes merge preview without mutation");
 assert.match(adminApiSource, /mergeCandidates/, "equivalence details API exposes resumable merge candidates");
 assert.match(adminApiSource, /action === "library-merge"/, "admin API exposes explicit merge action");
@@ -1167,6 +1212,8 @@ assert.match(verifySql, /non_native_review_pairs/, "verify ensures reviews only 
 assert.match(helperSource, /buildGuildDefenseLibraryMergePlan/, "helper centralizes the merge preview plan");
 assert.match(helperSource, /scoreGuildDefenseLibraryRoot/, "helper centralizes deterministic canonical scoring");
 assert.match(helperSource, /merged_into_defense_id/, "helper excludes merged roots from active library state");
+assert.match(helperSource, /const nativeRowsById = new Map/, "equivalence details builds merge candidates only from active native roots");
+assert.match(helperSource, /nativeRowsById\.get\(equivalentId\)/, "equivalence details refuses converted local copies as merge targets");
 assert.match(mergePreflightSql, /read-only/i, "merge preflight is explicitly read-only");
 assert.match(mergePreflightSql, /guild_defense_library_merges/, "merge preflight checks the audit table state");
 assert.match(mergeMigrationSql, /create table if not exists public\.guild_defense_library_merges/, "merge migration creates the audit table");
