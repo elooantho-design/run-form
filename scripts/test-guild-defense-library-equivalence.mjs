@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import {
   buildLibraryEquivalenceState,
+  buildLibraryEquivalenceMergeCandidates,
   buildGuildDefenseLibraryMergePlan,
   detectLibraryDefenseSimilarities,
   findLibraryDefenseSimilarityCandidates,
@@ -485,6 +486,23 @@ assert.deepEqual(
   ["G2", "G3", "G4"],
   "family presence includes native roots and compatible descendants only",
 );
+const equivalenceMergeResume = buildLibraryEquivalenceMergeCandidates(
+  pendingStub.state.defenses,
+  pendingStub.state.reviews,
+  rootA.id,
+  { organizationId: PALADIN_ORG },
+);
+assert.equal(equivalenceMergeResume.mergeCandidates.length, 1, "validated equivalence details expose one resumable merge candidate");
+assert.equal(
+  equivalenceMergeResume.mergeCandidates[0].review.id,
+  pendingStub.state.reviews[0].id,
+  "resumable merge candidate keeps the original IDENTICAL review id",
+);
+assert.equal(
+  equivalenceMergeResume.mergeCandidates[0].equivalentDefenseId,
+  rootB.id,
+  "resumable merge candidate is attached to the equivalent root shown in the modal",
+);
 assert.equal(
   getEquivalentImportTargetStatus(rootBAfter, "G3", pendingStub.state.defenses, equivalenceState).status,
   "equivalent-imported",
@@ -761,6 +779,18 @@ const postMergeState = buildLibraryEquivalenceState(
   [makeLibraryReview(fleetRootA, fleetRootB, { id: "review-post-merge" })],
 );
 assert.equal(postMergeState.byDefenseId.has(fleetRootB.id), false, "absorbed root is excluded from active library state");
+const postMergeResume = buildLibraryEquivalenceMergeCandidates(
+  [
+    fleetRootA,
+    { ...fleetRootB, is_hidden: true, merged_into_defense_id: fleetRootA.id },
+    fleetAChildG2,
+    { ...fleetBChildG4, source_defense_id: fleetRootA.id },
+  ],
+  [makeLibraryReview(fleetRootA, fleetRootB, { id: "review-post-merge" })],
+  fleetRootA.id,
+  { organizationId: PALADIN_ORG },
+);
+assert.equal(postMergeResume.mergeCandidates.length, 0, "merged roots no longer expose a resumable merge action");
 assert.equal(
   getEquivalentImportTargetStatus(fleetRootA, "G4", [fleetRootA, fleetAChildG2, { ...fleetBChildG4, source_defense_id: fleetRootA.id }], postMergeState).status,
   "imported",
@@ -837,6 +867,7 @@ assert.match(adminApiSource, /getEquivalentImportTargetStatus/, "admin API block
 assert.match(adminApiSource, /loadPreCreateLibrarySimilarityWarning/, "admin API performs a pre-create library similarity check");
 assert.match(adminApiSource, /allowSimilarLibraryDuplicate/, "admin API keeps create-anyway explicit");
 assert.match(adminApiSource, /action === "library-merge-preview"/, "admin API exposes merge preview without mutation");
+assert.match(adminApiSource, /mergeCandidates/, "equivalence details API exposes resumable merge candidates");
 assert.match(adminApiSource, /action === "library-merge"/, "admin API exposes explicit merge action");
 assert.match(adminApiSource, /merge_guild_defense_library_roots/, "admin API delegates merge mutation to a transactional RPC");
 assert.match(enemyBankSource, /propagateLibraryEquivalenceKnowledge/, "enemy validation shares knowledge back to equivalent library roots");

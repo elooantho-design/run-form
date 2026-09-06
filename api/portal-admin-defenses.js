@@ -19,6 +19,7 @@ import {
 import {
   GUILD_DEFENSE_LIBRARY_EQUIVALENCE_MESSAGE,
   buildLibraryEquivalenceState,
+  buildLibraryEquivalenceMergeCandidates,
   buildGuildDefenseLibraryMergePlan,
   detectLibraryDefenseSimilarities,
   findLibraryDefenseSimilarityCandidates,
@@ -1383,12 +1384,44 @@ async function handleLibraryEquivalenceDetails(body, req, res) {
   try {
     const { defenses } = await loadMappedDefenseRowsInScope(scope);
     const reviews = await loadLibrarySimilarityReviews(supabase, scope.organizationId);
-    const state = buildLibraryEquivalenceState(defenses, reviews);
-    const family = state.byDefenseId.get(String(defenseId));
+    const { family, mergeCandidates } = buildLibraryEquivalenceMergeCandidates(defenses, reviews, defenseId, {
+      organizationId: scope.organizationId,
+    });
     if (!family) {
       sendJson(res, 404, { error: "Famille bibliotheque introuvable." });
       return;
     }
+
+    const defensesById = new Map(defenses.map((defense) => [String(defense.id), defense]));
+    const mergeCandidateByEquivalentId = new Map(
+      mergeCandidates.map((candidate) => [String(candidate.equivalentDefenseId || candidate.equivalent_defense_id || ""), candidate]),
+    );
+    const equivalentDefenses = (family.equivalentDefenses || family.equivalent_defenses || []).map((equivalent) => {
+      const defense = defensesById.get(String(equivalent.id || "")) || equivalent;
+      const mergeCandidate = mergeCandidateByEquivalentId.get(String(equivalent.id || ""));
+      const review = mergeCandidate?.review ? mapLibrarySimilarityReview(mergeCandidate.review) : null;
+      const mergeStatus = defense.mergedIntoDefenseId || defense.merged_into_defense_id ? "merged" : review?.status || "";
+
+      return {
+        ...defense,
+        review,
+        reviewId: review?.id || "",
+        review_id: review?.id || "",
+        libraryMergeStatus: mergeStatus,
+        library_merge_status: mergeStatus,
+      };
+    });
+    const mappedMergeCandidates = mergeCandidates.map((candidate) => ({
+      review: mapLibrarySimilarityReview(candidate.review),
+      review_id: candidate.review?.id || "",
+      status: candidate.review?.status || "",
+      equivalentDefenseId: candidate.equivalentDefenseId || candidate.equivalent_defense_id || "",
+      equivalent_defense_id: candidate.equivalentDefenseId || candidate.equivalent_defense_id || "",
+      leftDefense: candidate.leftDefense,
+      left_defense: candidate.leftDefense,
+      rightDefense: candidate.rightDefense,
+      right_defense: candidate.rightDefense,
+    }));
 
     sendJson(res, 200, {
       ok: true,
@@ -1396,8 +1429,10 @@ async function handleLibraryEquivalenceDetails(body, req, res) {
       defense_id: defenseId,
       familyRootIds: family.familyRootIds || family.family_root_ids || [],
       family_root_ids: family.familyRootIds || family.family_root_ids || [],
-      equivalentDefenses: family.equivalentDefenses || family.equivalent_defenses || [],
-      equivalent_defenses: family.equivalentDefenses || family.equivalent_defenses || [],
+      equivalentDefenses,
+      equivalent_defenses: equivalentDefenses,
+      mergeCandidates: mappedMergeCandidates,
+      merge_candidates: mappedMergeCandidates,
       presentGuilds: family.presentGuilds || family.present_guilds || [],
       present_guilds: family.presentGuilds || family.present_guilds || [],
     });

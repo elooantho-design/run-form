@@ -649,6 +649,75 @@ export function buildLibraryEquivalenceState(defenses = [], reviews = []) {
   return { byDefenseId, adjacency, defensesById };
 }
 
+export function buildLibraryEquivalenceMergeCandidates(
+  defenseRows = [],
+  reviews = [],
+  defenseId = "",
+  { organizationId = "" } = {},
+) {
+  const seedId = String(defenseId || "");
+  const organizationKey = String(organizationId || "");
+  const visibleDefenses = (defenseRows || []).filter((defense) => {
+    if (!defense?.id || isHiddenDefense(defense)) return false;
+    if (!organizationKey) return true;
+    return String(defense.organization_id || defense.organizationId || "") === organizationKey;
+  });
+  const scopedReviews = organizationKey
+    ? (reviews || []).filter((review) => String(review.organization_id || review.organizationId || "") === organizationKey)
+    : reviews;
+  const state = buildLibraryEquivalenceState(visibleDefenses, scopedReviews);
+  const family = state.byDefenseId.get(seedId);
+
+  if (!family) {
+    return {
+      family: null,
+      mergeCandidates: [],
+      merge_candidates: [],
+    };
+  }
+
+  const familyRootIds = new Set((family.familyRootIds || family.family_root_ids || [seedId]).map(String));
+  const equivalentIds = (family.equivalentDefenseIds || family.equivalent_defense_ids || []).map(String);
+  const rowsById = new Map(visibleDefenses.map((defense) => [String(defense.id), defense]));
+  const usableReviews = (scopedReviews || []).filter((review) => {
+    if (review?.status !== "identical" || !reviewIsCurrent(review, state.defensesById)) return false;
+    const leftId = String(review.left_defense_id || "");
+    const rightId = String(review.right_defense_id || "");
+    return familyRootIds.has(leftId) && familyRootIds.has(rightId);
+  });
+
+  const mergeCandidates = equivalentIds
+    .map((equivalentId) => {
+      const review =
+        usableReviews.find((item) => makePairKey(item.left_defense_id, item.right_defense_id) === makePairKey(seedId, equivalentId)) ||
+        usableReviews.find((item) => String(item.left_defense_id || "") === equivalentId || String(item.right_defense_id || "") === equivalentId);
+      const leftDefense = review ? rowsById.get(String(review.left_defense_id || "")) : null;
+      const rightDefense = review ? rowsById.get(String(review.right_defense_id || "")) : null;
+      const equivalentDefense = rowsById.get(equivalentId) || null;
+
+      if (!review || !leftDefense || !rightDefense || !equivalentDefense) return null;
+
+      return {
+        review,
+        leftDefense,
+        left_defense: leftDefense,
+        rightDefense,
+        right_defense: rightDefense,
+        equivalentDefense,
+        equivalent_defense: equivalentDefense,
+        equivalentDefenseId: equivalentId,
+        equivalent_defense_id: equivalentId,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    family,
+    mergeCandidates,
+    merge_candidates: mergeCandidates,
+  };
+}
+
 export function getEquivalentImportTargetStatus(defense, targetGuildCode, localDefenses = [], equivalenceState = null) {
   const sourceId = String(defense?.id || "");
   const sourceSignature = getDefenseSimilaritySignature(defense);

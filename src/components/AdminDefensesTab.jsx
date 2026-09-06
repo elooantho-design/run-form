@@ -190,6 +190,20 @@ const getLibraryPresentGuilds = (defense) =>
 const getLibraryEquivalentDefenses = (defense) =>
   defense?.equivalentDefenses || defense?.equivalent_defenses || [];
 
+const getLibraryMergeCandidateEquivalentId = (candidate, currentDefenseId = "") => {
+  const explicitId = candidate?.equivalentDefenseId || candidate?.equivalent_defense_id;
+  if (explicitId) return String(explicitId);
+
+  const leftDefense = candidate?.leftDefense || candidate?.left_defense;
+  const rightDefense = candidate?.rightDefense || candidate?.right_defense;
+  const currentId = String(currentDefenseId || "");
+
+  if (currentId && String(leftDefense?.id || "") === currentId) return String(rightDefense?.id || "");
+  if (currentId && String(rightDefense?.id || "") === currentId) return String(leftDefense?.id || "");
+
+  return String(rightDefense?.id || leftDefense?.id || "");
+};
+
 const getImportTargetDetail = (defense, targetGuildCode) =>
   (defense?.importTargets || []).find(
     (entry) => normalizeGuildCodeKey(entry.guildCode || entry.guild_code) === normalizeGuildCodeKey(targetGuildCode)
@@ -319,7 +333,7 @@ const openLibraryEquivalenceDetailsModal = async (defense) => {
     setLibrarySimilarityModal({
       mode: "equivalents",
       defense,
-      candidates: [],
+      candidates: data.mergeCandidates || data.merge_candidates || [],
       equivalents: data.equivalentDefenses || data.equivalent_defenses || [],
       presentGuilds: data.presentGuilds || data.present_guilds || [],
       error: "",
@@ -380,6 +394,19 @@ const loadLibraryMergePreview = async (candidate) => {
   }
 };
 
+const showLibraryMergePlan = async (candidate) => {
+  const reviewId = candidate?.review?.id || candidate?.review_id;
+  if (!reviewId) return null;
+
+  updateLibrarySimilarityCandidate(reviewId, (item) => ({
+    ...item,
+    showMergePlan: true,
+    show_merge_plan: true,
+  }));
+
+  return loadLibraryMergePreview(candidate);
+};
+
 const reviewLibrarySimilarity = async (candidate, status) => {
   const reviewId = candidate?.review?.id || candidate?.review_id;
   if (!reviewId) return;
@@ -424,15 +451,42 @@ const mergeLibraryRoots = async (candidate) => {
 
   setLibraryMergingId(reviewId);
   try {
-    await callPortalAdminDefenses({
+    const data = await callPortalAdminDefenses({
       action: "library-merge",
       guildCode: activeGuildCode,
       reviewId,
     });
+    const mergePlan = data.mergePlan || data.merge_plan || candidate.mergePlan || candidate.merge_plan || {};
+    const mergeResult = data.mergeResult || data.merge_result || {};
+    const canonicalDefense = mergePlan.canonical || null;
+    const absorbedDefense = mergePlan.absorbed || null;
+    const canonicalId = String(
+      mergeResult.canonical_defense_id ||
+        mergeResult.canonicalDefenseId ||
+        canonicalDefense?.id ||
+        "",
+    );
+    const absorbedId = String(
+      mergeResult.absorbed_defense_id ||
+        mergeResult.absorbedDefenseId ||
+        absorbedDefense?.id ||
+        "",
+    );
+
     setLibrarySimilarityModal((previous) => previous ? {
       ...previous,
       notice: "Fusion bibliotheque effectuee.",
       candidates: (previous.candidates || []).filter((item) => (item.review?.id || item.review_id) !== reviewId),
+      defense: absorbedId && String(previous.defense?.id || "") === absorbedId && canonicalDefense
+        ? { ...previous.defense, ...canonicalDefense }
+        : previous.defense,
+      equivalents: (previous.equivalents || []).filter((defense) => {
+        const id = String(defense?.id || "");
+        if (absorbedId && id === absorbedId) return false;
+        if (absorbedId && String(previous.defense?.id || "") === absorbedId && canonicalId && id === canonicalId) return false;
+        return true;
+      }),
+      presentGuilds: mergePlan.guilds || mergePlan.presentGuilds || mergePlan.present_guilds || previous.presentGuilds,
     } : previous);
     onDataChanged?.();
   } catch (error) {
@@ -900,7 +954,7 @@ const renderLibraryMergePlan = (candidate) => {
             disabled={isBusy}
             className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
           >
-            {libraryMergeLoadingId === reviewId ? "Chargement..." : "Charger le plan"}
+            {libraryMergeLoadingId === reviewId ? "Chargement..." : "VOIR LE PLAN DE FUSION"}
           </button>
         )}
       </div>
@@ -988,7 +1042,13 @@ const renderLibraryMergePlan = (candidate) => {
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <button
               type="button"
-              onClick={() => updateLibrarySimilarityCandidate(reviewId, (item) => ({ ...item, mergePlan: null, merge_plan: null }))}
+              onClick={() => updateLibrarySimilarityCandidate(reviewId, (item) => ({
+                ...item,
+                mergePlan: null,
+                merge_plan: null,
+                showMergePlan: false,
+                show_merge_plan: false,
+              }))}
               className="rounded-xl border border-zinc-700 px-3 py-2 text-sm font-semibold text-zinc-200 hover:bg-zinc-800"
             >
               ANNULER
@@ -1486,8 +1546,57 @@ const renderLibraryMergePlan = (candidate) => {
               Aucun autre modele equivalent confirme.
             </div>
           ) : (
-            <div className="grid gap-3 md:grid-cols-2">
-              {(librarySimilarityModal.equivalents || []).map((defense) => renderLibraryDefensePanel(defense, defense.guildCode || defense.guild_code || "Modele lie"))}
+            <div className="space-y-4">
+              {(librarySimilarityModal.equivalents || []).map((defense) => {
+                const currentDefenseId = librarySimilarityModal.defense?.id || "";
+                const equivalentId = String(defense?.id || "");
+                const mergeCandidate = (librarySimilarityModal.candidates || []).find(
+                  (candidate) => getLibraryMergeCandidateEquivalentId(candidate, currentDefenseId) === equivalentId,
+                );
+                const reviewId = mergeCandidate?.review?.id || mergeCandidate?.review_id || "";
+                const mergePlanVisible = Boolean(
+                  mergeCandidate?.showMergePlan ||
+                    mergeCandidate?.show_merge_plan ||
+                    mergeCandidate?.mergePlan ||
+                    mergeCandidate?.merge_plan ||
+                    mergeCandidate?.mergeError ||
+                    mergeCandidate?.merge_error ||
+                    libraryMergeLoadingId === reviewId ||
+                    libraryMergingId === reviewId,
+                );
+                const mergedIntoId = defense?.mergedIntoDefenseId || defense?.merged_into_defense_id;
+
+                return (
+                  <div key={equivalentId || reviewId} className="rounded-2xl border border-violet-300/20 bg-violet-400/5 p-4">
+                    {renderLibraryDefensePanel(defense, defense.guildCode || defense.guild_code || "Modele lie")}
+
+                    {mergedIntoId ? (
+                      <div className="mt-3 rounded-xl border border-zinc-700/70 bg-zinc-950/60 px-3 py-2 text-sm text-zinc-300">
+                        Modele deja fusionne vers {mergedIntoId}.
+                      </div>
+                    ) : mergeCandidate ? (
+                      mergePlanVisible ? (
+                        renderLibraryMergePlan(mergeCandidate)
+                      ) : (
+                        <div className="mt-3 flex flex-wrap justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => showLibraryMergePlan(mergeCandidate)}
+                            disabled={libraryMergeLoadingId === reviewId}
+                            className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
+                          >
+                            {libraryMergeLoadingId === reviewId ? "Chargement..." : "VOIR LE PLAN DE FUSION"}
+                          </button>
+                        </div>
+                      )
+                    ) : (
+                      <div className="mt-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
+                        Review IDENTIQUE introuvable pour cette equivalence active.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
