@@ -170,16 +170,23 @@ function createSupabaseStub({ defenses = [], reviews = [], enemies = [] } = {}) 
     );
 
   const upsertReviewRows = (rows) => {
+    const persistedRows = [];
     for (const row of rows || []) {
       const existing = state.reviews.find(
         (review) =>
           String(review.left_defense_id) === String(row.left_defense_id) &&
           String(review.right_defense_id) === String(row.right_defense_id),
       );
-      if (existing) Object.assign(existing, row);
-      else state.reviews.push({ id: `review-${state.reviews.length + 1}`, created_at: "2026-08-24T12:00:00.000Z", ...row });
+      if (existing) {
+        Object.assign(existing, row);
+        persistedRows.push(structuredClone(existing));
+      } else {
+        const persisted = { id: `review-${state.reviews.length + 1}`, created_at: "2026-08-24T12:00:00.000Z", ...row };
+        state.reviews.push(persisted);
+        persistedRows.push(structuredClone(persisted));
+      }
     }
-    return { data: null, error: null };
+    return persistedRows;
   };
 
   const updateRows = (table, payload, filters, inFilter) => {
@@ -258,7 +265,20 @@ function createSupabaseStub({ defenses = [], reviews = [], enemies = [] } = {}) 
           return this;
         },
         upsert(rows) {
-          return upsertReviewRows(rows);
+          const data = upsertReviewRows(rows);
+          return {
+            data: null,
+            error: null,
+            select() {
+              return this;
+            },
+            single() {
+              return { data: data[0] || null, error: null };
+            },
+            maybeSingle() {
+              return { data: data[0] || null, error: null };
+            },
+          };
         },
       };
       return query;
@@ -537,6 +557,44 @@ assert.equal(
   0,
   "pre-create warning skips reusable different reviews",
 );
+
+const newIdenticalStub = createSupabaseStub({ defenses: [rootA, rootB], reviews: [] });
+const newIdenticalDecision = await recordLibrarySimilarityDecision(newIdenticalStub.supabase, {
+  organizationId: PALADIN_ORG,
+  leftDefenseId: rootA.id,
+  rightDefenseId: rootB.id,
+  status: "identical",
+  reviewer: { memberId: "member-admin", name: "Admin" },
+});
+assert.equal(newIdenticalDecision.ok, true, "edit-identical decision can create a new review");
+assert.equal(newIdenticalDecision.status, "identical", "edit-identical decision keeps the identical status");
+assert.ok(newIdenticalDecision.reviewId, "new edit-identical decision returns the generated review id");
+assert.equal(newIdenticalDecision.review_id, newIdenticalDecision.reviewId, "new edit-identical decision returns snake_case review id too");
+assert.equal(newIdenticalStub.state.reviews.length, 1, "new edit-identical decision creates one persisted review");
+assert.equal(newIdenticalDecision.reviewId, newIdenticalStub.state.reviews[0].id, "new edit-identical decision returns the persisted review id");
+const newIdenticalMergePlan = buildGuildDefenseLibraryMergePlan(newIdenticalStub.state.defenses, newIdenticalStub.state.reviews, {
+  organizationId: PALADIN_ORG,
+  reviewId: newIdenticalDecision.reviewId,
+});
+assert.equal(newIdenticalMergePlan.reviewId, newIdenticalDecision.reviewId, "returned review id can immediately reopen the merge preview");
+assert.equal(newIdenticalMergePlan.canMerge, true, "new edit-identical review is usable by the merge plan");
+
+const existingPendingReview = makeLibraryReview(rootA, rootB, {
+  id: "review-existing-pending",
+  status: "pending",
+});
+const existingPendingStub = createSupabaseStub({ defenses: [rootA, rootB], reviews: [existingPendingReview] });
+const existingPendingDecision = await recordLibrarySimilarityDecision(existingPendingStub.supabase, {
+  organizationId: PALADIN_ORG,
+  leftDefenseId: rootA.id,
+  rightDefenseId: rootB.id,
+  status: "identical",
+  reviewer: { memberId: "member-admin", name: "Admin" },
+});
+assert.equal(existingPendingDecision.ok, true, "edit-identical decision can update an existing pending review");
+assert.equal(existingPendingDecision.reviewId, existingPendingReview.id, "existing pending review keeps and returns its original id");
+assert.equal(existingPendingStub.state.reviews.length, 1, "existing pending review is updated instead of duplicated");
+assert.equal(existingPendingStub.state.reviews[0].status, "identical", "existing pending review becomes identical");
 
 const reviewResult = await markLibrarySimilarityReview(pendingStub.supabase, {
   organizationId: PALADIN_ORG,
@@ -1074,6 +1132,8 @@ assert.match(adminApiSource, /action === "library-recalculate"/, "admin API expo
 assert.match(adminApiSource, /getEquivalentImportTargetStatus/, "admin API blocks duplicate imports through equivalence");
 assert.match(adminApiSource, /loadPreCreateLibrarySimilarityWarning/, "admin API performs a pre-create library similarity check");
 assert.match(adminApiSource, /allowSimilarLibraryDuplicate/, "admin API keeps create-anyway explicit");
+assert.match(adminApiSource, /librarySimilarityDecisionResults\.push\(result\)/, "admin API keeps every persisted similarity decision result");
+assert.match(adminApiSource, /library_similarity_decision_results: librarySimilarityDecisionResults/, "admin API returns persisted decision results to the frontend");
 assert.match(portalSource, /function getPortalDefenseSimilarityMode/, "Portal UI derives a similarity modal mode");
 assert.match(portalSource, /isExistingPortalDefenseDraft\(draft\) \? "edit" : "create"/, "Portal UI falls back to draft id for edit similarity warnings");
 assert.match(portalSource, /const isEditSimilarityWarning = similarDefenseMode === "edit"/, "Portal UI keeps one edit/create mode per similarity modal");
@@ -1090,6 +1150,8 @@ assert.match(portalSource, /DIFFÉRENTE/, "edit similarity modal exposes the DIF
 }
 assert.match(portalSource, /isEditSimilarityWarning \? "ANNULER"/, "edit similarity modal exposes a global ANNULER action");
 assert.match(portalSource, /isEditSimilarityWarning\s*\?\s*"Appliquer la modification"/, "edit similarity modal applies an existing defense edit after all decisions");
+assert.match(portalSource, /status === "identical" && \(item\.reviewId \|\| item\.review_id\)/, "Portal UI waits for an identical decision with a real review id");
+assert.match(portalSource, /setLibraryMergeOpenRequest\(\{[\s\S]*reviewId: identicalDecision\.reviewId \|\| identicalDecision\.review_id/, "Portal UI opens the merge plan from the returned review id");
 assert.match(adminApiSource, /action === "library-merge-preview"/, "admin API exposes merge preview without mutation");
 assert.match(adminApiSource, /mergeCandidates/, "equivalence details API exposes resumable merge candidates");
 assert.match(adminApiSource, /action === "library-merge"/, "admin API exposes explicit merge action");

@@ -1547,10 +1547,19 @@ export async function recordLibrarySimilarityDecision(
   const existing = existingReviews.find((review) => reviewPairKey(review) === makePairKey(leftDefense.id, rightDefense.id));
   if (existing?.id) reviewRow.id = existing.id;
 
-  const { error: upsertError } = await supabase
+  const { data: persistedReview, error: upsertError } = await supabase
     .from("guild_defense_library_similarity_reviews")
-    .upsert([reviewRow], { onConflict: "left_defense_id,right_defense_id" });
+    .upsert([reviewRow], { onConflict: "left_defense_id,right_defense_id" })
+    .select("id")
+    .single();
   if (upsertError) throw upsertError;
+
+  const persistedReviewId = persistedReview?.id || reviewRow.id || existing?.id || "";
+  if (!persistedReviewId) {
+    const error = new Error("Decision similarite bibliotheque enregistree sans id de review.");
+    error.statusCode = 500;
+    throw error;
+  }
 
   const propagation = normalizedStatus === "identical"
     ? await propagateLibraryEquivalenceKnowledge(supabase, {
@@ -1563,8 +1572,8 @@ export async function recordLibrarySimilarityDecision(
     ok: true,
     skipped: false,
     status: normalizedStatus,
-    reviewId: reviewRow.id || existing?.id || "",
-    review_id: reviewRow.id || existing?.id || "",
+    reviewId: persistedReviewId,
+    review_id: persistedReviewId,
     leftDefenseId: leftDefense.id,
     left_defense_id: leftDefense.id,
     rightDefenseId: rightDefense.id,
