@@ -102,6 +102,10 @@ function isAdminRole(role) {
   return ["admin", "administrateur", "leader"].includes(normalizeText(role));
 }
 
+function isOfficerRole(role) {
+  return ["officier", "officer"].includes(normalizeText(role));
+}
+
 function isLeaderRole(role) {
   return normalizeText(role) === "leader";
 }
@@ -2264,6 +2268,10 @@ function isRequestManager(member, requestRow) {
   return String(member.id) === String(requestRow?.requester_member_id);
 }
 
+function canCancelEmptyRequest(member, requestRow) {
+  return isRequestManager(member, requestRow) || isOfficerRole(member?.role);
+}
+
 async function cancelRequest(supabase, requestRow, user, options = {}) {
   const member = await resolveMemberByDiscordUserForGuild(supabase, user, requestRow.guild);
   if (!member) throw new Error("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
@@ -2276,7 +2284,7 @@ async function cancelRequest(supabase, requestRow, user, options = {}) {
     throw new Error("Seul un admin peut supprimer une demande avec reproduction active.");
   }
 
-  if (!hasActive && !isRequestManager(member, requestRow)) {
+  if (!hasActive && !canCancelEmptyRequest(member, requestRow)) {
     throw new Error("Seul le createur, un officier ou un admin peut annuler cette demande.");
   }
 

@@ -29,6 +29,7 @@ assert.match(discordSource, /gvg_repro_confirm_join:/, "non-compliant repro requ
 assert.match(discordSource, /gvg_repro_cancel_mine:/, "members can cancel their own repro");
 assert.match(discordSource, /gvg_repro_confirm_open:/, "open action requires confirmation");
 assert.match(discordSource, /gvg_repro_force_cancel:/, "admin force delete has a dedicated confirmation path");
+assert.match(discordSource, /"officier", "officer"/, "officer role can cancel an empty request");
 assert.match(discordSource, /interactive_workflow_no_auto_reopen/, "panel return no longer recreates per-defense Discord cards");
 
 const notifyBody = discordSource.slice(
