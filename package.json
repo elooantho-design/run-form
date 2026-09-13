@@ -24,6 +24,7 @@
     "@sentry/react": "^10.43.0",
     "@supabase/supabase-js": "^2.99.0",
     "@tailwindcss/vite": "^4.2.1",
+    "@vercel/functions": "^3.9.7",
     "browser-image-compression": "^2.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

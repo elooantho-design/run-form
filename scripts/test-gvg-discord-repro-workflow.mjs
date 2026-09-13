@@ -49,6 +49,19 @@ assert.match(discordSource, /buildDiscordUserAvatarUrl/, "reproducer avatars use
 assert.match(discordSource, /embed\/avatars/, "default Discord avatars are supported");
 assert.match(discordSource, /discordDeferredEphemeral/, "slow Discord interactions are deferred before backend work");
 assert.match(serverSource, /__discordDeferred/, "API sends deferred ACKs before running slow Discord tasks");
+assert.match(serverSource, /import \{ waitUntil \} from "@vercel\/functions"/, "deferred Discord tasks use Vercel waitUntil");
+assert.match(serverSource, /function scheduleDiscordDeferredTask/, "Discord deferred tasks are attached to the Vercel invocation lifecycle");
+assert.doesNotMatch(serverSource, /await\s+deferredTask\(\)/, "deferred Discord work must not rely on an await after res.json");
+assert.match(
+  serverSource,
+  /res\.status\(200\)\.json\(response\);\s*scheduleDiscordDeferredTask\(deferredTask, "component"\);/,
+  "component interactions ACK first and continue through waitUntil",
+);
+assert.match(
+  serverSource,
+  /res\.status\(200\)\.json\(response\);\s*scheduleDiscordDeferredTask\(deferredTask, "modal"\);/,
+  "modal interactions ACK first and continue through waitUntil",
+);
 assert.match(discordSource, /"officier", "officer"/, "officer role can cancel an empty request");
 assert.match(discordSource, /interactive_workflow_no_auto_reopen/, "panel return no longer recreates per-defense Discord cards");
 

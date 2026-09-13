@@ -3,6 +3,7 @@ import { importGvgItems } from "./gvg-import.js";
 import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
+import { waitUntil } from "@vercel/functions";
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
@@ -41,6 +42,16 @@ const LAUNCHER_SCOPE_FALLBACK_LOOKBACK_HOURS = 12;
 const LAUNCHER_SCOPE_JOB_BEFORE_MS = 90 * 60 * 1000;
 const LAUNCHER_SCOPE_JOB_AFTER_MS = 15 * 60 * 1000;
 const LAUNCHER_SCOPE_CANDIDATES_PER_JOB = 5;
+
+function scheduleDiscordDeferredTask(task, label) {
+  waitUntil(
+    Promise.resolve()
+      .then(() => task())
+      .catch((error) => {
+        console.error(`[gvg-discord-deferred:${label || "task"}]`, error);
+      })
+  );
+}
 
 let supabaseAdmin = null;
 let launcherScopeCache = {
@@ -1109,7 +1120,7 @@ async function handleDiscordReproInteraction(req, res, supabase, rawBody) {
       delete response.__discordDeferred;
       delete response.deferredTask;
       res.status(200).json(response);
-      await deferredTask();
+      scheduleDiscordDeferredTask(deferredTask, "component");
       return;
     }
     return res.status(200).json(response);
@@ -1122,7 +1133,7 @@ async function handleDiscordReproInteraction(req, res, supabase, rawBody) {
       delete response.__discordDeferred;
       delete response.deferredTask;
       res.status(200).json(response);
-      await deferredTask();
+      scheduleDiscordDeferredTask(deferredTask, "modal");
       return;
     }
     return res.status(200).json(response);
