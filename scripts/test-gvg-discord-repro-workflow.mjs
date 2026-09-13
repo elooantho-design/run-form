@@ -50,6 +50,31 @@ assert.ok(purgeIndex >= 0, "reset must purge Discord first");
 assert.ok(archiveIndex > purgeIndex, "enemy archive must run after Discord purge");
 assert.ok(deleteIndex > archiveIndex, "current GVG clear must run after enemy archive");
 assert.match(resetSource, /channel_empty_confirmed/, "reset must require confirmed empty Discord channel");
+assert.doesNotMatch(
+  resetSource,
+  /discordReproCleanup\?\.\s*errors[\s\S]{0,80}length\s*>\s*0/,
+  "intermediate Discord delete errors must not block reset when the channel is confirmed empty",
+);
+assert.match(
+  resetSource,
+  /channel_empty_confirmed !== true/,
+  "reset must block when final Discord empty verification is missing or false",
+);
+assert.match(
+  discordSource,
+  /channel_empty_confirmed: remainingMessages === 0/,
+  "Discord purge success is based on the final empty-channel refetch",
+);
+assert.match(
+  discordSource,
+  /warnings: remainingMessages === 0 \? errors : \[\]/,
+  "intermediate Discord purge errors are preserved as warnings when the channel ends empty",
+);
+assert.match(
+  discordSource,
+  /fatal_errors: remainingMessages === 0 \? \[\] : errors/,
+  "Discord purge errors remain fatal when the final empty-channel check fails",
+);
 
 assert.match(serverSource, /handleDiscordReproComponentInteraction/, "Discord component interactions use the workflow router");
 assert.match(serverSource, /handleDiscordReproModalInteraction/, "Discord modals use the workflow router");

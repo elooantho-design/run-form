@@ -266,8 +266,7 @@ export default async function handler(req, res) {
 
     if (
       discordReproCleanup?.enabled === false ||
-      (discordReproCleanup?.errors || []).length > 0 ||
-      discordReproCleanup?.channel_empty_confirmed === false
+      (!discordReproCleanup?.skipped && discordReproCleanup?.channel_empty_confirmed !== true)
     ) {
       return sendPortalJson(res, 500, {
         error: "nettoyage Discord repro incomplet",

@@ -1005,7 +1005,9 @@ export async function purgeDiscordReproChannelForGuild(supabase, guild, options 
     single_deleted_messages: singleDeletedMessages,
     max_messages: maxMessages,
     remaining_messages: remainingMessages,
-    channel_empty_confirmed: remainingMessages === 0 && errors.length === 0,
+    channel_empty_confirmed: remainingMessages === 0,
+    warnings: remainingMessages === 0 ? errors : [],
+    fatal_errors: remainingMessages === 0 ? [] : errors,
     request_rows_update: requestRowsUpdate,
     errors,
   };
