@@ -1,3 +1,4 @@
+/* global Buffer, process */
 import { importGvgItems } from "./gvg-import.js";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -12,13 +13,10 @@ import {
 } from "./_portal-auth.js";
 import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
 import {
-  buildDiscordReproModal,
-  buildReproTemplateData,
-  getDiscordReproRequestById,
+  handleDiscordReproComponentInteraction,
+  handleDiscordReproModalInteraction,
   handleDiscordReproReaction,
   handleGuildDefenseFollowupReaction,
-  resolveMemberByDiscordUser,
-  saveDiscordModalSubmission,
 } from "../src/lib/discordReproServer.js";
 
 export const config = {
@@ -126,16 +124,6 @@ function verifyDiscordSignature(req, rawBody) {
     publicKey,
     Buffer.from(signatureHex, "hex")
   );
-}
-
-function getInteractionUser(interaction) {
-  return interaction?.member?.user || interaction?.user || null;
-}
-
-function parseRequestIdFromCustomId(customId, prefix) {
-  const value = String(customId || "");
-  if (!value.startsWith(prefix)) return "";
-  return value.slice(prefix.length).trim();
 }
 
 function getServerConfig() {
@@ -1098,59 +1086,6 @@ async function handleDeleteJob(req, res) {
   });
 }
 
-async function handleDiscordReproButton(supabase, interaction) {
-  const customId = interaction?.data?.custom_id || "";
-  const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_take:");
-
-  if (!requestId) {
-    return discordEphemeral("Bouton de repro inconnu.");
-  }
-
-  const requestRow = await getDiscordReproRequestById(supabase, requestId);
-  if (!requestRow) {
-    return discordEphemeral("Cette demande de repro n'existe plus.");
-  }
-
-  const user = getInteractionUser(interaction);
-  const member = await resolveMemberByDiscordUser(supabase, user);
-
-  if (!member) {
-    return discordEphemeral(
-      "Ton ID Discord n'est pas relie a un joueur Portal. Demande a un admin de verifier ton profil."
-    );
-  }
-
-  const template = await buildReproTemplateData(supabase, {
-    gvgDefenseId: requestRow.gvg_defense_id,
-    memberId: member.id,
-    watcherName: member.watcher_name || user?.username || "Joueur",
-  });
-
-  return buildDiscordReproModal(requestRow, member, template);
-}
-
-async function handleDiscordReproModalSubmit(supabase, interaction) {
-  const customId = interaction?.data?.custom_id || "";
-  const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_submit:");
-
-  if (!requestId) {
-    return discordEphemeral("Modal de repro inconnu.");
-  }
-
-  try {
-    await saveDiscordModalSubmission(supabase, {
-      requestId,
-      user: getInteractionUser(interaction),
-      modalComponents: interaction?.data?.components || [],
-    });
-
-    return discordEphemeral("Repro enregistree dans Portal. Merci !");
-  } catch (error) {
-    console.error("[gvg-server:discord-repro-modal] save error:", error);
-    return discordEphemeral(error?.message || "Impossible d'enregistrer la repro.");
-  }
-}
-
 async function handleDiscordReproInteraction(req, res, supabase, rawBody) {
   if (!verifyDiscordSignature(req, rawBody)) {
     return res.status(401).json({ error: "invalid discord signature" });
@@ -1168,12 +1103,12 @@ async function handleDiscordReproInteraction(req, res, supabase, rawBody) {
   }
 
   if (interaction?.type === 3) {
-    const response = await handleDiscordReproButton(supabase, interaction);
+    const response = await handleDiscordReproComponentInteraction(supabase, interaction);
     return res.status(200).json(response);
   }
 
   if (interaction?.type === 5) {
-    const response = await handleDiscordReproModalSubmit(supabase, interaction);
+    const response = await handleDiscordReproModalInteraction(supabase, interaction);
     return res.status(200).json(response);
   }
 

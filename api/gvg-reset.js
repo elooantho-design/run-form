@@ -251,6 +251,30 @@ export default async function handler(req, res) {
     });
 
     const defenseIds = (defenses || []).map((row) => row.id).filter(Boolean);
+    let discordReproCleanup = null;
+    try {
+      discordReproCleanup = await purgeDiscordReproChannelForGuild(supabase, guild, {
+        reason: "gvg_reset",
+        source: "gvg-reset",
+      });
+    } catch (cleanupError) {
+      console.error("[gvg-reset] discord repro cleanup error:", cleanupError);
+      return sendPortalJson(res, 500, {
+        error: cleanupError?.message || "nettoyage Discord repro impossible",
+      }, req);
+    }
+
+    if (
+      discordReproCleanup?.enabled === false ||
+      (discordReproCleanup?.errors || []).length > 0 ||
+      discordReproCleanup?.channel_empty_confirmed === false
+    ) {
+      return sendPortalJson(res, 500, {
+        error: "nettoyage Discord repro incomplet",
+        discord_repro_cleanup: discordReproCleanup,
+      }, req);
+    }
+
     let enemyDefenseArchive = null;
     try {
       traceGvgResetSimilarity("reset_archive_start", {
@@ -282,20 +306,6 @@ export default async function handler(req, res) {
       console.error("[gvg-reset] enemy strat availability refresh error:", availabilityError);
       enemyStratAvailabilityWarning =
         availabilityError?.message || "mise a jour availability strats adverses impossible";
-    }
-
-    let discordReproCleanup = null;
-    let discordReproWarning = null;
-
-    try {
-      discordReproCleanup = await purgeDiscordReproChannelForGuild(supabase, guild, {
-        reason: "gvg_reset",
-        source: "gvg-reset",
-      });
-    } catch (cleanupError) {
-      console.error("[gvg-reset] discord repro cleanup error:", cleanupError);
-      discordReproWarning =
-        cleanupError?.message || "nettoyage Discord repro impossible";
     }
 
     // 2) Supprimer les fichiers liés
@@ -378,7 +388,6 @@ export default async function handler(req, res) {
       enemy_strat_availability: enemyStratAvailability,
       enemy_strat_availability_warning: enemyStratAvailabilityWarning,
       discord_repro_cleanup: discordReproCleanup,
-      discord_repro_warning: discordReproWarning,
       record_server_reset: recordServerReset,
       record_server_warning: recordServerWarning,
       activity_log_warning: activityLogWarning,
