@@ -13,6 +13,7 @@ const DEFENSE_STATUS_VALID = "Valid\u00e9";
 const DISCORD_STATUS_DONE = "\u2705";
 const MAX_DISCORD_FIELD_VALUE = 1024;
 const MAX_DISCORD_EMBEDS = 10;
+const DISCORD_REQUEST_TIMEOUT_MS = 15000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,6 +26,34 @@ function discordEphemeral(content) {
       content,
       flags: 64,
     },
+  };
+}
+
+function discordMessageUpdate(content, options = {}) {
+  return {
+    type: 7,
+    data: {
+      content,
+      embeds: options.embeds || [],
+      components: options.components || [],
+      allowed_mentions: { parse: [] },
+    },
+  };
+}
+
+function buildDiscordInteractionMessageResponse(content, options = {}) {
+  const data = {
+    content,
+    embeds: options.embeds || [],
+    components: options.components || [],
+    allowed_mentions: { parse: [] },
+  };
+
+  if (!options.update) data.flags = 64;
+
+  return {
+    type: options.update ? 7 : 4,
+    data,
   };
 }
 
@@ -215,6 +244,50 @@ function truncateDiscordText(value, max = MAX_DISCORD_FIELD_VALUE) {
   return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
 }
 
+function safeJsonLog(details = {}) {
+  try {
+    return JSON.stringify(details, (_key, value) => {
+      if (typeof value === "bigint") return value.toString();
+      if (value instanceof Error) {
+        return {
+          name: value.name,
+          message: value.message,
+          status: value.status ?? value.statusCode ?? null,
+          code: value.code ?? null,
+        };
+      }
+      return value;
+    });
+  } catch {
+    return "{}";
+  }
+}
+
+function createReproSubmitTrace(context = {}) {
+  let currentStage = "start";
+  const base = {
+    defense_id: context.defense_id || null,
+    user_id: context.user_id || null,
+    guild_id: context.guild_id || null,
+  };
+
+  return {
+    stage(stage, details = {}) {
+      currentStage = stage;
+      console.log(`[REPRO SUBMIT] ${stage} ${safeJsonLog({ ...base, ...details })}`);
+    },
+    fail(error, details = {}) {
+      console.error(
+        `[REPRO SUBMIT] FAILED at ${currentStage} ${safeJsonLog({
+          ...base,
+          ...details,
+          error,
+        })}`
+      );
+    },
+  };
+}
+
 function resolvePublicAssetProxyUrl(imageUrl) {
   const value = String(imageUrl || "").trim();
   if (!value) return value;
@@ -291,11 +364,28 @@ async function discordRequest(pathname, options = {}, requestOptions = {}) {
   };
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const response = await fetch(`${DISCORD_API_BASE}${pathname}`, {
-      method,
-      headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(requestOptions.timeoutMs || DISCORD_REQUEST_TIMEOUT_MS));
+    let response = null;
+    try {
+      response = await fetch(`${DISCORD_API_BASE}${pathname}`, {
+        method,
+        headers,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        const timeoutError = new Error(`Discord request timeout: ${method} ${pathname}`);
+        timeoutError.code = "DISCORD_REQUEST_TIMEOUT";
+        timeoutError.path = pathname;
+        timeoutError.method = method;
+        throw timeoutError;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (response.status === 429) {
       const payload = await response.json().catch(() => null);
@@ -398,6 +488,17 @@ async function editDeferredInteractionResponse(interaction, payload) {
   );
 }
 
+async function deleteDeferredInteractionResponse(interaction) {
+  const applicationId = String(interaction?.application_id || "").trim();
+  const token = String(interaction?.token || "").trim();
+  if (!applicationId || !token) return null;
+  return discordRequest(
+    `/webhooks/${encodeURIComponent(applicationId)}/${encodeURIComponent(token)}/messages/@original`,
+    { method: "DELETE" },
+    { auth: false, ignoreNotFound: true }
+  );
+}
+
 function discordDeferredEphemeral(interaction, action, options = {}) {
   const fallback = options.fallback || "Action impossible pour le moment.";
   return {
@@ -411,6 +512,42 @@ function discordDeferredEphemeral(interaction, action, options = {}) {
       } catch (error) {
         console.error(`[discord-repro:${options.label || "deferred"}]`, error);
         await editDeferredInteractionResponse(interaction, error?.message || fallback);
+      }
+    },
+  };
+}
+
+function discordDeferredMessageUpdate(interaction, action, options = {}) {
+  const fallback = options.fallback || "Impossible de finaliser cette action. Tu peux reessayer.";
+  return {
+    type: 6,
+    __discordDeferred: true,
+    deferredTask: async () => {
+      try {
+        const payload = await action();
+        if (options.deleteOnSuccess) {
+          try {
+            await deleteDeferredInteractionResponse(interaction);
+          } catch (deleteError) {
+            console.warn(`[discord-repro:${options.label || "deferred_update"}:delete_original_failed]`, deleteError?.message || deleteError);
+          }
+        } else {
+          await editDeferredInteractionResponse(interaction, payload || "Action terminee.");
+        }
+        if (typeof options.onFinalize === "function") options.onFinalize();
+      } catch (error) {
+        if (typeof options.onError === "function") options.onError(error);
+        console.error(`[discord-repro:${options.label || "deferred_update"}]`, error);
+        try {
+          await editDeferredInteractionResponse(interaction, {
+            content: error?.publicMessage || error?.message || fallback,
+            embeds: [],
+            components: [],
+          });
+          if (typeof options.onErrorFinalize === "function") options.onErrorFinalize(error);
+        } catch (editError) {
+          console.error(`[discord-repro:${options.label || "deferred_update"}:finalize_failed]`, editError);
+        }
       }
     },
   };
@@ -529,46 +666,48 @@ function buildMainControlPayload(guild) {
   };
 }
 
-function buildBastionSelectResponse(guild) {
-  const normalizedGuild = normalizeGuildCode(guild) || "GVG";
-  return {
-    type: 4,
-    data: {
-      content: "Choisis le bastion.",
-      flags: 64,
-      components: [
-        {
-          type: 1,
-          components: [
-            {
-              type: 3,
-              custom_id: `gvg_repro_bastion:${normalizedGuild}`,
-              placeholder: "Bastion",
-              min_values: 1,
-              max_values: 1,
-              options: [1, 2, 3, 4].map((bastion) => ({
-                label: `Bastion ${bastion}`,
-                value: String(bastion),
-              })),
-            },
-          ],
-        },
-      ],
-    },
-  };
+function formatWizardLocationLabel(location) {
+  const value = String(location || "").trim().toLowerCase();
+  if (value === "fort") return "Forteresse";
+  const tower = value.match(/^t(\d+)$/)?.[1];
+  return tower ? `Tour ${tower}` : "Position inconnue";
 }
 
-function buildLocationSelectResponse(guild, bastion) {
+function buildBastionSelectResponse(guild, options = {}) {
   const normalizedGuild = normalizeGuildCode(guild) || "GVG";
-  const options = [
+  return buildDiscordInteractionMessageResponse("Choisis le bastion.", {
+    update: options.update,
+    components: [
+      {
+        type: 1,
+        components: [
+          {
+            type: 3,
+            custom_id: `gvg_repro_bastion:${normalizedGuild}`,
+            placeholder: "Bastion",
+            min_values: 1,
+            max_values: 1,
+            options: [1, 2, 3, 4].map((bastion) => ({
+              label: `Bastion ${bastion}`,
+              value: String(bastion),
+            })),
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function buildLocationSelectResponse(guild, bastion, options = {}) {
+  const normalizedGuild = normalizeGuildCode(guild) || "GVG";
+  const locationOptions = [
     { label: "Forteresse", value: "fort" },
     ...[1, 2, 3, 4, 5].map((tower) => ({ label: `Tour ${tower}`, value: `t${tower}` })),
   ];
-  return {
-    type: 4,
-    data: {
-      content: `Bastion ${bastion} choisi. Selectionne la forteresse ou la tour.`,
-      flags: 64,
+  return buildDiscordInteractionMessageResponse(
+    `Bastion ${bastion} choisi.\nSelectionne la forteresse ou la tour.`,
+    {
+      update: options.update,
       components: [
         {
           type: 1,
@@ -579,22 +718,21 @@ function buildLocationSelectResponse(guild, bastion) {
               placeholder: "Forteresse / Tour",
               min_values: 1,
               max_values: 1,
-              options,
+              options: locationOptions,
             },
           ],
         },
       ],
-    },
-  };
+    }
+  );
 }
 
-function buildTeamSelectResponse(guild, bastion, location) {
+function buildTeamSelectResponse(guild, bastion, location, options = {}) {
   const normalizedGuild = normalizeGuildCode(guild) || "GVG";
-  return {
-    type: 4,
-    data: {
-      content: "Choisis la team.",
-      flags: 64,
+  return buildDiscordInteractionMessageResponse(
+    [`Bastion ${bastion} choisi.`, `${formatWizardLocationLabel(location)} choisie.`, "Choisis la team."].join("\n"),
+    {
+      update: options.update,
       components: [
         {
           type: 1,
@@ -613,16 +751,15 @@ function buildTeamSelectResponse(guild, bastion, location) {
           ],
         },
       ],
-    },
-  };
+    }
+  );
 }
 
-function buildAlreadyOpenConfirmation(defense) {
-  return {
-    type: 4,
-    data: {
-      content: `✅ **DEJA OUVERTE**\n\n${formatDefenseTitle(defense)} a deja ete ouverte. Es-tu sur de vouloir creer une nouvelle demande de reproduction ?`,
-      flags: 64,
+function buildAlreadyOpenConfirmation(defense, options = {}) {
+  return buildDiscordInteractionMessageResponse(
+    `✅ **DEJA OUVERTE**\n\n${formatDefenseTitle(defense)} a deja ete ouverte. Es-tu sur de vouloir creer une nouvelle demande de reproduction ?`,
+    {
+      update: options.update,
       components: [
         {
           type: 1,
@@ -642,8 +779,8 @@ function buildAlreadyOpenConfirmation(defense) {
           ],
         },
       ],
-    },
-  };
+    }
+  );
 }
 
 function buildConditionsModal(defense, requestRow = null) {
@@ -1625,20 +1762,6 @@ function buildJumpUrl(interaction, requestRow) {
   return `https://discord.com/channels/${guildId}/${requestRow.discord_channel_id}/${requestRow.discord_message_id}`;
 }
 
-function buildRequestAlreadyActiveResponse(interaction, requestRow) {
-  const url = buildJumpUrl(interaction, requestRow);
-  return {
-    type: 4,
-    data: {
-      content: [
-        "Une demande de repro est deja active pour cette defense.",
-        url ? `[Voir la demande active](${url})` : null,
-      ].filter(Boolean).join("\n"),
-      flags: 64,
-    },
-  };
-}
-
 function parseConditionsModalValues(components) {
   const values = flattenModalValues(components);
   const minAwakenings = {};
@@ -1909,7 +2032,7 @@ async function syncDashboardReproState(supabase, requestRow) {
   }
 }
 
-async function createDiscordReproRequest(supabase, { defense, member, user, minAwakenings, interaction }) {
+async function createDiscordReproRequest(supabase, { defense, member, user, minAwakenings, interaction, trace }) {
   const normalizedGuild = normalizeGuildCode(defense?.guild);
   const channelId = getDiscordReproChannelId(normalizedGuild);
   if (!channelId) {
@@ -1933,6 +2056,7 @@ async function createDiscordReproRequest(supabase, { defense, member, user, minA
 
   const now = new Date().toISOString();
   let requestRow = activeRequest;
+  trace?.stage("database creation start", { defense_id: defense.id, reused_request: Boolean(requestRow) });
   if (!requestRow) {
     const { data, error } = await supabase
       .from(REPRO_REQUEST_TABLE)
@@ -1977,15 +2101,31 @@ async function createDiscordReproRequest(supabase, { defense, member, user, minA
     if (error) throw error;
     requestRow = data;
   }
+  trace?.stage("database creation ok", { request_id: requestRow?.id || null });
 
   let message = null;
   try {
+    trace?.stage("heroes rendering start", {
+      request_id: requestRow?.id || null,
+      hero_count: Array.isArray(defense?.heroes) ? defense.heroes.slice(0, 5).length : 0,
+    });
     const payload = buildReproRequestMessagePayload(defense, requestRow, []);
+    trace?.stage("heroes rendering ok", {
+      request_id: requestRow?.id || null,
+      embeds: Array.isArray(payload.embeds) ? payload.embeds.length : 0,
+    });
+
+    trace?.stage("discord message creation start", { request_id: requestRow?.id || null, channel_id: channelId });
     message = await discordRequest(`/channels/${encodeURIComponent(channelId)}/messages`, {
       method: "POST",
       body: payload,
     });
+    trace?.stage("discord message creation ok", {
+      request_id: requestRow?.id || null,
+      message_id: message?.id || null,
+    });
 
+    trace?.stage("message ids persistence start", { request_id: requestRow?.id || null });
     const { data: updated, error: updateError } = await supabase
       .from(REPRO_REQUEST_TABLE)
       .update({
@@ -1999,8 +2139,12 @@ async function createDiscordReproRequest(supabase, { defense, member, user, minA
       .select("*")
       .maybeSingle();
     if (updateError) throw updateError;
+    trace?.stage("message ids persistence ok", { request_id: updated?.id || null });
 
+    trace?.stage("guild role ping start", { request_id: updated?.id || null, role_configured: Boolean(getDiscordReproRoleId(updated?.guild)) });
     await postGuildReproAnnouncementMessage(supabase, updated, defense);
+    trace?.stage("guild role ping ok", { request_id: updated?.id || null });
+    trace?.stage("persistence finalized", { request_id: updated?.id || null });
     return { request: updated, interaction };
   } catch (error) {
     console.error(`[discord-repro:create] request=${requestRow?.id || "?"} defense=${defense?.id || "?"}`, error);
@@ -2458,46 +2602,54 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
   if (customId.startsWith("gvg_repro_bastion:")) {
     const guild = parseRequestIdFromCustomId(customId, "gvg_repro_bastion:");
     const bastion = interaction?.data?.values?.[0];
-    return buildLocationSelectResponse(guild, bastion);
+    return buildLocationSelectResponse(guild, bastion, { update: true });
   }
 
   if (customId.startsWith("gvg_repro_location:")) {
     const [, guild, bastion] = customId.split(":");
     const location = interaction?.data?.values?.[0];
-    return buildTeamSelectResponse(guild, bastion, location);
+    return buildTeamSelectResponse(guild, bastion, location, { update: true });
   }
 
   if (customId.startsWith("gvg_repro_team:")) {
     const [, guild, bastion, location] = customId.split(":");
     const team = interaction?.data?.values?.[0];
     const defense = await loadGvgDefenseByWizard(supabase, { guild, bastion, location, team });
-    if (!defense) return discordEphemeral("Defense introuvable dans la GVG en cours.");
+    if (!defense) return discordMessageUpdate("Defense introuvable dans la GVG en cours.");
 
     const member = await resolveMemberByDiscordUserForGuild(supabase, user, defense.guild);
-    if (!member) return discordEphemeral("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
+    if (!member) return discordMessageUpdate("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
 
     if (!getDiscordReproChannelId(defense.guild)) {
-      return discordEphemeral("Aucun salon repro n'est configure pour cette guilde.");
+      return discordMessageUpdate("Aucun salon repro n'est configure pour cette guilde.");
     }
 
     const activeRequest = await getActiveRequestForDefense(supabase, defense.id);
-    if (activeRequest?.discord_message_id) return buildRequestAlreadyActiveResponse(interaction, activeRequest);
-    if (defense.record_status) return buildAlreadyOpenConfirmation(defense);
+    if (activeRequest?.discord_message_id) {
+      const url = buildJumpUrl(interaction, activeRequest);
+      return discordMessageUpdate(
+        [
+          "Une demande de repro est deja active pour cette defense.",
+          url ? `[Voir la demande active](${url})` : null,
+        ].filter(Boolean).join("\n")
+      );
+    }
+    if (defense.record_status) return buildAlreadyOpenConfirmation(defense, { update: true });
     return buildConditionsModal(defense);
   }
 
   if (customId.startsWith("gvg_repro_create_confirm:")) {
     const defenseId = parseRequestIdFromCustomId(customId, "gvg_repro_create_confirm:");
     const defense = await loadGvgDefenseById(supabase, defenseId);
-    if (!defense) return discordEphemeral("Defense introuvable.");
+    if (!defense) return discordMessageUpdate("Defense introuvable.");
     if (!getDiscordReproChannelId(defense.guild)) {
-      return discordEphemeral("Aucun salon repro n'est configure pour cette guilde.");
+      return discordMessageUpdate("Aucun salon repro n'est configure pour cette guilde.");
     }
     return buildConditionsModal(defense);
   }
 
   if (customId === "gvg_repro_ephemeral_cancel") {
-    return discordEphemeral("Operation annulee.");
+    return discordMessageUpdate("Operation annulee.");
   }
 
   if (customId.startsWith("gvg_repro_take:")) {
@@ -2638,37 +2790,83 @@ export async function handleDiscordReproModalInteraction(supabase, interaction) 
   if (customId.startsWith("gvg_repro_create:")) {
     const defenseId = parseRequestIdFromCustomId(customId, "gvg_repro_create:");
     const modalComponents = interaction?.data?.components || [];
-    return discordDeferredEphemeral(interaction, async () => {
-      const defense = await loadGvgDefenseById(supabase, defenseId);
-      if (!defense) throw new Error("Defense introuvable.");
-      const member = await resolveMemberByDiscordUserForGuild(supabase, user, defense.guild);
-      if (!member) throw new Error("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
-      const activeRequest = await getActiveRequestForDefense(supabase, defense.id);
-      if (activeRequest?.discord_message_id) {
-        const url = buildJumpUrl(interaction, activeRequest);
-        return [
-          "Une demande de repro est deja active pour cette defense.",
-          url ? `[Voir la demande active](${url})` : null,
-        ].filter(Boolean).join("\n");
-      }
+    const trace = createReproSubmitTrace({
+      defense_id: defenseId,
+      user_id: user?.id,
+      guild_id: interaction?.guild_id,
+    });
+    return discordDeferredMessageUpdate(interaction, async () => {
+      trace.stage("start", { custom_id: "gvg_repro_create" });
+      try {
+        trace.stage("context resolve start");
+        const defense = await loadGvgDefenseById(supabase, defenseId);
+        if (!defense) throw new Error("Defense introuvable.");
+        trace.stage("context resolved", {
+          defense_id: defense.id,
+          guild: normalizeGuildCode(defense.guild),
+          bastion: defense.bastion || null,
+          tower: defense.tower || null,
+          type: defense.type || null,
+          team: defense.team || null,
+        });
 
-      const minAwakenings = parseConditionsModalValues(modalComponents);
-      const result = await createDiscordReproRequest(supabase, {
-        defense,
-        member,
-        user,
-        minAwakenings,
-        interaction,
-      });
-      if (result.alreadyActive) {
-        const url = buildJumpUrl(interaction, result.request);
-        return [
-          "Une demande de repro est deja active pour cette defense.",
-          url ? `[Voir la demande active](${url})` : null,
-        ].filter(Boolean).join("\n");
+        trace.stage("validation start", { channel_configured: Boolean(getDiscordReproChannelId(defense.guild)) });
+        const member = await resolveMemberByDiscordUserForGuild(supabase, user, defense.guild);
+        if (!member) throw new Error("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
+        if (!getDiscordReproChannelId(defense.guild)) throw new Error("Aucun salon repro n'est configure pour cette guilde.");
+        const activeRequest = await getActiveRequestForDefense(supabase, defense.id);
+        if (activeRequest?.discord_message_id) {
+          const url = buildJumpUrl(interaction, activeRequest);
+          const error = new Error(
+            [
+              "Une demande de repro est deja active pour cette defense.",
+              url ? `[Voir la demande active](${url})` : null,
+            ].filter(Boolean).join("\n")
+          );
+          error.publicMessage = error.message;
+          throw error;
+        }
+
+        const minAwakenings = parseConditionsModalValues(modalComponents);
+        trace.stage("validation ok", {
+          request_member_id: member.id || null,
+          min_awakenings_count: Object.keys(minAwakenings).length,
+        });
+
+        const result = await createDiscordReproRequest(supabase, {
+          defense,
+          member,
+          user,
+          minAwakenings,
+          interaction,
+          trace,
+        });
+        if (result.alreadyActive) {
+          const url = buildJumpUrl(interaction, result.request);
+          const error = new Error(
+            [
+              "Une demande de repro est deja active pour cette defense.",
+              url ? `[Voir la demande active](${url})` : null,
+            ].filter(Boolean).join("\n")
+          );
+          error.publicMessage = error.message;
+          throw error;
+        }
+
+        return null;
+      } catch (error) {
+        trace.fail(error);
+        const publicError = new Error("Impossible de creer la demande de repro. La tentative a ete annulee, tu peux reessayer.");
+        publicError.publicMessage = error?.publicMessage || publicError.message;
+        throw publicError;
       }
-      return "Demande de repro creee dans le salon.";
-    }, { label: "create_request" });
+    }, {
+      label: "repro_submit",
+      deleteOnSuccess: true,
+      fallback: "Impossible de creer la demande de repro. La tentative a ete annulee, tu peux reessayer.",
+      onFinalize: () => trace.stage("interaction finalized", { outcome: "success" }),
+      onErrorFinalize: () => trace.stage("interaction finalized", { outcome: "error" }),
+    });
   }
 
   if (customId.startsWith("gvg_repro_conditions_submit:")) {

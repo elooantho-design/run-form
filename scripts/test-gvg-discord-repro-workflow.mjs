@@ -21,6 +21,14 @@ assert.match(discordSource, /gvg_repro_start:/, "main message exposes a single e
 assert.match(discordSource, /gvg_repro_bastion:/, "wizard starts with bastion selection");
 assert.match(discordSource, /gvg_repro_location:/, "wizard uses fortress\/tower selection");
 assert.match(discordSource, /gvg_repro_team:/, "wizard ends with team selection");
+assert.match(discordSource, /function discordMessageUpdate/, "wizard select steps can edit the existing ephemeral message");
+assert.match(discordSource, /type: 7/, "wizard component interactions update the existing message instead of replying again");
+assert.match(discordSource, /buildLocationSelectResponse\(guild, bastion, \{ update: true \}\)/, "bastion selection edits the wizard message");
+assert.match(discordSource, /buildTeamSelectResponse\(guild, bastion, location, \{ update: true \}\)/, "location selection edits the wizard message");
+assert.match(discordSource, /function discordDeferredMessageUpdate/, "modal submit can defer an update to the wizard message");
+assert.match(discordSource, /type: 6/, "modal submit uses deferred message update instead of a new thinking reply");
+assert.match(discordSource, /deleteDeferredInteractionResponse/, "successful submit deletes the wizard ephemeral message");
+assert.match(discordSource, /\[REPRO SUBMIT\]/, "submit path has temporary diagnostic logs");
 assert.match(discordSource, /function buildAlreadyOpenConfirmation/, "opened defenses require explicit confirmation");
 assert.match(discordSource, /Une demande de repro est deja active/, "duplicate active request is blocked");
 assert.match(discordSource, /Aucun salon repro n'est configure pour cette guilde/, "guilds without a repro channel cannot open the creation form");
