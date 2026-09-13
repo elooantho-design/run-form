@@ -21,6 +21,9 @@ assert.match(discordSource, /gvg_repro_start:/, "main message exposes a single e
 assert.match(discordSource, /gvg_repro_bastion:/, "wizard starts with bastion selection");
 assert.match(discordSource, /gvg_repro_location:/, "wizard uses fortress\/tower selection");
 assert.match(discordSource, /gvg_repro_team:/, "wizard ends with team selection");
+assert.match(discordSource, /function buildWizardConditionsModal/, "team selection can open a modal from encoded wizard context");
+assert.match(discordSource, /gvg_repro_create_wizard:/, "wizard modal submit carries guild/bastion/location/team context");
+assert.match(discordSource, /\[REPRO TEAM\]/, "team selection has targeted diagnostic logs");
 assert.match(discordSource, /function discordMessageUpdate/, "wizard select steps can edit the existing ephemeral message");
 assert.match(discordSource, /type: 7/, "wizard component interactions update the existing message instead of replying again");
 assert.match(discordSource, /buildLocationSelectResponse\(guild, bastion, \{ update: true \}\)/, "bastion selection edits the wizard message");
@@ -64,6 +67,16 @@ assert.match(
 );
 assert.match(discordSource, /"officier", "officer"/, "officer role can cancel an empty request");
 assert.match(discordSource, /interactive_workflow_no_auto_reopen/, "panel return no longer recreates per-defense Discord cards");
+
+const teamBranch = discordSource.slice(
+  discordSource.indexOf('if (customId.startsWith("gvg_repro_team:"))'),
+  discordSource.indexOf('if (customId.startsWith("gvg_repro_create_confirm:"))'),
+);
+assert.match(teamBranch, /buildWizardConditionsModal/, "team selection returns the modal directly");
+assert.doesNotMatch(teamBranch, /\bawait\b/, "team selection must not await network work before opening the modal");
+assert.doesNotMatch(teamBranch, /loadGvgDefenseByWizard/, "team selection must not load gvg_defense before opening the modal");
+assert.doesNotMatch(teamBranch, /resolveMemberByDiscordUserForGuild/, "team selection must not resolve guild_members before opening the modal");
+assert.doesNotMatch(teamBranch, /getActiveRequestForDefense/, "team selection must not query active repro requests before opening the modal");
 
 const notifyBody = discordSource.slice(
   discordSource.indexOf("export async function notifyDiscordReproRequestsForDefenses"),

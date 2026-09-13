@@ -288,6 +288,10 @@ function createReproSubmitTrace(context = {}) {
   };
 }
 
+function logReproTeamStage(stage, details = {}) {
+  console.log(`[REPRO TEAM] ${stage} ${safeJsonLog(details)}`);
+}
+
 function resolvePublicAssetProxyUrl(imageUrl) {
   const value = String(imageUrl || "").trim();
   if (!value) return value;
@@ -525,7 +529,7 @@ function discordDeferredMessageUpdate(interaction, action, options = {}) {
     deferredTask: async () => {
       try {
         const payload = await action();
-        if (options.deleteOnSuccess) {
+        if (options.deleteOnSuccess && !payload) {
           try {
             await deleteDeferredInteractionResponse(interaction);
           } catch (deleteError) {
@@ -798,6 +802,35 @@ function buildConditionsModal(defense, requestRow = null) {
           `hero_${index + 1}`,
           `${getHeroDisplayName(hero, index)} minimum`,
           Number.isInteger(minAwakenings[index]) ? `A${minAwakenings[index]}` : "",
+          {
+            style: 1,
+            required: false,
+            maxLength: 8,
+            placeholder: "Aucun, A0, A1, A2, A3, A4 ou A5",
+          }
+        )
+      ),
+    },
+  };
+}
+
+function buildWizardConditionsModal({ guild, bastion, location, team }) {
+  const normalizedGuild = normalizeGuildCode(guild) || "GVG";
+  const safeBastion = String(bastion || "").trim();
+  const safeLocation = String(location || "").trim().toLowerCase();
+  const safeTeam = String(team || "").trim();
+  const heroes = [1, 2, 3, 4, 5].map((index) => ({ name: `Heros ${index}` }));
+
+  return {
+    type: 9,
+    data: {
+      custom_id: `gvg_repro_create_wizard:${normalizedGuild}:${safeBastion}:${safeLocation}:${safeTeam}`,
+      title: "Conditions de repro",
+      components: heroes.map((hero, index) =>
+        textInput(
+          `hero_${index + 1}`,
+          `${getHeroDisplayName(hero, index)} minimum`,
+          "",
           {
             style: 1,
             required: false,
@@ -2614,28 +2647,29 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
   if (customId.startsWith("gvg_repro_team:")) {
     const [, guild, bastion, location] = customId.split(":");
     const team = interaction?.data?.values?.[0];
-    const defense = await loadGvgDefenseByWizard(supabase, { guild, bastion, location, team });
-    if (!defense) return discordMessageUpdate("Defense introuvable dans la GVG en cours.");
-
-    const member = await resolveMemberByDiscordUserForGuild(supabase, user, defense.guild);
-    if (!member) return discordMessageUpdate("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
-
-    if (!getDiscordReproChannelId(defense.guild)) {
-      return discordMessageUpdate("Aucun salon repro n'est configure pour cette guilde.");
-    }
-
-    const activeRequest = await getActiveRequestForDefense(supabase, defense.id);
-    if (activeRequest?.discord_message_id) {
-      const url = buildJumpUrl(interaction, activeRequest);
-      return discordMessageUpdate(
-        [
-          "Une demande de repro est deja active pour cette defense.",
-          url ? `[Voir la demande active](${url})` : null,
-        ].filter(Boolean).join("\n")
-      );
-    }
-    if (defense.record_status) return buildAlreadyOpenConfirmation(defense, { update: true });
-    return buildConditionsModal(defense);
+    logReproTeamStage("start", {
+      guild: normalizeGuildCode(guild),
+      bastion,
+      location,
+      team,
+      user_id: user?.id || null,
+    });
+    const parsedLocation = parseWizardLocation(location);
+    logReproTeamStage("context available", {
+      guild: normalizeGuildCode(guild),
+      bastion: bastion ? Number(bastion) : null,
+      location,
+      type: parsedLocation?.type || null,
+      tower: parsedLocation?.tower || null,
+      team: team ? Number(team) : null,
+    });
+    logReproTeamStage("external fetch skipped", { reason: "modal_context_is_encoded" });
+    const response = buildWizardConditionsModal({ guild, bastion, location, team });
+    logReproTeamStage("modal response sent", {
+      type: response.type,
+      custom_id: "gvg_repro_create_wizard",
+    });
+    return response;
   }
 
   if (customId.startsWith("gvg_repro_create_confirm:")) {
@@ -2787,8 +2821,18 @@ export async function handleDiscordReproModalInteraction(supabase, interaction) 
   const customId = String(interaction?.data?.custom_id || "");
   const user = interaction?.member?.user || interaction?.user || null;
 
-  if (customId.startsWith("gvg_repro_create:")) {
-    const defenseId = parseRequestIdFromCustomId(customId, "gvg_repro_create:");
+  if (customId.startsWith("gvg_repro_create:") || customId.startsWith("gvg_repro_create_wizard:")) {
+    const isWizardCreate = customId.startsWith("gvg_repro_create_wizard:");
+    const defenseId = isWizardCreate ? "" : parseRequestIdFromCustomId(customId, "gvg_repro_create:");
+    const wizardParts = isWizardCreate ? customId.split(":") : [];
+    const wizardContext = isWizardCreate
+      ? {
+          guild: wizardParts[1] || "",
+          bastion: wizardParts[2] || "",
+          location: wizardParts[3] || "",
+          team: wizardParts[4] || "",
+        }
+      : null;
     const modalComponents = interaction?.data?.components || [];
     const trace = createReproSubmitTrace({
       defense_id: defenseId,
@@ -2796,10 +2840,15 @@ export async function handleDiscordReproModalInteraction(supabase, interaction) 
       guild_id: interaction?.guild_id,
     });
     return discordDeferredMessageUpdate(interaction, async () => {
-      trace.stage("start", { custom_id: "gvg_repro_create" });
+      trace.stage("start", {
+        custom_id: isWizardCreate ? "gvg_repro_create_wizard" : "gvg_repro_create",
+        wizard_context: wizardContext,
+      });
       try {
         trace.stage("context resolve start");
-        const defense = await loadGvgDefenseById(supabase, defenseId);
+        const defense = isWizardCreate
+          ? await loadGvgDefenseByWizard(supabase, wizardContext)
+          : await loadGvgDefenseById(supabase, defenseId);
         if (!defense) throw new Error("Defense introuvable.");
         trace.stage("context resolved", {
           defense_id: defense.id,
@@ -2825,6 +2874,10 @@ export async function handleDiscordReproModalInteraction(supabase, interaction) 
           );
           error.publicMessage = error.message;
           throw error;
+        }
+        if (defense.record_status) {
+          trace.stage("already open confirmation", { defense_id: defense.id });
+          return buildAlreadyOpenConfirmation(defense, { update: true }).data;
         }
 
         const minAwakenings = parseConditionsModalValues(modalComponents);
