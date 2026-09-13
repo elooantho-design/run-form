@@ -23,12 +23,24 @@ assert.match(discordSource, /gvg_repro_location:/, "wizard uses fortress\/tower 
 assert.match(discordSource, /gvg_repro_team:/, "wizard ends with team selection");
 assert.match(discordSource, /function buildAlreadyOpenConfirmation/, "opened defenses require explicit confirmation");
 assert.match(discordSource, /Une demande de repro est deja active/, "duplicate active request is blocked");
-assert.match(discordSource, /postCompatibleMembersMessage/, "compatible members are pinged in one reply");
+assert.match(discordSource, /Aucun salon repro n'est configure pour cette guilde/, "guilds without a repro channel cannot open the creation form");
+assert.match(discordSource, /postGuildReproAnnouncementMessage/, "creation pings the guild role once");
+assert.doesNotMatch(discordSource, /postCompatibleMembersMessage/, "compatible individual pings are removed");
+assert.doesNotMatch(discordSource, /Joueurs compatibles/, "compatible member lists are not posted publicly");
+assert.doesNotMatch(discordSource, /Une nouvelle reproduction est disponible/, "joining a repro must not create a public announcement");
 assert.match(discordSource, /warning_active/, "non-compliant awakenings are persisted as immutable warning state");
 assert.match(discordSource, /gvg_repro_confirm_join:/, "non-compliant repro requires confirmation");
 assert.match(discordSource, /gvg_repro_cancel_mine:/, "members can cancel their own repro");
 assert.match(discordSource, /gvg_repro_confirm_open:/, "open action requires confirmation");
 assert.match(discordSource, /gvg_repro_force_cancel:/, "admin force delete has a dedicated confirmation path");
+assert.match(discordSource, /gvg_repro_cleanup_public:/, "admins can remove stored parasite public announcements only");
+assert.match(discordSource, /buildHeroPreviewEmbed/, "hero images are rendered as Discord embed thumbnails");
+assert.match(discordSource, /thumbnail = \{ url: heroUrl \}/, "hero images are sent as inline thumbnails, not markdown links");
+assert.doesNotMatch(discordSource, /\`\[\$\{name\}\]\(\$\{heroUrl\}\)\`/, "hero image URLs must not be rendered as clickable markdown labels");
+assert.match(discordSource, /buildDiscordUserAvatarUrl/, "reproducer avatars use Discord CDN URLs");
+assert.match(discordSource, /embed\/avatars/, "default Discord avatars are supported");
+assert.match(discordSource, /discordDeferredEphemeral/, "slow Discord interactions are deferred before backend work");
+assert.match(serverSource, /__discordDeferred/, "API sends deferred ACKs before running slow Discord tasks");
 assert.match(discordSource, /"officier", "officer"/, "officer role can cancel an empty request");
 assert.match(discordSource, /interactive_workflow_no_auto_reopen/, "panel return no longer recreates per-defense Discord cards");
 

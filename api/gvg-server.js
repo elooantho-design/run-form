@@ -1104,11 +1104,27 @@ async function handleDiscordReproInteraction(req, res, supabase, rawBody) {
 
   if (interaction?.type === 3) {
     const response = await handleDiscordReproComponentInteraction(supabase, interaction);
+    if (response?.__discordDeferred) {
+      const deferredTask = response.deferredTask;
+      delete response.__discordDeferred;
+      delete response.deferredTask;
+      res.status(200).json(response);
+      await deferredTask();
+      return;
+    }
     return res.status(200).json(response);
   }
 
   if (interaction?.type === 5) {
     const response = await handleDiscordReproModalInteraction(supabase, interaction);
+    if (response?.__discordDeferred) {
+      const deferredTask = response.deferredTask;
+      delete response.__discordDeferred;
+      delete response.deferredTask;
+      res.status(200).json(response);
+      await deferredTask();
+      return;
+    }
     return res.status(200).json(response);
   }
 

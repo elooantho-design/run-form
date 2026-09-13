@@ -12,6 +12,7 @@ const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
 const DEFENSE_STATUS_VALID = "Valid\u00e9";
 const DISCORD_STATUS_DONE = "\u2705";
 const MAX_DISCORD_FIELD_VALUE = 1024;
+const MAX_DISCORD_EMBEDS = 10;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -275,7 +276,8 @@ function isAlreadyExistsError(error) {
 
 async function discordRequest(pathname, options = {}, requestOptions = {}) {
   const token = getDiscordBotToken();
-  if (!token) {
+  const useBotAuth = requestOptions.auth !== false;
+  if (useBotAuth && !token) {
     const error = new Error("DISCORD_BOT_TOKEN manquant");
     error.code = "DISCORD_CONFIG_MISSING";
     throw error;
@@ -283,7 +285,7 @@ async function discordRequest(pathname, options = {}, requestOptions = {}) {
 
   const method = options.method || "GET";
   const headers = {
-    Authorization: `Bot ${token}`,
+    ...(useBotAuth ? { Authorization: `Bot ${token}` } : {}),
     ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(options.headers || {}),
   };
@@ -325,6 +327,93 @@ async function discordRequest(pathname, options = {}, requestOptions = {}) {
   }
 
   throw new Error("Discord rate limit retry exhausted");
+}
+
+function sanitizeDiscordUserId(value) {
+  return String(value || "").trim();
+}
+
+function getDiscordDefaultAvatarIndex(userId, discriminator = null) {
+  const legacyDiscriminator = String(discriminator || "").trim();
+  if (/^\d{4}$/.test(legacyDiscriminator) && legacyDiscriminator !== "0000") {
+    return Number(legacyDiscriminator) % 5;
+  }
+
+  try {
+    return Number((BigInt(sanitizeDiscordUserId(userId)) >> 22n) % 6n);
+  } catch {
+    return 0;
+  }
+}
+
+function buildDiscordUserAvatarUrl(user) {
+  const userId = sanitizeDiscordUserId(user?.id);
+  if (!userId) return "";
+  const avatarHash = String(user?.avatar || "").trim();
+  if (avatarHash) {
+    const ext = avatarHash.startsWith("a_") ? "gif" : "png";
+    return `https://cdn.discordapp.com/avatars/${encodeUrlSegment(userId)}/${encodeUrlSegment(avatarHash)}.${ext}?size=128`;
+  }
+  return `https://cdn.discordapp.com/embed/avatars/${getDiscordDefaultAvatarIndex(userId, user?.discriminator)}.png`;
+}
+
+async function fetchDiscordUser(userId) {
+  const id = sanitizeDiscordUserId(userId);
+  if (!id) return null;
+  return discordRequest(`/users/${encodeURIComponent(id)}`, { method: "GET" }).catch((error) => {
+    console.warn("[discord-repro] user avatar fetch failed:", error?.message || error);
+    return null;
+  });
+}
+
+async function enrichParticipantsForDiscordDisplay(participants = []) {
+  const enriched = [];
+  for (const participant of participants) {
+    const user = await fetchDiscordUser(participant.discord_user_id);
+    enriched.push({
+      ...participant,
+      discord_avatar_url: buildDiscordUserAvatarUrl(user || { id: participant.discord_user_id }),
+    });
+  }
+  return enriched;
+}
+
+async function editDeferredInteractionResponse(interaction, payload) {
+  const applicationId = String(interaction?.application_id || "").trim();
+  const token = String(interaction?.token || "").trim();
+  if (!applicationId || !token) return null;
+  return discordRequest(
+    `/webhooks/${encodeURIComponent(applicationId)}/${encodeURIComponent(token)}/messages/@original`,
+    {
+      method: "PATCH",
+      body: {
+        content: "",
+        embeds: [],
+        components: [],
+        allowed_mentions: { parse: [] },
+        ...(typeof payload === "string" ? { content: payload } : payload || {}),
+      },
+    },
+    { auth: false, ignoreNotFound: true }
+  );
+}
+
+function discordDeferredEphemeral(interaction, action, options = {}) {
+  const fallback = options.fallback || "Action impossible pour le moment.";
+  return {
+    type: 5,
+    data: { flags: 64 },
+    __discordDeferred: true,
+    deferredTask: async () => {
+      try {
+        const payload = await action();
+        await editDeferredInteractionResponse(interaction, payload || "Action terminee.");
+      } catch (error) {
+        console.error(`[discord-repro:${options.label || "deferred"}]`, error);
+        await editDeferredInteractionResponse(interaction, error?.message || fallback);
+      }
+    },
+  };
 }
 
 function serializeDiscordError(error, extra = {}) {
@@ -391,9 +480,7 @@ function getHeroLine(hero, index, minAwakenings = {}) {
   const direction = normalizeGvgDefenseDirection(hero?.direction) || "?";
   const min = Number(minAwakenings?.[index] ?? minAwakenings?.[String(index)] ?? -1);
   const minimum = Number.isFinite(min) && min >= 0 ? ` - min A${min}` : "";
-  const heroUrl = buildPublicHeroUrl(slugHeroFileName(name));
-  const label = heroUrl ? `[${name}](${heroUrl})` : name;
-  return `${index + 1}. ${label} - ${position} ${direction}${minimum}`;
+  return `${index + 1}. ${name} - ${position} ${direction}${minimum}`;
 }
 
 function normalizeMinAwakenings(value) {
@@ -1525,7 +1612,7 @@ async function getActiveRequestForDefense(supabase, defenseId) {
     .from(REPRO_REQUEST_TABLE)
     .select("*")
     .eq("gvg_defense_id", defenseId)
-    .in("state", ["requested", "send_failed", "repro_active"])
+    .in("state", ["requested", "repro_active"])
     .maybeSingle();
 
   if (error) throw error;
@@ -1627,42 +1714,6 @@ function evaluateAwakeningCompliance(heroRows, memberAwakenings, minAwakenings =
   });
 }
 
-async function findCompatibleMembersForRequest(supabase, defense, minAwakenings = {}) {
-  const normalizedGuild = normalizeGuildCode(defense?.guild);
-  if (!normalizedGuild) return { heroRows: [], compatibleMembers: [] };
-
-  const heroRows = await fetchChampionIdsForDefense(supabase, defense);
-  if (heroRows.length !== 5) return { heroRows, compatibleMembers: [] };
-
-  const { data: members, error: membersError } = await supabase
-    .from("guild_members")
-    .select("id, watcher_name, discord_id, guild_code, role")
-    .eq("guild_code", normalizedGuild)
-    .order("watcher_name", { ascending: true });
-
-  if (membersError) throw membersError;
-
-  const memberIds = (members || []).map((member) => member.id).filter(Boolean);
-  const awakeningsByMember = await fetchMemberAwakeningsForHeroes(supabase, memberIds, heroRows);
-
-  const compatibleMembers = (members || [])
-    .map((member) => {
-      const status = evaluateAwakeningCompliance(
-        heroRows,
-        awakeningsByMember.get(String(member.id)) || new Map(),
-        minAwakenings
-      );
-      return {
-        member,
-        status,
-        compatible: status.every((hero) => hero.ok),
-      };
-    })
-    .filter((entry) => entry.compatible && entry.member.discord_id);
-
-  return { heroRows, compatibleMembers, awakeningsByMember };
-}
-
 async function fetchActiveParticipants(supabase, requestId) {
   const { data, error } = await supabase
     .from(REPRO_PARTICIPANT_TABLE)
@@ -1679,11 +1730,48 @@ async function fetchRequestDefense(supabase, requestRow) {
   return loadGvgDefenseById(supabase, requestRow?.gvg_defense_id);
 }
 
+function buildHeroPreviewEmbed(hero, index, minAwakenings = {}) {
+  const name = getHeroDisplayName(hero, index);
+  const position = normalizeGvgDefensePosition(hero?.position) || "?";
+  const direction = normalizeGvgDefenseDirection(hero?.direction) || "?";
+  const min = Number(minAwakenings?.[index] ?? minAwakenings?.[String(index)] ?? -1);
+  const minimum = Number.isFinite(min) && min >= 0 ? `Min A${min}` : "Aucun minimum";
+  const heroUrl = buildPublicHeroUrl(slugHeroFileName(name));
+  const embed = {
+    title: `${index + 1}. ${name}`,
+    description: `${position} ${direction} · ${minimum}`,
+    color: 0x0ea5e9,
+  };
+  if (heroUrl) embed.thumbnail = { url: heroUrl };
+  return embed;
+}
+
+function buildParticipantPreviewEmbed(participant) {
+  const warning = participant.warning_active
+    ? "⚠️ **Attention : certains eveils minimum demandes ne sont pas respectes.**\n"
+    : "";
+  const comment = String(participant.comment || "").trim();
+  return {
+    author: {
+      name: `Reproduction - ${participant.display_name}`,
+      icon_url: participant.discord_avatar_url || buildDiscordUserAvatarUrl({ id: participant.discord_user_id }),
+    },
+    description: truncateDiscordText(`${warning}${comment ? `Commentaire :\n${comment}` : "Commentaire : -"}`),
+    color: 0x3b82f6,
+  };
+}
+
 function buildReproRequestMessagePayload(defense, requestRow, participants = []) {
   const minAwakenings = normalizeMinAwakenings(requestRow?.min_awakenings);
   const heroes = Array.isArray(defense?.heroes) ? defense.heroes.slice(0, 5) : [];
   const statusText = participants.length ? "🔵 Reproduction en cours" : "🟠 En attente de reproduction";
   const imageUrl = resolveDiscordImageUrl(defense?.image_url);
+  const heroEmbeds = heroes.map((hero, index) => buildHeroPreviewEmbed(hero, index, minAwakenings));
+  const maxParticipantEmbeds = Math.max(0, MAX_DISCORD_EMBEDS - 1 - heroEmbeds.length);
+  const participantEmbeds = participants
+    .slice(0, maxParticipantEmbeds)
+    .map((participant) => buildParticipantPreviewEmbed(participant));
+  const hiddenParticipants = participants.slice(maxParticipantEmbeds);
 
   const fields = [
     {
@@ -1709,17 +1797,11 @@ function buildReproRequestMessagePayload(defense, requestRow, participants = [])
     fields.push({ name: "Conditions", value: "Conditions mises a jour", inline: false });
   }
 
-  if (participants.length) {
-    participants.slice(0, 10).forEach((participant) => {
-      const warning = participant.warning_active
-        ? "⚠️ **Attention : certains eveils minimum demandes ne sont pas respectes.**\n"
-        : "";
-      const comment = String(participant.comment || "").trim();
-      fields.push({
-        name: `🔵 Reproduction en cours - ${participant.display_name}`,
-        value: truncateDiscordText(`${warning}${comment ? `Commentaire :\n${comment}` : "Commentaire : -"}`),
-        inline: false,
-      });
+  if (hiddenParticipants.length) {
+    fields.push({
+      name: "Autres reproducteurs",
+      value: truncateDiscordText(hiddenParticipants.map((participant) => `- ${participant.display_name}`).join("\n")),
+      inline: false,
     });
   }
 
@@ -1734,7 +1816,7 @@ function buildReproRequestMessagePayload(defense, requestRow, participants = [])
 
   return {
     content: "",
-    embeds: [embed],
+    embeds: [embed, ...heroEmbeds, ...participantEmbeds].slice(0, MAX_DISCORD_EMBEDS),
     components: [
       {
         type: 1,
@@ -1749,6 +1831,7 @@ function buildReproRequestMessagePayload(defense, requestRow, participants = [])
         type: 1,
         components: [
           { type: 2, style: 2, custom_id: `gvg_repro_cancel_mine:${requestRow.id}`, label: "Annuler ma repro" },
+          { type: 2, style: 2, custom_id: `gvg_repro_cleanup_public:${requestRow.id}`, label: "Nettoyer annonces" },
         ],
       },
     ],
@@ -1760,7 +1843,8 @@ async function updateReproRequestMessage(supabase, requestRow, defense = null) {
   const loadedDefense = defense || (await fetchRequestDefense(supabase, requestRow));
   if (!loadedDefense || !requestRow?.discord_channel_id || !requestRow?.discord_message_id) return { skipped: true };
   const participants = await fetchActiveParticipants(supabase, requestRow.id);
-  const payload = buildReproRequestMessagePayload(loadedDefense, requestRow, participants);
+  const displayParticipants = await enrichParticipantsForDiscordDisplay(participants);
+  const payload = buildReproRequestMessagePayload(loadedDefense, requestRow, displayParticipants);
   await discordRequest(
     `/channels/${encodeURIComponent(requestRow.discord_channel_id)}/messages/${encodeURIComponent(requestRow.discord_message_id)}`,
     { method: "PATCH", body: payload },
@@ -1769,30 +1853,30 @@ async function updateReproRequestMessage(supabase, requestRow, defense = null) {
   return { updated: true, participants: participants.length };
 }
 
-async function postCompatibleMembersMessage(supabase, requestRow, defense) {
+async function postGuildReproAnnouncementMessage(supabase, requestRow, defense) {
   const previousMessageId = requestRow?.compatible_message_id;
   if (previousMessageId) {
     await deleteDiscordMessage(requestRow.discord_channel_id, previousMessageId).catch((error) => {
-      console.warn("[discord-repro] compatible cleanup failed:", error?.message || error);
+      console.warn("[discord-repro] announcement cleanup failed:", error?.message || error);
     });
   }
 
-  const { compatibleMembers } = await findCompatibleMembersForRequest(
-    supabase,
-    defense,
-    normalizeMinAwakenings(requestRow?.min_awakenings)
-  );
-  const mentions = compatibleMembers.map((entry) => `<@${entry.member.discord_id}>`);
-  const content = mentions.length
-    ? `🔔 Joueurs compatibles :\n${mentions.join(" ")}`
-    : "🔔 Aucun joueur compatible avec les conditions actuelles.";
+  const roleId = getDiscordReproRoleId(requestRow.guild);
+  const roleMention = roleId ? `<@&${roleId}>` : `@${normalizeGuildCode(requestRow.guild).replace("_", " ")}`;
+  const content = [
+    roleMention,
+    "",
+    `🔔 Nouvelle demande de reproduction : ${formatDefenseShortTitle(defense)}.`,
+    "",
+    "La fiche contient la composition et les conditions d'eveil demandees.",
+  ].join("\n");
 
   const message = await discordRequest(`/channels/${encodeURIComponent(requestRow.discord_channel_id)}/messages`, {
     method: "POST",
     body: {
       content,
       message_reference: { message_id: requestRow.discord_message_id, fail_if_not_exists: false },
-      allowed_mentions: { users: compatibleMembers.map((entry) => String(entry.member.discord_id)) },
+      allowed_mentions: roleId ? { roles: [roleId] } : { parse: [] },
     },
   });
 
@@ -1894,28 +1978,55 @@ async function createDiscordReproRequest(supabase, { defense, member, user, minA
     requestRow = data;
   }
 
-  const payload = buildReproRequestMessagePayload(defense, requestRow, []);
-  const message = await discordRequest(`/channels/${encodeURIComponent(channelId)}/messages`, {
-    method: "POST",
-    body: payload,
-  });
+  let message = null;
+  try {
+    const payload = buildReproRequestMessagePayload(defense, requestRow, []);
+    message = await discordRequest(`/channels/${encodeURIComponent(channelId)}/messages`, {
+      method: "POST",
+      body: payload,
+    });
 
-  const { data: updated, error: updateError } = await supabase
-    .from(REPRO_REQUEST_TABLE)
-    .update({
-      discord_message_id: message?.id || null,
-      discord_response_message_id: null,
-      state: "requested",
-      last_error: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", requestRow.id)
-    .select("*")
-    .maybeSingle();
-  if (updateError) throw updateError;
+    const { data: updated, error: updateError } = await supabase
+      .from(REPRO_REQUEST_TABLE)
+      .update({
+        discord_message_id: message?.id || null,
+        discord_response_message_id: null,
+        state: "requested",
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", requestRow.id)
+      .select("*")
+      .maybeSingle();
+    if (updateError) throw updateError;
 
-  await postCompatibleMembersMessage(supabase, updated, defense);
-  return { request: updated, interaction };
+    await postGuildReproAnnouncementMessage(supabase, updated, defense);
+    return { request: updated, interaction };
+  } catch (error) {
+    console.error(`[discord-repro:create] request=${requestRow?.id || "?"} defense=${defense?.id || "?"}`, error);
+    if (message?.id) {
+      await deleteDiscordMessage(channelId, message.id).catch((deleteError) => {
+        console.warn("[discord-repro:create] rollback message delete failed:", deleteError?.message || deleteError);
+      });
+    }
+    if (requestRow?.id) {
+      try {
+        await supabase
+          .from(REPRO_REQUEST_TABLE)
+          .update({
+            state: "deleted",
+            discord_message_id: null,
+            compatible_message_id: null,
+            last_error: error?.message || "creation failed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", requestRow.id);
+      } catch (rollbackError) {
+        console.warn("[discord-repro:create] rollback db update failed:", rollbackError?.message || rollbackError);
+      }
+    }
+    throw error;
+  }
 }
 
 function textInput(customId, label, value, options = {}) {
@@ -2036,30 +2147,6 @@ async function evaluateMemberForRequest(supabase, requestRow, member) {
   };
 }
 
-async function postReproducerPingMessage(requestRow, defense, participant) {
-  const roleId = getDiscordReproRoleId(requestRow.guild);
-  const roleMention = roleId ? `<@&${roleId}>` : `@${normalizeGuildCode(requestRow.guild).replace("_", " ")}`;
-  const content = [
-    roleMention,
-    "",
-    `🔵 Une nouvelle reproduction est disponible sur ${formatDefenseShortTitle(defense)}.`,
-    "",
-    `Reproduction en cours par ${participant.display_name}.`,
-    "",
-    "Venez la tester et avancer ensemble sur la strat !",
-  ].join("\n");
-
-  const message = await discordRequest(`/channels/${encodeURIComponent(requestRow.discord_channel_id)}/messages`, {
-    method: "POST",
-    body: {
-      content,
-      message_reference: { message_id: requestRow.discord_message_id, fail_if_not_exists: false },
-      allowed_mentions: roleId ? { roles: [roleId] } : { parse: [] },
-    },
-  });
-  return message?.id || null;
-}
-
 async function activateParticipant(supabase, participantId) {
   const { data: participant, error } = await supabase
     .from(REPRO_PARTICIPANT_TABLE)
@@ -2073,16 +2160,12 @@ async function activateParticipant(supabase, participantId) {
   if (!requestRow) throw new Error("demande de repro introuvable");
 
   const defense = await fetchRequestDefense(supabase, requestRow);
-  const pingMessageId = await postReproducerPingMessage(requestRow, defense, participant).catch((pingError) => {
-    console.warn("[discord-repro] role ping failed:", pingError?.message || pingError);
-    return null;
-  });
 
   const { data: updated, error: updateError } = await supabase
     .from(REPRO_PARTICIPANT_TABLE)
     .update({
       state: "active",
-      ping_message_id: pingMessageId,
+      ping_message_id: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", participant.id)
@@ -2319,6 +2402,51 @@ async function cancelRequest(supabase, requestRow, user, options = {}) {
   return { defense, cleanup };
 }
 
+async function cleanupStoredPublicMessagesForRequest(supabase, requestRow, user) {
+  const member = await resolveMemberByDiscordUserForGuild(supabase, user, requestRow.guild);
+  if (!isAdminRole(member?.role)) {
+    throw new Error("Seul un admin peut nettoyer les annonces publiques.");
+  }
+
+  const { data: participantRows, error } = await supabase
+    .from(REPRO_PARTICIPANT_TABLE)
+    .select("id, ping_message_id")
+    .eq("request_id", requestRow.id)
+    .not("ping_message_id", "is", null);
+  if (error && !isMissingReproWorkflowTable(error)) throw error;
+
+  const messageIds = [
+    requestRow.compatible_message_id,
+    ...(participantRows || []).map((row) => row.ping_message_id),
+  ].filter(Boolean);
+
+  const deleted = [];
+  const failed = [];
+  for (const messageId of messageIds) {
+    try {
+      await deleteDiscordMessage(requestRow.discord_channel_id, messageId);
+      deleted.push(messageId);
+    } catch (deleteError) {
+      failed.push({ message_id: messageId, error: deleteError?.message || "delete failed" });
+    }
+  }
+
+  await supabase
+    .from(REPRO_REQUEST_TABLE)
+    .update({ compatible_message_id: null, updated_at: new Date().toISOString() })
+    .eq("id", requestRow.id);
+
+  if ((participantRows || []).length) {
+    await supabase
+      .from(REPRO_PARTICIPANT_TABLE)
+      .update({ ping_message_id: null, updated_at: new Date().toISOString() })
+      .eq("request_id", requestRow.id)
+      .not("ping_message_id", "is", null);
+  }
+
+  return { deleted: deleted.length, failed };
+}
+
 export async function handleDiscordReproComponentInteraction(supabase, interaction) {
   const customId = String(interaction?.data?.custom_id || "");
   const user = interaction?.member?.user || interaction?.user || null;
@@ -2348,6 +2476,10 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
     const member = await resolveMemberByDiscordUserForGuild(supabase, user, defense.guild);
     if (!member) return discordEphemeral("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
 
+    if (!getDiscordReproChannelId(defense.guild)) {
+      return discordEphemeral("Aucun salon repro n'est configure pour cette guilde.");
+    }
+
     const activeRequest = await getActiveRequestForDefense(supabase, defense.id);
     if (activeRequest?.discord_message_id) return buildRequestAlreadyActiveResponse(interaction, activeRequest);
     if (defense.record_status) return buildAlreadyOpenConfirmation(defense);
@@ -2358,6 +2490,9 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
     const defenseId = parseRequestIdFromCustomId(customId, "gvg_repro_create_confirm:");
     const defense = await loadGvgDefenseById(supabase, defenseId);
     if (!defense) return discordEphemeral("Defense introuvable.");
+    if (!getDiscordReproChannelId(defense.guild)) {
+      return discordEphemeral("Aucun salon repro n'est configure pour cette guilde.");
+    }
     return buildConditionsModal(defense);
   }
 
@@ -2377,14 +2512,18 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
 
   if (customId.startsWith("gvg_repro_confirm_join:")) {
     const participantId = parseRequestIdFromCustomId(customId, "gvg_repro_confirm_join:");
-    await activateParticipant(supabase, participantId);
-    return discordEphemeral("Repro enregistree malgre les eveils insuffisants.");
+    return discordDeferredEphemeral(interaction, async () => {
+      await activateParticipant(supabase, participantId);
+      return "Repro enregistree malgre les eveils insuffisants.";
+    }, { label: "confirm_join" });
   }
 
   if (customId.startsWith("gvg_repro_cancel_join:")) {
     const participantId = parseRequestIdFromCustomId(customId, "gvg_repro_cancel_join:");
-    await supabase.from(REPRO_PARTICIPANT_TABLE).update({ state: "cancelled" }).eq("id", participantId);
-    return discordEphemeral("Repro annulee.");
+    return discordDeferredEphemeral(interaction, async () => {
+      await supabase.from(REPRO_PARTICIPANT_TABLE).update({ state: "cancelled" }).eq("id", participantId);
+      return "Repro annulee.";
+    }, { label: "cancel_join" });
   }
 
   if (customId.startsWith("gvg_repro_open:")) {
@@ -2409,10 +2548,12 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
 
   if (customId.startsWith("gvg_repro_confirm_open:")) {
     const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_confirm_open:");
-    const requestRow = await getDiscordReproRequestById(supabase, requestId);
-    if (!requestRow) return discordEphemeral("Cette demande n'existe plus.");
-    await closeRequestAsOpened(supabase, requestRow, { ...user, guild_id: interaction?.guild_id });
-    return discordEphemeral("Defense marquee ouverte. La fiche Discord a ete nettoyee.");
+    return discordDeferredEphemeral(interaction, async () => {
+      const requestRow = await getDiscordReproRequestById(supabase, requestId);
+      if (!requestRow) throw new Error("Cette demande n'existe plus.");
+      await closeRequestAsOpened(supabase, requestRow, { ...user, guild_id: interaction?.guild_id });
+      return "Defense marquee ouverte. La fiche Discord a ete nettoyee.";
+    }, { label: "confirm_open" });
   }
 
   if (customId.startsWith("gvg_repro_conditions:")) {
@@ -2427,12 +2568,25 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
 
   if (customId.startsWith("gvg_repro_cancel_mine:")) {
     const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_cancel_mine:");
-    const requestRow = await getDiscordReproRequestById(supabase, requestId);
-    if (!requestRow) return discordEphemeral("Cette demande n'existe plus.");
-    const member = await resolveMemberByDiscordUserForGuild(supabase, user, requestRow.guild);
-    if (!member) return discordEphemeral("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
-    await cancelParticipant(supabase, requestRow, member);
-    return discordEphemeral("Ta reproduction a ete annulee.");
+    return discordDeferredEphemeral(interaction, async () => {
+      const requestRow = await getDiscordReproRequestById(supabase, requestId);
+      if (!requestRow) throw new Error("Cette demande n'existe plus.");
+      const member = await resolveMemberByDiscordUserForGuild(supabase, user, requestRow.guild);
+      if (!member) throw new Error("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
+      await cancelParticipant(supabase, requestRow, member);
+      return "Ta reproduction a ete annulee.";
+    }, { label: "cancel_mine" });
+  }
+
+  if (customId.startsWith("gvg_repro_cleanup_public:")) {
+    const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_cleanup_public:");
+    return discordDeferredEphemeral(interaction, async () => {
+      const requestRow = await getDiscordReproRequestById(supabase, requestId);
+      if (!requestRow) throw new Error("Cette demande n'existe plus.");
+      const result = await cleanupStoredPublicMessagesForRequest(supabase, requestRow, user);
+      const warning = result.failed.length ? ` (${result.failed.length} erreur(s) conservees dans les logs)` : "";
+      return `Annonces publiques nettoyees : ${result.deleted}${warning}. La demande et les reproducteurs sont inchanges.`;
+    }, { label: "cleanup_public_messages" });
   }
 
   if (customId.startsWith("gvg_repro_cancel_request:")) {
@@ -2458,16 +2612,20 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
         },
       };
     }
-    await cancelRequest(supabase, requestRow, user);
-    return discordEphemeral("Demande annulee.");
+    return discordDeferredEphemeral(interaction, async () => {
+      await cancelRequest(supabase, requestRow, user);
+      return "Demande annulee.";
+    }, { label: "cancel_request" });
   }
 
   if (customId.startsWith("gvg_repro_force_cancel:")) {
     const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_force_cancel:");
-    const requestRow = await getDiscordReproRequestById(supabase, requestId);
-    if (!requestRow) return discordEphemeral("Cette demande n'existe plus.");
-    await cancelRequest(supabase, requestRow, { ...user, guild_id: interaction?.guild_id }, { forced: true });
-    return discordEphemeral("Demande supprimee par admin.");
+    return discordDeferredEphemeral(interaction, async () => {
+      const requestRow = await getDiscordReproRequestById(supabase, requestId);
+      if (!requestRow) throw new Error("Cette demande n'existe plus.");
+      await cancelRequest(supabase, requestRow, { ...user, guild_id: interaction?.guild_id }, { forced: true });
+      return "Demande supprimee par admin.";
+    }, { label: "force_cancel" });
   }
 
   return discordEphemeral("Interaction Discord non geree.");
@@ -2479,86 +2637,102 @@ export async function handleDiscordReproModalInteraction(supabase, interaction) 
 
   if (customId.startsWith("gvg_repro_create:")) {
     const defenseId = parseRequestIdFromCustomId(customId, "gvg_repro_create:");
-    const defense = await loadGvgDefenseById(supabase, defenseId);
-    if (!defense) return discordEphemeral("Defense introuvable.");
-    const member = await resolveMemberByDiscordUserForGuild(supabase, user, defense.guild);
-    if (!member) return discordEphemeral("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
-    const activeRequest = await getActiveRequestForDefense(supabase, defense.id);
-    if (activeRequest?.discord_message_id) return buildRequestAlreadyActiveResponse(interaction, activeRequest);
+    const modalComponents = interaction?.data?.components || [];
+    return discordDeferredEphemeral(interaction, async () => {
+      const defense = await loadGvgDefenseById(supabase, defenseId);
+      if (!defense) throw new Error("Defense introuvable.");
+      const member = await resolveMemberByDiscordUserForGuild(supabase, user, defense.guild);
+      if (!member) throw new Error("Ton compte Discord n'est pas lie au dashboard pour cette guilde.");
+      const activeRequest = await getActiveRequestForDefense(supabase, defense.id);
+      if (activeRequest?.discord_message_id) {
+        const url = buildJumpUrl(interaction, activeRequest);
+        return [
+          "Une demande de repro est deja active pour cette defense.",
+          url ? `[Voir la demande active](${url})` : null,
+        ].filter(Boolean).join("\n");
+      }
 
-    const minAwakenings = parseConditionsModalValues(interaction?.data?.components || []);
-    const result = await createDiscordReproRequest(supabase, {
-      defense,
-      member,
-      user,
-      minAwakenings,
-      interaction,
-    });
-    if (result.alreadyActive) return buildRequestAlreadyActiveResponse(interaction, result.request);
-    return discordEphemeral("Demande de repro creee dans le salon.");
+      const minAwakenings = parseConditionsModalValues(modalComponents);
+      const result = await createDiscordReproRequest(supabase, {
+        defense,
+        member,
+        user,
+        minAwakenings,
+        interaction,
+      });
+      if (result.alreadyActive) {
+        const url = buildJumpUrl(interaction, result.request);
+        return [
+          "Une demande de repro est deja active pour cette defense.",
+          url ? `[Voir la demande active](${url})` : null,
+        ].filter(Boolean).join("\n");
+      }
+      return "Demande de repro creee dans le salon.";
+    }, { label: "create_request" });
   }
 
   if (customId.startsWith("gvg_repro_conditions_submit:")) {
     const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_conditions_submit:");
-    const requestRow = await getDiscordReproRequestById(supabase, requestId);
-    if (!requestRow) return discordEphemeral("Cette demande n'existe plus.");
-    const member = await resolveMemberByDiscordUserForGuild(supabase, user, requestRow.guild);
-    if (!isRequestManager(member, requestRow)) return discordEphemeral("Tu ne peux pas modifier ces conditions.");
+    const modalComponents = interaction?.data?.components || [];
+    return discordDeferredEphemeral(interaction, async () => {
+      const requestRow = await getDiscordReproRequestById(supabase, requestId);
+      if (!requestRow) throw new Error("Cette demande n'existe plus.");
+      const member = await resolveMemberByDiscordUserForGuild(supabase, user, requestRow.guild);
+      if (!isRequestManager(member, requestRow)) throw new Error("Tu ne peux pas modifier ces conditions.");
 
-    const minAwakenings = parseConditionsModalValues(interaction?.data?.components || []);
-    const { data: updated, error } = await supabase
-      .from(REPRO_REQUEST_TABLE)
-      .update({
-        min_awakenings: minAwakenings,
-        conditions_updated: true,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", requestRow.id)
-      .select("*")
-      .maybeSingle();
-    if (error) throw error;
-
-    const defense = await fetchRequestDefense(supabase, updated);
-    await postCompatibleMembersMessage(supabase, updated, defense);
-
-    const participants = await fetchActiveParticipants(supabase, updated.id);
-    const heroRows = await fetchChampionIdsForDefense(supabase, defense);
-    const awakeningsByMember = await fetchMemberAwakeningsForHeroes(
-      supabase,
-      participants.map((participant) => participant.member_id),
-      heroRows
-    );
-    for (const participant of participants) {
-      const status = evaluateAwakeningCompliance(
-        heroRows,
-        awakeningsByMember.get(String(participant.member_id)) || new Map(),
-        minAwakenings
-      );
-      await supabase
-        .from(REPRO_PARTICIPANT_TABLE)
+      const minAwakenings = parseConditionsModalValues(modalComponents);
+      const { data: updated, error } = await supabase
+        .from(REPRO_REQUEST_TABLE)
         .update({
-          warning_active: !status.every((hero) => hero.ok),
+          min_awakenings: minAwakenings,
+          conditions_updated: true,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", participant.id);
-    }
-    await updateReproRequestMessage(supabase, updated, defense);
-    return discordEphemeral("Conditions mises a jour.");
+        .eq("id", requestRow.id)
+        .select("*")
+        .maybeSingle();
+      if (error) throw error;
+
+      const defense = await fetchRequestDefense(supabase, updated);
+
+      const participants = await fetchActiveParticipants(supabase, updated.id);
+      const heroRows = await fetchChampionIdsForDefense(supabase, defense);
+      const awakeningsByMember = await fetchMemberAwakeningsForHeroes(
+        supabase,
+        participants.map((participant) => participant.member_id),
+        heroRows
+      );
+      for (const participant of participants) {
+        const status = evaluateAwakeningCompliance(
+          heroRows,
+          awakeningsByMember.get(String(participant.member_id)) || new Map(),
+          minAwakenings
+        );
+        await supabase
+          .from(REPRO_PARTICIPANT_TABLE)
+          .update({
+            warning_active: !status.every((hero) => hero.ok),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", participant.id);
+      }
+      await updateReproRequestMessage(supabase, updated, defense);
+      return "Conditions mises a jour.";
+    }, { label: "conditions_submit" });
   }
 
   if (customId.startsWith("gvg_repro_join:")) {
     const requestId = parseRequestIdFromCustomId(customId, "gvg_repro_join:");
-    const result = await saveParticipantFromModal(supabase, {
-      requestId,
-      user,
-      modalComponents: interaction?.data?.components || [],
-    });
-    if (result.pending) {
-      return {
-        type: 4,
-        data: {
+    const modalComponents = interaction?.data?.components || [];
+    return discordDeferredEphemeral(interaction, async () => {
+      const result = await saveParticipantFromModal(supabase, {
+        requestId,
+        user,
+        modalComponents,
+      });
+      if (result.pending) {
+        return {
           content: "⚠️ Vous ne respectez pas tous les eveils demandes.\n\nVoulez-vous confirmer malgre tout cette reproduction ?",
-          flags: 64,
           components: [
             {
               type: 1,
@@ -2568,10 +2742,10 @@ export async function handleDiscordReproModalInteraction(supabase, interaction) 
               ],
             },
           ],
-        },
-      };
-    }
-    return discordEphemeral("Repro enregistree dans la fiche.");
+        };
+      }
+      return "Repro enregistree dans la fiche.";
+    }, { label: "join_submit" });
   }
 
   return discordEphemeral("Modal Discord non gere.");
