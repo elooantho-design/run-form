@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Ban, Pencil, Trash2, X } from "lucide-react";
+import { Ban, Pencil, Search, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
@@ -194,6 +194,33 @@ function shouldShowDefenseForCurrentFilter(defense, selectedFilter) {
   return true;
 }
 
+function buildStrategySearchCriteria(defense) {
+  return (Array.isArray(defense?.heroes) ? defense.heroes : [])
+    .slice(0, 5)
+    .map((hero, index) => ({
+      id: `${defense?.id || "defense"}-${index}`,
+      champion: hero?.champion || hero?.name || "",
+      position: hero?.position || "",
+      direction: hero?.direction || "",
+      matchChampion: true,
+      matchPosition: true,
+      matchDirection: true,
+    }));
+}
+
+function formatStrategySearchDate(value) {
+  if (!value) return "";
+  try {
+    return new Intl.DateTimeFormat("fr-FR", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
+}
+
 export default function GvgCurrentTab({ session: portalSession, onEditRun } = {}) {
   const apiBase = useMemo(() => getApiBase(), []);
   const { language, t } = usePortalLanguage();
@@ -227,6 +254,13 @@ const [refreshTick, setRefreshTick] = useState(0);
     const [stratModalItems, setStratModalItems] = useState([]);
     const [stratModalDefenseId, setStratModalDefenseId] = useState(null);
     const [stratActionLoading, setStratActionLoading] = useState(null);
+    const [strategySearchOpen, setStrategySearchOpen] = useState(false);
+    const [strategySearchDefense, setStrategySearchDefense] = useState(null);
+    const [strategySearchCriteria, setStrategySearchCriteria] = useState([]);
+    const [strategySearchLoading, setStrategySearchLoading] = useState(false);
+    const [strategySearchMessage, setStrategySearchMessage] = useState("");
+    const [strategySearchItems, setStrategySearchItems] = useState([]);
+    const [strategySearchHasSearched, setStrategySearchHasSearched] = useState(false);
     const [reproCandidates, setReproCandidates] = useState([]);
     const [reproHeroes, setReproHeroes] = useState([]);
     const [reproCandidatesModalOpen, setReproCandidatesModalOpen] = useState(false);
@@ -646,6 +680,102 @@ async function openStratView(defenseId) {
     setStratModalOpen(true);
   } finally {
     setStratModalLoading(false);
+  }
+}
+
+function openStrategySearch(defense) {
+  setStrategySearchDefense(defense);
+  setStrategySearchCriteria(buildStrategySearchCriteria(defense));
+  setStrategySearchItems([]);
+  setStrategySearchMessage("");
+  setStrategySearchHasSearched(false);
+  setStrategySearchOpen(true);
+}
+
+function setAllStrategySearchCriteria(checked) {
+  setStrategySearchCriteria((current) =>
+    current.map((line) => ({
+      ...line,
+      matchChampion: checked,
+      matchPosition: checked,
+      matchDirection: checked,
+    }))
+  );
+}
+
+function toggleStrategySearchCriterion(index, key) {
+  setStrategySearchCriteria((current) =>
+    current.map((line, lineIndex) =>
+      lineIndex === index ? { ...line, [key]: !line[key] } : line
+    )
+  );
+}
+
+async function runStrategySearch() {
+  if (!strategySearchDefense?.id) return;
+
+  try {
+    setStrategySearchLoading(true);
+    setStrategySearchMessage("");
+    setStrategySearchHasSearched(true);
+
+    const response = await fetch(`${apiBase}/api/gvg-strat-search`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        gvgDefenseId: strategySearchDefense.id,
+        criteria: strategySearchCriteria.map((line) => ({
+          matchChampion: line.matchChampion,
+          matchPosition: line.matchPosition,
+          matchDirection: line.matchDirection,
+        })),
+      }),
+    });
+
+    const rawText = await response.text();
+    let data = null;
+
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      setStrategySearchItems([]);
+      setStrategySearchMessage(
+        formatTranslation(t, "gvgCurrent.errorNonJson", "Reponse non JSON {context} ({status})", {
+          context: "gvg-strat-search-flex",
+          status: response.status,
+        })
+      );
+      return;
+    }
+
+    if (!response.ok) {
+      setStrategySearchItems([]);
+      setStrategySearchMessage(
+        formatTranslation(t, "gvgCurrent.errorReadStrat", "Erreur lecture strat : {error}", {
+          error: data?.error || t("common.unknownError", "erreur inconnue"),
+        })
+      );
+      return;
+    }
+
+    const items = Array.isArray(data?.items) ? data.items : [];
+    setStrategySearchItems(items);
+    setStrategySearchMessage(
+      items.length ? "" : t("gvgCurrent.noFlexibleStratFound", "Aucune strat trouvée avec ces critères.")
+    );
+  } catch (error) {
+    console.error("runStrategySearch error:", error);
+    setStrategySearchItems([]);
+    setStrategySearchMessage(
+      formatTranslation(t, "gvgCurrent.errorReadStrat", "Erreur lecture strat : {error}", {
+        error: error?.message || t("common.unknownError", "erreur inconnue"),
+      })
+    );
+  } finally {
+    setStrategySearchLoading(false);
   }
 }
 
@@ -1098,6 +1228,171 @@ function handleEditStrat(strat) {
   onEditRun(stratId);
 }
 
+function renderStratResultCard(strat, index, { showAdminActions = true, showSearchMeta = false } = {}) {
+  return (
+    <div
+      key={strat.strat_id || index}
+      className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-sm text-zinc-400">
+          {formatTranslation(t, "gvgCurrent.stratNumber", "Strat #{number}", {
+            number: strat.strat_id,
+          })}
+        </div>
+        {showSearchMeta ? (
+          <>
+            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-amber-100">
+              👍 {Number(strat.likes_count || 0)}
+            </span>
+            {strat.created_at ? (
+              <span
+                className="rounded-full border border-zinc-700 bg-zinc-950/60 px-2 py-0.5 text-[11px] font-semibold uppercase text-zinc-300"
+                title={new Date(strat.created_at).toLocaleString("fr-FR")}
+              >
+                {formatStrategySearchDate(strat.created_at)}
+              </span>
+            ) : null}
+          </>
+        ) : null}
+        {showExternalRunAlerts && isExternalRunGuildCode(strat.guild_code) ? (
+          <span className="rounded-full border border-amber-400/50 bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-amber-100">
+            {formatTranslation(t, "gvgCurrent.externalRun", "Run externe - {guild}", {
+              guild: getGvgGuildLabel(strat.guild_code),
+            })}
+          </span>
+        ) : null}
+      </div>
+
+      {showAdminActions && canUseStratAdminActions ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={
+              !canManageRunFromCurrent(strat) ||
+              stratActionLoading?.id === strat.strat_id
+            }
+            title={
+              canManageRunFromCurrent(strat)
+                ? t("gvgCurrent.editRun", "Modifier")
+                : t("gvgCurrent.editLimited", "Modification limitee a la banque modifiable")
+            }
+            onClick={() => handleEditStrat(strat)}
+            className="rounded-2xl border-zinc-700 bg-zinc-950/60 text-zinc-100 hover:bg-zinc-800"
+          >
+            <Pencil className="mr-2 h-4 w-4" />
+            {t("common.edit", "Modifier")}
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={stratActionLoading?.id === strat.strat_id}
+            onClick={() => handleBoycottStrat(strat)}
+            className="rounded-2xl border-amber-500/50 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+          >
+            <Ban className="mr-2 h-4 w-4" />
+            {stratActionLoading?.type === "boycott" && stratActionLoading?.id === strat.strat_id
+              ? t("common.saving", "Enregistrement...")
+              : t("gvgCurrent.boycottRun", "Boycotter")}
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            disabled={
+              !canManageRunFromCurrent(strat) ||
+              stratActionLoading?.id === strat.strat_id
+            }
+            title={
+              canManageRunFromCurrent(strat)
+                ? t("gvgCurrent.deleteRun", "Supprimer")
+                : t("gvgCurrent.deleteLimited", "Suppression limitee a la banque modifiable")
+            }
+            onClick={() => handleDeleteStrat(strat)}
+            className="rounded-2xl"
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            {stratActionLoading?.type === "delete" && stratActionLoading?.id === strat.strat_id
+              ? t("run.deleting", "Suppression...")
+              : t("common.delete", "Supprimer")}
+          </Button>
+        </div>
+      ) : null}
+
+      {strat.youtube_url ? (
+        <div className="mt-3 space-y-3">
+          <div className="text-xs text-zinc-500">{t("gvgCurrent.video", "Video")} :</div>
+
+          {getYoutubeEmbedUrl(strat.youtube_url) ? (
+            <div className="overflow-hidden rounded-2xl border border-zinc-800">
+              <iframe
+                src={getYoutubeEmbedUrl(strat.youtube_url)}
+                title={`Strat video ${strat.strat_id}`}
+                className="h-64 w-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+          ) : (
+            <a
+              href={strat.youtube_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-block text-sm text-blue-400 underline"
+            >
+              {t("gvgCurrent.openVideo", "Ouvrir la video")}
+            </a>
+          )}
+        </div>
+      ) : null}
+
+      <div className="mt-3 grid gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/50 p-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            {t("gvgCurrent.attackCode", "Code d'attaque")}
+          </span>
+          {strat.attack_code ? (
+            <>
+              <span className="font-semibold text-zinc-100">{strat.attack_code}</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(strat.attack_code);
+                  } catch (error) {
+                    console.error("clipboard error:", error);
+                  }
+                }}
+                className="rounded-2xl border border-zinc-700 bg-zinc-800/60 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700/70"
+              >
+                {t("common.copy", "Copier")}
+              </button>
+            </>
+          ) : (
+            <span className="text-zinc-400">{t("gvgCurrent.noAttackCode", "Pas de code")}</span>
+          )}
+        </div>
+
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            {t("gvgCurrent.instructions", "Consignes")}
+          </div>
+          <div className="mt-1 whitespace-pre-wrap text-zinc-200">
+            {strat.commentaire
+              ? strat.commentaire
+              : t("gvgCurrent.noInstructions", "Pas de consigne particuliere")}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function renderDefenseCard(defense, key = defense.id) {
   const canOpenVisibleRuns =
     defense.has_visible_run === true ||
@@ -1212,6 +1507,15 @@ function renderDefenseCard(defense, key = defense.id) {
             }
           >
             👀
+          </button>
+
+          <button
+            type="button"
+            onClick={() => openStrategySearch(defense)}
+            className="rounded-2xl border border-cyan-500/40 bg-cyan-500/15 px-3 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/25"
+            title={t("gvgCurrent.searchSimilarStrat", "Recherche de strat")}
+          >
+            <Search className="h-4 w-4" aria-hidden="true" />
           </button>
 
           <button
@@ -1618,6 +1922,15 @@ function renderDesktopSlot(slot, team) {
 
 <button
   type="button"
+  onClick={() => openStrategySearch(defense)}
+  className="rounded-2xl border border-cyan-500/40 bg-cyan-500/15 px-3 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/25"
+  title={t("gvgCurrent.searchSimilarStrat", "Recherche de strat")}
+>
+  <Search className="h-4 w-4" aria-hidden="true" />
+</button>
+
+<button
+  type="button"
   onClick={() => openReproCandidates(defense)}
   className="rounded-2xl border border-zinc-500/40 bg-zinc-500/15 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-500/25"
   title={t("gvgCurrent.whoCanRepro", "Qui peut repro")}
@@ -1942,155 +2255,164 @@ function renderDesktopSlot(slot, team) {
         ) : stratModalMessage ? (
           <div className="text-sm text-zinc-300">{stratModalMessage}</div>
         ) : (
-          stratModalItems.map((strat, index) => (
-            <div
-              key={strat.strat_id || index}
-              className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-sm text-zinc-400">
-                  {formatTranslation(t, "gvgCurrent.stratNumber", "Strat #{number}", {
-                    number: strat.strat_id,
-                  })}
-                </div>
-                {showExternalRunAlerts && isExternalRunGuildCode(strat.guild_code) ? (
-                  <span className="rounded-full border border-amber-400/50 bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-amber-100">
-                    {formatTranslation(t, "gvgCurrent.externalRun", "Run externe - {guild}", {
-                      guild: getGvgGuildLabel(strat.guild_code),
-                    })}
-                  </span>
-                ) : null}
-              </div>
+          stratModalItems.map((strat, index) =>
+            renderStratResultCard(strat, index, { showAdminActions: true })
+          )
+        )}
 
-              {canUseStratAdminActions ? (
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      !canManageRunFromCurrent(strat) ||
-                      stratActionLoading?.id === strat.strat_id
-                    }
-                    title={
-                      canManageRunFromCurrent(strat)
-                        ? t("gvgCurrent.editRun", "Modifier")
-                        : t("gvgCurrent.editLimited", "Modification limitee a la banque modifiable")
-                    }
-                    onClick={() => handleEditStrat(strat)}
-                    className="rounded-2xl border-zinc-700 bg-zinc-950/60 text-zinc-100 hover:bg-zinc-800"
-                  >
-                    <Pencil className="mr-2 h-4 w-4" />
-                    {t("common.edit", "Modifier")}
-                  </Button>
-
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={stratActionLoading?.id === strat.strat_id}
-                    onClick={() => handleBoycottStrat(strat)}
-                    className="rounded-2xl border-amber-500/50 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
-                  >
-                    <Ban className="mr-2 h-4 w-4" />
-                    {stratActionLoading?.type === "boycott" && stratActionLoading?.id === strat.strat_id
-                      ? t("common.saving", "Enregistrement...")
-                      : t("gvgCurrent.boycottRun", "Boycotter")}
-                  </Button>
-
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    disabled={
-                      !canManageRunFromCurrent(strat) ||
-                      stratActionLoading?.id === strat.strat_id
-                    }
-                    title={
-                      canManageRunFromCurrent(strat)
-                        ? t("gvgCurrent.deleteRun", "Supprimer")
-                        : t("gvgCurrent.deleteLimited", "Suppression limitee a la banque modifiable")
-                    }
-                    onClick={() => handleDeleteStrat(strat)}
-                    className="rounded-2xl"
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {stratActionLoading?.type === "delete" && stratActionLoading?.id === strat.strat_id
-                      ? t("run.deleting", "Suppression...")
-                      : t("common.delete", "Supprimer")}
-                  </Button>
-                </div>
-              ) : null}
-
-{strat.youtube_url ? (
-  <div className="mt-3 space-y-3">
-    <div className="text-xs text-zinc-500">{t("gvgCurrent.video", "Video")} :</div>
-
-    {getYoutubeEmbedUrl(strat.youtube_url) ? (
-      <div className="overflow-hidden rounded-2xl border border-zinc-800">
-        <iframe
-          src={getYoutubeEmbedUrl(strat.youtube_url)}
-          title={`Strat video ${strat.strat_id}`}
-          className="h-64 w-full"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-        />
       </div>
-    ) : (
-      <a
-        href={strat.youtube_url}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-block text-sm text-blue-400 underline"
-      >
-        {t("gvgCurrent.openVideo", "Ouvrir la video")}
-      </a>
-    )}
+    </div>
   </div>
 ) : null}
 
-              <div className="mt-3 grid gap-2 rounded-2xl border border-zinc-800 bg-zinc-950/50 p-3 text-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    {t("gvgCurrent.attackCode", "Code d'attaque")}
-                  </span>
-                  {strat.attack_code ? (
-                    <>
-                      <span className="font-semibold text-zinc-100">{strat.attack_code}</span>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(strat.attack_code);
-                          } catch (error) {
-                            console.error("clipboard error:", error);
-                          }
-                        }}
-                        className="rounded-2xl border border-zinc-700 bg-zinc-800/60 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700/70"
-                      >
-                        {t("common.copy", "Copier")}
-                      </button>
-                    </>
-                  ) : (
-                    <span className="text-zinc-400">{t("gvgCurrent.noAttackCode", "Pas de code")}</span>
-                  )}
+{strategySearchOpen ? (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+    <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+        <div>
+          <div className="text-lg font-semibold text-zinc-100">
+            {t("gvgCurrent.flexSearchTitle", "Rechercher une strat similaire")}
+          </div>
+          {strategySearchDefense ? (
+            <div className="mt-1 text-sm text-zinc-400">
+              {buildDefenseTitle(strategySearchDefense, t)}
+            </div>
+          ) : null}
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          className="rounded-2xl border-zinc-700 text-zinc-200"
+          onClick={() => setStrategySearchOpen(false)}
+        >
+          {t("common.close", "Fermer")}
+        </Button>
+      </div>
+
+      <div className="space-y-5 overflow-y-auto px-5 py-4">
+        <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-zinc-300">
+              {t(
+                "gvgCurrent.flexSearchHelp",
+                "Coche les critères qui doivent matcher. Une case décochée devient un joker."
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setAllStrategySearchCriteria(true)}
+                className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-800"
+              >
+                {t("gvgCurrent.checkAllCriteria", "Tout cocher")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllStrategySearchCriteria(false)}
+                className="rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-800"
+              >
+                {t("gvgCurrent.uncheckAllCriteria", "Tout décocher")}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-3">
+            {strategySearchCriteria.map((line, index) => (
+              <div
+                key={line.id || index}
+                className="grid gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3 md:grid-cols-[minmax(0,1fr)_auto]"
+              >
+                <div className="grid gap-2 text-sm text-zinc-200 sm:grid-cols-[minmax(0,1.4fr)_80px_80px]">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                      {t("gvgCurrent.hero", "Héros")}
+                    </div>
+                    <div className="mt-1 font-semibold text-zinc-100">
+                      {translateChampionName(line.champion, championDisplayMap, language) || "-"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                      {t("gvgCurrent.position", "Position")}
+                    </div>
+                    <div className="mt-1 font-semibold text-zinc-100">{line.position || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                      {t("gvgCurrent.direction", "Sens")}
+                    </div>
+                    <div className="mt-1 font-semibold text-zinc-100">{line.direction || "-"}</div>
+                  </div>
                 </div>
 
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    {t("gvgCurrent.instructions", "Consignes")}
-                  </div>
-                  <div className="mt-1 whitespace-pre-wrap text-zinc-200">
-                    {strat.commentaire
-                      ? strat.commentaire
-                      : t("gvgCurrent.noInstructions", "Pas de consigne particuliere")}
-                  </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    ["matchChampion", t("gvgCurrent.hero", "Héros")],
+                    ["matchPosition", t("gvgCurrent.position", "Position")],
+                    ["matchDirection", t("gvgCurrent.direction", "Sens")],
+                  ].map(([key, label]) => (
+                    <label
+                      key={key}
+                      className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                        line[key]
+                          ? "border-cyan-400/50 bg-cyan-500/15 text-cyan-100"
+                          : "border-zinc-700 bg-zinc-900/80 text-zinc-400"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(line[key])}
+                        onChange={() => toggleStrategySearchCriterion(index, key)}
+                        className="h-4 w-4 accent-cyan-400"
+                      />
+                      {label}
+                    </label>
+                  ))}
                 </div>
               </div>
-            </div>
-          ))
-        )}
+            ))}
+          </div>
 
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              className="rounded-2xl"
+              disabled={strategySearchLoading || !strategySearchCriteria.length}
+              onClick={runStrategySearch}
+            >
+              {strategySearchLoading
+                ? t("gvgCurrent.searching", "Recherche...")
+                : t("gvgCurrent.search", "Rechercher")}
+            </Button>
+            {strategySearchHasSearched && !strategySearchLoading ? (
+              <div className="text-sm text-zinc-400">
+                {formatTranslation(t, "gvgCurrent.flexSearchResultCount", "{count} résultat(s)", {
+                  count: strategySearchItems.length,
+                })}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {strategySearchLoading ? (
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-400">
+              {t("gvgCurrent.searching", "Recherche...")}
+            </div>
+          ) : strategySearchMessage ? (
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-sm text-zinc-300">
+              {strategySearchMessage}
+            </div>
+          ) : strategySearchItems.length ? (
+            strategySearchItems.map((strat, index) =>
+              renderStratResultCard(strat, index, {
+                showAdminActions: false,
+                showSearchMeta: true,
+              })
+            )
+          ) : null}
+        </div>
       </div>
     </div>
   </div>

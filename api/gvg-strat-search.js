@@ -16,6 +16,16 @@ import {
   buildGvgActivityContextId,
   touchPortalMemberActivityState,
 } from "./_portal-member-activity.js";
+import {
+  buildGvgStrategyCriteriaFromHeroes,
+  compareGvgStrategySearchResults,
+  gvgStrategyHasBijectiveMatch,
+  inferGvgStrategyMapType,
+  normalizeGvgStrategyChampionName,
+  normalizeGvgStrategyDirection,
+  normalizeGvgStrategyMapType,
+  normalizeGvgStrategyPosition,
+} from "../src/lib/gvgStrategySearch.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -23,29 +33,12 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-const GVG_POSITION_GRIDS = {
-  tower: { rows: 7, cols: 10 },
-  fortress: { rows: 8, cols: 11 },
-};
-
 function normalizeGvgMapType(mapType) {
-  const value = String(mapType || "").trim().toLowerCase();
-  if (value === "fortress" || value === "bastion") return "fortress";
-  if (value === "tower" || value === "tour") return "tower";
-  return "tower";
+  return normalizeGvgStrategyMapType(mapType);
 }
 
 export function normalizeGvgPosition(pos, mapType = "tower") {
-  if (!pos) return null;
-  const p = String(pos).trim().toUpperCase();
-  const match = /^([A-Z])([1-9]\d?)$/.exec(p);
-  if (!match) return null;
-
-  const grid = GVG_POSITION_GRIDS[normalizeGvgMapType(mapType)] || GVG_POSITION_GRIDS.tower;
-  const row = match[1].charCodeAt(0) - "A".charCodeAt(0) + 1;
-  const col = Number(match[2]);
-
-  return row >= 1 && row <= grid.rows && col >= 1 && col <= grid.cols ? p : null;
+  return normalizeGvgStrategyPosition(pos, mapType);
 }
 
 function normalizePos(pos, mapType = "tower") {
@@ -53,34 +46,23 @@ function normalizePos(pos, mapType = "tower") {
 }
 
 function normalizeChampionName(name) {
-  if (!name) return null;
-  return String(name)
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\d+$/, "");
+  return normalizeGvgStrategyChampionName(name);
 }
 
 function normalizeDir(dir) {
-  if (!dir) return null;
-  const d = String(dir).trim().toUpperCase();
-
-  if (["N", "NORD", "NORTH"].includes(d)) return "N";
-  if (["S", "SUD", "SOUTH"].includes(d)) return "S";
-  if (["E", "EST", "EAST"].includes(d)) return "E";
-  if (["O", "OUEST", "WEST", "W"].includes(d)) return "O";
-
-  if (d === "↑") return "N";
-  if (d === "↓") return "S";
-  if (d === "→") return "E";
-  if (d === "←") return "O";
-
-  return null;
+  return normalizeGvgStrategyDirection(dir);
 }
 
 function normalizeChampion(ch) {
   return normalizeChampionName(ch);
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function fetchCandidateStratIdsByChampionsStrict(
@@ -143,21 +125,26 @@ function stratMatchesAllQueries(stratSlots, queryItems) {
 }
 
 async function fetchAllSlotsForStratIds(supabaseClient, stratIds, pageSize = 1000) {
+  const ids = [...new Set((stratIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+
   let all = [];
 
-  for (let from = 0; ; from += pageSize) {
-    const to = from + pageSize - 1;
+  for (const chunk of chunkArray(ids, 500)) {
+    for (let from = 0; ; from += pageSize) {
+      const to = from + pageSize - 1;
 
-    const { data, error } = await supabaseClient
-      .from("defence_slot")
-      .select("strat_id, champion, position, direction")
-      .in("strat_id", stratIds)
-      .range(from, to);
+      const { data, error } = await supabaseClient
+        .from("defence_slot")
+        .select("strat_id, champion, position, direction")
+        .in("strat_id", chunk)
+        .range(from, to);
 
-    if (error) throw error;
+      if (error) throw error;
 
-    all = all.concat(data || []);
-    if (!data || data.length < pageSize) break;
+      all = all.concat(data || []);
+      if (!data || data.length < pageSize) break;
+    }
   }
 
   return all;
@@ -275,6 +262,182 @@ export async function searchDefenceStrict(
   return matched.slice(0, limit);
 }
 
+const STRAT_SEARCH_SELECT = "id, name, def_key, commentaire, youtube_url, created_at, attack_code, guild_code";
+const STRAT_SEARCH_SELECT_FALLBACK = "id, name, def_key, commentaire, youtube_url, created_at, attack_code";
+
+function isMissingOptionalLikeTable(error) {
+  const message = String(error?.message || error?.details || "");
+  return (
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    message.includes("defence_strat_likes")
+  );
+}
+
+async function fetchFlexibleStrats(supabaseClient, stratIds, { scope = null, maxCandidates = 50000 } = {}) {
+  let query = supabaseClient.from("defence_strat").select(STRAT_SEARCH_SELECT);
+
+  if (Array.isArray(stratIds)) {
+    if (!stratIds.length) return [];
+    query = query.in("id", stratIds);
+  } else {
+    query = query.order("created_at", { ascending: false }).limit(maxCandidates);
+  }
+
+  let { data, error } = await query;
+
+  if (error) {
+    if (!isMissingGuildCodeColumn(error)) throw error;
+    if (!scope?.isPaladin) {
+      throw new Error("Colonne defence_strat.guild_code manquante pour isoler les banques de runs externes.");
+    }
+
+    let fallbackQuery = supabaseClient.from("defence_strat").select(STRAT_SEARCH_SELECT_FALLBACK);
+    if (Array.isArray(stratIds)) {
+      fallbackQuery = fallbackQuery.in("id", stratIds);
+    } else {
+      fallbackQuery = fallbackQuery.order("created_at", { ascending: false }).limit(maxCandidates);
+    }
+
+    const fallback = await fallbackQuery;
+    if (fallback.error) throw fallback.error;
+    data = (fallback.data || []).map((strat) => ({ ...strat, guild_code: null }));
+  }
+
+  return (data || []).filter((strat) => stratMatchesRunReadScope(strat, scope));
+}
+
+async function filterBoycottedStrats(supabaseClient, strats, targetGuildCode) {
+  if (!targetGuildCode || !strats?.length) return strats || [];
+
+  const stratIds = strats.map((strat) => strat.id).filter(Boolean);
+  if (!stratIds.length) return [];
+
+  const { data, error } = await supabaseClient
+    .from("defence_strat_boycotts")
+    .select("strat_id")
+    .eq("guild_code", targetGuildCode)
+    .in("strat_id", stratIds);
+
+  if (error) {
+    if (isMissingRunBoycottTable(error)) return strats;
+    throw error;
+  }
+
+  const boycottedIds = new Set((data || []).map((row) => String(row.strat_id)));
+  return strats.filter((strat) => !boycottedIds.has(String(strat.id)));
+}
+
+async function fetchStratLikeCounts(supabaseClient, stratIds) {
+  const ids = [...new Set((stratIds || []).filter(Boolean))];
+  if (!ids.length) return new Map();
+
+  let { data, error } = await supabaseClient
+    .from("defence_strat_likes")
+    .select("strat_id, value")
+    .in("strat_id", ids);
+
+  if (error) {
+    if (!isMissingOptionalLikeTable(error)) throw error;
+
+    const fallback = await supabaseClient
+      .from("defence_strat_likes")
+      .select("strat_id")
+      .in("strat_id", ids);
+
+    if (fallback.error) {
+      if (isMissingOptionalLikeTable(fallback.error)) return new Map();
+      throw fallback.error;
+    }
+
+    data = fallback.data || [];
+  }
+
+  const counts = new Map();
+  for (const row of data || []) {
+    const stratId = row?.strat_id;
+    if (!stratId) continue;
+    if (row.value !== undefined && row.value !== null && Number(row.value) <= 0) continue;
+    counts.set(String(stratId), (counts.get(String(stratId)) || 0) + 1);
+  }
+
+  return counts;
+}
+
+export async function searchDefenceFlexible(
+  supabaseClient,
+  criteria,
+  { limit = 25, maxCandidates = 50000, scope = null, targetGuildCode = "", mapType = "tower" } = {}
+) {
+  const normalizedMapType = normalizeGvgMapType(mapType);
+  const normalizedCriteria = (criteria || [])
+    .map((line) => ({
+      champion: normalizeChampion(line?.champion),
+      position: normalizePos(line?.position, normalizedMapType),
+      direction: normalizeDir(line?.direction),
+      matchChampion: line?.matchChampion !== false,
+      matchPosition: line?.matchPosition !== false,
+      matchDirection: line?.matchDirection !== false,
+    }))
+    .filter((line) => line.champion || line.position || line.direction);
+
+  if (!normalizedCriteria.length) return [];
+
+  const requiredChampions = normalizedCriteria
+    .filter((line) => line.matchChampion && line.champion)
+    .map((line) => line.champion);
+  const candidateStratIds = requiredChampions.length
+    ? await fetchCandidateStratIdsByChampionsStrict(supabaseClient, requiredChampions, { maxCandidates })
+    : null;
+
+  let strats = await fetchFlexibleStrats(supabaseClient, candidateStratIds, { scope, maxCandidates });
+  strats = await filterBoycottedStrats(supabaseClient, strats, targetGuildCode);
+
+  const scopedStratIds = strats.map((strat) => strat.id).filter(Boolean);
+  if (!scopedStratIds.length) return [];
+
+  const [slots, likeCounts] = await Promise.all([
+    fetchAllSlotsForStratIds(supabaseClient, scopedStratIds, 1000),
+    fetchStratLikeCounts(supabaseClient, scopedStratIds),
+  ]);
+
+  const slotsByStrat = new Map();
+  for (const slot of slots || []) {
+    if (!slotsByStrat.has(slot.strat_id)) slotsByStrat.set(slot.strat_id, []);
+    slotsByStrat.get(slot.strat_id).push({
+      champion: slot.champion,
+      position: slot.position ?? null,
+      direction: slot.direction ?? null,
+    });
+  }
+
+  const matched = (strats || [])
+    .map((strat) => {
+      const stratSlots = slotsByStrat.get(strat.id) || [];
+      const stratMapType = inferGvgStrategyMapType(strat, stratSlots);
+      if (stratMapType !== normalizedMapType) return null;
+      if (!gvgStrategyHasBijectiveMatch(normalizedCriteria, stratSlots, normalizedMapType)) return null;
+
+      return {
+        strat_id: strat.id,
+        name: strat.name || null,
+        def_key: strat.def_key || null,
+        commentaire: strat.commentaire,
+        youtube_url: strat.youtube_url,
+        created_at: strat.created_at,
+        attack_code: strat.attack_code ?? null,
+        guild_code: strat.guild_code ?? null,
+        likes_count: likeCounts.get(String(strat.id)) || 0,
+        boycott: false,
+        slots: stratSlots,
+      };
+    })
+    .filter(Boolean);
+
+  matched.sort(compareGvgStrategySearchResults);
+  return matched.slice(0, limit);
+}
+
 export default async function handler(req, res) {
   applyPortalCorsHeaders(req, res);
 
@@ -286,7 +449,7 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: "origine de requete refusee" });
   }
 
-  if (req.method !== "GET") {
+  if (!["GET", "POST"].includes(req.method)) {
     return res.status(405).json({ error: "method not allowed" });
   }
 
@@ -297,7 +460,10 @@ export default async function handler(req, res) {
     }
     req.portalMember = sessionCheck.member;
 
-    const gvgDefenseId = req.query?.gvgDefenseId;
+    const flexibleSearch = req.method === "POST";
+    const gvgDefenseId = flexibleSearch
+      ? req.body?.gvgDefenseId || req.body?.defenseId
+      : req.query?.gvgDefenseId;
 
     if (!gvgDefenseId) {
       return res.status(400).json({ error: "gvgDefenseId manquant" });
@@ -347,6 +513,28 @@ export default async function handler(req, res) {
 
     if (!canUseRunTargetGuild(scope, defense.guild)) {
       return res.status(403).json({ error: "guilde hors perimetre" });
+    }
+
+    if (flexibleSearch) {
+      const criteriaOverrides = Array.isArray(req.body?.criteria) ? req.body.criteria : [];
+      const criteria = buildGvgStrategyCriteriaFromHeroes(
+        defense.heroes,
+        defenseMapType,
+        criteriaOverrides
+      );
+
+      const results = await searchDefenceFlexible(supabase, criteria, {
+        limit: 25,
+        scope,
+        targetGuildCode: defense.guild,
+        mapType: defenseMapType,
+      });
+
+      return res.status(200).json({
+        success: true,
+        items: results,
+        criteria,
+      });
     }
 
     const results = await searchDefenceStrict(supabase, queryItems, {
