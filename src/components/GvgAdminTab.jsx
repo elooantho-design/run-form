@@ -84,6 +84,25 @@ function getJobAgeLabel(job, t) {
   return isJobExpired(job) ? t("gvgAdmin.expired48h", "Caduc +48h") : t("gvgAdmin.valid48h", "Valide -48h");
 }
 
+function getJobActiveGvgLock(job) {
+  return job?.active_gvg_lock || null;
+}
+
+function isJobDeletionLocked(job) {
+  return Boolean(getJobActiveGvgLock(job)?.locked);
+}
+
+function getJobLockGuilds(job) {
+  const guilds = getJobActiveGvgLock(job)?.guilds;
+  return Array.isArray(guilds) ? guilds.filter(Boolean) : [];
+}
+
+function getJobLockLabel(job) {
+  const guilds = getJobLockGuilds(job);
+  if (!guilds.length) return "Utilise par une GvG active";
+  return `Utilise par ${guilds.join(", ")}`;
+}
+
 function getJobTone(job) {
   if (job.state === "error") return "border-red-500/35 bg-red-500/10";
   if (isJobExpired(job)) return "border-red-500/45 bg-red-500/12";
@@ -334,6 +353,11 @@ export default function GvgAdminTab({ session } = {}) {
       return;
     }
 
+    if (isJobDeletionLocked(job)) {
+      setMessage(`${getJobLockLabel(job)}. Reset la GvG avant de supprimer ce job.`);
+      return;
+    }
+
     const confirmed = window.confirm(
       `Supprimer definitivement le probe ${sourceGuild} / ${jobId} du serveur ?`
     );
@@ -554,6 +578,11 @@ export default function GvgAdminTab({ session } = {}) {
                         }`}>
                           {getJobAgeLabel(job, t)}
                         </div>
+                        {isJobDeletionLocked(job) ? (
+                          <div className="mt-2 inline-flex rounded-full border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-100">
+                            {getJobLockLabel(job)}
+                          </div>
+                        ) : null}
                       </div>
 
                       <Button
@@ -572,9 +601,13 @@ export default function GvgAdminTab({ session } = {}) {
                         type="button"
                         className="rounded-2xl border-red-500/40 text-red-200"
                         variant="outline"
-                        disabled={jobDeletingId === getJobId(job)}
+                        disabled={jobDeletingId === getJobId(job) || isJobDeletionLocked(job)}
                         onClick={() => deleteServerJob(job)}
-                        title={t("gvgAdmin.deleteProbeTitle", "Supprimer ce probe du serveur")}
+                        title={
+                          isJobDeletionLocked(job)
+                            ? `${getJobLockLabel(job)}. Supprimable apres reset.`
+                            : t("gvgAdmin.deleteProbeTitle", "Supprimer ce probe du serveur")
+                        }
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
                         {jobDeletingId === getJobId(job) ? t("gvgAdmin.deleting", "Suppression...") : t("common.delete", "Supprimer")}

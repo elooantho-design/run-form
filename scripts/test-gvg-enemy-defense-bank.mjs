@@ -20,6 +20,7 @@ import {
   getEnemyDefenseSuccessRate,
   getPermanentEnemyDefenseImagePath,
   getPermanentEnemyDefenseImageUrl,
+  isMissingGvgPreviewSourceError,
   isPermanentEnemyDefenseImagePath,
   isPermanentEnemyDefenseImageUrl,
   isEnemyDefenseLinksSchemaMissing,
@@ -957,6 +958,65 @@ function permanentImageRow(fingerprint) {
   const rpcCall = getArchiveRpcCall(supabaseStub);
   assert.equal(rpcCall.args.p_portal_guild_id, "portal-mad-g1", "MAD_G1 resolves through the Portal guild mapping");
   assert.equal(result.images_archived, 0, "an already-existing destination is reused without counting a new copy");
+}
+
+{
+  const firstSourceMissingError = new Error("source preview not found");
+  firstSourceMissingError.statusCode = 404;
+  firstSourceMissingError.data = { error: "source preview not found" };
+  assert.equal(isMissingGvgPreviewSourceError(firstSourceMissingError), true, "missing source previews are classified as recoverable candidates");
+
+  const supabaseStub = createArchiveSupabaseStub();
+  const archiveCalls = [];
+  const fallbackDefense = {
+    ...baseDefense,
+    id: "def-2",
+    raw_name: "Fallback source",
+    image_url: "https://vps-aad12be0.vps.ovh.net/public/jobs/g3/job_123/previews/def-2.webp",
+  };
+
+  const result = await archiveEnemyDefensesBeforeGvgReset(supabaseStub, {
+    guild: "G3",
+    defenses: [
+      { ...baseDefense, raw_name: "Missing source" },
+      fallbackDefense,
+    ],
+    archiveImageOnVps: async (request) => {
+      archiveCalls.push(request);
+      if (request.sourcePath.endsWith("/def-1.webp")) throw firstSourceMissingError;
+      return {
+        copied: true,
+        image_storage_path: getPermanentEnemyDefenseImagePath(request.fingerprint, request.sourcePath),
+        image_url: getPermanentEnemyDefenseImageUrl(getPermanentEnemyDefenseImagePath(request.fingerprint, request.sourcePath)),
+      };
+    },
+  });
+
+  const rpcCall = getArchiveRpcCall(supabaseStub);
+  assert.equal(archiveCalls.length, 2, "TEST F: first missing preview falls back to the second source");
+  assert.equal(archiveCalls[1].sourcePath, "/public/jobs/g3/job_123/previews/def-2.webp", "TEST F: fallback source is attempted");
+  assert.equal(rpcCall.args.p_defenses[0].image_url, getPermanentEnemyDefenseImageUrl(`enemy-defense-bank/${baseFingerprint}.webp`));
+  assert.equal(result.archived_without_image, 0, "TEST F: fallback source avoids an imageless archive");
+}
+
+{
+  const missingSourceError = new Error("source preview not found");
+  missingSourceError.statusCode = 404;
+  missingSourceError.data = { detail: "source preview not found" };
+  const supabaseStub = createArchiveSupabaseStub();
+  const result = await archiveEnemyDefensesBeforeGvgReset(supabaseStub, {
+    guild: "G3",
+    defenses: [baseDefense],
+    archiveImageOnVps: async () => {
+      throw missingSourceError;
+    },
+  });
+
+  const rpcCall = getArchiveRpcCall(supabaseStub);
+  assert.equal(rpcCall.args.p_defenses[0].image_url, null, "TEST G: metadata archive can continue without a lost preview image");
+  assert.equal(rpcCall.args.p_defenses[0].image_storage_path, null, "TEST G: no fake permanent path is invented");
+  assert.equal(result.archived_without_image, 1, "TEST G: imageless archive is counted");
+  assert.equal(result.warnings[0].type, "source_image_missing", "TEST G: source_image_missing warning is returned");
 }
 
 {

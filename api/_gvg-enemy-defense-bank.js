@@ -462,6 +462,12 @@ function laterDate(left, right) {
   return new Date(left).getTime() >= new Date(right).getTime() ? left : right;
 }
 
+function pushUniqueValue(target, value) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue || target.includes(cleanValue)) return;
+  target.push(cleanValue);
+}
+
 export function aggregateEnemyDefenseOccurrences(defenses = []) {
   const grouped = new Map();
   let skippedAlly = 0;
@@ -491,8 +497,15 @@ export function aggregateEnemyDefenseOccurrences(defenses = []) {
       existing.last_seen_at = laterDate(existing.last_seen_at, seenAt);
       existing.source_defense_ids.push(defense.id);
       if (!existing.source_image_url && defense?.image_url) existing.source_image_url = defense.image_url;
+      pushUniqueValue(existing.source_image_urls, defense?.image_url);
+      pushUniqueValue(existing.raw_names, defense?.raw_name || defense?.name);
       continue;
     }
+
+    const sourceImageUrls = [];
+    pushUniqueValue(sourceImageUrls, defense?.image_url);
+    const rawNames = [];
+    pushUniqueValue(rawNames, defense?.raw_name || defense?.name);
 
     grouped.set(fingerprint, {
       defense_fingerprint: fingerprint,
@@ -500,7 +513,9 @@ export function aggregateEnemyDefenseOccurrences(defenses = []) {
       map_type: canonicalDefinition.map_type,
       heroes_count: canonicalDefinition.heroes.length,
       source_image_url: defense?.image_url || null,
+      source_image_urls: sourceImageUrls,
       source_defense_ids: [defense.id],
+      raw_names: rawNames,
       encounters: 1,
       opened,
       first_seen_at: seenAt,
@@ -1618,6 +1633,43 @@ export async function archiveEnemyDefenseImageOnVps({ sourcePath, fingerprint, e
   };
 }
 
+export function isMissingGvgPreviewSourceError(error) {
+  const message = [
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.data?.message,
+    error?.data?.error,
+    error?.data?.detail,
+    error?.data?.raw,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    message.includes("source preview not found") ||
+    message.includes("preview source not found") ||
+    message.includes("preview not found") ||
+    (Number(error?.statusCode) === 404 && message.includes("preview") && message.includes("not found"))
+  );
+}
+
+function getEnemyArchiveSourceCandidates(entry) {
+  const sourceUrls = [];
+  pushUniqueValue(sourceUrls, entry?.source_image_url);
+  for (const url of entry?.source_image_urls || []) {
+    pushUniqueValue(sourceUrls, url);
+  }
+
+  return sourceUrls
+    .map((url) => ({
+      imageUrl: url,
+      sourcePath: extractGvgVpsPreviewSourcePath(url),
+    }))
+    .filter((candidate) => candidate.sourcePath);
+}
+
 export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defenses = [], archiveImageOnVps = archiveEnemyDefenseImageOnVps } = {}) {
   const enemyDefenses = (defenses || []).filter((defense) => defense?.is_ally !== true);
 
@@ -1733,6 +1785,8 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
   );
 
   let imagesArchived = 0;
+  let archivedWithoutImageCount = 0;
+  const archiveWarnings = [];
   const archivePayload = [];
 
   for (const entry of aggregated.entries) {
@@ -1741,33 +1795,89 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
       existing &&
       isPermanentEnemyDefenseImagePath(existing.image_storage_path, entry.defense_fingerprint) &&
       isPermanentEnemyDefenseImageUrl(existing.image_url, entry.defense_fingerprint);
-    let imageStoragePath = existingImageReady
-      ? existing.image_storage_path
-      : getPermanentEnemyDefenseImagePath(entry.defense_fingerprint, entry.source_image_url || "webp");
-    let imageUrl = existingImageReady
-      ? existing.image_url
-      : getPermanentEnemyDefenseImageUrl(imageStoragePath);
+    let imageStoragePath = existingImageReady ? existing.image_storage_path : null;
+    let imageUrl = existingImageReady ? existing.image_url : null;
     let imageArchived = false;
+    let archivedWithoutImage = false;
+    let fallbackUsed = existingImageReady ? "permanent_image" : "";
 
     if (!existingImageReady) {
-      const sourcePath = extractGvgVpsPreviewSourcePath(entry.source_image_url);
-      if (!sourcePath) {
+      const sourceCandidates = getEnemyArchiveSourceCandidates(entry);
+      const testedSourcePaths = [];
+      const missingErrors = [];
+      let copyResult = null;
+
+      if (!sourceCandidates.length) {
         const error = new Error(`Image temporaire introuvable pour la defense ${entry.defense_fingerprint}.`);
         error.statusCode = 500;
         throw error;
       }
 
-      const copyResult = await archiveImageOnVps({
-        sourcePath,
-        fingerprint: entry.defense_fingerprint,
-        extension: getStorageExtension(sourcePath),
-      });
-      imageStoragePath = copyResult.image_storage_path || imageStoragePath;
-      imageUrl = copyResult.image_url || imageUrl;
-      imageArchived = Boolean(copyResult.copied);
-      if (imageArchived) imagesArchived += 1;
+      for (const candidate of sourceCandidates) {
+        testedSourcePaths.push(candidate.sourcePath);
 
-      if (!imageUrl) {
+        try {
+          copyResult = await archiveImageOnVps({
+            sourcePath: candidate.sourcePath,
+            fingerprint: entry.defense_fingerprint,
+            extension: getStorageExtension(candidate.sourcePath),
+          });
+          fallbackUsed = testedSourcePaths.length > 1 ? "alternate_source_preview" : "source_preview";
+          break;
+        } catch (copyError) {
+          if (!isMissingGvgPreviewSourceError(copyError)) throw copyError;
+          missingErrors.push({
+            source_path: candidate.sourcePath,
+            message: copyError?.message || String(copyError || ""),
+          });
+        }
+      }
+
+      if (copyResult) {
+        imageStoragePath =
+          copyResult.image_storage_path ||
+          getPermanentEnemyDefenseImagePath(entry.defense_fingerprint, copyResult.source_path || testedSourcePaths[0] || "webp");
+        imageUrl = copyResult.image_url || getPermanentEnemyDefenseImageUrl(imageStoragePath);
+        imageArchived = Boolean(copyResult.copied);
+        if (imageArchived) imagesArchived += 1;
+        if (missingErrors.length) {
+          traceEnemySimilarity("archive_image_source_missing", {
+            guild: guild || null,
+            fingerprint: entry.defense_fingerprint,
+            fingerprint_short: shortTraceHash(entry.defense_fingerprint),
+            source_defense_ids: entry.source_defense_ids,
+            raw_names: entry.raw_names || [],
+            tested_source_paths: testedSourcePaths,
+            missing_errors: missingErrors,
+            fallback_used: fallbackUsed,
+            archived_without_image: false,
+          });
+        }
+      } else {
+        archivedWithoutImage = true;
+        archivedWithoutImageCount += 1;
+        fallbackUsed = "archive_without_image";
+        archiveWarnings.push({
+          type: "source_image_missing",
+          fingerprint: entry.defense_fingerprint,
+          source_defense_ids: entry.source_defense_ids,
+          raw_names: entry.raw_names || [],
+          tested_source_paths: testedSourcePaths,
+        });
+        traceEnemySimilarity("archive_image_source_missing", {
+          guild: guild || null,
+          fingerprint: entry.defense_fingerprint,
+          fingerprint_short: shortTraceHash(entry.defense_fingerprint),
+          source_defense_ids: entry.source_defense_ids,
+          raw_names: entry.raw_names || [],
+          tested_source_paths: testedSourcePaths,
+          missing_errors: missingErrors,
+          fallback_used: fallbackUsed,
+          archived_without_image: true,
+        });
+      }
+
+      if (!imageUrl && !archivedWithoutImage) {
         const error = new Error(`URL permanente introuvable pour la defense ${entry.defense_fingerprint}.`);
         error.statusCode = 500;
         throw error;
@@ -1794,6 +1904,8 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
     payload_rows: archivePayload.length,
     payload_sample: traceSample(archivePayload, summarizeEnemyDefenseForTrace, 12),
     images_archived: imagesArchived,
+    archived_without_image: archivedWithoutImageCount,
+    warnings: archiveWarnings,
   });
 
   traceEnemySimilarity("archive_rpc_start", {
@@ -1904,6 +2016,8 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
     occurrences: aggregated.occurrences,
     unique_defenses: archivePayload.length,
     images_archived: imagesArchived,
+    archived_without_image: archivedWithoutImageCount,
+    warnings: archiveWarnings,
     skipped_invalid: aggregated.skippedInvalid,
     skipped_ally: aggregated.skippedAlly,
     similarity_detection: similarityDetection,

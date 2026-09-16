@@ -14,6 +14,11 @@ import {
 } from "./_portal-auth.js";
 import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
 import {
+  annotateJobsWithActiveGvgLocks,
+  findActiveGvgJobReferences,
+  formatJobDeleteBlockedMessage,
+} from "../src/lib/gvgJobDeleteGuard.js";
+import {
   handleDiscordReproComponentInteraction,
   handleDiscordReproModalInteraction,
   handleDiscordReproReaction,
@@ -759,6 +764,23 @@ async function deleteVpsJob(sourceGuild, jobId) {
   throw error;
 }
 
+function logJobDeleteGuard(jobId, lock, extra = {}) {
+  const payload = {
+    job_id: jobId || null,
+    referenced_by_active_gvg: Boolean(lock?.referenced_by_active_gvg || lock?.locked),
+    guilds: Array.isArray(lock?.guilds) ? lock.guilds : [],
+    defense_count: Number(lock?.defense_count || 0),
+    deletion_allowed: Boolean(lock?.deletion_allowed),
+    ...extra,
+  };
+
+  try {
+    console.info(`[job-delete-guard] ${JSON.stringify(payload)}`);
+  } catch {
+    console.info("[job-delete-guard]", payload);
+  }
+}
+
 async function requireGvgServerAdminContext(req, res) {
   if (!verifyPortalRequestOrigin(req)) {
     sendPortalJson(res, 403, { error: "Origine refusee." }, req);
@@ -821,10 +843,17 @@ async function handleJobs(req, res) {
   );
 
   const jobs = filterJobsByGuild({ jobs: scopedJobs }, targetGuild);
+  let annotatedJobs = jobs;
+
+  try {
+    annotatedJobs = await annotateJobsWithActiveGvgLocks(context.supabase, jobs);
+  } catch (lockError) {
+    console.error("[job-delete-guard] lock annotation failed", lockError);
+  }
 
   return res.status(200).json({
     ...data,
-    jobs,
+    jobs: annotatedJobs,
     filtered_guild: targetGuild || null,
     total_before_filter: rawJobs.length,
   });
@@ -1086,6 +1115,33 @@ async function handleDeleteJob(req, res) {
   }
 
   if (!assertGvgServerGuildAccess(res, context, sourceGuild)) return;
+
+  let lock;
+  try {
+    lock = await findActiveGvgJobReferences(context.supabase, { sourceGuild, jobId });
+  } catch (guardError) {
+    lock = {
+      referenced_by_active_gvg: false,
+      guilds: [],
+      defense_count: 0,
+      deletion_allowed: false,
+    };
+    logJobDeleteGuard(jobId, lock, {
+      guard_error: guardError?.message || String(guardError || ""),
+    });
+    return res.status(500).json({
+      error: "Verification des GvG actives impossible. Suppression refusee par securite.",
+    });
+  }
+
+  logJobDeleteGuard(jobId, lock);
+
+  if (!lock.deletion_allowed) {
+    return res.status(409).json({
+      error: formatJobDeleteBlockedMessage(lock),
+      active_gvg_lock: lock,
+    });
+  }
 
   const data = await deleteVpsJob(sourceGuild, jobId);
 
