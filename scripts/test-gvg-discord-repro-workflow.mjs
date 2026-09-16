@@ -90,9 +90,12 @@ assert.match(importSource, /notifyDiscordReproRequestsForDefenses\(supabase, dat
 const resetBodyStart = resetSource.indexOf("const defenseIds =");
 const purgeIndex = resetSource.indexOf("purgeDiscordReproChannelForGuild", resetBodyStart);
 const archiveIndex = resetSource.indexOf("archiveEnemyDefensesBeforeGvgReset", resetBodyStart);
+const incompletePurgeIndex = resetSource.indexOf("reset_discord_purge_incomplete", resetBodyStart);
 const deleteMatch = [...resetSource.matchAll(/\.from\("gvg_defense"\)[\s\S]{0,80}\.delete\(\)/g)].at(-1);
 const deleteIndex = deleteMatch?.index ?? -1;
 assert.ok(purgeIndex >= 0, "reset must purge Discord first");
+assert.ok(incompletePurgeIndex > purgeIndex, "reset must log incomplete Discord purge after trying to purge");
+assert.ok(incompletePurgeIndex < archiveIndex, "reset must block before enemy archive when Discord empty confirmation fails");
 assert.ok(archiveIndex > purgeIndex, "enemy archive must run after Discord purge");
 assert.ok(deleteIndex > archiveIndex, "current GVG clear must run after enemy archive");
 assert.match(resetSource, /channel_empty_confirmed/, "reset must require confirmed empty Discord channel");
@@ -107,20 +110,37 @@ assert.match(
   "reset must block when final Discord empty verification is missing or false",
 );
 assert.match(
-  discordSource,
-  /channel_empty_confirmed: remainingMessages === 0/,
-  "Discord purge success is based on the final empty-channel refetch",
+  resetSource,
+  /reset_discord_purge_incomplete/,
+  "reset must log Discord purge details before blocking",
 );
 assert.match(
   discordSource,
-  /warnings: remainingMessages === 0 \? errors : \[\]/,
+  /DISCORD_PURGE_VERIFY_ATTEMPTS = 5/,
+  "Discord purge retries final empty-channel verification",
+);
+assert.match(
+  discordSource,
+  /DISCORD_PURGE_VERIFY_DELAY_MS = 400/,
+  "Discord purge waits briefly between empty-channel verification attempts",
+);
+assert.match(
+  discordSource,
+  /channel_empty_confirmed: channelEmptyConfirmed/,
+  "Discord purge success is based on confirmed empty-channel refetch",
+);
+assert.match(
+  discordSource,
+  /warnings: channelEmptyConfirmed \? errors : \[\]/,
   "intermediate Discord purge errors are preserved as warnings when the channel ends empty",
 );
 assert.match(
   discordSource,
-  /fatal_errors: remainingMessages === 0 \? \[\] : errors/,
+  /fatal_errors: channelEmptyConfirmed \? \[\] : errors/,
   "Discord purge errors remain fatal when the final empty-channel check fails",
 );
+assert.match(discordSource, /remaining_message_ids/, "Discord purge logs remaining message ids when verification fails");
+assert.match(discordSource, /verification_attempts/, "Discord purge reports final verification attempt count");
 
 assert.match(serverSource, /handleDiscordReproComponentInteraction/, "Discord component interactions use the workflow router");
 assert.match(serverSource, /handleDiscordReproModalInteraction/, "Discord modals use the workflow router");
@@ -132,5 +152,113 @@ assert.match(migrationSql, /gvg_discord_repro_participants_active_member_uidx/);
 assert.match(migrationSql, /add column if not exists min_awakenings jsonb/);
 assert.match(verifySql, /duplicate_active_controls/);
 assert.match(verifySql, /duplicate_active_participants/);
+
+const { purgeDiscordReproChannelForGuild } = await import("../src/lib/discordReproServer.js");
+
+function makeDiscordSnowflake(ms = Date.now()) {
+  return String((BigInt(ms - 1420070400000) << 22n) + 1n);
+}
+
+function jsonResponse(status, payload = null) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    text: async () => (payload === null ? "" : JSON.stringify(payload)),
+    json: async () => payload,
+  };
+}
+
+function makeSupabaseMock() {
+  return {
+    activityLogs: [],
+    from(table) {
+      return {
+        table,
+        data: [],
+        error: null,
+        count: 0,
+        select() {
+          this.data = [];
+          return this;
+        },
+        update() {
+          this.error = null;
+          this.count = 0;
+          return this;
+        },
+        insert(payload) {
+          if (table === "portal_activity_logs") this.activityLogs?.push?.(payload);
+          return { error: null };
+        },
+        eq() {
+          return this;
+        },
+        in() {
+          return this;
+        },
+      };
+    },
+  };
+}
+
+async function runPurgeVerificationScenario({ verificationPages, verificationErrorAt = 0 }) {
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.DISCORD_BOT_TOKEN;
+  const previousChannel = process.env.DISCORD_REPRO_CHANNEL_ID_G1;
+  process.env.DISCORD_BOT_TOKEN = "test-token";
+  process.env.DISCORD_REPRO_CHANNEL_ID_G1 = "channel-g1";
+
+  const deletedId = makeDiscordSnowflake();
+  let messageListCalls = 0;
+
+  globalThis.fetch = async (url, options = {}) => {
+    const method = options.method || "GET";
+    const value = String(url);
+    if (method === "GET" && value.includes("/channels/channel-g1/messages?")) {
+      messageListCalls += 1;
+      if (messageListCalls === 1) return jsonResponse(200, [{ id: deletedId }]);
+      const verificationCall = messageListCalls - 1;
+      if (verificationErrorAt === verificationCall) return jsonResponse(504, { message: "Gateway Timeout" });
+      return jsonResponse(200, verificationPages[Math.min(verificationCall - 1, verificationPages.length - 1)] || []);
+    }
+    if (method === "DELETE" && value.includes(`/messages/${deletedId}`)) return jsonResponse(204);
+    throw new Error(`Unexpected Discord request in test: ${method} ${value}`);
+  };
+
+  try {
+    return await purgeDiscordReproChannelForGuild(makeSupabaseMock(), "G1", {
+      reason: "test",
+      source: "test",
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+    else process.env.DISCORD_BOT_TOKEN = previousToken;
+    if (previousChannel === undefined) delete process.env.DISCORD_REPRO_CHANNEL_ID_G1;
+    else process.env.DISCORD_REPRO_CHANNEL_ID_G1 = previousChannel;
+  }
+}
+
+const staleThenEmpty = await runPurgeVerificationScenario({
+  verificationPages: [[{ id: "stale-message" }], []],
+});
+assert.equal(staleThenEmpty.channel_empty_confirmed, true, "stale Discord verification should retry until empty");
+assert.equal(staleThenEmpty.verification_attempts, 2, "stale Discord verification should stop after the empty retry");
+assert.equal(staleThenEmpty.remaining_messages, 0, "empty retry should allow reset to continue");
+
+const neverEmpty = await runPurgeVerificationScenario({
+  verificationPages: [[{ id: "still-present" }]],
+});
+assert.equal(neverEmpty.channel_empty_confirmed, false, "non-empty Discord channel must keep reset blocked");
+assert.equal(neverEmpty.verification_attempts, 5, "non-empty Discord channel should exhaust verification retries");
+assert.deepEqual(neverEmpty.remaining_message_ids, ["still-present"], "non-empty Discord verification should expose blocking message ids");
+
+const verifyFailure = await runPurgeVerificationScenario({
+  verificationPages: [],
+  verificationErrorAt: 1,
+});
+assert.equal(verifyFailure.channel_empty_confirmed, false, "Discord verification errors must keep reset blocked");
+assert.equal(verifyFailure.remaining_messages, null, "failed Discord verification should not fake an empty channel");
+assert.equal(verifyFailure.fatal_errors.some((error) => error.mode === "verify_empty"), true, "verification failure should be fatal");
 
 console.log("gvg discord repro workflow tests passed");

@@ -14,6 +14,9 @@ const DISCORD_STATUS_DONE = "\u2705";
 const MAX_DISCORD_FIELD_VALUE = 1024;
 const MAX_DISCORD_EMBEDS = 10;
 const DISCORD_REQUEST_TIMEOUT_MS = 15000;
+const DISCORD_PURGE_VERIFY_ATTEMPTS = 5;
+const DISCORD_PURGE_VERIFY_DELAY_MS = 400;
+const DISCORD_PURGE_VERIFY_LIMIT = 5;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1180,6 +1183,9 @@ export async function purgeDiscordReproChannelForGuild(supabase, guild, options 
   let bulkDeletedMessages = 0;
   let singleDeletedMessages = 0;
   let remainingMessages = null;
+  let remainingMessageIds = [];
+  let verificationAttempts = 0;
+  let channelEmptyConfirmed = false;
 
   while (scannedMessages < maxMessages) {
     const limit = Math.min(100, maxMessages - scannedMessages);
@@ -1235,10 +1241,24 @@ export async function purgeDiscordReproChannelForGuild(supabase, guild, options 
   }
 
   try {
-    const remaining = await listDiscordChannelMessages(channelId, { limit: 1 });
-    remainingMessages = Array.isArray(remaining) ? remaining.length : 0;
+    for (let attempt = 1; attempt <= DISCORD_PURGE_VERIFY_ATTEMPTS; attempt += 1) {
+      verificationAttempts = attempt;
+      if (attempt > 1) await sleep(DISCORD_PURGE_VERIFY_DELAY_MS);
+
+      const remaining = await listDiscordChannelMessages(channelId, { limit: DISCORD_PURGE_VERIFY_LIMIT });
+      const remainingPage = Array.isArray(remaining) ? remaining : [];
+      remainingMessages = remainingPage.length;
+      remainingMessageIds = remainingPage.map((message) => String(message?.id || "")).filter(Boolean);
+
+      if (remainingMessages === 0) {
+        channelEmptyConfirmed = true;
+        break;
+      }
+    }
   } catch (verifyError) {
     remainingMessages = null;
+    remainingMessageIds = [];
+    channelEmptyConfirmed = false;
     errors.push({ mode: "verify_empty", error: verifyError?.message || "channel empty verification failed" });
   }
 
@@ -1262,9 +1282,11 @@ export async function purgeDiscordReproChannelForGuild(supabase, guild, options 
     single_deleted_messages: singleDeletedMessages,
     max_messages: maxMessages,
     remaining_messages: remainingMessages,
-    channel_empty_confirmed: remainingMessages === 0,
-    warnings: remainingMessages === 0 ? errors : [],
-    fatal_errors: remainingMessages === 0 ? [] : errors,
+    remaining_message_ids: remainingMessageIds,
+    channel_empty_confirmed: channelEmptyConfirmed,
+    verification_attempts: verificationAttempts,
+    warnings: channelEmptyConfirmed ? errors : [],
+    fatal_errors: channelEmptyConfirmed ? [] : errors,
     request_rows_update: requestRowsUpdate,
     errors,
   };
@@ -1278,7 +1300,7 @@ export async function purgeDiscordReproChannelForGuild(supabase, guild, options 
   });
 
   console.log(
-    `[discord-repro:channel-purge] guild=${normalizedGuild} channel=${channelId} scanned=${scannedMessages} deleted=${deletedMessages} errors=${errors.length}`
+    `[discord-repro:channel-purge] guild=${normalizedGuild} channel=${channelId} scanned=${scannedMessages} deleted=${deletedMessages} remaining=${remainingMessages} empty=${channelEmptyConfirmed} verify_attempts=${verificationAttempts} errors=${errors.length} remaining_ids=${remainingMessageIds.join(",") || "-"}`
   );
 
   return result;

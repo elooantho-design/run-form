@@ -268,6 +268,15 @@ export default async function handler(req, res) {
       discordReproCleanup?.enabled === false ||
       (!discordReproCleanup?.skipped && discordReproCleanup?.channel_empty_confirmed !== true)
     ) {
+      traceGvgResetSimilarity("reset_discord_purge_incomplete", {
+        guild,
+        remaining_messages: discordReproCleanup?.remaining_messages ?? null,
+        remaining_message_ids: discordReproCleanup?.remaining_message_ids || [],
+        channel_empty_confirmed: discordReproCleanup?.channel_empty_confirmed ?? null,
+        errors: discordReproCleanup?.errors || [],
+        fatal_errors: discordReproCleanup?.fatal_errors || [],
+        verification_attempts: discordReproCleanup?.verification_attempts ?? null,
+      });
       return sendPortalJson(res, 500, {
         error: "nettoyage Discord repro incomplet",
         discord_repro_cleanup: discordReproCleanup,
