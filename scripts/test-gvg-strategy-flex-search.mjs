@@ -140,6 +140,72 @@ const fortressDefenseWithGrimmB3 = [
 const fortressCriteria = buildGvgStrategyCriteriaFromHeroes(fortressDefenseWithGrimmB3, "fortress");
 const ambiguousLegacyStrat = {};
 const ambiguousLegacySlots = fortressDefenseWithGrimmB3.map((slot) => ({ ...slot }));
+const khadgrimB3CandidateSlots = [
+  { champion: "Khadgrim", position: "B3", direction: "E" },
+  { champion: "Brokkir", position: "A5", direction: "N" },
+  { champion: "Eirlys", position: "C4", direction: "S" },
+  { champion: "Oren", position: "D2", direction: "O" },
+  { champion: "Valara", position: "B4", direction: "E" },
+];
+const partialKhadgrimB3Criteria = buildGvgStrategyCriteriaFromHeroes(
+  [{ champion: "Khadgrim", position: "B3", direction: "" }, {}, {}, {}, {}],
+  "fortress",
+);
+const partialKhadgrimOnlyCriteria = buildGvgStrategyCriteriaFromHeroes(
+  [{ champion: "Khadgrim", position: "", direction: "" }],
+  "fortress",
+);
+const partialTwoHeroesCriteria = buildGvgStrategyCriteriaFromHeroes(
+  [
+    { champion: "Khadgrim", position: "B3", direction: "" },
+    { champion: "Valara", position: "", direction: "" },
+    {},
+  ],
+  "fortress",
+);
+const khadgrimB3NorthCriteria = buildGvgStrategyCriteriaFromHeroes(
+  [{ champion: "Khadgrim", position: "B3", direction: "N" }],
+  "fortress",
+);
+
+assert.deepEqual(
+  partialKhadgrimB3Criteria,
+  [
+    {
+      champion: "khadgrim",
+      position: "B3",
+      direction: null,
+      matchChampion: true,
+      matchPosition: true,
+      matchDirection: false,
+    },
+  ],
+  "empty direction and empty slots become no constraint in manual partial search",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(partialKhadgrimOnlyCriteria, ambiguousLegacyStrat, khadgrimB3CandidateSlots, "fortress"),
+  true,
+  "hero-only partial search finds strategies containing the hero anywhere",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(partialKhadgrimB3Criteria, ambiguousLegacyStrat, khadgrimB3CandidateSlots, "fortress"),
+  true,
+  "Khadgrim B3 without direction ignores candidate direction",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(partialTwoHeroesCriteria, ambiguousLegacyStrat, khadgrimB3CandidateSlots, "fortress"),
+  true,
+  "two partial hero criteria both apply while blank slots remain ignored",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(khadgrimB3NorthCriteria, ambiguousLegacyStrat, khadgrimB3CandidateSlots, "fortress"),
+  false,
+  "direction becomes an active filter when it is filled",
+);
 
 assert.equal(
   gvgStrategyMatchesSearchCriteria(fortressCriteria, ambiguousLegacyStrat, ambiguousLegacySlots, "fortress"),

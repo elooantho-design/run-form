@@ -370,14 +370,19 @@ export async function searchDefenceFlexible(
 ) {
   const normalizedMapType = normalizeGvgMapType(mapType);
   const normalizedCriteria = (criteria || [])
-    .map((line) => ({
-      champion: normalizeChampion(line?.champion),
-      position: normalizePos(line?.position, normalizedMapType),
-      direction: normalizeDir(line?.direction),
-      matchChampion: line?.matchChampion !== false,
-      matchPosition: line?.matchPosition !== false,
-      matchDirection: line?.matchDirection !== false,
-    }))
+    .map((line) => {
+      const champion = normalizeChampion(line?.champion);
+      const position = normalizePos(line?.position, normalizedMapType);
+      const direction = normalizeDir(line?.direction);
+      return {
+        champion,
+        position,
+        direction,
+        matchChampion: line?.matchChampion !== false && Boolean(champion),
+        matchPosition: line?.matchPosition !== false && Boolean(position),
+        matchDirection: line?.matchDirection !== false && Boolean(direction),
+      };
+    })
     .filter((line) => line.champion || line.position || line.direction);
 
   if (!normalizedCriteria.length) return [];

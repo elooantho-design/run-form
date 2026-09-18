@@ -58,13 +58,16 @@ export function buildGvgStrategyCriteriaFromHeroes(heroes, mapType = "tower", ov
     .slice(0, 5)
     .map((hero, index) => {
       const override = overrides[index] || {};
+      const champion = normalizeGvgStrategyChampionName(hero?.champion || hero?.name);
+      const position = normalizeGvgStrategyPosition(hero?.position, normalizedMapType);
+      const direction = normalizeGvgStrategyDirection(hero?.direction);
       return {
-        champion: normalizeGvgStrategyChampionName(hero?.champion || hero?.name),
-        position: normalizeGvgStrategyPosition(hero?.position, normalizedMapType),
-        direction: normalizeGvgStrategyDirection(hero?.direction),
-        matchChampion: override.matchChampion !== false,
-        matchPosition: override.matchPosition !== false,
-        matchDirection: override.matchDirection !== false,
+        champion,
+        position,
+        direction,
+        matchChampion: override.matchChampion !== false && Boolean(champion),
+        matchPosition: override.matchPosition !== false && Boolean(position),
+        matchDirection: override.matchDirection !== false && Boolean(direction),
       };
     })
     .filter((line) => line.champion || line.position || line.direction);
