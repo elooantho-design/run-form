@@ -244,6 +244,7 @@ const gridSpec = useMemo(() => {
       },
       body: JSON.stringify({
         queryItems,
+        mapType: mode,
         includeBoycotted,
         session: runSessionPayload,
         targetGuildCode,
@@ -300,6 +301,7 @@ async function runBotCommandSearch() {
       },
       body: JSON.stringify({
         queryItems,
+        mapType: mode,
         includeBoycotted,
         session: runSessionPayload,
         targetGuildCode,

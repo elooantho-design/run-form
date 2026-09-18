@@ -139,8 +139,13 @@ export function gvgStrategyHasBijectiveMatch(sourceCriteria, candidateSlots, map
 }
 
 export function inferGvgStrategyMapType(strat = {}, slots = []) {
-  const explicit = normalizeGvgStrategyMapType(strat.map_type || strat.mapType || "");
-  if (strat.map_type || strat.mapType) return explicit;
+  const evidence = getGvgStrategyMapTypeEvidence(strat, slots);
+  return evidence || "tower";
+}
+
+export function getGvgStrategyMapTypeEvidence(strat = {}, slots = []) {
+  const rawMapType = strat.map_type || strat.mapType || "";
+  if (rawMapType) return normalizeGvgStrategyMapType(rawMapType);
 
   const defKey = String(strat.def_key || strat.defKey || "").toLowerCase();
   if (/_fort(?:_|$)/.test(defKey) || /fortress/.test(defKey) || /bastion/.test(defKey)) {
@@ -167,7 +172,20 @@ export function inferGvgStrategyMapType(strat = {}, slots = []) {
     return row > GVG_POSITION_GRIDS.tower.rows || col > GVG_POSITION_GRIDS.tower.cols;
   });
 
-  return hasFortressOnlyPosition ? "fortress" : "tower";
+  return hasFortressOnlyPosition ? "fortress" : null;
+}
+
+export function isGvgStrategyMapTypeCompatible(strat = {}, slots = [], requestedMapType = "tower") {
+  const requested = normalizeGvgStrategyMapType(requestedMapType);
+  const evidence = getGvgStrategyMapTypeEvidence(strat, slots);
+  return !evidence || evidence === requested;
+}
+
+export function gvgStrategyMatchesSearchCriteria(criteria, strat = {}, slots = [], mapType = "tower") {
+  return (
+    isGvgStrategyMapTypeCompatible(strat, slots, mapType) &&
+    gvgStrategyHasBijectiveMatch(criteria, slots, mapType)
+  );
 }
 
 export function compareGvgStrategySearchResults(a, b) {

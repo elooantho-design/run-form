@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   buildGvgStrategyCriteriaFromHeroes,
   compareGvgStrategySearchResults,
+  getGvgStrategyMapTypeEvidence,
   gvgStrategyHasBijectiveMatch,
+  gvgStrategyMatchesSearchCriteria,
   inferGvgStrategyMapType,
+  isGvgStrategyMapTypeCompatible,
 } from "../src/lib/gvgStrategySearch.js";
 
 const sourceHeroes = [
@@ -120,6 +124,84 @@ assert.equal(
 assert.equal(inferGvgStrategyMapType({ def_key: "b2_fort_team1" }, []), "fortress");
 assert.equal(inferGvgStrategyMapType({ def_key: "b2_t3_team1" }, []), "tower");
 assert.equal(inferGvgStrategyMapType({}, [{ position: "H11" }]), "fortress");
+assert.equal(getGvgStrategyMapTypeEvidence({}, [{ position: "B3" }]), null);
+assert.equal(inferGvgStrategyMapType({}, [{ position: "B3" }]), "tower");
+assert.equal(isGvgStrategyMapTypeCompatible({}, [{ position: "B3" }], "fortress"), true);
+assert.equal(isGvgStrategyMapTypeCompatible({ def_key: "b2_t3_team1" }, [{ position: "B3" }], "fortress"), false);
+assert.equal(isGvgStrategyMapTypeCompatible({ def_key: "b2_fort_team1" }, [{ position: "B3" }], "tower"), false);
+
+const fortressDefenseWithGrimmB3 = [
+  { champion: "Grimm", position: "B3", direction: "E" },
+  { champion: "Brokkir", position: "A5", direction: "N" },
+  { champion: "Eirlys", position: "C4", direction: "S" },
+  { champion: "Oren", position: "D2", direction: "O" },
+  { champion: "Valara", position: "B4", direction: "E" },
+];
+const fortressCriteria = buildGvgStrategyCriteriaFromHeroes(fortressDefenseWithGrimmB3, "fortress");
+const ambiguousLegacyStrat = {};
+const ambiguousLegacySlots = fortressDefenseWithGrimmB3.map((slot) => ({ ...slot }));
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(fortressCriteria, ambiguousLegacyStrat, ambiguousLegacySlots, "fortress"),
+  true,
+  "manual fortress search keeps legacy in-grid fortress strategies without explicit map metadata",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(fortressCriteria, { def_key: "b2_t3_team1" }, ambiguousLegacySlots, "fortress"),
+  false,
+  "explicit tower strategy is not returned for a fortress manual search",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(
+    fortressCriteria,
+    ambiguousLegacyStrat,
+    ambiguousLegacySlots.map((slot) => (slot.champion === "Grimm" ? { ...slot, position: "B4" } : slot)),
+    "fortress",
+  ),
+  false,
+  "same heroes with an incompatible layout are still excluded",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(
+    buildGvgStrategyCriteriaFromHeroes(sourceHeroes, "tower"),
+    { def_key: "b2_t3_team1" },
+    exactCandidate,
+    "tower",
+  ),
+  true,
+  "tower manual search still accepts explicit tower strategies",
+);
+
+assert.equal(
+  gvgStrategyMatchesSearchCriteria(
+    fortressCriteria,
+    { guild_code: "OTHER" },
+    ambiguousLegacySlots,
+    "fortress",
+  ),
+  true,
+  "map/layout matching remains independent from scope filtering, which stays in the API layer",
+);
+
+const panelSource = readFileSync(new URL("../src/components/GvgPanelTab.jsx", import.meta.url), "utf8");
+assert.match(
+  panelSource,
+  /api\/gvg-strat-search\?\$\{params\.toString\(\)\}/,
+  "Bastions/Pilotage manual run lookup uses the same gvg-strat-search endpoint as the GVG loupe",
+);
+
+const runSearchSource = readFileSync(new URL("../src/components/RunSearchGrid.jsx", import.meta.url), "utf8");
+assert.match(runSearchSource, /mapType:\s*mode/, "manual run search sends the selected Tour/Bastion map type");
+
+const runApiSource = readFileSync(new URL("../api/run.js", import.meta.url), "utf8");
+assert.match(
+  runApiSource,
+  /gvgStrategyMatchesSearchCriteria/,
+  "run search applies the shared map/layout compatibility helper when mapType is provided",
+);
 
 const sorted = [
   { strat_id: 1, likes_count: 0, created_at: "2026-09-04T10:00:00.000Z" },

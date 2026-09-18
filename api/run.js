@@ -15,6 +15,7 @@ import {
   stratMatchesRunReadScope,
   stratMatchesRunScope,
 } from "../src/lib/runScopeServer.js";
+import { gvgStrategyMatchesSearchCriteria, normalizeGvgStrategyMapType } from "../src/lib/gvgStrategySearch.js";
 import { refreshEnemyDefenseStratAvailabilityForGuild } from "./gvg-enemy-defense-bank.js";
 
 const supabase = createClient(
@@ -143,7 +144,7 @@ async function fetchScopedStratsByIds(
 
   const { data, error } = await supabaseClient
     .from("defence_strat")
-    .select("id, commentaire, youtube_url, created_at, attack_code, guild_code")
+    .select("id, name, def_key, commentaire, youtube_url, created_at, attack_code, guild_code")
     .in("id", stratIds);
 
   if (error) {
@@ -152,7 +153,7 @@ async function fetchScopedStratsByIds(
 
     const fallback = await supabaseClient
       .from("defence_strat")
-      .select("id, commentaire, youtube_url, created_at, attack_code")
+      .select("id, name, def_key, commentaire, youtube_url, created_at, attack_code")
       .in("id", stratIds);
 
     if (fallback.error) throw fallback.error;
@@ -170,7 +171,7 @@ async function fetchScopedStratById(
 ) {
   const { data, error } = await supabaseClient
     .from("defence_strat")
-    .select("id, commentaire, youtube_url, attack_code, guild_code")
+    .select("id, name, def_key, commentaire, youtube_url, attack_code, guild_code")
     .eq("id", stratId)
     .maybeSingle();
 
@@ -180,7 +181,7 @@ async function fetchScopedStratById(
 
     const fallback = await supabaseClient
       .from("defence_strat")
-      .select("id, commentaire, youtube_url, attack_code")
+      .select("id, name, def_key, commentaire, youtube_url, attack_code")
       .eq("id", stratId)
       .maybeSingle();
 
@@ -286,6 +287,7 @@ async function searchDefenceStrict(
     includeBoycotted = false,
     targetGuildCode = "",
     matcher = stratMatchesRunReadScope,
+    mapType = "",
   } = {}
 ) {
   if (!queryItems?.length) return [];
@@ -299,6 +301,13 @@ async function searchDefenceStrict(
     .filter((query) => query.champion);
 
   if (!normalizedQuery.length) return [];
+  const normalizedMapType = mapType ? normalizeGvgStrategyMapType(mapType) : "";
+  const normalizedCriteria = normalizedQuery.map((query) => ({
+    ...query,
+    matchChampion: true,
+    matchPosition: Boolean(query.position),
+    matchDirection: Boolean(query.direction),
+  }));
 
   const champions = normalizedQuery.map((query) => query.champion);
   const stratIds = await fetchCandidateStratIdsByChampionsStrict(
@@ -335,10 +344,15 @@ async function searchDefenceStrict(
   const matched = (visibleStrats || [])
     .map((strat) => {
       const stratSlots = slotsByStrat.get(strat.id) || [];
-      if (!stratMatchesAllQueries(stratSlots, normalizedQuery)) return null;
+      const matches = normalizedMapType
+        ? gvgStrategyMatchesSearchCriteria(normalizedCriteria, strat, stratSlots, normalizedMapType)
+        : stratMatchesAllQueries(stratSlots, normalizedQuery);
+      if (!matches) return null;
 
       return {
         strat_id: strat.id,
+        name: strat.name || null,
+        def_key: strat.def_key || null,
         commentaire: strat.commentaire,
         youtube_url: strat.youtube_url,
         created_at: strat.created_at,
@@ -453,7 +467,7 @@ async function handleAdd(req, res) {
 }
 
 async function handleSearch(req, res) {
-  const { queryItems, includeBoycotted = false, targetGuildCode } = req.body || {};
+  const { queryItems, includeBoycotted = false, targetGuildCode, mapType } = req.body || {};
   const scope = await resolveRunScope(supabase, req, req.portalMember);
   const boycottGuildCode = getRunTargetGuildCode(scope, targetGuildCode);
 
@@ -470,6 +484,7 @@ async function handleSearch(req, res) {
     scope,
     includeBoycotted: includeBoycotted === true,
     targetGuildCode: boycottGuildCode,
+    mapType,
   });
 
   return res.status(200).json(results);

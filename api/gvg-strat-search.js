@@ -19,8 +19,7 @@ import {
 import {
   buildGvgStrategyCriteriaFromHeroes,
   compareGvgStrategySearchResults,
-  gvgStrategyHasBijectiveMatch,
-  inferGvgStrategyMapType,
+  gvgStrategyMatchesSearchCriteria,
   normalizeGvgStrategyChampionName,
   normalizeGvgStrategyDirection,
   normalizeGvgStrategyMapType,
@@ -414,9 +413,7 @@ export async function searchDefenceFlexible(
   const matched = (strats || [])
     .map((strat) => {
       const stratSlots = slotsByStrat.get(strat.id) || [];
-      const stratMapType = inferGvgStrategyMapType(strat, stratSlots);
-      if (stratMapType !== normalizedMapType) return null;
-      if (!gvgStrategyHasBijectiveMatch(normalizedCriteria, stratSlots, normalizedMapType)) return null;
+      if (!gvgStrategyMatchesSearchCriteria(normalizedCriteria, strat, stratSlots, normalizedMapType)) return null;
 
       return {
         strat_id: strat.id,

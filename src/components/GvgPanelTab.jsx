@@ -115,35 +115,6 @@ function getYoutubeEmbedUrl(url) {
   }
 }
 
-function normalizeChampionName(name) {
-  if (!name) return null;
-
-  return String(name)
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\d+$/, "");
-}
-
-function normalizePos(pos) {
-  if (!pos) return null;
-  return String(pos).trim().toUpperCase();
-}
-
-function normalizeDir(dir) {
-  if (!dir) return null;
-
-  const d = String(dir).trim().toUpperCase();
-
-  if (["N", "NORD", "NORTH", "↑"].includes(d)) return "N";
-  if (["S", "SUD", "SOUTH", "↓"].includes(d)) return "S";
-  if (["E", "EST", "EAST", "→"].includes(d)) return "E";
-  if (["O", "OUEST", "WEST", "W", "←"].includes(d)) return "O";
-
-  return d;
-}
-
 export default function GvgPanelTab({ session: portalSession, onEditRun } = {}) {
   const { language, t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
@@ -1198,58 +1169,41 @@ async function openRuns(defense) {
     setRunsModal(defense);
     setRuns([]);
 
-const queryItems = Array.isArray(defense.heroes)
-  ? defense.heroes
-      .map((hero) => ({
-        champion: normalizeChampionName(hero?.champion),
-        position: normalizePos(hero?.position),
-        direction: normalizeDir(hero?.direction),
-      }))
-      .filter(
-        (item) => item.champion && item.position && item.direction
-      )
-  : [];
-
-    if (!queryItems.length) {
+    if (!defense.id) {
       setRuns([]);
       return;
     }
 
-const response = await fetch(`${apiBase}/api/run?action=search`, {
-  method: "POST",
-  credentials: "include",
-  headers: {
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    queryItems,
-    includeBoycotted: false,
-    session: getRunSessionPayload(session),
-    targetGuildCode: defense.guild || guild,
-  }),
-});
+    const params = new URLSearchParams({
+      gvgDefenseId: String(defense.id),
+    });
 
-const rawText = await response.text();
-let data = null;
+    Object.entries(getRunSessionPayload(session)).forEach(([key, value]) => {
+      if (value) params.set(key, String(value));
+    });
 
-console.log("run-search status:", response.status);
-console.log("run-search rawText:", rawText);
+    const response = await fetch(`${apiBase}/api/gvg-strat-search?${params.toString()}`, {
+      credentials: "include",
+    });
+
+    const rawText = await response.text();
+    let data = null;
 
     try {
       data = rawText ? JSON.parse(rawText) : null;
     } catch {
-      console.error("Réponse non JSON run-search:", rawText);
-      setRuns([]);
-      return;
-    }
-console.log("run-search parsed data:", data);
-    if (!response.ok) {
-      console.error("run-search error:", data);
+      console.error("Réponse non JSON gvg-strat-search:", rawText);
       setRuns([]);
       return;
     }
 
-    setRuns(Array.isArray(data) ? data : []);
+    if (!response.ok) {
+      console.error("gvg-strat-search error:", data);
+      setRuns([]);
+      return;
+    }
+
+    setRuns(Array.isArray(data?.items) ? data.items : []);
   } catch (e) {
     console.error("openRuns error:", e);
     setRuns([]);
