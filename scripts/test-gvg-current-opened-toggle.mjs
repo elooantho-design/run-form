@@ -50,8 +50,26 @@ assert.match(
 
 assert.match(
   source,
-  /isOpenedPreview \|\|[\s\S]*?defense\.has_visible_run/,
+  /isOpenedPreview \|\|[\s\S]*?hasAvailableStrategy\(defense\)/,
   "opened preview cards must keep the eye consultation action available",
+);
+
+assert.match(
+  source,
+  /function getOpenedPreviewStatusClasses\(defense\)[\s\S]*?hasAvailableStrategy\(defense\)[\s\S]*?border-emerald-500\/40 bg-emerald-500\/10[\s\S]*?border-orange-500\/40 bg-orange-500\/10/,
+  "opened preview cards must render green when a strategy is available and orange otherwise",
+);
+
+assert.doesNotMatch(
+  source.match(/function getOpenedPreviewStatusClasses\(defense\)[\s\S]*?\n}\n/)?.[0] || "",
+  /blue-500/,
+  "opened preview cards must never reuse the blue repro color",
+);
+
+assert.match(
+  source,
+  /!\s*isOpenedPreview \|\| openedPreviewHasStrategy[\s\S]*?isOpenedPreview[\s\S]*?gvgCurrent\.statusStrat[\s\S]*?getStatusLabel\(defense\.status, defense\.repro_by, t\)/,
+  "opened preview cards must hide stale action/repro labels while keeping strat available visible",
 );
 
 assert.match(
@@ -76,5 +94,11 @@ const toggleHandler = source.match(
   /onClick=\{\(\) => setShowOpenedDefenses\(\(value\) => !value\)\}/,
 );
 assert.ok(toggleHandler, "toggle handler must be a local state flip only");
+
+assert.doesNotMatch(
+  source,
+  /gvgCurrent\.viewAllDefenses/,
+  "the redundant view-all-defenses button must be removed from GvG current",
+);
 
 console.log("gvg current opened toggle guards passed");

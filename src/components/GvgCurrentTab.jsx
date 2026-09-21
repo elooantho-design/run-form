@@ -82,6 +82,23 @@ function getStatusClasses(status) {
   return "border-orange-500/40 bg-orange-500/10 text-orange-200";
 }
 
+function hasAvailableStrategy(defense) {
+  return Boolean(
+    defense?.status === "strat" ||
+      defense?.has_visible_run === true ||
+      Number(defense?.visible_run_count || 0) > 0 ||
+      defense?.record_status === "push"
+  );
+}
+
+function getOpenedPreviewStatusClasses(defense) {
+  if (hasAvailableStrategy(defense)) {
+    return "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+  }
+
+  return "border-orange-500/40 bg-orange-500/10 text-orange-200";
+}
+
 function formatTranslation(t, key, fallback, values = {}) {
   let text = t(key, fallback);
 
@@ -1410,19 +1427,21 @@ function renderStratResultCard(strat, index, { showAdminActions = true, showSear
 }
 
 function renderDefenseCard(defense, key = defense.id, { isOpenedPreview = false } = {}) {
+  const openedPreviewHasStrategy = isOpenedPreview && hasAvailableStrategy(defense);
   const canOpenVisibleRuns =
     isOpenedPreview ||
-    defense.has_visible_run === true ||
-    Number(defense.visible_run_count || 0) > 0 ||
-    defense.record_status === "push";
+    hasAvailableStrategy(defense);
   const isOpeningDefense = openingDefenseIds.has(defense.id);
+  const visualStatusClasses = isOpenedPreview
+    ? getOpenedPreviewStatusClasses(defense)
+    : getStatusClasses(defense.status);
 
   return (
     <div
       key={key}
-      className={`relative w-full overflow-hidden rounded-2xl border px-4 py-3 ${getStatusClasses(
-        defense.status
-      )} ${isOpenedPreview ? "ring-1 ring-red-500/40" : ""}`}
+      className={`relative w-full overflow-hidden rounded-2xl border px-4 py-3 ${visualStatusClasses} ${
+        isOpenedPreview ? "ring-1 ring-red-500/40" : ""
+      }`}
     >
       {isOpenedPreview ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center overflow-hidden rounded-2xl">
@@ -1438,9 +1457,13 @@ function renderDefenseCard(defense, key = defense.id, { isOpenedPreview = false 
             {buildDefenseTitle(defense, t)}
           </div>
 
-          <div className="mt-1 text-sm opacity-80">
-            {getStatusLabel(defense.status, defense.repro_by, t)}
-          </div>
+          {!isOpenedPreview || openedPreviewHasStrategy ? (
+            <div className="mt-1 text-sm opacity-80">
+              {isOpenedPreview
+                ? t("gvgCurrent.statusStrat", "Strat disponible")
+                : getStatusLabel(defense.status, defense.repro_by, t)}
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-col items-end gap-2">
@@ -1830,46 +1853,35 @@ function renderDesktopSlot(slot, team) {
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={showOpenedDefenses}
-                        onClick={() => setShowOpenedDefenses((value) => !value)}
-                        className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-medium transition ${
-                          showOpenedDefenses
-                            ? "border-red-500/50 bg-red-500/15 text-red-100"
-                            : "border-zinc-700 bg-zinc-900/60 text-zinc-300 hover:border-zinc-500"
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={showOpenedDefenses}
+                      onClick={() => setShowOpenedDefenses((value) => !value)}
+                      className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-medium transition ${
+                        showOpenedDefenses
+                          ? "border-red-500/50 bg-red-500/15 text-red-100"
+                          : "border-zinc-700 bg-zinc-900/60 text-zinc-300 hover:border-zinc-500"
+                      }`}
+                      title={t(
+                        "gvgCurrent.showOpenedDefensesHelp",
+                        "Affiche temporairement les defenses deja ouvertes pour consulter leurs strategies."
+                      )}
+                    >
+                      <span
+                        className={`flex h-5 w-9 items-center rounded-full p-0.5 transition ${
+                          showOpenedDefenses ? "bg-red-500/70" : "bg-zinc-700"
                         }`}
-                        title={t(
-                          "gvgCurrent.showOpenedDefensesHelp",
-                          "Affiche temporairement les defenses deja ouvertes pour consulter leurs strategies."
-                        )}
+                        aria-hidden="true"
                       >
                         <span
-                          className={`flex h-5 w-9 items-center rounded-full p-0.5 transition ${
-                            showOpenedDefenses ? "bg-red-500/70" : "bg-zinc-700"
+                          className={`h-4 w-4 rounded-full bg-zinc-100 transition ${
+                            showOpenedDefenses ? "translate-x-4" : ""
                           }`}
-                          aria-hidden="true"
-                        >
-                          <span
-                            className={`h-4 w-4 rounded-full bg-zinc-100 transition ${
-                              showOpenedDefenses ? "translate-x-4" : ""
-                            }`}
-                          />
-                        </span>
-                        {t("gvgCurrent.showOpenedDefenses", "Afficher les defenses ouvertes")}
-                      </button>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="rounded-2xl border-zinc-700 text-zinc-200"
-                        onClick={() => setSelectedFilter("def")}
-                      >
-                        {t("gvgCurrent.viewAllDefenses", "Voir toutes les defenses")}
-                      </Button>
-                    </div>
+                        />
+                      </span>
+                      {t("gvgCurrent.showOpenedDefenses", "Afficher les defenses ouvertes")}
+                    </button>
                   </div>
 
                   <div className={`mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2 ${
