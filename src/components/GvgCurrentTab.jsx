@@ -176,6 +176,10 @@ function isActiveGvgDefense(defense) {
   return Boolean(defense) && !hasOpenRecordStatus(defense);
 }
 
+function isOpenedGvgDefense(defense) {
+  return Boolean(defense) && hasOpenRecordStatus(defense);
+}
+
 function defenseMatchesDesktopSlot(defense, slot, team) {
   if (!defense || !slot) return false;
   if (Number(defense.team) !== Number(team)) return false;
@@ -189,6 +193,13 @@ function defenseMatchesDesktopSlot(defense, slot, team) {
 
 function shouldShowDefenseForCurrentFilter(defense, selectedFilter) {
   if (!isActiveGvgDefense(defense)) return false;
+  if (selectedFilter === "repro") return defense.status === "repro";
+  if (selectedFilter === "strat") return defense.status === "strat";
+  return true;
+}
+
+function shouldShowOpenedDefenseForCurrentFilter(defense, selectedFilter) {
+  if (!isOpenedGvgDefense(defense)) return false;
   if (selectedFilter === "repro") return defense.status === "repro";
   if (selectedFilter === "strat") return defense.status === "strat";
   return true;
@@ -226,6 +237,7 @@ export default function GvgCurrentTab({ session: portalSession, onEditRun } = {}
   const { language, t } = usePortalLanguage();
 const [refreshTick, setRefreshTick] = useState(0);
   const [selectedFilter, setSelectedFilter] = useState(null);
+  const [showOpenedDefenses, setShowOpenedDefenses] = useState(false);
   const [selectedBastionId, setSelectedBastionId] = useState(null);
   const [defenses, setDefenses] = useState([]);
   const [openingDefenseIds, setOpeningDefenseIds] = useState(() => new Set());
@@ -487,6 +499,7 @@ useEffect(() => {
     setDefenses([]);
     setSelectedBastionId(null);
     setSelectedFilter(null);
+    setShowOpenedDefenses(false);
     return;
   }
 
@@ -524,17 +537,20 @@ const bastions = useMemo(() => {
 
   const filteredDefenses = useMemo(() => {
     if (!selectedBastion) return [];
+    const sourceDefenses = showOpenedDefenses
+      ? selectedBastionAllDefenses
+      : selectedBastion.defenses;
 
     if (selectedFilter === "repro") {
-      return selectedBastion.defenses.filter((defense) => defense.status === "repro");
+      return sourceDefenses.filter((defense) => defense.status === "repro");
     }
 
     if (selectedFilter === "strat") {
-      return selectedBastion.defenses.filter((defense) => defense.status === "strat");
+      return sourceDefenses.filter((defense) => defense.status === "strat");
     }
 
-    return selectedBastion.defenses;
-  }, [selectedBastion, selectedFilter]);
+    return sourceDefenses;
+  }, [selectedBastion, selectedBastionAllDefenses, selectedFilter, showOpenedDefenses]);
 
 async function markDefenseAsRepro(defenseId) {
   try {
@@ -1393,8 +1409,9 @@ function renderStratResultCard(strat, index, { showAdminActions = true, showSear
   );
 }
 
-function renderDefenseCard(defense, key = defense.id) {
+function renderDefenseCard(defense, key = defense.id, { isOpenedPreview = false } = {}) {
   const canOpenVisibleRuns =
+    isOpenedPreview ||
     defense.has_visible_run === true ||
     Number(defense.visible_run_count || 0) > 0 ||
     defense.record_status === "push";
@@ -1403,10 +1420,18 @@ function renderDefenseCard(defense, key = defense.id) {
   return (
     <div
       key={key}
-      className={`w-full rounded-2xl border px-4 py-3 ${getStatusClasses(
+      className={`relative w-full overflow-hidden rounded-2xl border px-4 py-3 ${getStatusClasses(
         defense.status
-      )}`}
+      )} ${isOpenedPreview ? "ring-1 ring-red-500/40" : ""}`}
     >
+      {isOpenedPreview ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center overflow-hidden rounded-2xl">
+          <div className="-rotate-12 rounded-xl border-2 border-red-400/80 bg-red-950/20 px-5 py-2 text-3xl font-black uppercase tracking-[0.28em] text-red-300/85 shadow-lg shadow-red-950/40 sm:px-8 sm:text-4xl">
+            {t("gvgCurrent.openedStamp", "OUVERT")}
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="font-medium">
@@ -1450,17 +1475,20 @@ function renderDefenseCard(defense, key = defense.id) {
 
       <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,42%)] md:items-start">
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => openReproModal(defense.id)}
-            className="rounded-2xl border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-medium text-blue-200 transition hover:bg-blue-500/25"
-          >
-            {reproLoading && reproDefenseId === defense.id
-              ? t("common.loading", "Chargement...")
-              : t("gvgCurrent.markAsRepro", "C'est repro")}
-          </button>
+          {!isOpenedPreview ? (
+            <button
+              type="button"
+              onClick={() => openReproModal(defense.id)}
+              className="rounded-2xl border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-medium text-blue-200 transition hover:bg-blue-500/25"
+            >
+              {reproLoading && reproDefenseId === defense.id
+                ? t("common.loading", "Chargement...")
+                : t("gvgCurrent.markAsRepro", "C'est repro")}
+            </button>
+          ) : null}
 
-          {defense.status === "repro" &&
+          {!isOpenedPreview &&
+          defense.status === "repro" &&
           defense.repro_by === currentWatcherName ? (
             <button
               type="button"
@@ -1471,7 +1499,7 @@ function renderDefenseCard(defense, key = defense.id) {
             </button>
           ) : null}
 
-          {defense.status === "repro" ? (
+          {!isOpenedPreview && defense.status === "repro" ? (
             <button
               type="button"
               onClick={() => openReproView(defense.id)}
@@ -1518,23 +1546,27 @@ function renderDefenseCard(defense, key = defense.id) {
             <Search className="h-4 w-4" aria-hidden="true" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => openReproCandidates(defense)}
-            className="rounded-2xl border border-zinc-500/40 bg-zinc-500/15 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-500/25"
-            title={t("gvgCurrent.whoCanRepro", "Qui peut repro")}
-          >
-            ❓
-          </button>
+          {!isOpenedPreview ? (
+            <>
+              <button
+                type="button"
+                onClick={() => openReproCandidates(defense)}
+                className="rounded-2xl border border-zinc-500/40 bg-zinc-500/15 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-500/25"
+                title={t("gvgCurrent.whoCanRepro", "Qui peut repro")}
+              >
+                ❓
+              </button>
 
-          <button
-            type="button"
-            onClick={() => markDefenseAsOpened(defense.id)}
-            disabled={isOpeningDefense}
-            className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-wait disabled:opacity-70"
-          >
-            {isOpeningDefense ? t("common.saving", "Enregistrement...") : t("gvgCurrent.markAsOpen", "C'est ouvert")}
-          </button>
+              <button
+                type="button"
+                onClick={() => markDefenseAsOpened(defense.id)}
+                disabled={isOpeningDefense}
+                className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-wait disabled:opacity-70"
+              >
+                {isOpeningDefense ? t("common.saving", "Enregistrement...") : t("gvgCurrent.markAsOpen", "C'est ouvert")}
+              </button>
+            </>
+          ) : null}
         </div>
 
         {defense.image_url ? (
@@ -1569,6 +1601,13 @@ function renderDesktopSlot(slot, team) {
 
   if (shouldShowDefenseForCurrentFilter(defense, selectedFilter)) {
     return renderDefenseCard(defense, key);
+  }
+
+  if (
+    showOpenedDefenses &&
+    shouldShowOpenedDefenseForCurrentFilter(slotDefense, selectedFilter)
+  ) {
+    return renderDefenseCard(slotDefense, key, { isOpenedPreview: true });
   }
 
   const slotLabel = buildDefenseTitle(
@@ -1635,6 +1674,7 @@ function renderDesktopSlot(slot, team) {
                     onClick={() => {
                       localStorage.setItem("gvg_selected_guild", guild);
                       setSelectedGuild(guild);
+                      setShowOpenedDefenses(false);
                     }}
                   >
                     {getGuildDisplayName({ guildCode: guild })}
@@ -1660,6 +1700,7 @@ function renderDesktopSlot(slot, team) {
                     localStorage.removeItem("gvg_selected_guild");
                     setSelectedGuild("");
                     setSelectedFilter(null);
+                    setShowOpenedDefenses(false);
                     setSelectedBastionId(null);
                     setDefenses([]);
                     setMessage("");
@@ -1789,14 +1830,46 @@ function renderDesktopSlot(slot, team) {
                       </div>
                     </div>
 
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-2xl border-zinc-700 text-zinc-200"
-                      onClick={() => setSelectedFilter("def")}
-                    >
-                      {t("gvgCurrent.viewAllDefenses", "Voir toutes les defenses")}
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={showOpenedDefenses}
+                        onClick={() => setShowOpenedDefenses((value) => !value)}
+                        className={`flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-medium transition ${
+                          showOpenedDefenses
+                            ? "border-red-500/50 bg-red-500/15 text-red-100"
+                            : "border-zinc-700 bg-zinc-900/60 text-zinc-300 hover:border-zinc-500"
+                        }`}
+                        title={t(
+                          "gvgCurrent.showOpenedDefensesHelp",
+                          "Affiche temporairement les defenses deja ouvertes pour consulter leurs strategies."
+                        )}
+                      >
+                        <span
+                          className={`flex h-5 w-9 items-center rounded-full p-0.5 transition ${
+                            showOpenedDefenses ? "bg-red-500/70" : "bg-zinc-700"
+                          }`}
+                          aria-hidden="true"
+                        >
+                          <span
+                            className={`h-4 w-4 rounded-full bg-zinc-100 transition ${
+                              showOpenedDefenses ? "translate-x-4" : ""
+                            }`}
+                          />
+                        </span>
+                        {t("gvgCurrent.showOpenedDefenses", "Afficher les defenses ouvertes")}
+                      </button>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="rounded-2xl border-zinc-700 text-zinc-200"
+                        onClick={() => setSelectedFilter("def")}
+                      >
+                        {t("gvgCurrent.viewAllDefenses", "Voir toutes les defenses")}
+                      </Button>
+                    </div>
                   </div>
 
                   <div className={`mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2 ${
@@ -1807,167 +1880,11 @@ function renderDesktopSlot(slot, team) {
                         {t("gvgCurrent.noDefenseForFilter", "Aucune defense pour ce filtre.")}
                       </div>
                     ) : (
-                      filteredDefenses.map((defense) => {
-                        const canOpenVisibleRuns =
-                          defense.has_visible_run === true ||
-                          Number(defense.visible_run_count || 0) > 0 ||
-                          defense.record_status === "push";
-                        const isOpeningDefense = openingDefenseIds.has(defense.id);
-
-                        return (
-                        <div
-                          key={defense.id}
-                          className={`w-full rounded-2xl border px-4 py-3 ${getStatusClasses(
-                            defense.status
-                          )}`}
-                        >
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <div className="font-medium">
-                              {buildDefenseTitle(defense, t)}
-                            </div>
-
-                            <div className="mt-1 text-sm opacity-80">
-                              {getStatusLabel(defense.status, defense.repro_by, t)}
-                            </div>
-                          </div>
-
-                          <div className="flex flex-col items-end gap-2">
-                            <div className="text-sm font-semibold">
-                              {buildDefenseShortTitle(defense, t)}
-                            </div>
-
-                            <div className="flex flex-wrap justify-end gap-2">
-                              {defense.group_num ? (
-                                <div
-                                  className="rounded-2xl border border-zinc-600 bg-zinc-900/60 px-5 py-3 text-2xl font-bold leading-none text-zinc-100 shadow-sm"
-                                  title={t("gvgCurrent.enemyGroupTitle", "Groupe de defenses ennemies identiques")}
-                                >
-                                  {toGroupEmoji(defense.group_num)}
-                                </div>
-                              ) : null}
-
-                              {defense.mirror_group_num ? (
-                                <div
-                                  className="rounded-2xl border border-emerald-400/70 bg-emerald-500/15 px-5 py-3 text-2xl font-bold leading-none text-emerald-100 shadow-sm shadow-emerald-500/20"
-                                  title={t(
-                                    "gvgCurrent.mirrorGroupTitle",
-                                    "Composition aussi presente cote allie : eviter en debut de GVG"
-                                  )}
-                                >
-                                  {toGroupEmoji(defense.mirror_group_num)}
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-
-                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,42%)] md:items-start">
-                            <div className="flex flex-wrap gap-2">
-                        <button
-                        type="button"
-                        onClick={() => openReproModal(defense.id)}
-                        className="rounded-2xl border border-blue-500/40 bg-blue-500/15 px-3 py-2 text-sm font-medium text-blue-200 transition hover:bg-blue-500/25"
-                        >
-                        {reproLoading && reproDefenseId === defense.id
-                          ? t("common.loading", "Chargement...")
-                          : t("gvgCurrent.markAsRepro", "C'est repro")}
-                        </button>
-
-                            {defense.status === "repro" &&
-                            defense.repro_by === currentWatcherName ? (
-                              <button
-                                type="button"
-                                onClick={() => cancelDefenseRepro(defense.id)}
-                                className="rounded-2xl border border-zinc-600 bg-zinc-800/60 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700/70"
-                              >
-                                {t("gvgCurrent.cancelRepro", "Annuler repro")}
-                              </button>
-                            ) : null}
-                            {defense.status === "repro" ? (
-                            <button
-                                type="button"
-                                onClick={() => openReproView(defense.id)}
-                                className="rounded-2xl border border-zinc-600 bg-zinc-800/60 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700/70"
-                            >
-                                ⚔️
-                            </button>
-                            ) : null}
-                            {defense.image_url ? (
-                            <button
-                              type="button"
-                              onClick={() => openDefenseImage(defense)}
-                              className="rounded-2xl border border-zinc-600 bg-zinc-800/60 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-700/70"
-                            >
-                              📸
-                            </button>
-                          ) : null}
-  <button
-    type="button"
-    onClick={() => canOpenVisibleRuns && openStratView(defense.id)}
-    disabled={!canOpenVisibleRuns}
-    className={`rounded-2xl border px-3 py-2 text-sm font-medium transition ${
-      canOpenVisibleRuns
-        ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
-        : "cursor-not-allowed border-zinc-600 bg-zinc-800/40 text-zinc-500 opacity-60"
-    }`}
-    title={
-      canOpenVisibleRuns
-        ? t("gvgCurrent.viewRuns", "Voir les runs disponibles")
-        : t("gvgCurrent.noVisibleRun", "Aucun run visible pour ce compte")
-    }
-  >
-    👀
-  </button>
-
-<button
-  type="button"
-  onClick={() => openStrategySearch(defense)}
-  className="rounded-2xl border border-cyan-500/40 bg-cyan-500/15 px-3 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-500/25"
-  title={t("gvgCurrent.searchSimilarStrat", "Recherche de strat")}
->
-  <Search className="h-4 w-4" aria-hidden="true" />
-</button>
-
-<button
-  type="button"
-  onClick={() => openReproCandidates(defense)}
-  className="rounded-2xl border border-zinc-500/40 bg-zinc-500/15 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-zinc-500/25"
-  title={t("gvgCurrent.whoCanRepro", "Qui peut repro")}
->
-  ❓
-</button>
-
-<button
-  type="button"
-  onClick={() => markDefenseAsOpened(defense.id)}
-  disabled={isOpeningDefense}
-  className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-wait disabled:opacity-70"
->
-  {isOpeningDefense ? t("common.saving", "Enregistrement...") : t("gvgCurrent.markAsOpen", "C'est ouvert")}
-</button>
-                          </div>
-
-                            {defense.image_url ? (
-                              <button
-                                type="button"
-                                onClick={() => openDefenseImage(defense)}
-                                className="group block w-full overflow-hidden rounded-xl border border-zinc-700/80 bg-black/40 shadow-sm transition hover:border-zinc-400/80"
-                                title={t("gvgCurrent.viewDefenseImage", "Voir l'image de la defense en grand")}
-                              >
-                                <img
-                                  src={getDefenseImageUrl(defense)}
-                                  alt={buildDefenseTitle(defense, t)}
-                                  loading="lazy"
-                                  decoding="async"
-                                  className="h-36 w-full object-contain object-center transition duration-200 group-hover:scale-[1.02] sm:h-44 md:h-36 2xl:h-44"
-                                />
-                              </button>
-                            ) : null}
-                        </div>
-                        </div>
-                        );
-                      })
+                      filteredDefenses.map((defense) =>
+                        renderDefenseCard(defense, defense.id, {
+                          isOpenedPreview: isOpenedGvgDefense(defense),
+                        })
+                      )
                     )}
                   </div>
 
