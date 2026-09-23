@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import {
+  applyPortalCorsHeaders,
+  getPortalDiscordActivityOrigin,
   getPortalRequestOriginCheck,
   verifyPortalRequestOrigin,
 } from "../api/_portal-auth.js";
+
+const DISCORD_CLIENT_ID = "1552374112159277217";
+const originalDiscordClientId = process.env.VITE_DISCORD_CLIENT_ID;
+process.env.VITE_DISCORD_CLIENT_ID = DISCORD_CLIENT_ID;
 
 function makeRequest({ method = "POST", url = "/api/portal-auth", headers = {} } = {}) {
   return {
@@ -11,6 +17,25 @@ function makeRequest({ method = "POST", url = "/api/portal-auth", headers = {} }
     headers,
   };
 }
+
+function makeResponseRecorder() {
+  const headers = new Map();
+  return {
+    setHeader(name, value) {
+      headers.set(name.toLowerCase(), value);
+    },
+    getHeader(name) {
+      return headers.get(name.toLowerCase());
+    },
+  };
+}
+
+try {
+assert.equal(
+  getPortalDiscordActivityOrigin(),
+  `https://${DISCORD_CLIENT_ID}.discordsays.com`,
+  "Discord Activity origin is derived from the configured Client ID",
+);
 
 const sameOrigin = makeRequest({
   headers: {
@@ -34,6 +59,64 @@ assert.equal(
   "x-forwarded-host remains authoritative when present",
 );
 
+const discordActivityOrigin = makeRequest({
+  headers: {
+    origin: `https://${DISCORD_CLIENT_ID}.discordsays.com`,
+    host: "run-form-tau.vercel.app",
+    "x-forwarded-host": "run-form-tau.vercel.app",
+  },
+});
+assert.equal(
+  verifyPortalRequestOrigin(discordActivityOrigin),
+  true,
+  "configured Discord Activity origin is accepted against the Vercel API host",
+);
+assert.equal(
+  getPortalRequestOriginCheck(discordActivityOrigin).reason,
+  "discord_activity_origin",
+  "Discord Activity acceptance reason is explicit",
+);
+
+const discordActivityReferer = makeRequest({
+  headers: {
+    referer: `https://${DISCORD_CLIENT_ID}.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=desktop`,
+    host: "run-form-tau.vercel.app",
+    "x-forwarded-host": "run-form-tau.vercel.app",
+  },
+});
+assert.equal(
+  verifyPortalRequestOrigin(discordActivityReferer),
+  true,
+  "configured Discord Activity referer is accepted when Origin is absent",
+);
+
+const otherDiscordApp = makeRequest({
+  headers: {
+    origin: "https://999999999999999999.discordsays.com",
+    host: "run-form-tau.vercel.app",
+    "x-forwarded-host": "run-form-tau.vercel.app",
+  },
+});
+assert.equal(verifyPortalRequestOrigin(otherDiscordApp), false, "other Discord apps stay refused");
+
+const suffixSpoof = makeRequest({
+  headers: {
+    origin: `https://${DISCORD_CLIENT_ID}.discordsays.com.evil.com`,
+    host: "run-form-tau.vercel.app",
+    "x-forwarded-host": "run-form-tau.vercel.app",
+  },
+});
+assert.equal(verifyPortalRequestOrigin(suffixSpoof), false, "Discord suffix spoof stays refused");
+
+const subdomainSpoof = makeRequest({
+  headers: {
+    origin: `https://evil.${DISCORD_CLIENT_ID}.discordsays.com`,
+    host: "run-form-tau.vercel.app",
+    "x-forwarded-host": "run-form-tau.vercel.app",
+  },
+});
+assert.equal(verifyPortalRequestOrigin(subdomainSpoof), false, "Discord subdomain spoof stays refused");
+
 const externalOrigin = makeRequest({
   headers: {
     origin: "https://evil.example",
@@ -46,14 +129,14 @@ assert.equal(externalDiagnostic.reason, "host_mismatch", "external origin refusa
 assert.equal(externalDiagnostic.origin, "https://evil.example", "diagnostic includes the rejected origin");
 assert.equal(externalDiagnostic.host, "run-form-tau.vercel.app", "diagnostic includes the request host");
 
-const spoofedDiscord = makeRequest({
+const spoofedDiscordKeyword = makeRequest({
   headers: {
     origin: "https://discordsays.com.evil.example",
     host: "run-form-tau.vercel.app",
   },
 });
 assert.equal(
-  verifyPortalRequestOrigin(spoofedDiscord),
+  verifyPortalRequestOrigin(spoofedDiscordKeyword),
   false,
   "suffix-spoofed Discord-looking origins stay refused",
 );
@@ -127,6 +210,8 @@ assert.deepEqual(
   [
     "allowed",
     "checkedValueHost",
+    "checkedValueOrigin",
+    "discordActivityOrigin",
     "forwardedHost",
     "forwardedProto",
     "host",
@@ -146,5 +231,39 @@ assert.deepEqual(
 const serializedDiagnostic = JSON.stringify(diagnostic);
 assert.doesNotMatch(serializedDiagnostic, /portal_session|cookie|password|secret|token|body|session/i);
 assert.equal(diagnostic.path, "/api/portal-auth", "diagnostic path excludes query string");
+
+const discordCorsResponse = makeResponseRecorder();
+applyPortalCorsHeaders(discordActivityOrigin, discordCorsResponse);
+assert.equal(
+  discordCorsResponse.getHeader("access-control-allow-origin"),
+  `https://${DISCORD_CLIENT_ID}.discordsays.com`,
+  "CORS echoes the exact configured Discord Activity origin",
+);
+assert.equal(
+  discordCorsResponse.getHeader("access-control-allow-credentials"),
+  "true",
+  "CORS keeps credentials enabled for the configured Discord Activity origin",
+);
+assert.equal(discordCorsResponse.getHeader("vary"), "Origin", "CORS keeps Vary: Origin");
+
+const evilCorsResponse = makeResponseRecorder();
+applyPortalCorsHeaders(otherDiscordApp, evilCorsResponse);
+assert.equal(
+  evilCorsResponse.getHeader("access-control-allow-origin"),
+  undefined,
+  "CORS does not allow another Discord Activity application",
+);
+
+const sameOriginCorsResponse = makeResponseRecorder();
+applyPortalCorsHeaders(sameOrigin, sameOriginCorsResponse);
+assert.equal(
+  sameOriginCorsResponse.getHeader("access-control-allow-origin"),
+  "https://run-form-tau.vercel.app",
+  "same-origin CORS behaviour stays unchanged",
+);
+} finally {
+  if (originalDiscordClientId === undefined) delete process.env.VITE_DISCORD_CLIENT_ID;
+  else process.env.VITE_DISCORD_CLIENT_ID = originalDiscordClientId;
+}
 
 console.log("portal auth origin diagnostics tests passed");

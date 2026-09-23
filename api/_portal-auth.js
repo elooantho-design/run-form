@@ -8,6 +8,7 @@ const REMEMBER_SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const MAX_FIELD_LENGTH = 240;
 const DEFAULT_PASSWORDS = new Set(["motdepassemembre", "motdepasseadmin"]);
 const TEMPORARY_PASSWORD_PREFIX = "TMP-";
+const DISCORD_CLIENT_ID_PATTERN = /^\d{17,20}$/;
 
 function cleanText(value) {
   return String(value || "").trim();
@@ -23,6 +24,28 @@ function getRequestPath(req) {
   } catch {
     return "/";
   }
+}
+
+function getDiscordActivityClientId() {
+  const clientId = cleanText(process.env.VITE_DISCORD_CLIENT_ID);
+  return DISCORD_CLIENT_ID_PATTERN.test(clientId) ? clientId : "";
+}
+
+export function getPortalDiscordActivityOrigin() {
+  const clientId = getDiscordActivityClientId();
+  return clientId ? `https://${clientId}.discordsays.com` : "";
+}
+
+function isConfiguredDiscordActivityOrigin(parsedUrl) {
+  const expectedOrigin = getPortalDiscordActivityOrigin();
+  if (!expectedOrigin) return false;
+
+  const expectedUrl = new URL(expectedOrigin);
+  return (
+    parsedUrl.protocol === expectedUrl.protocol &&
+    parsedUrl.hostname === expectedUrl.hostname &&
+    parsedUrl.port === expectedUrl.port
+  );
 }
 
 export function normalizePortalText(value) {
@@ -250,6 +273,7 @@ export function applyPortalCorsHeaders(req, res) {
     const requestHost = cleanText(req?.headers?.["x-forwarded-host"] || req?.headers?.host);
     allowed =
       parsedOrigin.host === requestHost ||
+      isConfiguredDiscordActivityOrigin(parsedOrigin) ||
       ["localhost", "127.0.0.1"].includes(parsedOrigin.hostname);
   } catch {
     allowed = false;
@@ -288,6 +312,8 @@ export function getPortalRequestOriginCheck(req) {
     userAgent: cleanHeaderValue(req, "user-agent"),
     requestHost,
     checkedValueHost: "",
+    checkedValueOrigin: "",
+    discordActivityOrigin: getPortalDiscordActivityOrigin(),
     reason: "",
     allowed: false,
   };
@@ -312,8 +338,18 @@ export function getPortalRequestOriginCheck(req) {
   try {
     const parsed = new URL(valueToCheck);
     diagnostic.checkedValueHost = parsed.host;
-    diagnostic.allowed = parsed.host === requestHost;
-    diagnostic.reason = diagnostic.allowed ? "same_origin" : "host_mismatch";
+    diagnostic.checkedValueOrigin = parsed.origin;
+    if (parsed.host === requestHost) {
+      diagnostic.allowed = true;
+      diagnostic.reason = "same_origin";
+      return diagnostic;
+    }
+    if (isConfiguredDiscordActivityOrigin(parsed)) {
+      diagnostic.allowed = true;
+      diagnostic.reason = "discord_activity_origin";
+      return diagnostic;
+    }
+    diagnostic.reason = "host_mismatch";
     return diagnostic;
   } catch {
     diagnostic.reason = "invalid_origin_referer";
