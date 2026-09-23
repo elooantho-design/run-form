@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import {
+  getDiscordActivityPortalRedirectUrl,
+  hasDiscordActivityLaunchParams,
+} from "../src/lib/discordActivity.js";
 
 const packageJson = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -10,6 +14,10 @@ const helperSource = await readFile(
 );
 const portalSource = await readFile(
   new URL("../src/SaasPortal.jsx", import.meta.url),
+  "utf8",
+);
+const mainSource = await readFile(
+  new URL("../src/main.jsx", import.meta.url),
   "utf8",
 );
 
@@ -83,6 +91,50 @@ assert.doesNotMatch(
   portalSource,
   /VITE_DISCORD_CLIENT_ID|DiscordSDK|commands\.(?:authorize|authenticate)/,
   "Discord Activity details must stay isolated in the helper",
+);
+
+assert.equal(
+  getDiscordActivityPortalRedirectUrl("https://run-form-tau.vercel.app/"),
+  "",
+  "Normal browser root must keep the historical root page",
+);
+
+assert.equal(
+  getDiscordActivityPortalRedirectUrl("https://run-form-tau.vercel.app/?frame_id=f1&instance_id=i1&platform=desktop"),
+  "/portal?frame_id=f1&instance_id=i1&platform=desktop",
+  "Discord Activity root must redirect to Portal while preserving required query params",
+);
+
+assert.equal(
+  getDiscordActivityPortalRedirectUrl(
+    "https://run-form-tau.vercel.app/?frame_id=f1&instance_id=i1&platform=desktop&channel_id=c1#ready",
+  ),
+  "/portal?frame_id=f1&instance_id=i1&platform=desktop&channel_id=c1#ready",
+  "Discord Activity redirect must preserve extra query params and hash",
+);
+
+assert.equal(
+  getDiscordActivityPortalRedirectUrl("https://run-form-tau.vercel.app/portal?frame_id=f1&instance_id=i1&platform=desktop"),
+  "",
+  "Portal route must not redirect again",
+);
+
+assert.equal(
+  hasDiscordActivityLaunchParams("frame_id=f1&instance_id=i1"),
+  false,
+  "Partial Discord query params must not trigger the Activity redirect",
+);
+
+assert.match(
+  mainSource,
+  /getDiscordActivityPortalRedirectUrl\(window\.location\)/,
+  "Main bootstrap must check Discord Activity root launch before rendering the historical root",
+);
+
+assert.match(
+  mainSource,
+  /window\.location\.replace\(discordActivityPortalRedirectUrl\)/,
+  "Discord Activity root launch must use a replace redirect to Portal",
 );
 
 console.log("discord activity prototype guards passed");

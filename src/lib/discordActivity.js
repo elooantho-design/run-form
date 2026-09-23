@@ -1,7 +1,32 @@
 const DISCORD_ACTIVITY_READY_TIMEOUT_MS = 2500;
+const DISCORD_ACTIVITY_REQUIRED_PARAMS = ["frame_id", "instance_id", "platform"];
 
 function readViteEnv(name) {
   return String(import.meta.env?.[name] || "").trim();
+}
+
+export function hasDiscordActivityLaunchParams(searchParams) {
+  const params = searchParams instanceof URLSearchParams
+    ? searchParams
+    : new URLSearchParams(searchParams || "");
+
+  return DISCORD_ACTIVITY_REQUIRED_PARAMS.every((name) => String(params.get(name) || "").trim());
+}
+
+export function getDiscordActivityPortalRedirectUrl(locationLike) {
+  if (!locationLike) return "";
+
+  const currentUrl = new URL(
+    typeof locationLike === "string" ? locationLike : locationLike.href,
+    "https://run-form.local",
+  );
+
+  if (currentUrl.pathname !== "/" || !hasDiscordActivityLaunchParams(currentUrl.searchParams)) {
+    return "";
+  }
+
+  currentUrl.pathname = "/portal";
+  return `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
 }
 
 function isDiscordActivityEnabled() {
