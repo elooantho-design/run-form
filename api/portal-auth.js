@@ -13,6 +13,7 @@ import {
   isPortalCommunityRole,
   isPortalLeaderRole,
   loadPortalPrincipalByDiscordId,
+  logPortalOriginCheckFailure,
   readJsonBody,
   requirePortalSession,
   sendPortalJson,
@@ -350,6 +351,7 @@ export default async function handler(req, res) {
   }
 
   if (!verifyPortalRequestOrigin(req)) {
+    logPortalOriginCheckFailure(req);
     sendPortalJson(res, 403, { error: "Origine de requete invalide." }, req);
     return;
   }

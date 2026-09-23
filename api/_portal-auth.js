@@ -13,6 +13,18 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function cleanHeaderValue(req, name) {
+  return cleanText(req?.headers?.[name]).slice(0, 500);
+}
+
+function getRequestPath(req) {
+  try {
+    return new URL(req?.url || "/", "https://portal.local").pathname;
+  } catch {
+    return "/";
+  }
+}
+
 export function normalizePortalText(value) {
   return cleanText(value)
     .normalize("NFD")
@@ -252,6 +264,69 @@ export function applyPortalCorsHeaders(req, res) {
   res.setHeader("Vary", "Origin");
 }
 
+export function getPortalRequestOriginCheck(req) {
+  const method = String(req?.method || "GET").toUpperCase();
+  const origin = cleanHeaderValue(req, "origin");
+  const referer = cleanHeaderValue(req, "referer");
+  const host = cleanHeaderValue(req, "host");
+  const forwardedHost = cleanHeaderValue(req, "x-forwarded-host");
+  const forwardedProto = cleanHeaderValue(req, "x-forwarded-proto");
+  const requestHost = forwardedHost || host;
+  const valueToCheck = origin || referer;
+
+  const diagnostic = {
+    method,
+    path: getRequestPath(req),
+    origin,
+    referer,
+    host,
+    forwardedHost,
+    forwardedProto,
+    secFetchSite: cleanHeaderValue(req, "sec-fetch-site"),
+    secFetchMode: cleanHeaderValue(req, "sec-fetch-mode"),
+    secFetchDest: cleanHeaderValue(req, "sec-fetch-dest"),
+    userAgent: cleanHeaderValue(req, "user-agent"),
+    requestHost,
+    checkedValueHost: "",
+    reason: "",
+    allowed: false,
+  };
+
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) {
+    diagnostic.allowed = true;
+    diagnostic.reason = "safe_method";
+    return diagnostic;
+  }
+
+  if (!requestHost) {
+    diagnostic.reason = "missing_request_host";
+    return diagnostic;
+  }
+
+  if (!valueToCheck) {
+    diagnostic.allowed = process.env.NODE_ENV !== "production" && !process.env.VERCEL;
+    diagnostic.reason = diagnostic.allowed ? "dev_missing_origin_referer" : "missing_origin_referer";
+    return diagnostic;
+  }
+
+  try {
+    const parsed = new URL(valueToCheck);
+    diagnostic.checkedValueHost = parsed.host;
+    diagnostic.allowed = parsed.host === requestHost;
+    diagnostic.reason = diagnostic.allowed ? "same_origin" : "host_mismatch";
+    return diagnostic;
+  } catch {
+    diagnostic.reason = "invalid_origin_referer";
+    return diagnostic;
+  }
+}
+
+export function logPortalOriginCheckFailure(req, override = null) {
+  const diagnostic = override || getPortalRequestOriginCheck(req);
+  if (diagnostic?.allowed) return;
+  console.warn("[portal-origin-check]", diagnostic);
+}
+
 export function sendPortalJson(res, status, payload, req = null) {
   applyPortalSecurityHeaders(res);
   if (req) applyPortalCorsHeaders(req, res);
@@ -261,23 +336,7 @@ export function sendPortalJson(res, status, payload, req = null) {
 }
 
 export function verifyPortalRequestOrigin(req) {
-  const method = String(req?.method || "GET").toUpperCase();
-  if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
-
-  const origin = cleanText(req.headers?.origin);
-  const referer = cleanText(req.headers?.referer);
-  const host = cleanText(req.headers?.["x-forwarded-host"] || req.headers?.host);
-  const valueToCheck = origin || referer;
-  if (!host) return false;
-  if (!valueToCheck) {
-    return process.env.NODE_ENV !== "production" && !process.env.VERCEL;
-  }
-
-  try {
-    return new URL(valueToCheck).host === host;
-  } catch {
-    return false;
-  }
+  return getPortalRequestOriginCheck(req).allowed;
 }
 
 function isMissingPasswordChangeColumn(error) {
