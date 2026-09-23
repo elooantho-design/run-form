@@ -71,6 +71,7 @@ import {
   touchPortalPresence,
 } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
+import { initDiscordActivity } from "@/lib/discordActivity";
 import { getGuildDisplayName, getSessionGuildDisplayName } from "@/lib/guildDisplay";
 import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
 import moontonHeroImages from "@/data/moontonHeroImages.json";
@@ -9469,6 +9470,10 @@ function SaasPortalContent() {
   const sessionRequestRef = useRef(0);
   const sessionSyncSourceIdRef = useRef(createPortalSyncSourceId("auth"));
   const sessionSyncChannelRef = useRef(null);
+
+  useEffect(() => {
+    void initDiscordActivity();
+  }, []);
 
   useEffect(() => {
     sessionRef.current = session;
