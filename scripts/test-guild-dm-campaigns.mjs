@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   GUILD_DM_MAX_MESSAGE_LENGTH,
+  GUILD_DM_TEST_MESSAGE_PREFIX,
+  buildGuildDmTestMessage,
   buildGuildDmRecipientPlan,
   cleanDiscordUserId,
   normalizeGuildCompareKey,
@@ -29,6 +31,16 @@ assert.throws(
   () => validateGuildDmMessage("x".repeat(GUILD_DM_MAX_MESSAGE_LENGTH + 1)),
   /Message trop long/,
   "message length is enforced server-side",
+);
+assert.equal(
+  buildGuildDmTestMessage("  Bonjour test  "),
+  `${GUILD_DM_TEST_MESSAGE_PREFIX}\n\nBonjour test`,
+  "test campaigns keep the real message and add a visible test label",
+);
+assert.throws(
+  () => buildGuildDmTestMessage("x".repeat(GUILD_DM_MAX_MESSAGE_LENGTH)),
+  /Message trop long/,
+  "test campaign prefix is included in the server-side length limit",
 );
 
 const manageableGuilds = resolveManageableGuildRowsForActorFromRows(actor, portalGuildRows);
@@ -76,20 +88,33 @@ const guildManagementSource = await readFile(new URL("../src/components/PortalGu
 const modalSource = await readFile(new URL("../src/components/GuildDmCampaignModal.jsx", import.meta.url), "utf8");
 const migrationSql = await readFile(new URL("../scripts/guild_dm_campaigns.sql", import.meta.url), "utf8");
 const verifySql = await readFile(new URL("../scripts/guild_dm_campaigns_verify.sql", import.meta.url), "utf8");
+const testModeMigrationSql = await readFile(new URL("../scripts/guild_dm_campaigns_test_mode.sql", import.meta.url), "utf8");
+const testModeVerifySql = await readFile(new URL("../scripts/guild_dm_campaigns_test_mode_verify.sql", import.meta.url), "utf8");
 
 assert.match(apiSource, /requirePortalAdminSession/, "campaign endpoints require admin or leader Portal session");
 assert.match(apiSource, /resolveRequestedGuildCodes/, "backend revalidates manageable guild scope");
+assert.match(apiSource, /action === "create-test-campaign"/, "backend exposes a dedicated test campaign action");
+assert.match(apiSource, /loadActorMember\(actor\.id\)/, "test campaign recipient is resolved from the current member only");
+assert.match(apiSource, /is_test: true/, "test campaigns are explicitly marked");
+assert.match(apiSource, /total_recipients: 1/, "test campaigns create exactly one recipient");
+assert.doesNotMatch(apiSource, /body\?\.discord|discordUserId\s*[:=]\s*body/i, "test mode never accepts a caller-provided Discord ID");
 assert.doesNotMatch(apiSource, /sendDiscordDm|DISCORD_TOKEN|discord\.com\/api/i, "Portal API does not send real Discord DMs");
 assert.match(helperSource, /discord_id/, "member Discord snapshot is sourced from guild_members.discord_id");
 assert.match(guildManagementSource, /GuildDmCampaignModal/, "Gestion guilde mounts the DM modal");
 assert.match(guildManagementSource, /guildManagement\.guildDmButton/, "DM button lives in Gestion guilde actions");
 assert.match(modalSource, /Nouveau message/, "modal has new-message tab");
 assert.match(modalSource, /Historique/, "modal has history tab");
+assert.match(modalSource, /M'envoyer un test/, "modal exposes the admin self-test button");
+assert.match(modalSource, /Afficher les tests/, "test campaigns are hidden behind an explicit history toggle");
+assert.match(modalSource, /TEST/, "test campaigns are visibly badged in the UI");
 assert.match(modalSource, /retry-pending/, "modal exposes retry for non-confirmed recipients");
 assert.doesNotMatch(guildManagementSource, /active === ["']guild-dm|Messages prives Discord["']\s*:/, "no main dashboard navigation tab is introduced");
 assert.match(migrationSql, /create table if not exists public\.guild_dm_campaigns/, "migration creates campaigns table");
 assert.match(migrationSql, /create table if not exists public\.guild_dm_recipients/, "migration creates recipients table");
 assert.match(migrationSql, /unique index if not exists guild_dm_recipients_campaign_discord_uidx/, "migration deduplicates recipients per campaign");
 assert.match(verifySql, /cross_organization_recipients/, "verify checks tenant integrity");
+assert.match(testModeMigrationSql, /add column if not exists is_test boolean not null default false/, "test-mode migration marks test campaigns");
+assert.match(testModeMigrationSql, /guild_dm_campaigns_org_is_test_created_idx/, "test-mode migration indexes history filtering");
+assert.match(testModeVerifySql, /test_campaign_recipient_count_violations/, "test-mode verify checks single-recipient test campaigns");
 
 console.log("guild DM campaign tests passed");

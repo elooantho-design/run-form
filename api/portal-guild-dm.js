@@ -10,8 +10,11 @@ import {
 import {
   GUILD_DM_CAMPAIGNS_TABLE,
   GUILD_DM_RECIPIENTS_TABLE,
+  buildGuildDmTestMessage,
   buildGuildDmRecipientPlan,
+  cleanDiscordUserId,
   isMissingGuildDmCampaignSchema,
+  isMissingGuildDmTestColumn,
   normalizeGuildCompareKey,
   normalizePortalGuildValue,
   resolveManageableGuildRowsForActorFromRows,
@@ -29,6 +32,9 @@ const supabase = createClient(
 );
 
 const MAX_HISTORY_ROWS = 80;
+const CAMPAIGN_SELECT_COLUMNS =
+  "id, organization_id, created_by_member_id, created_by_name, message, target_guild_codes, status, total_recipients, sent_count, confirmed_count, failed_count, missing_discord_count, sent_at, created_at, updated_at";
+const CAMPAIGN_SELECT_COLUMNS_WITH_TEST = `${CAMPAIGN_SELECT_COLUMNS}, is_test`;
 
 function sendJson(res, status, payload) {
   sendPortalJson(res, status, payload, res._portalReq || null);
@@ -90,23 +96,61 @@ async function loadMembersForGuilds(guildCodes) {
   return data || [];
 }
 
+async function loadActorMember(memberId) {
+  const cleanMemberId = cleanText(memberId);
+  if (!cleanMemberId) {
+    const error = new Error("Session admin invalide.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select("id, watcher_name, discord_id, guild_code, role, roster_status, community_access_type, community_status")
+    .eq("id", cleanMemberId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) {
+    const notFound = new Error("Membre admin introuvable.");
+    notFound.statusCode = 404;
+    throw notFound;
+  }
+
+  return data;
+}
+
+async function queryCampaignRowsWithOptionalTestColumn(buildQuery) {
+  let { data, error } = await buildQuery(CAMPAIGN_SELECT_COLUMNS_WITH_TEST);
+  if (isMissingGuildDmTestColumn(error)) {
+    const fallback = await buildQuery(CAMPAIGN_SELECT_COLUMNS);
+    data = (fallback.data || []).map((row) => ({ ...row, is_test: false }));
+    error = fallback.error;
+    return { data, error, testModeReady: false };
+  }
+  return { data, error, testModeReady: true };
+}
+
 async function loadCampaignRows(organizationId) {
-  const { data: campaigns, error: campaignError } = await supabase
-    .from(GUILD_DM_CAMPAIGNS_TABLE)
-    .select("id, organization_id, created_by_member_id, created_by_name, message, target_guild_codes, status, total_recipients, sent_count, confirmed_count, failed_count, missing_discord_count, sent_at, created_at, updated_at")
-    .eq("organization_id", organizationId)
-    .order("created_at", { ascending: false })
-    .limit(MAX_HISTORY_ROWS);
+  const { data: campaigns, error: campaignError, testModeReady } = await queryCampaignRowsWithOptionalTestColumn(
+    (selectColumns) =>
+      supabase
+        .from(GUILD_DM_CAMPAIGNS_TABLE)
+        .select(selectColumns)
+        .eq("organization_id", organizationId)
+        .order("created_at", { ascending: false })
+        .limit(MAX_HISTORY_ROWS),
+  );
 
   if (campaignError) {
     if (isMissingGuildDmCampaignSchema(campaignError)) {
-      return { schemaReady: false, campaigns: [] };
+      return { schemaReady: false, testModeReady: false, campaigns: [], testCampaigns: [] };
     }
     throw campaignError;
   }
 
   const campaignIds = (campaigns || []).map((campaign) => campaign.id).filter(Boolean);
-  if (!campaignIds.length) return { schemaReady: true, campaigns: [] };
+  if (!campaignIds.length) return { schemaReady: true, testModeReady, campaigns: [], testCampaigns: [] };
 
   const { data: recipients, error: recipientError } = await supabase
     .from(GUILD_DM_RECIPIENTS_TABLE)
@@ -115,7 +159,7 @@ async function loadCampaignRows(organizationId) {
 
   if (recipientError) {
     if (isMissingGuildDmCampaignSchema(recipientError)) {
-      return { schemaReady: false, campaigns: [] };
+      return { schemaReady: false, testModeReady: false, campaigns: [], testCampaigns: [] };
     }
     throw recipientError;
   }
@@ -126,11 +170,15 @@ async function loadCampaignRows(organizationId) {
     recipientsByCampaignId.get(recipient.campaign_id).push(recipient);
   });
 
+  const serializedCampaigns = (campaigns || []).map((campaign) =>
+    serializeGuildDmCampaign(campaign, recipientsByCampaignId.get(campaign.id) || []),
+  );
+
   return {
     schemaReady: true,
-    campaigns: (campaigns || []).map((campaign) =>
-      serializeGuildDmCampaign(campaign, recipientsByCampaignId.get(campaign.id) || []),
-    ),
+    testModeReady,
+    campaigns: serializedCampaigns.filter((campaign) => !campaign.isTest),
+    testCampaigns: serializedCampaigns.filter((campaign) => campaign.isTest),
   };
 }
 
@@ -142,12 +190,15 @@ async function loadCampaignDetail(organizationId, campaignId) {
     throw error;
   }
 
-  const { data: campaign, error: campaignError } = await supabase
-    .from(GUILD_DM_CAMPAIGNS_TABLE)
-    .select("id, organization_id, created_by_member_id, created_by_name, message, target_guild_codes, status, total_recipients, sent_count, confirmed_count, failed_count, missing_discord_count, sent_at, created_at, updated_at")
-    .eq("organization_id", organizationId)
-    .eq("id", cleanCampaignId)
-    .maybeSingle();
+  const { data: campaignRows, error: campaignError, testModeReady } = await queryCampaignRowsWithOptionalTestColumn(
+    (selectColumns) =>
+      supabase
+        .from(GUILD_DM_CAMPAIGNS_TABLE)
+        .select(selectColumns)
+        .eq("organization_id", organizationId)
+        .eq("id", cleanCampaignId)
+        .limit(1),
+  );
 
   if (campaignError) {
     if (isMissingGuildDmCampaignSchema(campaignError)) {
@@ -158,6 +209,7 @@ async function loadCampaignDetail(organizationId, campaignId) {
     throw campaignError;
   }
 
+  const campaign = campaignRows?.[0] || null;
   if (!campaign) {
     const error = new Error("Campagne introuvable dans ce perimetre.");
     error.statusCode = 404;
@@ -182,6 +234,7 @@ async function loadCampaignDetail(organizationId, campaignId) {
 
   const serializedRecipients = (recipients || []).map(serializeGuildDmRecipient);
   return {
+    testModeReady,
     campaign: serializeGuildDmCampaign(campaign, recipients || []),
     recipients: serializedRecipients,
   };
@@ -226,9 +279,11 @@ async function handleSummary(req, res, actor) {
       ok: true,
       mode: "summary",
       schemaReady: campaigns.schemaReady,
+      testModeReady: campaigns.testModeReady,
       organizationId: scope.organizationId,
       manageableGuilds: summarizeGuildReachability(members, scope.manageableGuilds),
       campaigns: campaigns.campaigns,
+      testCampaigns: campaigns.testCampaigns,
     });
   } catch (error) {
     if (isMissingGuildDmCampaignSchema(error)) {
@@ -236,9 +291,11 @@ async function handleSummary(req, res, actor) {
         ok: true,
         mode: "summary",
         schemaReady: false,
+        testModeReady: false,
         organizationId: "",
         manageableGuilds: [],
         campaigns: [],
+        testCampaigns: [],
       });
       return;
     }
@@ -302,7 +359,7 @@ async function handleCreateCampaign(res, actor, body) {
         created_at: now,
         updated_at: now,
       })
-      .select("id, organization_id, created_by_member_id, created_by_name, message, target_guild_codes, status, total_recipients, sent_count, confirmed_count, failed_count, missing_discord_count, sent_at, created_at, updated_at")
+      .select(CAMPAIGN_SELECT_COLUMNS)
       .single();
 
     if (campaignError) {
@@ -354,6 +411,102 @@ async function handleCreateCampaign(res, actor, body) {
     sendJson(res, error?.statusCode || 500, {
       ok: false,
       error: error?.message || "Creation campagne MP impossible.",
+    });
+  }
+}
+
+async function handleCreateTestCampaign(res, actor, body) {
+  try {
+    const scope = await resolveGuildDmScope(actor);
+    const actorMember = await loadActorMember(actor.id);
+    const discordUserId = cleanDiscordUserId(actorMember.discord_id);
+    if (!discordUserId) {
+      const error = new Error("Ton compte n'a pas d'ID Discord valide.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const actorGuildKey = normalizeGuildCompareKey(actorMember.guild_code || actor.guild_code);
+    const actorGuild = scope.manageableGuilds.find((guild) => normalizeGuildCompareKey(guild.guild_code) === actorGuildKey);
+    if (!actorGuild) {
+      const error = new Error("Ta guilde n'est pas disponible dans ton perimetre admin.");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const message = buildGuildDmTestMessage(body?.message);
+    const guildCode = normalizePortalGuildValue(actorGuild.guild_code);
+    const now = new Date().toISOString();
+    const { data: campaign, error: campaignError } = await supabase
+      .from(GUILD_DM_CAMPAIGNS_TABLE)
+      .insert({
+        organization_id: scope.organizationId,
+        created_by_member_id: actorMember.id,
+        created_by_name: getActorName(actorMember),
+        message,
+        target_guild_codes: [guildCode],
+        is_test: true,
+        status: "queued",
+        total_recipients: 1,
+        missing_discord_count: 0,
+        created_at: now,
+        updated_at: now,
+      })
+      .select(CAMPAIGN_SELECT_COLUMNS_WITH_TEST)
+      .single();
+
+    if (campaignError) {
+      if (isMissingGuildDmTestColumn(campaignError)) {
+        const error = new Error("Migration guild_dm_campaigns_test_mode non executee.");
+        error.statusCode = 428;
+        throw error;
+      }
+      if (isMissingGuildDmCampaignSchema(campaignError)) {
+        const error = new Error("Migration guild_dm_campaigns non executee.");
+        error.statusCode = 428;
+        throw error;
+      }
+      throw campaignError;
+    }
+
+    const { error: recipientError } = await supabase.from(GUILD_DM_RECIPIENTS_TABLE).insert({
+      campaign_id: campaign.id,
+      organization_id: scope.organizationId,
+      member_id: actorMember.id,
+      guild_code: guildCode,
+      member_name_snapshot: getActorName(actorMember),
+      discord_user_id: discordUserId,
+      status: "queued",
+      created_at: now,
+      updated_at: now,
+    });
+
+    if (recipientError) {
+      await supabase
+        .from(GUILD_DM_CAMPAIGNS_TABLE)
+        .update({ status: "failed", updated_at: new Date().toISOString() })
+        .eq("id", campaign.id);
+
+      if (isMissingGuildDmCampaignSchema(recipientError)) {
+        const error = new Error("Migration guild_dm_recipients non executee.");
+        error.statusCode = 428;
+        throw error;
+      }
+      throw recipientError;
+    }
+
+    const detail = await loadCampaignDetail(scope.organizationId, campaign.id);
+    sendJson(res, 201, {
+      ok: true,
+      mode: "test-created",
+      schemaReady: true,
+      testModeReady: true,
+      ...detail,
+    });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, {
+      ok: false,
+      error: error?.message || "Creation du test MP impossible.",
     });
   }
 }
@@ -459,6 +612,10 @@ export default async function handler(req, res) {
 
   if (action === "create-campaign") {
     await handleCreateCampaign(res, sessionCheck.member, body);
+    return;
+  }
+  if (action === "create-test-campaign") {
+    await handleCreateTestCampaign(res, sessionCheck.member, body);
     return;
   }
   if (action === "retry-pending") {

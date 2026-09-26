@@ -60,6 +60,28 @@ function groupRecipientsByStatus(recipients) {
   };
 }
 
+function getTestDeliveryState(detail) {
+  const recipient = detail?.recipients?.[0] || null;
+  if (!recipient) return { label: "En file", tone: "amber", lastError: "" };
+  if (recipient.status === "confirmed" || recipient.confirmedAt) {
+    return { label: "Confirmé", tone: "emerald", lastError: "" };
+  }
+  if (recipient.status === "failed") {
+    return { label: "Échec", tone: "red", lastError: recipient.lastError || "Erreur Discord" };
+  }
+  if (recipient.status === "sent" || recipient.sentAt) {
+    return { label: "Envoyé", tone: "sky", lastError: "" };
+  }
+  return { label: "En file", tone: "amber", lastError: "" };
+}
+
+function getStatusBadgeClass(tone) {
+  if (tone === "emerald") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  if (tone === "red") return "border-red-500/30 bg-red-500/10 text-red-200";
+  if (tone === "sky") return "border-sky-500/30 bg-sky-500/10 text-sky-200";
+  return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+}
+
 function RecipientTable({ title, icon, recipients, emptyLabel, renderMeta }) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/60">
@@ -101,16 +123,24 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testSending, setTestSending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
   const [campaignDetail, setCampaignDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [showTests, setShowTests] = useState(false);
 
   const manageableGuilds = useMemo(() => summary?.manageableGuilds || [], [summary]);
   const campaigns = useMemo(() => summary?.campaigns || [], [summary]);
+  const testCampaigns = useMemo(() => summary?.testCampaigns || [], [summary]);
   const schemaReady = summary?.schemaReady !== false;
+  const testModeReady = summary?.testModeReady !== false;
+  const historyCampaigns = useMemo(() => {
+    const rows = showTests ? [...campaigns, ...testCampaigns] : [...campaigns];
+    return rows.sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+  }, [campaigns, showTests, testCampaigns]);
 
   const selectedGuilds = useMemo(
     () =>
@@ -137,6 +167,7 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
     () => groupRecipientsByStatus(campaignDetail?.recipients || []),
     [campaignDetail],
   );
+  const testDeliveryState = getTestDeliveryState(campaignDetail?.campaign?.isTest ? campaignDetail : null);
 
   const loadSummary = useCallback(async ({ keepSelection = true } = {}) => {
     setLoading(true);
@@ -219,6 +250,31 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
     }
   }
 
+  async function createTestCampaign() {
+    if (testSending) return;
+    setTestSending(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = await fetchGuildDmJson("/api/portal-guild-dm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create-test-campaign",
+          message,
+        }),
+      });
+      setCampaignDetail(payload);
+      setSelectedCampaignId(payload.campaign?.id || "");
+      setNotice("Test ajouté à la file d'envoi.");
+      await loadSummary({ keepSelection: true });
+    } catch (testError) {
+      setError(testError?.message || "Creation du test impossible.");
+    } finally {
+      setTestSending(false);
+    }
+  }
+
   async function retryPendingRecipients() {
     if (!campaignDetail?.campaign?.id || retrying) return;
     const confirmed = window.confirm("Relancer uniquement les destinataires envoyes qui n'ont pas confirme ?");
@@ -251,6 +307,11 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
     selectedTotals.reachable > 0 &&
     message.trim().length > 0 &&
     message.trim().length <= MAX_MESSAGE_LENGTH;
+  const canCreateTest =
+    schemaReady &&
+    testModeReady &&
+    message.trim().length > 0 &&
+    message.trim().length <= MAX_MESSAGE_LENGTH;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-4">
@@ -270,7 +331,7 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
           <button
             type="button"
             className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
-            disabled={saving || retrying}
+            disabled={saving || retrying || testSending}
             onClick={onClose}
             title="Fermer"
           >
@@ -382,6 +443,12 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                 />
               </label>
 
+              {!testModeReady ? (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                  La migration <span className="font-semibold">guild_dm_campaigns_test_mode</span> doit etre executee avant d'envoyer un test.
+                </div>
+              ) : null}
+
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 text-sm text-zinc-300">
                 <div className="font-semibold text-zinc-100">Apercu d'envoi</div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -427,6 +494,42 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                   </div>
                 </div>
               ) : null}
+
+              {campaignDetail?.campaign?.isTest ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Badge className="rounded-lg border-purple-500/30 bg-purple-500/10 text-purple-200">TEST</Badge>
+                        <span className="text-sm font-semibold text-zinc-100">Dernier test</span>
+                      </div>
+                      <div className="mt-2 text-sm text-zinc-400">
+                        {formatFullDateTime(campaignDetail.campaign.createdAt)}
+                      </div>
+                    </div>
+                    <Badge className={`rounded-lg py-1.5 ${getStatusBadgeClass(testDeliveryState.tone)}`}>
+                      {testDeliveryState.label}
+                    </Badge>
+                  </div>
+                  {testDeliveryState.lastError ? (
+                    <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                      {testDeliveryState.lastError}
+                    </div>
+                  ) : null}
+                  <div className="mt-4 flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-9 rounded-lg border-zinc-700 px-3 text-zinc-200"
+                      disabled={detailLoading}
+                      onClick={() => loadCampaignDetail(campaignDetail.campaign.id)}
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      Actualiser le test
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -445,8 +548,22 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                     Actualiser
                   </Button>
                 </div>
-                {campaigns.length ? (
-                  campaigns.map((campaign) => (
+                {testCampaigns.length ? (
+                  <label className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={showTests}
+                      onChange={(event) => setShowTests(event.target.checked)}
+                      className="h-4 w-4 rounded border-zinc-700 bg-zinc-950 accent-sky-500"
+                    />
+                    Afficher les tests
+                    <Badge className="ml-auto rounded-lg border-purple-500/30 bg-purple-500/10 text-purple-200">
+                      {testCampaigns.length}
+                    </Badge>
+                  </label>
+                ) : null}
+                {historyCampaigns.length ? (
+                  historyCampaigns.map((campaign) => (
                     <button
                       key={campaign.id}
                       type="button"
@@ -459,7 +576,12 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className="font-semibold text-zinc-100">{formatDateTime(campaign.createdAt)}</div>
+                          <div className="flex flex-wrap items-center gap-2 font-semibold text-zinc-100">
+                            {formatDateTime(campaign.createdAt)}
+                            {campaign.isTest ? (
+                              <Badge className="rounded-lg border-purple-500/30 bg-purple-500/10 text-purple-200">TEST</Badge>
+                            ) : null}
+                          </div>
                           <div className="mt-1 text-xs text-zinc-500">{campaign.targetGuildCodes.join(" · ")}</div>
                         </div>
                         <Badge className="rounded-lg border-zinc-700 bg-zinc-950 text-zinc-300">
@@ -494,8 +616,11 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Campagne</div>
-                          <div className="mt-1 text-lg font-semibold text-zinc-50">
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-lg font-semibold text-zinc-50">
                             {formatFullDateTime(campaignDetail.campaign.createdAt)}
+                            {campaignDetail.campaign.isTest ? (
+                              <Badge className="rounded-lg border-purple-500/30 bg-purple-500/10 text-purple-200">TEST</Badge>
+                            ) : null}
                           </div>
                           <div className="mt-1 text-sm text-zinc-400">
                             {campaignDetail.campaign.targetGuildCodes.join(" · ")}
@@ -581,21 +706,33 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
 
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-800 p-4 sm:p-5">
           {tab === "new" ? (
-            <Button
-              type="button"
-              className="rounded-lg bg-sky-500 text-zinc-950 hover:bg-sky-400"
-              disabled={!canPreview || saving}
-              onClick={() => setConfirmOpen(true)}
-            >
-              <Send className="mr-2 h-4 w-4" />
-              Apercu avant envoi
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-purple-500/40 bg-purple-500/10 text-purple-100 hover:bg-purple-500/20"
+                disabled={!canCreateTest || saving || testSending}
+                onClick={createTestCampaign}
+              >
+                <Send className="mr-2 h-4 w-4" />
+                {testSending ? "Ajout du test..." : "M'envoyer un test"}
+              </Button>
+              <Button
+                type="button"
+                className="rounded-lg bg-sky-500 text-zinc-950 hover:bg-sky-400"
+                disabled={!canPreview || saving || testSending}
+                onClick={() => setConfirmOpen(true)}
+              >
+                <Send className="mr-2 h-4 w-4" />
+                Apercu avant envoi
+              </Button>
+            </>
           ) : null}
           <Button
             type="button"
             variant="outline"
             className="rounded-lg border-zinc-700 text-zinc-200"
-            disabled={saving || retrying}
+            disabled={saving || retrying || testSending}
             onClick={onClose}
           >
             Fermer

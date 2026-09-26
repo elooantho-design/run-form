@@ -1,6 +1,7 @@
 export const GUILD_DM_CAMPAIGNS_TABLE = "guild_dm_campaigns";
 export const GUILD_DM_RECIPIENTS_TABLE = "guild_dm_recipients";
 export const GUILD_DM_MAX_MESSAGE_LENGTH = 1800;
+export const GUILD_DM_TEST_MESSAGE_PREFIX = "🧪 Message de test";
 
 export const GUILD_DM_CAMPAIGN_STATUSES = new Set([
   "queued",
@@ -73,6 +74,15 @@ export function isMissingGuildDmCampaignSchema(error) {
     message.includes(GUILD_DM_CAMPAIGNS_TABLE) ||
     message.includes(GUILD_DM_RECIPIENTS_TABLE) ||
     message.includes("could not find the table")
+  );
+}
+
+export function isMissingGuildDmTestColumn(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    error?.code === "PGRST204" &&
+    message.includes(GUILD_DM_CAMPAIGNS_TABLE) &&
+    message.includes("is_test")
   );
 }
 
@@ -225,6 +235,11 @@ export function validateGuildDmMessage(message) {
   return cleanMessage;
 }
 
+export function buildGuildDmTestMessage(message) {
+  const cleanMessage = validateGuildDmMessage(message);
+  return validateGuildDmMessage(`${GUILD_DM_TEST_MESSAGE_PREFIX}\n\n${cleanMessage}`);
+}
+
 export function serializeGuildDmCampaign(row, recipients = []) {
   const recipientRows = Array.isArray(recipients) ? recipients : [];
   const confirmedCount = recipientRows.filter((recipient) => recipient.confirmed_at || recipient.status === "confirmed").length;
@@ -240,6 +255,7 @@ export function serializeGuildDmCampaign(row, recipients = []) {
     organizationId: row?.organization_id || "",
     message: row?.message || "",
     messagePreview: cleanText(row?.message).slice(0, 140),
+    isTest: Boolean(row?.is_test),
     targetGuildCodes: Array.isArray(row?.target_guild_codes) ? row.target_guild_codes : [],
     status: row?.status || "queued",
     createdByName: row?.created_by_name || "",
