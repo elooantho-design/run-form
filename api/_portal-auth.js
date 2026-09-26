@@ -57,6 +57,21 @@ function isConfiguredDiscordActivityOrigin(parsedUrl) {
   );
 }
 
+export function isPortalDiscordActivityRequest(req) {
+  const candidates = [
+    cleanHeaderValue(req, "origin"),
+    cleanHeaderValue(req, "referer"),
+  ].filter(Boolean);
+
+  return candidates.some((value) => {
+    try {
+      return isConfiguredDiscordActivityOrigin(new URL(value));
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function normalizePortalText(value) {
   return cleanText(value)
     .normalize("NFD")
@@ -173,27 +188,40 @@ function getPortalSessionCookieMaxAge(options = {}) {
   return options.remember ? REMEMBER_SESSION_TTL_SECONDS : SESSION_TTL_SECONDS;
 }
 
+function getPortalSessionCookieAttributes(options = {}) {
+  const discordActivity = isPortalDiscordActivityRequest(options.req);
+  const sameSite = discordActivity ? "None" : "Lax";
+  const secure = isSecureCookie() || discordActivity;
+  return {
+    sameSite,
+    secure,
+    partitioned: false,
+  };
+}
+
 export function setPortalSessionCookie(res, token, options = {}) {
   const maxAge = getPortalSessionCookieMaxAge(options);
+  const cookieAttributes = getPortalSessionCookieAttributes(options);
   const attributes = [
     `${PORTAL_SESSION_COOKIE}=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Lax",
+    `SameSite=${cookieAttributes.sameSite}`,
     `Max-Age=${maxAge}`,
   ];
-  if (isSecureCookie()) attributes.push("Secure");
+  if (cookieAttributes.secure) attributes.push("Secure");
   res.setHeader("Set-Cookie", attributes.join("; "));
 }
 
 export function buildPortalSessionIssuedDiagnostic(req, options = {}) {
+  const cookieAttributes = getPortalSessionCookieAttributes({ ...options, req });
   return {
     cookieName: PORTAL_SESSION_COOKIE,
-    sameSite: "Lax",
-    secure: isSecureCookie(),
+    sameSite: cookieAttributes.sameSite,
+    secure: cookieAttributes.secure,
     path: "/",
     maxAge: getPortalSessionCookieMaxAge(options),
-    partitioned: false,
+    partitioned: cookieAttributes.partitioned,
     host: cleanHeaderValue(req, "host"),
     "x-forwarded-host": cleanHeaderValue(req, "x-forwarded-host"),
     origin: cleanHeaderValue(req, "origin"),
@@ -204,15 +232,16 @@ export function logPortalSessionIssued(req, options = {}) {
   console.info("[portal-session-issued]", buildPortalSessionIssuedDiagnostic(req, options));
 }
 
-export function clearPortalSessionCookie(res) {
+export function clearPortalSessionCookie(res, options = {}) {
+  const cookieAttributes = getPortalSessionCookieAttributes(options);
   const attributes = [
     `${PORTAL_SESSION_COOKIE}=`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Lax",
+    `SameSite=${cookieAttributes.sameSite}`,
     "Max-Age=0",
   ];
-  if (isSecureCookie()) attributes.push("Secure");
+  if (cookieAttributes.secure) attributes.push("Secure");
   res.setHeader("Set-Cookie", attributes.join("; "));
 }
 

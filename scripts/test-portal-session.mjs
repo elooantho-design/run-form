@@ -12,9 +12,11 @@ import {
   PORTAL_SESSION_COOKIE,
   buildPortalSessionCheckDiagnostic,
   buildPortalSessionIssuedDiagnostic,
+  clearPortalSessionCookie,
   createPortalSessionToken,
   getPortalSession,
   getPortalSessionTokenStatus,
+  isPortalDiscordActivityRequest,
   logPortalSessionCheck,
   logPortalSessionIssued,
   setPortalSessionCookie,
@@ -97,20 +99,75 @@ assert.match(portalSource, /buildPortalRolePreviewSession\(session, rolePreviewM
 assert.match(portalSource, /PORTAL_COSMETICS_SYNC_CHANNEL/, "cosmetic changes have a dedicated revalidation signal");
 
 const originalSessionSecret = process.env.PORTAL_SESSION_SECRET;
+const originalDiscordClientId = process.env.VITE_DISCORD_CLIENT_ID;
+const originalNodeEnv = process.env.NODE_ENV;
+const originalVercel = process.env.VERCEL;
+const discordClientId = "1552374112159277217";
 process.env.PORTAL_SESSION_SECRET = "test-portal-session-secret";
+process.env.VITE_DISCORD_CLIENT_ID = discordClientId;
+process.env.NODE_ENV = "production";
+process.env.VERCEL = "1";
 
 const requestWithCookies = {
   method: "GET",
   url: "/api/portal-auth?action=session",
   headers: {
     host: "run-form-tau.vercel.app",
-    "x-forwarded-host": "1552374112159277217.discordsays.com",
-    origin: "https://1552374112159277217.discordsays.com",
-    referer: "https://1552374112159277217.discordsays.com/portal",
+    "x-forwarded-host": `${discordClientId}.discordsays.com`,
+    origin: `https://${discordClientId}.discordsays.com`,
+    referer: `https://${discordClientId}.discordsays.com/portal`,
     "user-agent": "Discord Activity Test",
     cookie: `${PORTAL_SESSION_COOKIE}=secret-token-value; other_cookie=another-secret`,
   },
 };
+const normalBrowserRequest = {
+  method: "POST",
+  url: "/api/portal-auth?action=login",
+  headers: {
+    host: "run-form-tau.vercel.app",
+    origin: "https://run-form-tau.vercel.app",
+    referer: "https://run-form-tau.vercel.app/portal",
+  },
+};
+const otherDiscordRequest = {
+  method: "POST",
+  url: "/api/portal-auth?action=login",
+  headers: {
+    host: "run-form-tau.vercel.app",
+    origin: "https://999999999999999999.discordsays.com",
+  },
+};
+const spoofedDiscordRequest = {
+  method: "POST",
+  url: "/api/portal-auth?action=login",
+  headers: {
+    host: "run-form-tau.vercel.app",
+    origin: `https://${discordClientId}.discordsays.com.evil.com`,
+  },
+};
+const malformedOriginRequest = {
+  method: "POST",
+  url: "/api/portal-auth?action=login",
+  headers: {
+    host: "run-form-tau.vercel.app",
+    origin: "https://",
+  },
+};
+
+function makeResponseRecorder() {
+  return {
+    headers: {},
+    setHeader(name, value) {
+      this.headers[name] = value;
+    },
+  };
+}
+
+assert.equal(isPortalDiscordActivityRequest(requestWithCookies), true, "configured Discord Activity request is detected");
+assert.equal(isPortalDiscordActivityRequest(normalBrowserRequest), false, "normal browser request is not detected as Discord Activity");
+assert.equal(isPortalDiscordActivityRequest(otherDiscordRequest), false, "another Discord app is not detected as this Activity");
+assert.equal(isPortalDiscordActivityRequest(spoofedDiscordRequest), false, "Discord suffix spoof is not detected as this Activity");
+assert.equal(isPortalDiscordActivityRequest(malformedOriginRequest), false, "malformed Origin is not detected as Discord Activity");
 
 const checkDiagnostic = buildPortalSessionCheckDiagnostic(requestWithCookies, {
   portalSessionTokenStatus: "malformed",
@@ -151,30 +208,66 @@ assert.deepEqual(
   },
   {
     cookieName: PORTAL_SESSION_COOKIE,
-    sameSite: "Lax",
+    sameSite: "None",
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
     partitioned: false,
   },
-  "issued-cookie diagnostic exposes only cookie settings",
+  "Discord Activity issued-cookie diagnostic exposes SameSite=None without Partitioned",
 );
 assert.equal(typeof issuedDiagnostic.secure, "boolean", "issued-cookie diagnostic exposes Secure as a boolean");
+assert.equal(issuedDiagnostic.secure, true, "Discord Activity SameSite=None keeps Secure enabled");
 assert.doesNotMatch(
   JSON.stringify(issuedDiagnostic),
   /secret-token-value|another-secret/,
   "issued-cookie diagnostic never serializes cookie values",
 );
 
-const fakeResponse = {
-  headers: {},
-  setHeader(name, value) {
-    this.headers[name] = value;
-  },
-};
-setPortalSessionCookie(fakeResponse, "sensitive-cookie-token", { remember: false });
+const normalIssuedDiagnostic = buildPortalSessionIssuedDiagnostic(normalBrowserRequest, { remember: false });
+assert.equal(normalIssuedDiagnostic.sameSite, "Lax", "normal browser cookie keeps SameSite=Lax");
+assert.equal(normalIssuedDiagnostic.secure, true, "normal production browser cookie keeps Secure");
+assert.equal(normalIssuedDiagnostic.partitioned, false, "normal browser cookie does not add Partitioned");
+assert.equal(normalIssuedDiagnostic.maxAge, 60 * 60 * 12, "normal browser non-remember Max-Age is unchanged");
+
+const otherDiscordIssuedDiagnostic = buildPortalSessionIssuedDiagnostic(otherDiscordRequest, { remember: false });
+assert.equal(otherDiscordIssuedDiagnostic.sameSite, "Lax", "another Discord app does not receive SameSite=None");
+
+const spoofedIssuedDiagnostic = buildPortalSessionIssuedDiagnostic(spoofedDiscordRequest, { remember: false });
+assert.equal(spoofedIssuedDiagnostic.sameSite, "Lax", "Discord suffix spoof does not receive SameSite=None");
+
+const malformedIssuedDiagnostic = buildPortalSessionIssuedDiagnostic(malformedOriginRequest, { remember: false });
+assert.equal(malformedIssuedDiagnostic.sameSite, "Lax", "malformed Origin does not receive SameSite=None");
+
+const fakeResponse = makeResponseRecorder();
+setPortalSessionCookie(fakeResponse, "sensitive-cookie-token", { remember: false, req: normalBrowserRequest });
 assert.match(fakeResponse.headers["Set-Cookie"], /^portal_session=/, "setPortalSessionCookie writes Set-Cookie");
-assert.match(fakeResponse.headers["Set-Cookie"], /SameSite=Lax/, "session cookie SameSite remains unchanged");
+assert.match(fakeResponse.headers["Set-Cookie"], /SameSite=Lax/, "normal browser session cookie keeps SameSite=Lax");
+assert.match(fakeResponse.headers["Set-Cookie"], /Secure/, "normal production session cookie keeps Secure");
 assert.match(fakeResponse.headers["Set-Cookie"], /Path=\//, "session cookie Path remains unchanged");
+assert.doesNotMatch(fakeResponse.headers["Set-Cookie"], /Partitioned/, "normal browser session cookie does not add Partitioned");
+
+const discordResponse = makeResponseRecorder();
+setPortalSessionCookie(discordResponse, "sensitive-cookie-token", { remember: false, req: requestWithCookies });
+assert.match(discordResponse.headers["Set-Cookie"], /SameSite=None/, "Discord Activity session cookie uses SameSite=None");
+assert.match(discordResponse.headers["Set-Cookie"], /Secure/, "Discord Activity session cookie keeps Secure");
+assert.doesNotMatch(discordResponse.headers["Set-Cookie"], /Partitioned/, "Discord Activity session cookie does not add Partitioned");
+assert.match(discordResponse.headers["Set-Cookie"], /Max-Age=43200/, "Discord Activity non-remember Max-Age is unchanged");
+
+const rememberResponse = makeResponseRecorder();
+setPortalSessionCookie(rememberResponse, "sensitive-cookie-token", { remember: true, req: requestWithCookies });
+assert.match(rememberResponse.headers["Set-Cookie"], /Max-Age=2592000/, "remember Max-Age stays unchanged");
+
+const normalLogoutResponse = makeResponseRecorder();
+clearPortalSessionCookie(normalLogoutResponse, { req: normalBrowserRequest });
+assert.match(normalLogoutResponse.headers["Set-Cookie"], /^portal_session=/, "logout clears the session cookie");
+assert.match(normalLogoutResponse.headers["Set-Cookie"], /SameSite=Lax/, "normal browser logout clears with SameSite=Lax");
+assert.match(normalLogoutResponse.headers["Set-Cookie"], /Max-Age=0/, "logout Max-Age remains zero");
+
+const discordLogoutResponse = makeResponseRecorder();
+clearPortalSessionCookie(discordLogoutResponse, { req: requestWithCookies });
+assert.match(discordLogoutResponse.headers["Set-Cookie"], /SameSite=None/, "Discord Activity logout clears with SameSite=None");
+assert.match(discordLogoutResponse.headers["Set-Cookie"], /Secure/, "Discord Activity logout keeps Secure");
+assert.doesNotMatch(discordLogoutResponse.headers["Set-Cookie"], /Partitioned/, "Discord Activity logout does not add Partitioned");
 
 const validToken = createPortalSessionToken({ id: "member-test" });
 assert.equal(getPortalSessionTokenStatus(""), "absent", "empty token is diagnosed as absent");
@@ -242,6 +335,21 @@ if (originalSessionSecret === undefined) {
   delete process.env.PORTAL_SESSION_SECRET;
 } else {
   process.env.PORTAL_SESSION_SECRET = originalSessionSecret;
+}
+if (originalDiscordClientId === undefined) {
+  delete process.env.VITE_DISCORD_CLIENT_ID;
+} else {
+  process.env.VITE_DISCORD_CLIENT_ID = originalDiscordClientId;
+}
+if (originalNodeEnv === undefined) {
+  delete process.env.NODE_ENV;
+} else {
+  process.env.NODE_ENV = originalNodeEnv;
+}
+if (originalVercel === undefined) {
+  delete process.env.VERCEL;
+} else {
+  process.env.VERCEL = originalVercel;
 }
 
 console.log("portal session tests passed");

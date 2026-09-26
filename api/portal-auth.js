@@ -151,7 +151,7 @@ async function handleLogin(req, res, body) {
   clearRateLimit(rateKey);
 
   const token = createPortalSessionToken(member, { remember });
-  setPortalSessionCookie(res, token, { remember });
+  setPortalSessionCookie(res, token, { remember, req });
   logPortalSessionIssued(req, { remember });
   sendPortalJson(
     res,
@@ -172,7 +172,7 @@ async function handleSession(req, res) {
 }
 
 async function handleLogout(req, res) {
-  clearPortalSessionCookie(res);
+  clearPortalSessionCookie(res, { req });
   sendPortalJson(res, 200, { ok: true }, req);
 }
 
@@ -213,7 +213,7 @@ async function handlePasswordChange(req, res, body) {
   sessionCheck.member.password_change_required = false;
 
   const token = createPortalSessionToken(sessionCheck.member, { remember: false });
-  setPortalSessionCookie(res, token, { remember: false });
+  setPortalSessionCookie(res, token, { remember: false, req });
 
   await writeActivity({
     actor_member_id: sessionCheck.member.id,
