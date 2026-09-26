@@ -1,6 +1,8 @@
 const DISCORD_ACTIVITY_READY_TIMEOUT_MS = 2500;
 const DISCORD_ACTIVITY_REQUIRED_PARAMS = ["frame_id", "instance_id", "platform"];
 
+let activeDiscordActivitySdk = null;
+
 function readViteEnv(name) {
   return String(import.meta.env?.[name] || "").trim();
 }
@@ -38,20 +40,37 @@ export function isDiscordActivityRuntime(locationLike, options = {}) {
   return currentUrl.hostname === `${clientId}.discordsays.com`;
 }
 
-export function getDiscordActivityPortalRedirectUrl(locationLike) {
-  if (!locationLike) return "";
+export function shouldRenderPortalForDiscordActivityRoot(locationLike) {
+  if (!locationLike) return false;
 
-  const currentUrl = new URL(
-    typeof locationLike === "string" ? locationLike : locationLike.href,
-    "https://run-form.local",
-  );
-
-  if (currentUrl.pathname !== "/" || !hasDiscordActivityLaunchParams(currentUrl.searchParams)) {
-    return "";
+  let currentUrl;
+  try {
+    currentUrl = new URL(
+      typeof locationLike === "string" ? locationLike : locationLike.href,
+      "https://run-form.local",
+    );
+  } catch {
+    return false;
   }
 
-  currentUrl.pathname = "/portal";
-  return `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+  return currentUrl.pathname === "/" && hasDiscordActivityLaunchParams(currentUrl.searchParams);
+}
+
+export function getBootstrapRenderPath(locationLike) {
+  if (!locationLike) return "/";
+
+  let currentUrl;
+  try {
+    currentUrl = new URL(
+      typeof locationLike === "string" ? locationLike : locationLike.href,
+      "https://run-form.local",
+    );
+  } catch {
+    return "/";
+  }
+
+  if (shouldRenderPortalForDiscordActivityRoot(currentUrl)) return "/portal";
+  return currentUrl.pathname || "/";
 }
 
 function isDiscordActivityEnabled() {
@@ -86,6 +105,10 @@ export async function initDiscordActivity(options = {}) {
     return { status: "server" };
   }
 
+  if (activeDiscordActivitySdk) {
+    return { status: "ready", sdk: activeDiscordActivitySdk };
+  }
+
   if (!isDiscordActivityEnabled()) {
     logDiscordActivity("info", "browser fallback");
     return { status: "disabled" };
@@ -105,6 +128,7 @@ export async function initDiscordActivity(options = {}) {
       discordSdk.ready(),
       Number(options.readyTimeoutMs || DISCORD_ACTIVITY_READY_TIMEOUT_MS),
     );
+    activeDiscordActivitySdk = discordSdk;
     logDiscordActivity("info", "ready");
     return { status: "ready", sdk: discordSdk };
   } catch (error) {
@@ -113,4 +137,53 @@ export async function initDiscordActivity(options = {}) {
     });
     return { status: "browser-fallback", error };
   }
+}
+
+export async function openExternalUrlForRuntime(url, options = {}) {
+  const targetUrl = String(url || "").trim();
+  if (!targetUrl) return { opened: false, mode: "empty" };
+
+  const windowRef = options.windowRef || (typeof window !== "undefined" ? window : null);
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(targetUrl, windowRef?.location?.href || "https://run-form.local/");
+  } catch {
+    return { opened: false, mode: "invalid-url" };
+  }
+
+  const normalizedUrl = parsedUrl.href;
+  const isHttpUrl = parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
+  const locationLike = options.location || windowRef?.location || "";
+  const discordActivity =
+    typeof options.discordActivity === "boolean"
+      ? options.discordActivity
+      : isDiscordActivityRuntime(locationLike, { clientId: options.discordClientId });
+
+  if (discordActivity && isHttpUrl) {
+    let discordSdk = options.discordSdk || activeDiscordActivitySdk;
+
+    if (!discordSdk && options.initializeSdk !== false) {
+      const initResult = await initDiscordActivity({
+        readyTimeoutMs: options.readyTimeoutMs || DISCORD_ACTIVITY_READY_TIMEOUT_MS,
+      });
+      discordSdk = initResult?.sdk || null;
+    }
+
+    if (discordSdk?.commands?.openExternalLink) {
+      const result = await discordSdk.commands.openExternalLink({ url: normalizedUrl });
+      return { opened: result?.opened !== false, mode: "discord", result };
+    }
+
+    return { opened: false, mode: "discord-sdk-unavailable" };
+  }
+
+  if (!windowRef) return { opened: false, mode: "no-window" };
+
+  if (options.newTab) {
+    windowRef.open?.(normalizedUrl, "_blank", "noopener,noreferrer");
+    return { opened: true, mode: "browser-new-tab" };
+  }
+
+  windowRef.location.href = normalizedUrl;
+  return { opened: true, mode: "browser-location" };
 }

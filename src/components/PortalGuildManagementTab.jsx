@@ -14,6 +14,7 @@ import {
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
 import { getChampionDisplayName } from "@/lib/championDisplay";
+import { isDiscordActivityRuntime, openExternalUrlForRuntime } from "@/lib/discordActivity";
 import { resolveAssignedDefense, resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -57,8 +58,14 @@ function getDiscordAppUrl(value) {
 }
 
 function openDiscordTarget(value) {
+  const rawUrl = String(value || "").trim();
   const targetUrl = getDiscordAppUrl(value);
   if (!targetUrl) return;
+
+  if (/^https?:\/\//i.test(rawUrl) && isDiscordActivityRuntime(window.location)) {
+    void openExternalUrlForRuntime(rawUrl, { newTab: true });
+    return;
+  }
 
   if (targetUrl.startsWith("discord://")) {
     window.location.href = targetUrl;

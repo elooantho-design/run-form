@@ -9,6 +9,8 @@ import { isDiscordActivityRuntime } from "../src/lib/discordActivity.js";
 
 const discordClientId = "1552374112159277217";
 const discordLocation = `https://${discordClientId}.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=desktop`;
+const discordAndroidLocation = `https://${discordClientId}.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=android`;
+const discordIosLocation = `https://${discordClientId}.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=ios`;
 const normalLocation = "https://run-form-tau.vercel.app/portal";
 const supabasePublicUrl = "https://axxvzhsbagtksbhngrbe.supabase.co";
 const supabaseDefenseImageUrl = `${supabasePublicUrl}/storage/v1/object/public/defense-images/test.webp`;
@@ -17,6 +19,18 @@ assert.equal(
   isDiscordActivityRuntime(discordLocation, { clientId: discordClientId }),
   true,
   "exact discordsays Activity host is detected",
+);
+
+assert.equal(
+  isDiscordActivityRuntime(discordAndroidLocation, { clientId: discordClientId }),
+  true,
+  "Android Discord Activity uses the same runtime detection as desktop",
+);
+
+assert.equal(
+  isDiscordActivityRuntime(discordIosLocation, { clientId: discordClientId }),
+  true,
+  "iOS Discord Activity uses the same runtime detection as desktop",
 );
 
 assert.equal(

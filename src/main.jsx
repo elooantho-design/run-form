@@ -1,9 +1,10 @@
+/* eslint-disable react-refresh/only-export-components */
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import * as Sentry from '@sentry/react';
 import App from './App.jsx';
 import SaasPortal from './SaasPortal.jsx';
-import { getDiscordActivityPortalRedirectUrl } from './lib/discordActivity.js';
+import { getBootstrapRenderPath } from './lib/discordActivity.js';
 import './index.css';
 
 Sentry.init({
@@ -51,22 +52,16 @@ function DashboardRetiredPage() {
   );
 }
 
-const discordActivityPortalRedirectUrl = getDiscordActivityPortalRedirectUrl(window.location);
+const finalPath = getBootstrapRenderPath(window.location);
+const isDashboard = finalPath === '/dashboard' || finalPath.startsWith('/dashboard/');
+const isPortal = finalPath === '/portal' || finalPath.startsWith('/portal/');
 
-if (discordActivityPortalRedirectUrl) {
-  window.location.replace(discordActivityPortalRedirectUrl);
+if (isDashboard || isPortal) {
+  document.documentElement.classList.add('dark');
 } else {
-  const finalPath = window.location.pathname;
-  const isDashboard = finalPath === '/dashboard' || finalPath.startsWith('/dashboard/');
-  const isPortal = finalPath === '/portal' || finalPath.startsWith('/portal/');
-
-  if (isDashboard || isPortal) {
-    document.documentElement.classList.add('dark');
-  } else {
-    document.documentElement.classList.remove('dark');
-  }
-
-  ReactDOM.createRoot(document.getElementById('root')).render(
-    isPortal ? <SaasPortal /> : isDashboard ? <DashboardRetiredPage /> : <App />
-  );
+  document.documentElement.classList.remove('dark');
 }
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  isPortal ? <SaasPortal /> : isDashboard ? <DashboardRetiredPage /> : <App />
+);

@@ -13,6 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import ProfileAvatar from "@/components/ProfileAvatar";
+import { openExternalUrlForRuntime } from "@/lib/discordActivity";
 import { PORTAL_SUPPORT_CONFIG } from "@/lib/portalSupportConfig";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -411,7 +412,8 @@ export default function SupportProjectTab({ session }) {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || t("support.checkoutError", "Ouverture Stripe impossible."));
       if (!payload.checkoutUrl) throw new Error(t("support.checkoutMissingUrl", "Stripe n'a pas renvoye de lien."));
-      window.location.href = payload.checkoutUrl;
+      const openResult = await openExternalUrlForRuntime(payload.checkoutUrl);
+      if (!openResult.opened) throw new Error(t("support.checkoutError", "Ouverture Stripe impossible."));
     } catch (error) {
       setErrorMessage(error?.message || t("support.checkoutError", "Ouverture Stripe impossible."));
     } finally {
@@ -432,7 +434,8 @@ export default function SupportProjectTab({ session }) {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || t("support.portalError", "Portail Stripe indisponible."));
       if (!payload.portalUrl) throw new Error(t("support.portalMissingUrl", "Stripe n'a pas renvoye de lien."));
-      window.open(payload.portalUrl, "_blank", "noopener,noreferrer");
+      const openResult = await openExternalUrlForRuntime(payload.portalUrl, { newTab: true });
+      if (!openResult.opened) throw new Error(t("support.portalError", "Portail Stripe indisponible."));
     } catch (error) {
       setErrorMessage(error?.message || t("support.portalError", "Portail Stripe indisponible."));
     } finally {

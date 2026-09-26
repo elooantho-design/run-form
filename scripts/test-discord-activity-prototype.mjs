@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
-  getDiscordActivityPortalRedirectUrl,
+  getBootstrapRenderPath,
   hasDiscordActivityLaunchParams,
+  openExternalUrlForRuntime,
+  shouldRenderPortalForDiscordActivityRoot,
 } from "../src/lib/discordActivity.js";
 
 const packageJson = JSON.parse(
@@ -94,29 +96,47 @@ assert.doesNotMatch(
 );
 
 assert.equal(
-  getDiscordActivityPortalRedirectUrl("https://run-form-tau.vercel.app/"),
-  "",
-  "Normal browser root must keep the historical root page",
+  getBootstrapRenderPath("https://run-form-tau.vercel.app/"),
+  "/",
+  "Normal browser root must keep the historical root page render path",
 );
 
 assert.equal(
-  getDiscordActivityPortalRedirectUrl("https://run-form-tau.vercel.app/?frame_id=f1&instance_id=i1&platform=desktop"),
-  "/portal?frame_id=f1&instance_id=i1&platform=desktop",
-  "Discord Activity root must redirect to Portal while preserving required query params",
+  getBootstrapRenderPath("https://run-form-tau.vercel.app/?frame_id=f1&instance_id=i1&platform=desktop"),
+  "/portal",
+  "Discord desktop Activity root must render Portal without a top-level redirect",
 );
 
 assert.equal(
-  getDiscordActivityPortalRedirectUrl(
+  getBootstrapRenderPath("https://run-form-tau.vercel.app/?frame_id=f1&instance_id=i1&platform=android"),
+  "/portal",
+  "Discord Android Activity root uses the same Portal render path as desktop",
+);
+
+assert.equal(
+  getBootstrapRenderPath("https://run-form-tau.vercel.app/?frame_id=f1&instance_id=i1&platform=ios"),
+  "/portal",
+  "Discord iOS Activity root uses the same Portal render path as desktop",
+);
+
+assert.equal(
+  getBootstrapRenderPath("https://run-form-tau.vercel.app/portal?frame_id=f1&instance_id=i1&platform=desktop"),
+  "/portal",
+  "Portal route must render Portal directly without a redirect loop",
+);
+
+assert.equal(
+  getBootstrapRenderPath("https://run-form-tau.vercel.app/dashboard/G1?frame_id=f1&instance_id=i1&platform=desktop"),
+  "/dashboard/G1",
+  "Dashboard routes remain internal routes in Discord Activity",
+);
+
+assert.equal(
+  shouldRenderPortalForDiscordActivityRoot(
     "https://run-form-tau.vercel.app/?frame_id=f1&instance_id=i1&platform=desktop&channel_id=c1#ready",
   ),
-  "/portal?frame_id=f1&instance_id=i1&platform=desktop&channel_id=c1#ready",
-  "Discord Activity redirect must preserve extra query params and hash",
-);
-
-assert.equal(
-  getDiscordActivityPortalRedirectUrl("https://run-form-tau.vercel.app/portal?frame_id=f1&instance_id=i1&platform=desktop"),
-  "",
-  "Portal route must not redirect again",
+  true,
+  "Discord Activity root launch is detected while keeping SDK query params on the current URL",
 );
 
 assert.equal(
@@ -127,14 +147,92 @@ assert.equal(
 
 assert.match(
   mainSource,
-  /getDiscordActivityPortalRedirectUrl\(window\.location\)/,
-  "Main bootstrap must check Discord Activity root launch before rendering the historical root",
+  /getBootstrapRenderPath\(window\.location\)/,
+  "Main bootstrap must derive the render path before choosing Portal/dashboard/root",
 );
 
-assert.match(
+assert.doesNotMatch(
   mainSource,
-  /window\.location\.replace\(discordActivityPortalRedirectUrl\)/,
-  "Discord Activity root launch must use a replace redirect to Portal",
+  /window\.location\.replace/,
+  "Discord Activity root launch must not perform a top-level replace navigation",
+);
+
+assert.doesNotMatch(
+  mainSource,
+  /const finalPath = window\.location\.pathname/,
+  "Main bootstrap must not depend only on the physical pathname for Discord Activity root launches",
+);
+
+const externalCalls = [];
+const fakeDiscordSdk = {
+  commands: {
+    async openExternalLink(args) {
+      externalCalls.push(args);
+      return { opened: true };
+    },
+  },
+};
+
+assert.deepEqual(
+  await openExternalUrlForRuntime("https://discord.com/channels/1/2/3", {
+    discordActivity: true,
+    discordSdk: fakeDiscordSdk,
+    windowRef: {
+      location: { href: "https://1552374112159277217.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=android" },
+    },
+  }),
+  { opened: true, mode: "discord", result: { opened: true } },
+  "Discord Activity external links must use Discord openExternalLink",
+);
+
+assert.deepEqual(
+  externalCalls,
+  [{ url: "https://discord.com/channels/1/2/3" }],
+  "Discord openExternalLink receives the normalized external URL",
+);
+
+const blockedDiscordWindowRef = {
+  location: { href: "https://1552374112159277217.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=ios" },
+};
+assert.deepEqual(
+  await openExternalUrlForRuntime("https://example.com/outside", {
+    discordActivity: true,
+    initializeSdk: false,
+    windowRef: blockedDiscordWindowRef,
+  }),
+  { opened: false, mode: "discord-sdk-unavailable" },
+  "Discord Activity must not fall back to a direct top-level navigation when the SDK is unavailable",
+);
+assert.equal(
+  blockedDiscordWindowRef.location.href,
+  "https://1552374112159277217.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=ios",
+  "blocked Discord external links leave the Activity URL unchanged",
+);
+
+const browserOpenCalls = [];
+await openExternalUrlForRuntime("https://example.com/docs", {
+  discordActivity: false,
+  newTab: true,
+  windowRef: {
+    location: { href: "https://run-form-tau.vercel.app/portal" },
+    open: (...args) => browserOpenCalls.push(args),
+  },
+});
+assert.deepEqual(
+  browserOpenCalls,
+  [["https://example.com/docs", "_blank", "noopener,noreferrer"]],
+  "normal browsers keep the standard new-tab behavior for external links",
+);
+
+const browserWindowRef = { location: { href: "https://run-form-tau.vercel.app/portal" } };
+await openExternalUrlForRuntime("https://checkout.stripe.com/test", {
+  discordActivity: false,
+  windowRef: browserWindowRef,
+});
+assert.equal(
+  browserWindowRef.location.href,
+  "https://checkout.stripe.com/test",
+  "normal browsers keep same-tab external navigation when requested",
 );
 
 console.log("discord activity prototype guards passed");
