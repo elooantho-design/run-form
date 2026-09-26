@@ -144,6 +144,12 @@ assert.match(discordSource, /verification_attempts/, "Discord purge reports fina
 
 assert.match(serverSource, /handleDiscordReproComponentInteraction/, "Discord component interactions use the workflow router");
 assert.match(serverSource, /handleDiscordReproModalInteraction/, "Discord modals use the workflow router");
+assert.match(discordSource, /GUILD_DM_ACK_PREFIX = "gdmack:"/, "guild DM ack buttons are known by the HTTP interaction router");
+assert.ok(
+  discordSource.indexOf("isGuildDmAckCustomId(customId)") < discordSource.indexOf('return discordEphemeral("Interaction Discord non geree.")'),
+  "gdmack buttons must be routed before the generic Discord fallback",
+);
+assert.match(discordSource, /handleGuildDmAckHttpInteraction/, "gdmack buttons have a dedicated HTTP interaction handler");
 
 assert.match(migrationSql, /create table if not exists public\.gvg_discord_repro_controls/);
 assert.match(migrationSql, /create table if not exists public\.gvg_discord_repro_participants/);
@@ -153,7 +159,10 @@ assert.match(migrationSql, /add column if not exists min_awakenings jsonb/);
 assert.match(verifySql, /duplicate_active_controls/);
 assert.match(verifySql, /duplicate_active_participants/);
 
-const { purgeDiscordReproChannelForGuild } = await import("../src/lib/discordReproServer.js");
+const {
+  handleDiscordReproComponentInteraction,
+  purgeDiscordReproChannelForGuild,
+} = await import("../src/lib/discordReproServer.js");
 
 function makeDiscordSnowflake(ms = Date.now()) {
   return String((BigInt(ms - 1420070400000) << 22n) + 1n);
@@ -201,6 +210,141 @@ function makeSupabaseMock() {
   };
 }
 
+function makeGuildDmAckSupabaseMock() {
+  const db = {
+    guild_dm_campaigns: [
+      { id: "campaign-ack", status: "sending", sent_count: 1, confirmed_count: 0, failed_count: 0 },
+    ],
+    guild_dm_recipients: [
+      {
+        id: "recipient-ack",
+        campaign_id: "campaign-ack",
+        discord_user_id: "user-ack",
+        status: "sent",
+        sent_at: "2026-09-26T10:00:00Z",
+        confirmed_at: null,
+      },
+    ],
+  };
+
+  function createQuery(table) {
+    return {
+      table,
+      filters: [],
+      updatePayload: null,
+      selectColumns: "",
+      select(columns = "*") {
+        this.selectColumns = columns;
+        return this;
+      },
+      update(payload) {
+        this.updatePayload = payload;
+        return this;
+      },
+      eq(column, value) {
+        this.filters.push([column, value]);
+        return this;
+      },
+      filterRows() {
+        return (db[this.table] || []).filter((row) =>
+          this.filters.every(([column, value]) => String(row[column]) === String(value)),
+        );
+      },
+      execute() {
+        const rows = this.filterRows();
+        if (this.updatePayload) {
+          for (const row of rows) Object.assign(row, this.updatePayload);
+        }
+        return { data: rows.map((row) => ({ ...row })), error: null };
+      },
+      maybeSingle() {
+        const result = this.execute();
+        return Promise.resolve({ data: result.data[0] || null, error: null });
+      },
+      single() {
+        const result = this.execute();
+        return Promise.resolve({ data: result.data[0] || null, error: null });
+      },
+      then(resolve, reject) {
+        return Promise.resolve(this.execute()).then(resolve, reject);
+      },
+    };
+  }
+
+  return {
+    db,
+    from(table) {
+      return createQuery(table);
+    },
+  };
+}
+
+async function testGuildDmAckHttpRouting() {
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.DISCORD_BOT_TOKEN;
+  process.env.DISCORD_BOT_TOKEN = "test-token";
+
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), method: options.method || "GET", body: options.body ? JSON.parse(options.body) : null });
+    return jsonResponse(200, { ok: true });
+  };
+
+  try {
+    const supabase = makeGuildDmAckSupabaseMock();
+    const interaction = {
+      type: 3,
+      application_id: "app-test",
+      token: "interaction-token",
+      channel_id: "dm-channel",
+      user: { id: "user-ack" },
+      message: { id: "dm-message", channel_id: "dm-channel" },
+      data: { custom_id: "gdmack:recipient-ack" },
+    };
+
+    const response = await handleDiscordReproComponentInteraction(supabase, interaction);
+    assert.equal(response.type, 5, "gdmack must ACK immediately through a deferred response");
+    assert.equal(response.__discordDeferred, true, "gdmack deferred work must be attached to waitUntil by the API layer");
+    await response.deferredTask();
+
+    const recipient = supabase.db.guild_dm_recipients[0];
+    assert.equal(recipient.status, "confirmed", "gdmack confirmation updates recipient status");
+    assert.ok(recipient.confirmed_at, "gdmack confirmation stores confirmed_at");
+    assert.equal(supabase.db.guild_dm_campaigns[0].confirmed_count, 1, "gdmack refreshes campaign counters");
+    assert.ok(
+      requests.some((request) =>
+        request.method === "PATCH" &&
+        request.url.includes("/channels/dm-channel/messages/dm-message") &&
+        request.body?.components?.[0]?.components?.[0]?.disabled === true
+      ),
+      "gdmack disables the Discord button on the original DM message",
+    );
+    assert.ok(
+      requests.some((request) =>
+        request.method === "PATCH" &&
+        request.url.includes("/webhooks/app-test/interaction-token/messages/@original") &&
+        /confirme/.test(request.body?.content || "")
+      ),
+      "gdmack edits the deferred ephemeral response with a confirmation",
+    );
+
+    const secondClick = await handleDiscordReproComponentInteraction(supabase, interaction);
+    assert.equal(secondClick.type, 5, "second gdmack click remains handled");
+    await secondClick.deferredTask();
+    assert.equal(supabase.db.guild_dm_recipients[0].status, "confirmed", "second gdmack click is idempotent");
+
+    const unknown = await handleDiscordReproComponentInteraction(
+      supabase,
+      { type: 3, user: { id: "user-ack" }, data: { custom_id: "unknown_button" } },
+    );
+    assert.match(unknown?.data?.content || "", /non geree/, "unknown buttons keep the generic fallback");
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+    else process.env.DISCORD_BOT_TOKEN = previousToken;
+  }
+}
+
 async function runPurgeVerificationScenario({ verificationPages, verificationErrorAt = 0 }) {
   const previousFetch = globalThis.fetch;
   const previousToken = process.env.DISCORD_BOT_TOKEN;
@@ -238,6 +382,8 @@ async function runPurgeVerificationScenario({ verificationPages, verificationErr
     else process.env.DISCORD_REPRO_CHANNEL_ID_G1 = previousChannel;
   }
 }
+
+await testGuildDmAckHttpRouting();
 
 const staleThenEmpty = await runPurgeVerificationScenario({
   verificationPages: [[{ id: "stale-message" }], []],

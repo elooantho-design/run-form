@@ -8,6 +8,9 @@ const REPRO_REQUEST_TABLE = "gvg_discord_repro_requests";
 const REPRO_CONTROL_TABLE = "gvg_discord_repro_controls";
 const REPRO_PARTICIPANT_TABLE = "gvg_discord_repro_participants";
 const DEFENSE_FOLLOWUP_TABLE = "guild_defense_discord_followups";
+const GUILD_DM_CAMPAIGNS_TABLE = "guild_dm_campaigns";
+const GUILD_DM_RECIPIENTS_TABLE = "guild_dm_recipients";
+const GUILD_DM_ACK_PREFIX = "gdmack:";
 const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
 const DEFENSE_STATUS_VALID = "Valid\u00e9";
 const DISCORD_STATUS_DONE = "\u2705";
@@ -64,6 +67,28 @@ function parseRequestIdFromCustomId(customId, prefix) {
   const value = String(customId || "");
   if (!value.startsWith(prefix)) return "";
   return value.slice(prefix.length).trim();
+}
+
+function isGuildDmAckCustomId(customId) {
+  return String(customId || "").startsWith(GUILD_DM_ACK_PREFIX);
+}
+
+function buildGuildDmAckComponents(recipientId, { disabled = false } = {}) {
+  return [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 3,
+          custom_id: `${GUILD_DM_ACK_PREFIX}${recipientId}`,
+          label: disabled ? "Lu et confirme" : "J'ai lu",
+          emoji: { name: "✅" },
+          disabled: Boolean(disabled),
+        },
+      ],
+    },
+  ];
 }
 
 function normalizeGuildCode(value) {
@@ -493,6 +518,132 @@ async function editDeferredInteractionResponse(interaction, payload) {
     },
     { auth: false, ignoreNotFound: true }
   );
+}
+
+async function editDiscordChannelMessage(channelId, messageId, payload) {
+  const cleanChannelId = String(channelId || "").trim();
+  const cleanMessageId = String(messageId || "").trim();
+  if (!cleanChannelId || !cleanMessageId) return null;
+  return discordRequest(
+    `/channels/${encodeURIComponent(cleanChannelId)}/messages/${encodeURIComponent(cleanMessageId)}`,
+    {
+      method: "PATCH",
+      body: {
+        allowed_mentions: { parse: [] },
+        ...(payload || {}),
+      },
+    },
+    { ignoreNotFound: true }
+  );
+}
+
+async function loadGuildDmRecipientForAck(supabase, recipientId) {
+  const cleanRecipientId = String(recipientId || "").trim();
+  if (!cleanRecipientId) return null;
+  const { data, error } = await supabase
+    .from(GUILD_DM_RECIPIENTS_TABLE)
+    .select("id, campaign_id, discord_user_id, status, confirmed_at")
+    .eq("id", cleanRecipientId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data || null;
+}
+
+async function refreshGuildDmCampaignCounters(supabase, campaignId) {
+  const { data: campaign, error: campaignError } = await supabase
+    .from(GUILD_DM_CAMPAIGNS_TABLE)
+    .select("id, status")
+    .eq("id", campaignId)
+    .maybeSingle();
+
+  if (campaignError) throw campaignError;
+
+  const { data, error } = await supabase
+    .from(GUILD_DM_RECIPIENTS_TABLE)
+    .select("id, status, sent_at, confirmed_at")
+    .eq("campaign_id", campaignId);
+
+  if (error) throw error;
+
+  const recipients = data || [];
+  const sentCount = recipients.filter((row) => ["sent", "confirmed"].includes(row.status) || row.sent_at).length;
+  const confirmedCount = recipients.filter((row) => row.status === "confirmed" || row.confirmed_at).length;
+  const failedCount = recipients.filter((row) => row.status === "failed").length;
+  const queuedCount = recipients.filter((row) => ["queued", "sending"].includes(row.status)).length;
+  const status = campaign?.status === "cancelled"
+    ? "cancelled"
+    : queuedCount > 0 ? "sending" : failedCount > 0 ? "partial" : "completed";
+
+  const { error: updateError } = await supabase
+    .from(GUILD_DM_CAMPAIGNS_TABLE)
+    .update({
+      status,
+      sent_count: sentCount,
+      confirmed_count: confirmedCount,
+      failed_count: failedCount,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", campaignId);
+
+  if (updateError) throw updateError;
+}
+
+async function confirmGuildDmRecipientFromInteraction(supabase, interaction, recipient) {
+  if (!recipient?.id) return null;
+  let confirmedRecipient = recipient;
+
+  if (recipient.status !== "confirmed" || !recipient.confirmed_at) {
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from(GUILD_DM_RECIPIENTS_TABLE)
+      .update({
+        status: "confirmed",
+        confirmed_at: recipient.confirmed_at || now,
+        updated_at: now,
+      })
+      .eq("id", recipient.id)
+      .select("id, campaign_id, discord_user_id, status, confirmed_at")
+      .single();
+
+    if (error) throw error;
+    confirmedRecipient = data;
+    await refreshGuildDmCampaignCounters(supabase, data.campaign_id);
+  }
+
+  const channelId = interaction?.message?.channel_id || interaction?.channel_id || "";
+  const messageId = interaction?.message?.id || "";
+  await editDiscordChannelMessage(channelId, messageId, {
+    components: buildGuildDmAckComponents(recipient.id, { disabled: true }),
+  }).catch((error) => {
+    console.warn("[guild-dm-http] ack button disable failed:", error?.message || error);
+  });
+
+  return confirmedRecipient;
+}
+
+function handleGuildDmAckHttpInteraction(supabase, interaction) {
+  const customId = String(interaction?.data?.custom_id || "");
+  const recipientId = parseRequestIdFromCustomId(customId, GUILD_DM_ACK_PREFIX);
+  return discordDeferredEphemeral(interaction, async () => {
+    if (!recipientId) return "Confirmation introuvable.";
+
+    const recipient = await loadGuildDmRecipientForAck(supabase, recipientId);
+    if (!recipient) return "Cette confirmation n'existe plus.";
+
+    const interactionUserId = String((interaction?.member?.user || interaction?.user || {})?.id || "");
+    if (interactionUserId !== String(recipient.discord_user_id || "")) {
+      return "Ce bouton est reserve au destinataire du message.";
+    }
+
+    await confirmGuildDmRecipientFromInteraction(supabase, interaction, recipient);
+    console.log("[guild-dm-http] confirmed", {
+      campaignId: recipient.campaign_id,
+      recipientId: recipient.id,
+      discordUserId: recipient.discord_user_id,
+    });
+    return "Lu et confirme.";
+  }, { label: "guild_dm_ack", fallback: "Confirmation temporairement indisponible. Reessaie dans un instant." });
 }
 
 async function deleteDeferredInteractionResponse(interaction) {
@@ -2649,6 +2800,10 @@ async function cleanupStoredPublicMessagesForRequest(supabase, requestRow, user)
 export async function handleDiscordReproComponentInteraction(supabase, interaction) {
   const customId = String(interaction?.data?.custom_id || "");
   const user = interaction?.member?.user || interaction?.user || null;
+
+  if (isGuildDmAckCustomId(customId)) {
+    return handleGuildDmAckHttpInteraction(supabase, interaction);
+  }
 
   if (customId.startsWith("gvg_repro_start:")) {
     return buildBastionSelectResponse(parseRequestIdFromCustomId(customId, "gvg_repro_start:"));
