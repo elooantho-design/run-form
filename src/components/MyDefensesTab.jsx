@@ -29,6 +29,7 @@ import {
   resolveDefenseVariantsForGuild,
 } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
 
 const EMPTY_DEFENSE = "--";
 
@@ -875,7 +876,7 @@ function DefenseInfoBlocks({ blocks }) {
           block.blockType === "image" ? (
             <img
               key={block.id}
-              src={block.content}
+              src={resolveVpsAssetUrlForRuntime(block.content)}
               alt={t("defenses.info", "Info defense")}
               className="mx-auto max-h-[180px] w-full rounded-md object-contain"
             />
@@ -928,6 +929,7 @@ function VoteControls({ defense, voteProps }) {
 
 function DefenseBody({ defense, member, championDisplayMap, language }) {
   const { t } = usePortalLanguage();
+  const imageSrc = resolveVpsAssetUrlForRuntime(defense?.image || defense?.image_url || defense?.imageUrl || "");
   const missingConditions = getDefenseConditionRequirements(defense).filter(
     (requirement) => (member?.awakenings?.[requirement.hero] ?? -1) < requirement.minAwakening
   );
@@ -939,8 +941,8 @@ function DefenseBody({ defense, member, championDisplayMap, language }) {
   return (
     <div className="grid gap-4 md:grid-cols-[minmax(0,1.05fr)_minmax(220px,0.95fr)]">
       <div className="flex min-h-[170px] items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-black/45">
-        {defense.image ? (
-          <img src={defense.image} alt={defense.name} className="max-h-[210px] w-full object-contain" />
+        {imageSrc ? (
+          <img src={imageSrc} alt={defense.name} className="max-h-[210px] w-full object-contain" />
         ) : (
           <div className="text-sm text-zinc-500">{t("defenses.noImage", "Aucune image")}</div>
         )}

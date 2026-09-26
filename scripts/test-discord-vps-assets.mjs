@@ -115,4 +115,24 @@ assert.match(
   "profile cosmetic animation layers also use the VPS runtime resolver",
 );
 
+const myDefensesSource = await readFile(
+  new URL("../src/components/MyDefensesTab.jsx", import.meta.url),
+  "utf8",
+);
+assert.match(
+  myDefensesSource,
+  /import \{ resolveVpsAssetUrlForRuntime \} from "@\/lib\/vpsAssets";/,
+  "My defenses imports the VPS runtime resolver",
+);
+assert.match(
+  myDefensesSource,
+  /const imageSrc = resolveVpsAssetUrlForRuntime\(\s*defense\?\.image \|\| defense\?\.image_url \|\| defense\?\.imageUrl \|\| ""\s*\);/,
+  "My defenses maps defense images through the VPS runtime resolver",
+);
+assert.match(
+  myDefensesSource,
+  /src=\{resolveVpsAssetUrlForRuntime\(block\.content\)\}/,
+  "My defenses info image blocks also use the VPS runtime resolver",
+);
+
 console.log("discord vps asset mapping guards passed");
