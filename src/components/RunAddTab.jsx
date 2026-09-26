@@ -5,12 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import HeroDirectionOverlay from "@/components/HeroDirectionOverlay";
+import HeroPortraitImage from "@/components/HeroPortraitImage";
 import { buildChampionDisplayMap, translateChampionName } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
 import { HERO_DIRECTION_OPTIONS } from "@/lib/heroDirectionOverlay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
-import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import { getRunGridSpec } from "@/run-config/gridConfig";
 
 const MAX_SLOTS = 5;
@@ -32,23 +32,6 @@ function norm(value) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
-}
-
-function normalizeChampionName(name) {
-  if (!name) return "";
-  return String(name)
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\d+$/, "");
-}
-
-function getHeroImageSrc(heroName) {
-  const name = normalizeChampionName(heroName);
-  if (!name) return "";
-  const fileName = `${name}.png`;
-  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
 }
 
 const LOCAL_API_PORT = 3000;
@@ -508,13 +491,11 @@ useEffect(() => {
                                         {isSelected ? (
                                           slot && slot.hero ? (
                                             <div className="relative flex h-full w-full items-center justify-center overflow-visible">
-                                              <img
-                                                src={getHeroImageSrc(slot.hero)}
+                                              <HeroPortraitImage
+                                                heroName={slot.hero}
+                                                championDisplayMap={championDisplayMap}
                                                 alt={translateChampionName(slot.hero, championDisplayMap, language)}
                                                 className="max-h-[72%] max-w-[72%] object-contain"
-                                                onError={(e) => {
-                                                  e.currentTarget.style.display = "none";
-                                                }}
                                               />
 
                                               <HeroDirectionOverlay direction={slot.dir} />
@@ -610,13 +591,11 @@ useEffect(() => {
                                     {isSelected ? (
                                       slot && slot.hero ? (
                                         <div className="relative flex h-full w-full items-center justify-center overflow-visible">
-                                          <img
-                                            src={getHeroImageSrc(slot.hero)}
+                                          <HeroPortraitImage
+                                            heroName={slot.hero}
+                                            championDisplayMap={championDisplayMap}
                                             alt={translateChampionName(slot.hero, championDisplayMap, language)}
                                             className="max-h-[72%] max-w-[72%] object-contain"
-                                            onError={(e) => {
-                                              e.currentTarget.style.display = "none";
-                                            }}
                                           />
 
                                           <HeroDirectionOverlay direction={slot.dir} />

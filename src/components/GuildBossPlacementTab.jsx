@@ -15,8 +15,8 @@ import HeroDirectionOverlay from "@/components/HeroDirectionOverlay";
 import { getChampionDisplayName, getChampionFieldValue, normalizeChampionLookupKey } from "@/lib/championDisplay";
 import { fetchPortalChampions } from "@/lib/portalChampions";
 import { getHeroDirectionOverlayBox } from "@/lib/heroDirectionOverlay";
+import { getChampionPortraitImageSources } from "@/lib/heroPortraits";
 import { usePortalLanguage } from "@/lib/portalLanguage";
-import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
   GUILD_BOSS_CALIBRATION_STORAGE_KEY,
   GUILD_BOSS_DIRECTIONS,
@@ -53,42 +53,6 @@ function normalizeRoleValue(role) {
 
 function isLeaderSession(session) {
   return Boolean(session?.isLeader || session?.leader || normalizeRoleValue(session?.role) === "leader");
-}
-
-function normalizeImageFile(value) {
-  const normalized = String(value || "")
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
-
-  return normalized ? `${normalized}.png` : "";
-}
-
-function getChampionImageFile(champion) {
-  const configured = getChampionFieldValue(champion, [
-    "image_file",
-    "imageFile",
-    "portrait",
-    "hero_image",
-    "heroImage",
-    "portal_name",
-    "portalName",
-    "name",
-  ]);
-
-  return normalizeImageFile(configured || champion?.name);
-}
-
-function getChampionLocalImageUrl(champion) {
-  const fileName = getChampionImageFile(champion);
-  return fileName ? `/heroes/${fileName}` : "";
-}
-
-function getChampionRemoteImageUrl(champion) {
-  const fileName = getChampionImageFile(champion);
-  return buildPublicHeroUrl(fileName);
 }
 
 function getChampionInitials(champion, language) {
@@ -219,7 +183,8 @@ async function renderPlacementBlob({ map, placements, championById, includeGrid,
     const cellWidth = geometry.cellWidth * width;
     const cellHeight = geometry.cellHeight * height;
     const radius = Math.min(cellWidth, cellHeight) * getGuildBossHeroExportRadiusScale(map);
-    const imageUrl = getChampionLocalImageUrl(champion);
+    const imageSources = getChampionPortraitImageSources(champion);
+    const imageUrl = imageSources.find((src) => src.startsWith("/heroes/")) || imageSources[0] || "";
 
     try {
       const heroImage = await loadImage(imageUrl);
@@ -302,8 +267,7 @@ function buildHeroOption(champion, language) {
     displayName,
     technicalName,
     searchKey,
-    localImageUrl: getChampionLocalImageUrl(champion),
-    remoteImageUrl: getChampionRemoteImageUrl(champion),
+    imageSources: getChampionPortraitImageSources(champion),
   };
 }
 
@@ -313,9 +277,7 @@ function HeroPortrait({ option, className = "" }) {
 
   if (!option) return null;
 
-  const imageSources = [option.localImageUrl, option.remoteImageUrl].filter(
-    (src, index, sources) => src && sources.indexOf(src) === index,
-  );
+  const imageSources = Array.isArray(option.imageSources) ? option.imageSources : [];
   const src = imageSources.find((imageSource) => !failedSources.includes(imageSource)) || "";
 
   return src ? (

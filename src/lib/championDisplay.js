@@ -68,11 +68,21 @@ export function buildChampionDisplayMap(champions = []) {
     const technicalName = getChampionTechnicalName(champion);
     const portalName = getChampionPortalDisplayName(champion) || technicalName;
     const englishName = getChampionEnglishName(champion);
+    const imageFile = String(
+      getChampionFieldValue(champion, [
+        "image_file",
+        "imageFile",
+        "portrait",
+        "hero_image",
+        "heroImage",
+      ]) || "",
+    ).trim();
     const entry = {
       id: champion?.id || null,
       technicalName,
       portalName,
       englishName,
+      imageFile,
       displayFr: portalName || technicalName,
       displayEn: englishName || portalName || technicalName,
     };
