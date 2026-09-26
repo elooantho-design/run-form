@@ -9,6 +9,7 @@ export const GUILD_DM_CAMPAIGN_STATUSES = new Set([
   "completed",
   "partial",
   "failed",
+  "cancelled",
 ]);
 
 export const GUILD_DM_RECIPIENT_STATUSES = new Set([
@@ -17,6 +18,7 @@ export const GUILD_DM_RECIPIENT_STATUSES = new Set([
   "sent",
   "confirmed",
   "failed",
+  "cancelled",
 ]);
 
 function cleanText(value) {
@@ -244,11 +246,16 @@ export function serializeGuildDmCampaign(row, recipients = []) {
   const recipientRows = Array.isArray(recipients) ? recipients : [];
   const confirmedCount = recipientRows.filter((recipient) => recipient.confirmed_at || recipient.status === "confirmed").length;
   const failedCount = recipientRows.filter((recipient) => recipient.status === "failed").length;
+  const queuedCount = recipientRows.filter((recipient) => ["queued", "sending"].includes(recipient.status)).length;
+  const cancelledCount = recipientRows.filter((recipient) => recipient.status === "cancelled").length;
   const sentCount = recipientRows.filter((recipient) =>
     ["sent", "confirmed"].includes(recipient.status) || recipient.sent_at,
   ).length;
+  const sentAwaitingCount = recipientRows.filter(
+    (recipient) => !recipient.confirmed_at && recipient.status === "sent",
+  ).length;
   const totalRecipients = Number(row?.total_recipients ?? recipientRows.length) || recipientRows.length;
-  const pendingCount = Math.max(0, totalRecipients - confirmedCount - failedCount);
+  const pendingCount = Math.max(0, queuedCount + sentAwaitingCount);
 
   return {
     id: row?.id || "",
@@ -261,9 +268,12 @@ export function serializeGuildDmCampaign(row, recipients = []) {
     createdByName: row?.created_by_name || "",
     totalRecipients,
     sentCount,
+    sentAwaitingCount,
+    queuedCount,
     confirmedCount,
     pendingCount,
     failedCount,
+    cancelledCount,
     missingDiscordCount: Number(row?.missing_discord_count || 0),
     createdAt: row?.created_at || null,
     sentAt: row?.sent_at || null,

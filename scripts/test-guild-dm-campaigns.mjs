@@ -9,6 +9,7 @@ import {
   normalizeGuildCompareKey,
   resolveManageableGuildRowsForActorFromRows,
   resolveRequestedGuildCodes,
+  serializeGuildDmCampaign,
   summarizeGuildReachability,
   validateGuildDmMessage,
 } from "../api/_guild-dm-campaigns.js";
@@ -82,6 +83,20 @@ assert.deepEqual(
   "recipient plan keeps one row per Discord user",
 );
 
+const serializedCampaign = serializeGuildDmCampaign(
+  { id: "campaign-statuses", total_recipients: 4, status: "sending" },
+  [
+    { id: "queued", status: "queued" },
+    { id: "sent", status: "sent", sent_at: "2026-09-26T10:00:00Z" },
+    { id: "confirmed", status: "confirmed", confirmed_at: "2026-09-26T10:05:00Z" },
+    { id: "failed", status: "failed" },
+  ],
+);
+assert.equal(serializedCampaign.queuedCount, 1, "queued/sending recipients are counted separately");
+assert.equal(serializedCampaign.sentAwaitingCount, 1, "sent-but-unconfirmed recipients are not labelled as queued");
+assert.equal(serializedCampaign.confirmedCount, 1, "confirmed recipients keep their own counter");
+assert.equal(serializedCampaign.failedCount, 1, "failed recipients keep their own counter");
+
 const apiSource = await readFile(new URL("../api/portal-guild-dm.js", import.meta.url), "utf8");
 const helperSource = await readFile(new URL("../api/_guild-dm-campaigns.js", import.meta.url), "utf8");
 const guildManagementSource = await readFile(new URL("../src/components/PortalGuildManagementTab.jsx", import.meta.url), "utf8");
@@ -90,10 +105,18 @@ const migrationSql = await readFile(new URL("../scripts/guild_dm_campaigns.sql",
 const verifySql = await readFile(new URL("../scripts/guild_dm_campaigns_verify.sql", import.meta.url), "utf8");
 const testModeMigrationSql = await readFile(new URL("../scripts/guild_dm_campaigns_test_mode.sql", import.meta.url), "utf8");
 const testModeVerifySql = await readFile(new URL("../scripts/guild_dm_campaigns_test_mode_verify.sql", import.meta.url), "utf8");
+const lifecycleMigrationSql = await readFile(new URL("../scripts/guild_dm_campaigns_lifecycle.sql", import.meta.url), "utf8");
+const lifecycleVerifySql = await readFile(new URL("../scripts/guild_dm_campaigns_lifecycle_verify.sql", import.meta.url), "utf8");
 
 assert.match(apiSource, /requirePortalAdminSession/, "campaign endpoints require admin or leader Portal session");
 assert.match(apiSource, /resolveRequestedGuildCodes/, "backend revalidates manageable guild scope");
 assert.match(apiSource, /action === "create-test-campaign"/, "backend exposes a dedicated test campaign action");
+assert.match(apiSource, /action === "cancel-campaign"/, "backend exposes campaign termination");
+assert.match(apiSource, /action === "delete-campaign"/, "backend exposes permanent campaign deletion");
+assert.match(apiSource, /ACTIVE_RECIPIENT_STATUSES = \["queued", "sending"\]/, "active recipients are protected from deletion");
+assert.match(apiSource, /Termine d'abord la campagne/, "active campaigns cannot be deleted directly");
+assert.match(apiSource, /\.in\("status", ACTIVE_RECIPIENT_STATUSES\)/, "campaign termination only cancels queued/sending recipients");
+assert.match(apiSource, /\.eq\("organization_id", scope\.organizationId\)/, "campaign mutation is scoped to the actor organization");
 assert.match(apiSource, /loadActorMember\(actor\.id\)/, "test campaign recipient is resolved from the current member only");
 assert.match(apiSource, /is_test: true/, "test campaigns are explicitly marked");
 assert.match(apiSource, /total_recipients: 1/, "test campaigns create exactly one recipient");
@@ -107,6 +130,9 @@ assert.match(modalSource, /Historique/, "modal has history tab");
 assert.match(modalSource, /M'envoyer un test/, "modal exposes the admin self-test button");
 assert.match(modalSource, /Afficher les tests/, "test campaigns are hidden behind an explicit history toggle");
 assert.match(modalSource, /TEST/, "test campaigns are visibly badged in the UI");
+assert.match(modalSource, /Envoyes - confirmation en attente/, "sent-but-unconfirmed recipients have an explicit section");
+assert.match(modalSource, /Terminer la campagne/, "modal exposes campaign termination");
+assert.match(modalSource, /Supprimer definitivement/, "modal exposes permanent campaign deletion");
 assert.match(modalSource, /retry-pending/, "modal exposes retry for non-confirmed recipients");
 assert.doesNotMatch(guildManagementSource, /active === ["']guild-dm|Messages prives Discord["']\s*:/, "no main dashboard navigation tab is introduced");
 assert.match(migrationSql, /create table if not exists public\.guild_dm_campaigns/, "migration creates campaigns table");
@@ -116,5 +142,7 @@ assert.match(verifySql, /cross_organization_recipients/, "verify checks tenant i
 assert.match(testModeMigrationSql, /add column if not exists is_test boolean not null default false/, "test-mode migration marks test campaigns");
 assert.match(testModeMigrationSql, /guild_dm_campaigns_org_is_test_created_idx/, "test-mode migration indexes history filtering");
 assert.match(testModeVerifySql, /test_campaign_recipient_count_violations/, "test-mode verify checks single-recipient test campaigns");
+assert.match(lifecycleMigrationSql, /'cancelled'/, "lifecycle migration allows cancelled statuses");
+assert.match(lifecycleVerifySql, /recipients_campaign_fk_delete_rule/, "lifecycle verify checks cascade deletion");
 
 console.log("guild DM campaign tests passed");

@@ -35,6 +35,8 @@ const MAX_HISTORY_ROWS = 80;
 const CAMPAIGN_SELECT_COLUMNS =
   "id, organization_id, created_by_member_id, created_by_name, message, target_guild_codes, status, total_recipients, sent_count, confirmed_count, failed_count, missing_discord_count, sent_at, created_at, updated_at";
 const CAMPAIGN_SELECT_COLUMNS_WITH_TEST = `${CAMPAIGN_SELECT_COLUMNS}, is_test`;
+const ACTIVE_RECIPIENT_STATUSES = ["queued", "sending"];
+const ACTIVE_CAMPAIGN_STATUSES = ["queued", "sending", "partial"];
 
 function sendJson(res, status, payload) {
   sendPortalJson(res, status, payload, res._portalReq || null);
@@ -46,6 +48,18 @@ function cleanText(value) {
 
 function getActorName(actor) {
   return cleanText(actor?.watcher_name || actor?.discord_id || "Admin");
+}
+
+function isLifecycleConstraintError(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return error?.code === "23514" && message.includes("status");
+}
+
+function throwLifecycleMigrationErrorIfNeeded(error) {
+  if (!isLifecycleConstraintError(error)) return;
+  const migrationError = new Error("Migration guild_dm_campaigns_lifecycle non executee.");
+  migrationError.statusCode = 428;
+  throw migrationError;
 }
 
 async function loadActivePortalGuildRows() {
@@ -267,6 +281,14 @@ async function refreshCampaignCounters(campaignId) {
     .eq("id", campaignId);
 
   if (updateError) throw updateError;
+}
+
+function getActiveRecipients(detail) {
+  return (detail?.recipients || []).filter((recipient) => ACTIVE_RECIPIENT_STATUSES.includes(recipient.status));
+}
+
+function canCancelCampaign(campaign) {
+  return ACTIVE_CAMPAIGN_STATUSES.includes(campaign?.status);
 }
 
 async function handleSummary(req, res, actor) {
@@ -515,6 +537,11 @@ async function handleRetryPending(res, actor, body) {
   try {
     const scope = await resolveGuildDmScope(actor);
     const detail = await loadCampaignDetail(scope.organizationId, body?.campaignId);
+    if (detail.campaign.status === "cancelled") {
+      const error = new Error("Campagne terminee : relance impossible.");
+      error.statusCode = 409;
+      throw error;
+    }
     const retryRecipients = detail.recipients.filter(
       (recipient) => recipient.status === "sent" && !recipient.confirmedAt,
     );
@@ -562,6 +589,98 @@ async function handleRetryPending(res, actor, body) {
     sendJson(res, error?.statusCode || 500, {
       ok: false,
       error: error?.message || "Relance des non-confirmes impossible.",
+    });
+  }
+}
+
+async function handleCancelCampaign(res, actor, body) {
+  try {
+    const scope = await resolveGuildDmScope(actor);
+    const detail = await loadCampaignDetail(scope.organizationId, body?.campaignId);
+    if (!canCancelCampaign(detail.campaign)) {
+      sendJson(res, 200, {
+        ok: true,
+        mode: "cancel-campaign",
+        cancelledCount: 0,
+        ...detail,
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const { data: cancelledRecipients, error: recipientError } = await supabase
+      .from(GUILD_DM_RECIPIENTS_TABLE)
+      .update({
+        status: "cancelled",
+        last_error: "Campagne terminee par un admin.",
+        updated_at: now,
+      })
+      .eq("campaign_id", detail.campaign.id)
+      .in("status", ACTIVE_RECIPIENT_STATUSES)
+      .select("id");
+
+    if (recipientError) {
+      throwLifecycleMigrationErrorIfNeeded(recipientError);
+      throw recipientError;
+    }
+
+    const { error: campaignError } = await supabase
+      .from(GUILD_DM_CAMPAIGNS_TABLE)
+      .update({
+        status: "cancelled",
+        updated_at: now,
+      })
+      .eq("id", detail.campaign.id)
+      .eq("organization_id", scope.organizationId);
+
+    if (campaignError) {
+      throwLifecycleMigrationErrorIfNeeded(campaignError);
+      throw campaignError;
+    }
+
+    const refreshed = await loadCampaignDetail(scope.organizationId, detail.campaign.id);
+    sendJson(res, 200, {
+      ok: true,
+      mode: "cancel-campaign",
+      cancelledCount: (cancelledRecipients || []).length,
+      ...refreshed,
+    });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, {
+      ok: false,
+      error: error?.message || "Terminaison de campagne impossible.",
+    });
+  }
+}
+
+async function handleDeleteCampaign(res, actor, body) {
+  try {
+    const scope = await resolveGuildDmScope(actor);
+    const detail = await loadCampaignDetail(scope.organizationId, body?.campaignId);
+    const activeRecipients = getActiveRecipients(detail);
+    if (activeRecipients.length) {
+      const error = new Error("Termine d'abord la campagne avant de la supprimer definitivement.");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const { error } = await supabase
+      .from(GUILD_DM_CAMPAIGNS_TABLE)
+      .delete()
+      .eq("id", detail.campaign.id)
+      .eq("organization_id", scope.organizationId);
+
+    if (error) throw error;
+
+    sendJson(res, 200, {
+      ok: true,
+      mode: "delete-campaign",
+      deletedCampaignId: detail.campaign.id,
+    });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, {
+      ok: false,
+      error: error?.message || "Suppression de campagne impossible.",
     });
   }
 }
@@ -620,6 +739,14 @@ export default async function handler(req, res) {
   }
   if (action === "retry-pending") {
     await handleRetryPending(res, sessionCheck.member, body);
+    return;
+  }
+  if (action === "cancel-campaign") {
+    await handleCancelCampaign(res, sessionCheck.member, body);
+    return;
+  }
+  if (action === "delete-campaign") {
+    await handleDeleteCampaign(res, sessionCheck.member, body);
     return;
   }
 

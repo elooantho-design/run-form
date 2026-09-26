@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Bell, CheckCircle2, Clock3, Mail, RefreshCw, Send, X, XCircle } from "lucide-react";
+import { AlertTriangle, Bell, CheckCircle2, Clock3, Mail, RefreshCw, Send, Trash2, X, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -53,10 +53,10 @@ async function fetchGuildDmJson(url, options = {}) {
 function groupRecipientsByStatus(recipients) {
   return {
     confirmed: recipients.filter((recipient) => recipient.confirmedAt || recipient.status === "confirmed"),
-    pending: recipients.filter(
-      (recipient) => !recipient.confirmedAt && !["confirmed", "failed"].includes(recipient.status),
-    ),
+    queued: recipients.filter((recipient) => ["queued", "sending"].includes(recipient.status)),
+    sent: recipients.filter((recipient) => !recipient.confirmedAt && recipient.status === "sent"),
     failed: recipients.filter((recipient) => recipient.status === "failed"),
+    cancelled: recipients.filter((recipient) => recipient.status === "cancelled"),
   };
 }
 
@@ -115,6 +115,29 @@ function RecipientTable({ title, icon, recipients, emptyLabel, renderMeta }) {
   );
 }
 
+function CampaignCounters({ campaign }) {
+  const badges = [
+    ["Destinataires", campaign.totalRecipients, "border-zinc-700 bg-zinc-950 text-zinc-200"],
+    ["En file", campaign.queuedCount || 0, "border-amber-500/30 bg-amber-500/10 text-amber-200"],
+    ["Envoyés", campaign.sentAwaitingCount || 0, "border-sky-500/30 bg-sky-500/10 text-sky-200"],
+    ["Confirmés", campaign.confirmedCount || 0, "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"],
+    ["Échecs", campaign.failedCount || 0, "border-red-500/30 bg-red-500/10 text-red-200"],
+  ];
+  if (campaign.cancelledCount > 0) {
+    badges.push(["Annulés", campaign.cancelledCount, "border-zinc-600 bg-zinc-800/70 text-zinc-300"]);
+  }
+
+  return (
+    <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+      {badges.map(([label, value, className]) => (
+        <Badge key={label} className={`justify-center rounded-lg py-2 ${className}`}>
+          {label} : {value}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) {
   const [tab, setTab] = useState("new");
   const [summary, setSummary] = useState(null);
@@ -130,6 +153,9 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
   const [campaignDetail, setCampaignDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [showTests, setShowTests] = useState(false);
 
   const manageableGuilds = useMemo(() => summary?.manageableGuilds || [], [summary]);
@@ -168,6 +194,8 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
     [campaignDetail],
   );
   const testDeliveryState = getTestDeliveryState(campaignDetail?.campaign?.isTest ? campaignDetail : null);
+  const campaignIsActive = ["queued", "sending", "partial"].includes(campaignDetail?.campaign?.status);
+  const campaignHasActiveRecipients = detailGroups.queued.length > 0;
 
   const loadSummary = useCallback(async ({ keepSelection = true } = {}) => {
     setLoading(true);
@@ -201,6 +229,7 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
       );
       setCampaignDetail(payload);
       setSelectedCampaignId(campaignId);
+      setDeleteConfirmOpen(false);
     } catch (loadError) {
       setError(loadError?.message || "Detail de campagne impossible.");
     } finally {
@@ -301,6 +330,58 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
     }
   }
 
+  async function cancelCampaign() {
+    if (!campaignDetail?.campaign?.id || cancelling) return;
+    setCancelling(true);
+    setError("");
+    setNotice("");
+    setDeleteConfirmOpen(false);
+    try {
+      const payload = await fetchGuildDmJson("/api/portal-guild-dm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "cancel-campaign",
+          campaignId: campaignDetail.campaign.id,
+        }),
+      });
+      setCampaignDetail(payload);
+      setNotice("Campagne terminee. Les destinataires encore en file ne seront plus envoyes.");
+      await loadSummary({ keepSelection: true });
+    } catch (cancelError) {
+      setError(cancelError?.message || "Terminaison impossible.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function deleteCampaign() {
+    if (!campaignDetail?.campaign?.id || deleting) return;
+    setDeleting(true);
+    setError("");
+    setNotice("");
+    try {
+      const deletedId = campaignDetail.campaign.id;
+      await fetchGuildDmJson("/api/portal-guild-dm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete-campaign",
+          campaignId: deletedId,
+        }),
+      });
+      setCampaignDetail(null);
+      setSelectedCampaignId("");
+      setDeleteConfirmOpen(false);
+      setNotice("Historique de campagne supprime definitivement.");
+      await loadSummary({ keepSelection: true });
+    } catch (deleteError) {
+      setError(deleteError?.message || "Suppression impossible.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const canPreview =
     schemaReady &&
     selectedGuildCodes.length > 0 &&
@@ -331,7 +412,7 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
           <button
             type="button"
             className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
-            disabled={saving || retrying || testSending}
+            disabled={saving || retrying || testSending || cancelling || deleting}
             onClick={onClose}
             title="Fermer"
           >
@@ -590,8 +671,9 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                       </div>
                       <div className="mt-3 text-sm text-zinc-300">"{truncateMessage(campaign.messagePreview || campaign.message)}"</div>
                       <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-400">
+                        <span>File {campaign.queuedCount || 0}</span>
+                        <span>Envoyes {campaign.sentAwaitingCount || 0}</span>
                         <span>OK {campaign.confirmedCount}</span>
-                        <span>Attente {campaign.pendingCount}</span>
                         <span>Echecs {campaign.failedCount}</span>
                       </div>
                     </button>
@@ -641,35 +723,94 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                         {campaignDetail.campaign.message}
                       </div>
 
-                      <div className="mt-4 grid gap-2 sm:grid-cols-4">
-                        <Badge className="justify-center rounded-lg border-zinc-700 bg-zinc-950 py-2 text-zinc-200">
-                          {campaignDetail.campaign.totalRecipients} destinataires
-                        </Badge>
-                        <Badge className="justify-center rounded-lg border-emerald-500/30 bg-emerald-500/10 py-2 text-emerald-200">
-                          {campaignDetail.campaign.confirmedCount} confirmes
-                        </Badge>
-                        <Badge className="justify-center rounded-lg border-amber-500/30 bg-amber-500/10 py-2 text-amber-200">
-                          {campaignDetail.campaign.pendingCount} en attente
-                        </Badge>
-                        <Badge className="justify-center rounded-lg border-red-500/30 bg-red-500/10 py-2 text-red-200">
-                          {campaignDetail.campaign.failedCount} echecs
-                        </Badge>
-                      </div>
+                      <CampaignCounters campaign={campaignDetail.campaign} />
 
                       <div className="mt-4 flex flex-wrap justify-end gap-2">
+                        {campaignIsActive ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-lg border-zinc-600 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                            disabled={cancelling || retrying || deleting}
+                            onClick={cancelCampaign}
+                          >
+                            <XCircle className="mr-2 h-4 w-4" />
+                            {cancelling ? "Terminaison..." : "Terminer la campagne"}
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           variant="outline"
                           className="rounded-lg border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
-                          disabled={retrying || detailGroups.pending.filter((recipient) => recipient.status === "sent").length === 0}
+                          disabled={
+                            retrying ||
+                            deleting ||
+                            campaignDetail.campaign.status === "cancelled" ||
+                            detailGroups.sent.length === 0
+                          }
                           onClick={retryPendingRecipients}
                         >
                           <Bell className="mr-2 h-4 w-4" />
                           {retrying ? "Relance..." : "Relancer les non-confirmes"}
                         </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-lg border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20"
+                          disabled={deleting || cancelling || campaignHasActiveRecipients}
+                          onClick={() => setDeleteConfirmOpen(true)}
+                          title={campaignHasActiveRecipients ? "Termine d'abord la campagne." : "Supprimer definitivement"}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Supprimer definitivement
+                        </Button>
                       </div>
+
+                      {deleteConfirmOpen ? (
+                        <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 p-4">
+                          <div className="font-semibold text-red-100">Supprimer definitivement cette campagne ?</div>
+                          <div className="mt-2 text-sm leading-6 text-red-100/90">
+                            Le message, les destinataires, les confirmations et les statistiques seront supprimes du dashboard.
+                            Cette action est irreversible. Les MP deja recus dans Discord ne seront pas supprimes.
+                          </div>
+                          <div className="mt-4 flex flex-wrap justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="rounded-lg border-zinc-700 text-zinc-200"
+                              disabled={deleting}
+                              onClick={() => setDeleteConfirmOpen(false)}
+                            >
+                              Annuler
+                            </Button>
+                            <Button
+                              type="button"
+                              className="rounded-lg bg-red-500 text-white hover:bg-red-400"
+                              disabled={deleting}
+                              onClick={deleteCampaign}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              {deleting ? "Suppression..." : "Supprimer definitivement"}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
+                    <RecipientTable
+                      title="En file"
+                      icon={<Clock3 className="h-4 w-4 text-amber-300" />}
+                      recipients={detailGroups.queued}
+                      emptyLabel="Aucun destinataire en file."
+                      renderMeta={(recipient) => recipient.status === "sending" ? "En cours" : "En file"}
+                    />
+                    <RecipientTable
+                      title="Envoyes - confirmation en attente"
+                      icon={<Send className="h-4 w-4 text-sky-300" />}
+                      recipients={detailGroups.sent}
+                      emptyLabel="Aucun MP envoye en attente de confirmation."
+                      renderMeta={(recipient) => formatDateTime(recipient.lastSentAt || recipient.sentAt)}
+                    />
                     <RecipientTable
                       title="Confirmes"
                       icon={<CheckCircle2 className="h-4 w-4 text-emerald-300" />}
@@ -678,20 +819,18 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
                       renderMeta={(recipient) => formatDateTime(recipient.confirmedAt)}
                     />
                     <RecipientTable
-                      title="En attente"
-                      icon={<Clock3 className="h-4 w-4 text-amber-300" />}
-                      recipients={detailGroups.pending}
-                      emptyLabel="Aucun destinataire en attente."
-                      renderMeta={(recipient) =>
-                        recipient.status === "queued" ? "En file" : recipient.lastSentAt || recipient.sentAt ? formatDateTime(recipient.lastSentAt || recipient.sentAt) : "Non envoye"
-                      }
-                    />
-                    <RecipientTable
                       title="Echecs"
                       icon={<XCircle className="h-4 w-4 text-red-300" />}
                       recipients={detailGroups.failed}
                       emptyLabel="Aucun echec d'envoi."
                       renderMeta={(recipient) => recipient.lastError || "Erreur Discord"}
+                    />
+                    <RecipientTable
+                      title="Annules"
+                      icon={<X className="h-4 w-4 text-zinc-400" />}
+                      recipients={detailGroups.cancelled}
+                      emptyLabel="Aucun destinataire annule."
+                      renderMeta={(recipient) => recipient.lastError || "Campagne terminee"}
                     />
                   </div>
                 ) : (
@@ -732,7 +871,7 @@ export default function GuildDmCampaignModal({ activeGuildCode = "", onClose }) 
             type="button"
             variant="outline"
             className="rounded-lg border-zinc-700 text-zinc-200"
-            disabled={saving || retrying || testSending}
+            disabled={saving || retrying || testSending || cancelling || deleting}
             onClick={onClose}
           >
             Fermer
