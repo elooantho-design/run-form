@@ -5,11 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import HeroPortraitImage from "@/components/HeroPortraitImage";
 import { logPortalActivity } from "@/lib/portalActivity";
-import { getChampionDisplayName, getChampionEnglishName } from "@/lib/championDisplay";
+import { buildChampionDisplayMap, getChampionDisplayName, getChampionEnglishName } from "@/lib/championDisplay";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { formatPbAverage, formatPbInputValue, normalizePbRawInput, normalizeStoredPbRaw } from "@/lib/personalBestValues";
-import { buildPublicHeroUrl } from "@/lib/vpsAssets";
 import {
   PALADIN_CLUSTER_GUILD_CODES,
   isPaladinSession,
@@ -31,21 +31,16 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
-function normalizeHeroImageName(heroName) {
-  return String(heroName || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
-function getHeroImageUrl(heroName) {
-  const fileName = `${normalizeHeroImageName(heroName)}.png`;
-  return buildPublicHeroUrl(fileName) || `/heroes/${fileName}`;
-}
-
 function getSessionGuildCode(session) {
   return session?.guildCode || session?.guild_code || "G1";
+}
+
+function renderHeroPortraitFallback(sizeClassName = "h-9 w-9") {
+  return (
+    <div className={`flex ${sizeClassName} items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-[10px] text-zinc-500`}>
+      ?
+    </div>
+  );
 }
 
 function getSessionRole(session) {
@@ -93,17 +88,6 @@ function normalizeAwakeningLookupKey(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
-}
-
-function isMissingPbAwakeningColumn(error) {
-  const message = normalizeText(`${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`);
-
-  return (
-    error?.code === "42703" ||
-    error?.code === "PGRST204" ||
-    (message.includes("awakening_level") &&
-      (message.includes("schema cache") || message.includes("does not exist") || message.includes("column")))
-  );
 }
 
 async function callPortalPlayerData(payload) {
@@ -311,6 +295,8 @@ export default function PersonalBestTab({ session }) {
     );
   }, [session]);
 
+  const championDisplayMap = useMemo(() => buildChampionDisplayMap(allHeroesData), [allHeroesData]);
+
   useEffect(() => {
     setActiveGuildCode((current) => {
       if (!isPaladinScope) return guildCode;
@@ -352,7 +338,12 @@ export default function PersonalBestTab({ session }) {
           (data.champions || []).map((row) => ({
             id: row.id,
             name: row.name,
+            portalName: row.portal_name || row.portalName || "",
+            portal_name: row.portal_name || row.portalName || "",
             englishName: getChampionEnglishName(row),
+            english_name: getChampionEnglishName(row),
+            imageFile: row.image_file || row.imageFile || row.portrait || row.hero_image || row.heroImage || "",
+            image_file: row.image_file || row.imageFile || row.portrait || row.hero_image || row.heroImage || "",
             lord: row.lord || "non-lord",
           })),
         );
@@ -863,10 +854,12 @@ export default function PersonalBestTab({ session }) {
                             >
                               <div className="shrink-0">
                                 {slot.championName ? (
-                                  <img
-                                    src={getHeroImageUrl(slot.championName)}
+                                  <HeroPortraitImage
+                                    heroName={slot.championName}
+                                    championDisplayMap={championDisplayMap}
                                     alt={slotDisplayName}
                                     className="h-8 w-8 rounded-full object-cover"
+                                    fallback={renderHeroPortraitFallback("h-8 w-8")}
                                   />
                                 ) : (
                                   <div className="flex h-9 w-9 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-[10px] text-zinc-500">
@@ -954,10 +947,12 @@ export default function PersonalBestTab({ session }) {
                         <>
                           <div className="flex items-center justify-between gap-3">
                             <div className="flex min-w-0 items-center gap-3">
-                              <img
-                                src={getHeroImageUrl(slot.championName)}
+                              <HeroPortraitImage
+                                heroName={slot.championName}
+                                championDisplayMap={championDisplayMap}
                                 alt={slotDisplayName}
                                 className="h-14 w-14 rounded-full object-cover"
+                                fallback={renderHeroPortraitFallback("h-14 w-14")}
                               />
                               <div className="min-w-0">
                                 <div className="truncate font-medium text-zinc-50">{slotDisplayName}</div>
@@ -1038,7 +1033,13 @@ export default function PersonalBestTab({ session }) {
                       onClick={() => selectPbHero(hero)}
                       className="flex items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 p-3 text-left hover:bg-zinc-800"
                     >
-                      <img src={getHeroImageUrl(hero.name)} alt={hero.displayName} className="h-10 w-10 rounded-full object-cover" />
+                      <HeroPortraitImage
+                        heroName={hero.name}
+                        championDisplayMap={championDisplayMap}
+                        alt={hero.displayName}
+                        className="h-10 w-10 rounded-full object-cover"
+                        fallback={renderHeroPortraitFallback("h-10 w-10")}
+                      />
                       <div className="min-w-0">
                         <div className="truncate text-zinc-100">{hero.displayName}</div>
                         {language === "en" && hero.displayName !== hero.name ? (

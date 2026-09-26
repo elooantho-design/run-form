@@ -7,6 +7,7 @@ export default function HeroPortraitImage({
   alt,
   className = "",
   draggable = false,
+  fallback = null,
 }) {
   const imageSources = useMemo(
     () => getHeroPortraitImageSources(heroName, championDisplayMap),
@@ -17,7 +18,7 @@ export default function HeroPortraitImage({
 
   const sourceIndex = fallbackState.sourceKey === sourceKey ? fallbackState.index : 0;
   const src = imageSources[sourceIndex] || "";
-  if (!src) return null;
+  if (!src) return fallback;
 
   return (
     <img
