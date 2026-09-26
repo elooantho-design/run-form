@@ -10,6 +10,8 @@ import { isDiscordActivityRuntime } from "../src/lib/discordActivity.js";
 const discordClientId = "1552374112159277217";
 const discordLocation = `https://${discordClientId}.discordsays.com/portal?frame_id=f1&instance_id=i1&platform=desktop`;
 const normalLocation = "https://run-form-tau.vercel.app/portal";
+const supabasePublicUrl = "https://axxvzhsbagtksbhngrbe.supabase.co";
+const supabaseDefenseImageUrl = `${supabasePublicUrl}/storage/v1/object/public/defense-images/test.webp`;
 
 assert.equal(
   isDiscordActivityRuntime(discordLocation, { clientId: discordClientId }),
@@ -132,6 +134,56 @@ assert.equal(
 );
 
 assert.equal(
+  resolvePublicAssetProxyUrl(supabaseDefenseImageUrl, {
+    location: normalLocation,
+    discordClientId,
+    supabasePublicUrl,
+  }),
+  supabaseDefenseImageUrl,
+  "normal browser keeps Supabase defense image URLs unchanged",
+);
+
+assert.equal(
+  resolvePublicAssetProxyUrl(supabaseDefenseImageUrl, {
+    location: discordLocation,
+    discordClientId,
+    supabasePublicUrl,
+  }),
+  "/supabase-storage/storage/v1/object/public/defense-images/test.webp",
+  "Discord Activity maps Supabase defense image URLs to the configured storage prefix",
+);
+
+assert.equal(
+  resolvePublicAssetProxyUrl(`${supabaseDefenseImageUrl}?t=123#x`, {
+    location: discordLocation,
+    discordClientId,
+    supabasePublicUrl,
+  }),
+  "/supabase-storage/storage/v1/object/public/defense-images/test.webp?t=123#x",
+  "Discord Activity Supabase mapping preserves query strings and hashes",
+);
+
+assert.equal(
+  resolvePublicAssetProxyUrl(`${supabasePublicUrl}/storage/v1/object/public/other-bucket/test.webp`, {
+    location: discordLocation,
+    discordClientId,
+    supabasePublicUrl,
+  }),
+  `${supabasePublicUrl}/storage/v1/object/public/other-bucket/test.webp`,
+  "Discord Activity does not map other Supabase buckets",
+);
+
+assert.equal(
+  resolvePublicAssetProxyUrl("https://axxvzhsbagtksbhngrbe.supabase.co.evil.com/storage/v1/object/public/defense-images/test.webp", {
+    location: discordLocation,
+    discordClientId,
+    supabasePublicUrl,
+  }),
+  "https://axxvzhsbagtksbhngrbe.supabase.co.evil.com/storage/v1/object/public/defense-images/test.webp",
+  "spoofed Supabase-like domains are not rewritten",
+);
+
+assert.equal(
   buildPublicCalqueUrl("hero", "Bayek.png"),
   "https://vps-aad12be0.vps.ovh.net/assets/calques/hero-calques/Bayek.png",
   "server/no-window context still builds absolute VPS calque URLs",
@@ -190,6 +242,26 @@ assert.doesNotMatch(
   adminDefensesSource,
   /src=\{block\.content\}/,
   "Admin defenses image blocks do not render raw defense image URLs",
+);
+
+const vpsAssetsSource = await readFile(
+  new URL("../src/lib/vpsAssets.js", import.meta.url),
+  "utf8",
+);
+assert.match(
+  vpsAssetsSource,
+  /const SUPABASE_PUBLIC_URL = String\(import\.meta\.env\?\.VITE_SUPABASE_URL \|\| ""\)\.replace\(\/\\\/\+\$\/, ""\);/,
+  "VPS asset resolver derives the Supabase origin from VITE_SUPABASE_URL",
+);
+assert.match(
+  vpsAssetsSource,
+  /const SUPABASE_DEFENSE_IMAGES_PUBLIC_PATH_PREFIX = "\/storage\/v1\/object\/public\/defense-images\/";/,
+  "Supabase mapping is restricted to the defense-images public bucket path",
+);
+assert.match(
+  vpsAssetsSource,
+  /const DISCORD_SUPABASE_STORAGE_PREFIX = "\/supabase-storage";/,
+  "Supabase defense images use the configured Discord storage mapping prefix",
 );
 
 console.log("discord vps asset mapping guards passed");

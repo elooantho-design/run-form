@@ -2,12 +2,15 @@ import { isDiscordActivityRuntime } from "./discordActivity.js";
 
 const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
 const DISCORD_VPS_ASSETS_PREFIX = "/vps-assets";
+const DISCORD_SUPABASE_STORAGE_PREFIX = "/supabase-storage";
+const SUPABASE_DEFENSE_IMAGES_PUBLIC_PATH_PREFIX = "/storage/v1/object/public/defense-images/";
 
 const PUBLIC_ASSETS_BASE_URL = String(
   import.meta.env?.VITE_GVG_PUBLIC_ASSETS_BASE_URL ||
     import.meta.env?.VITE_ASSETS_BASE_URL ||
     DEFAULT_PUBLIC_ASSETS_BASE_URL
 ).replace(/\/+$/, "");
+const SUPABASE_PUBLIC_URL = String(import.meta.env?.VITE_SUPABASE_URL || "").replace(/\/+$/, "");
 
 const CALQUE_FOLDERS = {
   hero: "hero-calques",
@@ -55,6 +58,34 @@ export function resolveVpsAssetUrlForRuntime(url, options = {}) {
   return `${prefix}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
 }
 
+function resolveSupabaseDefenseImageUrlForRuntime(url, options = {}) {
+  const value = String(url || "").trim();
+  const supabasePublicUrl = String(options.supabasePublicUrl || SUPABASE_PUBLIC_URL || "").replace(/\/+$/, "");
+  if (!value || !supabasePublicUrl) return value;
+
+  let parsedUrl;
+  let supabaseBaseUrl;
+  try {
+    parsedUrl = new URL(value);
+    supabaseBaseUrl = new URL(supabasePublicUrl);
+  } catch {
+    return value;
+  }
+
+  if (parsedUrl.origin !== supabaseBaseUrl.origin) return value;
+  if (!parsedUrl.pathname.startsWith(SUPABASE_DEFENSE_IMAGES_PUBLIC_PATH_PREFIX)) return value;
+
+  const useDiscordMapping =
+    typeof options.discordActivity === "boolean"
+      ? options.discordActivity
+      : isDiscordActivityRuntime(options.location, { clientId: options.discordClientId });
+
+  if (!useDiscordMapping) return value;
+
+  const prefix = String(options.supabaseDiscordPrefix || DISCORD_SUPABASE_STORAGE_PREFIX).replace(/\/+$/, "");
+  return `${prefix}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+}
+
 export function buildPublicCalquesBaseUrl(options = {}) {
   return PUBLIC_ASSETS_BASE_URL ? resolveVpsAssetUrlForRuntime(`${PUBLIC_ASSETS_BASE_URL}/assets/calques`, options) : "";
 }
@@ -94,7 +125,9 @@ export function resolvePublicAssetProxyUrl(url, options = {}) {
 
   try {
     const parsed = new URL(url, "https://portal.local");
-    if (parsed.pathname !== "/api/gvg-server") return resolveVpsAssetUrlForRuntime(url, options);
+    if (parsed.pathname !== "/api/gvg-server") {
+      return resolveSupabaseDefenseImageUrlForRuntime(resolveVpsAssetUrlForRuntime(url, options), options);
+    }
 
     const action = parsed.searchParams.get("action");
 
@@ -130,5 +163,5 @@ export function resolvePublicAssetProxyUrl(url, options = {}) {
     return url;
   }
 
-  return resolveVpsAssetUrlForRuntime(url, options);
+  return resolveSupabaseDefenseImageUrlForRuntime(resolveVpsAssetUrlForRuntime(url, options), options);
 }
