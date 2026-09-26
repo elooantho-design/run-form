@@ -26,6 +26,15 @@ function getRequestPath(req) {
   }
 }
 
+function getRequestPathWithQuery(req) {
+  try {
+    const parsed = new URL(req?.url || "/", "https://portal.local");
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "/";
+  }
+}
+
 function getDiscordActivityClientId() {
   const clientId = cleanText(process.env.VITE_DISCORD_CLIENT_ID);
   return DISCORD_CLIENT_ID_PATTERN.test(clientId) ? clientId : "";
@@ -133,12 +142,39 @@ export function parseCookies(req) {
   );
 }
 
+function cleanCookieName(value) {
+  const rawName = String(value || "").slice(0, 160);
+  try {
+    return decodeURIComponent(rawName);
+  } catch {
+    return rawName;
+  }
+}
+
+function readCookieNames(req) {
+  const cookieHeader = String(req?.headers?.cookie || "");
+  return cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separatorIndex = part.indexOf("=");
+      return cleanCookieName(separatorIndex === -1 ? part : part.slice(0, separatorIndex));
+    })
+    .filter(Boolean)
+    .slice(0, 80);
+}
+
 function isSecureCookie() {
   return process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
 }
 
+function getPortalSessionCookieMaxAge(options = {}) {
+  return options.remember ? REMEMBER_SESSION_TTL_SECONDS : SESSION_TTL_SECONDS;
+}
+
 export function setPortalSessionCookie(res, token, options = {}) {
-  const maxAge = options.remember ? REMEMBER_SESSION_TTL_SECONDS : SESSION_TTL_SECONDS;
+  const maxAge = getPortalSessionCookieMaxAge(options);
   const attributes = [
     `${PORTAL_SESSION_COOKIE}=${encodeURIComponent(token)}`,
     "Path=/",
@@ -148,6 +184,24 @@ export function setPortalSessionCookie(res, token, options = {}) {
   ];
   if (isSecureCookie()) attributes.push("Secure");
   res.setHeader("Set-Cookie", attributes.join("; "));
+}
+
+export function buildPortalSessionIssuedDiagnostic(req, options = {}) {
+  return {
+    cookieName: PORTAL_SESSION_COOKIE,
+    sameSite: "Lax",
+    secure: isSecureCookie(),
+    path: "/",
+    maxAge: getPortalSessionCookieMaxAge(options),
+    partitioned: false,
+    host: cleanHeaderValue(req, "host"),
+    "x-forwarded-host": cleanHeaderValue(req, "x-forwarded-host"),
+    origin: cleanHeaderValue(req, "origin"),
+  };
+}
+
+export function logPortalSessionIssued(req, options = {}) {
+  console.info("[portal-session-issued]", buildPortalSessionIssuedDiagnostic(req, options));
 }
 
 export function clearPortalSessionCookie(res) {
@@ -160,6 +214,33 @@ export function clearPortalSessionCookie(res) {
   ];
   if (isSecureCookie()) attributes.push("Secure");
   res.setHeader("Set-Cookie", attributes.join("; "));
+}
+
+export function getPortalSessionTokenStatus(token) {
+  if (!token) return "absent";
+
+  const [payload, signature] = String(token || "").split(".");
+  if (!payload || !signature) return "malformed";
+
+  let decoded;
+  try {
+    decoded = JSON.parse(base64UrlDecode(payload));
+  } catch {
+    return "malformed";
+  }
+
+  if (!decoded?.sub || !decoded?.exp) return "malformed";
+
+  const expectedSignature = signPayload(payload);
+  const provided = Buffer.from(signature);
+  const expected = Buffer.from(expectedSignature);
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+    return "signature_invalid";
+  }
+
+  if (Number(decoded.exp) <= Math.floor(Date.now() / 1000)) return "expired";
+
+  return "valid";
 }
 
 export function verifyPortalSessionToken(token) {
@@ -183,6 +264,30 @@ export function verifyPortalSessionToken(token) {
   }
 
   return decoded;
+}
+
+export function buildPortalSessionCheckDiagnostic(req, options = {}) {
+  const cookieNames = Array.isArray(options.cookieNames) ? options.cookieNames : readCookieNames(req);
+  const hasCookieHeader = Boolean(String(req?.headers?.cookie || "").trim());
+  const hasPortalSessionCookie = cookieNames.includes(PORTAL_SESSION_COOKIE);
+
+  return {
+    method: cleanText(req?.method || "GET").toUpperCase() || "GET",
+    path: getRequestPathWithQuery(req),
+    host: cleanHeaderValue(req, "host"),
+    "x-forwarded-host": cleanHeaderValue(req, "x-forwarded-host"),
+    origin: cleanHeaderValue(req, "origin"),
+    referer: cleanHeaderValue(req, "referer"),
+    "user-agent": cleanHeaderValue(req, "user-agent"),
+    hasCookieHeader,
+    cookieNames,
+    hasPortalSessionCookie,
+    portalSessionTokenStatus: options.portalSessionTokenStatus || "absent",
+  };
+}
+
+export function logPortalSessionCheck(req, options = {}) {
+  console.info("[portal-session-check]", buildPortalSessionCheckDiagnostic(req, options));
 }
 
 export function isHashedPortalPassword(value) {
@@ -547,7 +652,15 @@ export function buildPortalSession(member, overrides = {}) {
 }
 
 export async function getPortalSession(req, supabase, options = {}) {
-  const token = parseCookies(req)[PORTAL_SESSION_COOKIE];
+  const cookies = parseCookies(req);
+  const token = cookies[PORTAL_SESSION_COOKIE];
+  const portalSessionTokenStatus = getPortalSessionTokenStatus(token);
+  if (options.logSessionCheck) {
+    logPortalSessionCheck(req, {
+      cookieNames: Object.keys(cookies),
+      portalSessionTokenStatus,
+    });
+  }
   const payload = verifyPortalSessionToken(token);
   if (!payload?.sub) return { error: "Session Portal manquante ou expiree.", status: 401 };
 

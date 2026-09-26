@@ -14,6 +14,7 @@ import {
   isPortalLeaderRole,
   loadPortalPrincipalByDiscordId,
   logPortalOriginCheckFailure,
+  logPortalSessionIssued,
   readJsonBody,
   requirePortalSession,
   sendPortalJson,
@@ -151,6 +152,7 @@ async function handleLogin(req, res, body) {
 
   const token = createPortalSessionToken(member, { remember });
   setPortalSessionCookie(res, token, { remember });
+  logPortalSessionIssued(req, { remember });
   sendPortalJson(
     res,
     200,
@@ -160,7 +162,7 @@ async function handleLogin(req, res, body) {
 }
 
 async function handleSession(req, res) {
-  const sessionCheck = await requirePortalSession(req, supabase);
+  const sessionCheck = await requirePortalSession(req, supabase, { logSessionCheck: true });
   if (sessionCheck.error) {
     sendPortalJson(res, sessionCheck.status, { error: sessionCheck.error }, req);
     return;
