@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Ban, CheckCircle2, Download, Link2, Maximize2, Minus, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Swords, X, XCircle } from "lucide-react";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -109,7 +110,7 @@ function getLocalGuildCode(defense) {
 }
 
 function getLocalImage(defense) {
-  return defense?.imageUrl || defense?.image_url || defense?.image || "";
+  return resolveVpsAssetUrlForRuntime(defense?.imageUrl || defense?.image_url || defense?.image || "");
 }
 
 function getLinkedDefenses(item) {
@@ -601,7 +602,7 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
             const hasAvailableStrat = item.hasAvailableStrat || item.has_available_strat || stratCount > 0;
             const activeGuildAlreadyLinked = isLinkedToGuild(item, activeGuildCode);
             const canImportElsewhere = getAvailableImportGuilds(item).length > 0;
-            const imageUrl = item.imageUrl || item.image_url;
+            const imageUrl = resolveVpsAssetUrlForRuntime(item.imageUrl || item.image_url);
 
             return (
               <article
@@ -905,7 +906,9 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
                     type="button"
                     onClick={() =>
                       openImagePreview(
-                        similarityModal.enemyDefense.imageUrl || similarityModal.enemyDefense.image_url,
+                        resolveVpsAssetUrlForRuntime(
+                          similarityModal.enemyDefense.imageUrl || similarityModal.enemyDefense.image_url,
+                        ),
                         "Defense adverse",
                       )
                     }
@@ -913,7 +916,9 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
                     title="Agrandir l'image"
                   >
                     <img
-                      src={similarityModal.enemyDefense.imageUrl || similarityModal.enemyDefense.image_url}
+                      src={resolveVpsAssetUrlForRuntime(
+                        similarityModal.enemyDefense.imageUrl || similarityModal.enemyDefense.image_url,
+                      )}
                       alt="Defense adverse"
                       className="h-full w-full rounded-lg object-contain"
                     />

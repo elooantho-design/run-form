@@ -13,6 +13,31 @@ export function hasDiscordActivityLaunchParams(searchParams) {
   return DISCORD_ACTIVITY_REQUIRED_PARAMS.every((name) => String(params.get(name) || "").trim());
 }
 
+export function isDiscordActivityRuntime(locationLike, options = {}) {
+  const clientId = String(options.clientId || readViteEnv("VITE_DISCORD_CLIENT_ID")).trim();
+  if (!clientId) return false;
+
+  let currentUrl;
+  try {
+    const fallbackHref =
+      typeof window !== "undefined" && window.location?.href
+        ? window.location.href
+        : "https://run-form.local/";
+    currentUrl = new URL(
+      locationLike
+        ? typeof locationLike === "string"
+          ? locationLike
+          : locationLike.href
+        : fallbackHref,
+      "https://run-form.local",
+    );
+  } catch {
+    return false;
+  }
+
+  return currentUrl.hostname === `${clientId}.discordsays.com`;
+}
+
 export function getDiscordActivityPortalRedirectUrl(locationLike) {
   if (!locationLike) return "";
 

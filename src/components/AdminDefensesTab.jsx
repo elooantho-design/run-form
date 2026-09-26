@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import GvgEnemyDefenseBankTab from "@/components/GvgEnemyDefenseBankTab";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { normalizeGuildCodeKey } from "@/lib/guildScope";
+import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -970,7 +971,7 @@ const pasteImageBlockFromClipboard = async () => {
 const renderLibraryDefensePanel = (defense, title) => {
   const heroRows = getDefenseHeroRows(defense);
   const hasAnyLayout = heroRows.some((slot) => slot.position && slot.direction);
-  const imageSrc = defense?.image || defense?.image_url || defense?.imageUrl || "";
+  const imageSrc = resolveVpsAssetUrlForRuntime(defense?.image || defense?.image_url || defense?.imageUrl || "");
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
@@ -1349,7 +1350,7 @@ const renderLibraryMergePlan = (candidate) => {
           </div>
         ) : (
           displayedDefenses.map((defense) => {
-            const imageSrc = defense.image || defense.image_url || "";
+            const imageSrc = resolveVpsAssetUrlForRuntime(defense.image || defense.image_url || "");
             const infoBlocks = getDefenseInfoBlocks(defense);
             const selectedTarget = getSelectedImportTarget(defense);
             const targetStatus = getImportTargetStatus(defense, selectedTarget);
@@ -1824,7 +1825,9 @@ const renderLibraryMergePlan = (candidate) => {
             <div className="mb-2 text-sm font-semibold text-zinc-100">Source adverse</div>
             {enemyHistoryModal.enemyDefense?.imageUrl || enemyHistoryModal.enemyDefense?.image_url ? (
               <img
-                src={enemyHistoryModal.enemyDefense.imageUrl || enemyHistoryModal.enemyDefense.image_url}
+                src={resolveVpsAssetUrlForRuntime(
+                  enemyHistoryModal.enemyDefense.imageUrl || enemyHistoryModal.enemyDefense.image_url,
+                )}
                 alt="Defense adverse"
                 className="h-52 w-full rounded-lg border border-zinc-800 object-cover"
               />

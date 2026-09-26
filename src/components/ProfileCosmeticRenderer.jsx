@@ -6,13 +6,14 @@ import {
   PROFILE_FRAME_ANIMATION_INFERNAL_HORNS,
   PROFILE_FRAME_ANIMATION_SHARK_MOUTH,
 } from "@/lib/profileCosmetics";
+import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
 
 function getInitial(name) {
   return String(name || "?").trim().slice(0, 1).toUpperCase() || "?";
 }
 
 function getAssetUrl(asset) {
-  return asset?.url || asset?.assetUrl || asset?.asset_url || "";
+  return resolveVpsAssetUrlForRuntime(asset?.url || asset?.assetUrl || asset?.asset_url || "");
 }
 
 function toPercent(value) {
@@ -27,6 +28,7 @@ function getLayerDelayMs(layer) {
 
 function AnimationLayer({ layer, onStatusChange }) {
   const delayMs = getLayerDelayMs(layer);
+  const layerUrl = resolveVpsAssetUrlForRuntime(layer.url);
   const [layerVisible, setLayerVisible] = useState(delayMs === 0);
 
   useEffect(() => {
@@ -37,7 +39,7 @@ function AnimationLayer({ layer, onStatusChange }) {
     }, delayMs);
 
     return () => window.clearTimeout(timerId);
-  }, [delayMs, layer.id, layer.url]);
+  }, [delayMs, layer.id, layerUrl]);
 
   return (
     <span
@@ -58,7 +60,7 @@ function AnimationLayer({ layer, onStatusChange }) {
       title={layer.label || layer.id}
     >
       <img
-        src={layer.url}
+        src={layerUrl}
         alt=""
         className="profile-avatar-animation-layer-img h-full w-full object-contain"
         draggable="false"

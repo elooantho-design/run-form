@@ -1,4 +1,7 @@
+import { isDiscordActivityRuntime } from "./discordActivity.js";
+
 const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
+const DISCORD_VPS_ASSETS_PREFIX = "/vps-assets";
 
 const PUBLIC_ASSETS_BASE_URL = String(
   import.meta.env?.VITE_GVG_PUBLIC_ASSETS_BASE_URL ||
@@ -19,15 +22,41 @@ function encodeSegment(value) {
 
 function buildAssetUrl(parts) {
   if (!PUBLIC_ASSETS_BASE_URL) return "";
-  return `${PUBLIC_ASSETS_BASE_URL}/${parts.map(encodeSegment).join("/")}`;
+  return resolveVpsAssetUrlForRuntime(`${PUBLIC_ASSETS_BASE_URL}/${parts.map(encodeSegment).join("/")}`);
 }
 
 export function getPublicAssetsBaseUrl() {
   return PUBLIC_ASSETS_BASE_URL;
 }
 
+export function resolveVpsAssetUrlForRuntime(url, options = {}) {
+  const value = String(url || "").trim();
+  if (!value || !PUBLIC_ASSETS_BASE_URL) return value;
+
+  let parsedUrl;
+  let publicBaseUrl;
+  try {
+    parsedUrl = new URL(value);
+    publicBaseUrl = new URL(PUBLIC_ASSETS_BASE_URL);
+  } catch {
+    return value;
+  }
+
+  if (parsedUrl.origin !== publicBaseUrl.origin) return value;
+
+  const useDiscordMapping =
+    typeof options.discordActivity === "boolean"
+      ? options.discordActivity
+      : isDiscordActivityRuntime(options.location, { clientId: options.discordClientId });
+
+  if (!useDiscordMapping) return value;
+
+  const prefix = String(options.discordPrefix || DISCORD_VPS_ASSETS_PREFIX).replace(/\/+$/, "");
+  return `${prefix}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+}
+
 export function buildPublicCalquesBaseUrl() {
-  return PUBLIC_ASSETS_BASE_URL ? `${PUBLIC_ASSETS_BASE_URL}/assets/calques` : "";
+  return PUBLIC_ASSETS_BASE_URL ? resolveVpsAssetUrlForRuntime(`${PUBLIC_ASSETS_BASE_URL}/assets/calques`) : "";
 }
 
 export function buildPublicCalqueUrl(kind, fileName) {
@@ -65,7 +94,7 @@ export function resolvePublicAssetProxyUrl(url) {
 
   try {
     const parsed = new URL(url, "https://portal.local");
-    if (parsed.pathname !== "/api/gvg-server") return url;
+    if (parsed.pathname !== "/api/gvg-server") return resolveVpsAssetUrlForRuntime(url);
 
     const action = parsed.searchParams.get("action");
 
@@ -99,5 +128,5 @@ export function resolvePublicAssetProxyUrl(url) {
     return url;
   }
 
-  return url;
+  return resolveVpsAssetUrlForRuntime(url);
 }

@@ -100,6 +100,7 @@ import {
   buildPublicCalqueUrl,
   buildPublicCalquesBaseUrl,
   buildPublicDownloadUrl,
+  resolveVpsAssetUrlForRuntime,
 } from "@/lib/vpsAssets";
 import {
   canShowPortalAdminItem,
@@ -683,7 +684,7 @@ const categoryCards = [
 ];
 
 const calquesBaseUrl = String(
-  import.meta.env?.VITE_CALQUES_BASE_URL || buildPublicCalquesBaseUrl()
+  resolveVpsAssetUrlForRuntime(import.meta.env?.VITE_CALQUES_BASE_URL || buildPublicCalquesBaseUrl())
 ).replace(/\/$/, "");
 
 function isLocalHost() {
@@ -5871,7 +5872,11 @@ function PortalAdminDefensesView({ session }) {
               <div className="space-y-3">
                 <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
                   {draft.image ? (
-                    <img src={draft.image} alt={draft.name || "Defense"} className="h-52 w-full object-contain" />
+                    <img
+                      src={resolveVpsAssetUrlForRuntime(draft.image)}
+                      alt={draft.name || "Defense"}
+                      className="h-52 w-full object-contain"
+                    />
                   ) : (
                     <div className="flex h-52 items-center justify-center text-sm text-zinc-500">
                       {t("common.noImage", "Aucune image")}
@@ -6078,7 +6083,7 @@ function PortalAdminDefensesView({ session }) {
                       <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
                         {candidate.image || candidate.image_url ? (
                           <img
-                            src={candidate.image || candidate.image_url}
+                            src={resolveVpsAssetUrlForRuntime(candidate.image || candidate.image_url)}
                             alt={candidate.name || "Defense similaire"}
                             className="h-40 w-full object-cover"
                           />

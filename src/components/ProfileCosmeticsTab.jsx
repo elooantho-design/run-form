@@ -46,6 +46,7 @@ import {
   sortProfileCosmeticAssetsNatural,
 } from "@/lib/profileCosmetics";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -65,7 +66,7 @@ function buildAssetMap(assets = []) {
 }
 
 function getAssetUrl(asset) {
-  return asset?.url || asset?.assetUrl || asset?.asset_url || "";
+  return resolveVpsAssetUrlForRuntime(asset?.url || asset?.assetUrl || asset?.asset_url || "");
 }
 
 function isLeaderSession(session) {
@@ -118,7 +119,9 @@ function fromBoundedPercent(value, fallback = 0, min = 0, max = 100) {
   return Math.min(max, Math.max(min, numeric)) / 100;
 }
 
-const ANIMATION_LAYER_URL_PLACEHOLDER = "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/effet.webp";
+const ANIMATION_LAYER_URL_PLACEHOLDER = resolveVpsAssetUrlForRuntime(
+  "https://vps-aad12be0.vps.ovh.net/assets/profile-cosmetics/effects/effet.webp",
+);
 const MAX_ANIMATION_EFFECT_BYTES = 5 * 1024 * 1024;
 const ANIMATION_LAYER_BLEND_MODES = Array.from(PROFILE_FRAME_ALLOWED_ANIMATION_BLEND_MODES);
 
