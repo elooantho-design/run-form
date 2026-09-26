@@ -20,9 +20,9 @@ function encodeSegment(value) {
   return encodeURIComponent(String(value || "").trim());
 }
 
-function buildAssetUrl(parts) {
+function buildAssetUrl(parts, options = {}) {
   if (!PUBLIC_ASSETS_BASE_URL) return "";
-  return resolveVpsAssetUrlForRuntime(`${PUBLIC_ASSETS_BASE_URL}/${parts.map(encodeSegment).join("/")}`);
+  return resolveVpsAssetUrlForRuntime(`${PUBLIC_ASSETS_BASE_URL}/${parts.map(encodeSegment).join("/")}`, options);
 }
 
 export function getPublicAssetsBaseUrl() {
@@ -55,23 +55,23 @@ export function resolveVpsAssetUrlForRuntime(url, options = {}) {
   return `${prefix}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
 }
 
-export function buildPublicCalquesBaseUrl() {
-  return PUBLIC_ASSETS_BASE_URL ? resolveVpsAssetUrlForRuntime(`${PUBLIC_ASSETS_BASE_URL}/assets/calques`) : "";
+export function buildPublicCalquesBaseUrl(options = {}) {
+  return PUBLIC_ASSETS_BASE_URL ? resolveVpsAssetUrlForRuntime(`${PUBLIC_ASSETS_BASE_URL}/assets/calques`, options) : "";
 }
 
-export function buildPublicCalqueUrl(kind, fileName) {
+export function buildPublicCalqueUrl(kind, fileName, options = {}) {
   const folder = CALQUE_FOLDERS[kind];
   if (!folder || !fileName) return "";
-  return buildAssetUrl(["assets", "calques", folder, fileName]);
+  return buildAssetUrl(["assets", "calques", folder, fileName], options);
 }
 
-export function buildPublicHeroUrl(fileName) {
+export function buildPublicHeroUrl(fileName, options = {}) {
   if (!fileName) return "";
-  const url = buildAssetUrl(["assets", "heroes", fileName]);
+  const url = buildAssetUrl(["assets", "heroes", fileName], options);
   return url ? `${url}?v=${HERO_ASSETS_VERSION}` : "";
 }
 
-export function buildPublicPreviewUrl(guild, jobId, fileName) {
+export function buildPublicPreviewUrl(guild, jobId, fileName, options = {}) {
   if (!guild || !jobId || !fileName) return "";
 
   return buildAssetUrl([
@@ -81,20 +81,20 @@ export function buildPublicPreviewUrl(guild, jobId, fileName) {
     jobId,
     "previews",
     fileName,
-  ]);
+  ], options);
 }
 
-export function buildPublicDownloadUrl(fileName) {
+export function buildPublicDownloadUrl(fileName, options = {}) {
   if (!fileName) return "";
-  return buildAssetUrl(["downloads", fileName]);
+  return buildAssetUrl(["downloads", fileName], options);
 }
 
-export function resolvePublicAssetProxyUrl(url) {
+export function resolvePublicAssetProxyUrl(url, options = {}) {
   if (!url) return "";
 
   try {
     const parsed = new URL(url, "https://portal.local");
-    if (parsed.pathname !== "/api/gvg-server") return resolveVpsAssetUrlForRuntime(url);
+    if (parsed.pathname !== "/api/gvg-server") return resolveVpsAssetUrlForRuntime(url, options);
 
     const action = parsed.searchParams.get("action");
 
@@ -103,7 +103,8 @@ export function resolvePublicAssetProxyUrl(url) {
         buildPublicPreviewUrl(
           parsed.searchParams.get("guild") || parsed.searchParams.get("sourceGuild"),
           parsed.searchParams.get("jobId") || parsed.searchParams.get("job_id"),
-          parsed.searchParams.get("file")
+          parsed.searchParams.get("file"),
+          options,
         ) || url
       );
     }
@@ -112,21 +113,22 @@ export function resolvePublicAssetProxyUrl(url) {
       return (
         buildPublicCalqueUrl(
           parsed.searchParams.get("kind"),
-          parsed.searchParams.get("file")
+          parsed.searchParams.get("file"),
+          options,
         ) || url
       );
     }
 
     if (action === "launcher-download") {
-      return buildPublicDownloadUrl("PaladinGVGLauncher.zip") || url;
+      return buildPublicDownloadUrl("PaladinGVGLauncher.zip", options) || url;
     }
 
     if (action === "record-launcher-download") {
-      return buildPublicDownloadUrl("PaladinGVGRecordLauncher.zip") || url;
+      return buildPublicDownloadUrl("PaladinGVGRecordLauncher.zip", options) || url;
     }
   } catch {
     return url;
   }
 
-  return resolveVpsAssetUrlForRuntime(url);
+  return resolveVpsAssetUrlForRuntime(url, options);
 }

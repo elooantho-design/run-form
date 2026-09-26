@@ -29,7 +29,7 @@ import {
   resolveDefenseVariantsForGuild,
 } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
-import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
+import { resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
 
 const EMPTY_DEFENSE = "--";
 
@@ -876,7 +876,7 @@ function DefenseInfoBlocks({ blocks }) {
           block.blockType === "image" ? (
             <img
               key={block.id}
-              src={resolveVpsAssetUrlForRuntime(block.content)}
+              src={resolvePublicAssetProxyUrl(block.content)}
               alt={t("defenses.info", "Info defense")}
               className="mx-auto max-h-[180px] w-full rounded-md object-contain"
             />
@@ -929,7 +929,7 @@ function VoteControls({ defense, voteProps }) {
 
 function DefenseBody({ defense, member, championDisplayMap, language }) {
   const { t } = usePortalLanguage();
-  const imageSrc = resolveVpsAssetUrlForRuntime(defense?.image || defense?.image_url || defense?.imageUrl || "");
+  const imageSrc = resolvePublicAssetProxyUrl(defense?.image || defense?.image_url || defense?.imageUrl || "");
   const missingConditions = getDefenseConditionRequirements(defense).filter(
     (requirement) => (member?.awakenings?.[requirement.hero] ?? -1) < requirement.minAwakening
   );

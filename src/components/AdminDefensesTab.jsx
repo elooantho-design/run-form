@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import GvgEnemyDefenseBankTab from "@/components/GvgEnemyDefenseBankTab";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { normalizeGuildCodeKey } from "@/lib/guildScope";
-import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
+import { resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
 
 function getApiBase() {
   if (typeof window === "undefined") return "";
@@ -971,7 +971,7 @@ const pasteImageBlockFromClipboard = async () => {
 const renderLibraryDefensePanel = (defense, title) => {
   const heroRows = getDefenseHeroRows(defense);
   const hasAnyLayout = heroRows.some((slot) => slot.position && slot.direction);
-  const imageSrc = resolveVpsAssetUrlForRuntime(defense?.image || defense?.image_url || defense?.imageUrl || "");
+  const imageSrc = resolvePublicAssetProxyUrl(defense?.image || defense?.image_url || defense?.imageUrl || "");
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-3">
@@ -1350,7 +1350,7 @@ const renderLibraryMergePlan = (candidate) => {
           </div>
         ) : (
           displayedDefenses.map((defense) => {
-            const imageSrc = resolveVpsAssetUrlForRuntime(defense.image || defense.image_url || "");
+            const imageSrc = resolvePublicAssetProxyUrl(defense.image || defense.image_url || defense.imageUrl || "");
             const infoBlocks = getDefenseInfoBlocks(defense);
             const selectedTarget = getSelectedImportTarget(defense);
             const targetStatus = getImportTargetStatus(defense, selectedTarget);
@@ -1491,7 +1491,7 @@ const renderLibraryMergePlan = (candidate) => {
                               className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/80"
                             >
                               <img
-                                src={block.content}
+                                src={resolvePublicAssetProxyUrl(block.content)}
                                 alt={t("adminDefenses.infoImageAlt", "Info defense")}
                                 className="max-h-24 w-full object-contain"
                               />
@@ -1825,7 +1825,7 @@ const renderLibraryMergePlan = (candidate) => {
             <div className="mb-2 text-sm font-semibold text-zinc-100">Source adverse</div>
             {enemyHistoryModal.enemyDefense?.imageUrl || enemyHistoryModal.enemyDefense?.image_url ? (
               <img
-                src={resolveVpsAssetUrlForRuntime(
+                src={resolvePublicAssetProxyUrl(
                   enemyHistoryModal.enemyDefense.imageUrl || enemyHistoryModal.enemyDefense.image_url,
                 )}
                 alt="Defense adverse"
@@ -2038,7 +2038,7 @@ const renderLibraryMergePlan = (candidate) => {
                 {block.block_type === "image" ? (
                   <div className="overflow-hidden rounded-xl border border-zinc-800 bg-black">
                     <img
-                      src={block.content}
+                      src={resolvePublicAssetProxyUrl(block.content)}
                       alt={t("adminDefenses.blockImageAlt", "Bloc defense")}
                       className="max-h-[320px] w-full object-contain"
                     />

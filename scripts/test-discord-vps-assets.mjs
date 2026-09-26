@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   buildPublicCalqueUrl,
+  resolvePublicAssetProxyUrl,
   resolveVpsAssetUrlForRuntime,
 } from "../src/lib/vpsAssets.js";
 import { isDiscordActivityRuntime } from "../src/lib/discordActivity.js";
@@ -95,6 +96,42 @@ assert.equal(
 );
 
 assert.equal(
+  resolvePublicAssetProxyUrl("https://vps-aad12be0.vps.ovh.net/assets/test.png", {
+    location: normalLocation,
+    discordClientId,
+  }),
+  "https://vps-aad12be0.vps.ovh.net/assets/test.png",
+  "normal browser keeps direct VPS defense asset URLs unchanged through the public proxy resolver",
+);
+
+assert.equal(
+  resolvePublicAssetProxyUrl("https://vps-aad12be0.vps.ovh.net/assets/test.png", {
+    location: discordLocation,
+    discordClientId,
+  }),
+  "/vps-assets/assets/test.png",
+  "Discord Activity maps direct VPS defense asset URLs through the public proxy resolver",
+);
+
+assert.equal(
+  resolvePublicAssetProxyUrl("/api/gvg-server?action=preview&guild=G1&jobId=job123&file=defense.png", {
+    location: normalLocation,
+    discordClientId,
+  }),
+  "https://vps-aad12be0.vps.ovh.net/public/jobs/g1/job123/previews/defense.png",
+  "normal browser maps defense preview API URLs to public VPS preview URLs",
+);
+
+assert.equal(
+  resolvePublicAssetProxyUrl("/api/gvg-server?action=preview&guild=G1&jobId=job123&file=defense.png", {
+    location: discordLocation,
+    discordClientId,
+  }),
+  "/vps-assets/public/jobs/g1/job123/previews/defense.png",
+  "Discord Activity maps defense preview API URLs to the configured VPS assets prefix",
+);
+
+assert.equal(
   buildPublicCalqueUrl("hero", "Bayek.png"),
   "https://vps-aad12be0.vps.ovh.net/assets/calques/hero-calques/Bayek.png",
   "server/no-window context still builds absolute VPS calque URLs",
@@ -121,18 +158,38 @@ const myDefensesSource = await readFile(
 );
 assert.match(
   myDefensesSource,
-  /import \{ resolveVpsAssetUrlForRuntime \} from "@\/lib\/vpsAssets";/,
-  "My defenses imports the VPS runtime resolver",
+  /import \{ resolvePublicAssetProxyUrl \} from "@\/lib\/vpsAssets";/,
+  "My defenses imports the public asset proxy resolver",
 );
 assert.match(
   myDefensesSource,
-  /const imageSrc = resolveVpsAssetUrlForRuntime\(\s*defense\?\.image \|\| defense\?\.image_url \|\| defense\?\.imageUrl \|\| ""\s*\);/,
-  "My defenses maps defense images through the VPS runtime resolver",
+  /const imageSrc = resolvePublicAssetProxyUrl\(\s*defense\?\.image \|\| defense\?\.image_url \|\| defense\?\.imageUrl \|\| ""\s*\);/,
+  "My defenses maps defense images through the public asset proxy resolver",
 );
 assert.match(
   myDefensesSource,
-  /src=\{resolveVpsAssetUrlForRuntime\(block\.content\)\}/,
-  "My defenses info image blocks also use the VPS runtime resolver",
+  /src=\{resolvePublicAssetProxyUrl\(block\.content\)\}/,
+  "My defenses info image blocks also use the public asset proxy resolver",
+);
+
+const adminDefensesSource = await readFile(
+  new URL("../src/components/AdminDefensesTab.jsx", import.meta.url),
+  "utf8",
+);
+assert.match(
+  adminDefensesSource,
+  /import \{ resolvePublicAssetProxyUrl \} from "@\/lib\/vpsAssets";/,
+  "Admin defenses imports the public asset proxy resolver",
+);
+assert.doesNotMatch(
+  adminDefensesSource,
+  /resolveVpsAssetUrlForRuntime/,
+  "Admin defenses no longer uses the direct-only VPS resolver for defense images",
+);
+assert.doesNotMatch(
+  adminDefensesSource,
+  /src=\{block\.content\}/,
+  "Admin defenses image blocks do not render raw defense image URLs",
 );
 
 console.log("discord vps asset mapping guards passed");
