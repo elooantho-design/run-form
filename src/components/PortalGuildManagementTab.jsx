@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowRightLeft, ExternalLink, Link2, MessageSquare, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, Unlink, UserCog, UserPlus, Users, X } from "lucide-react";
 import GestionDefenseTab from "@/components/GestionDefenseTab";
+import GuildDmCampaignModal from "@/components/GuildDmCampaignModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -594,6 +595,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [linkActionLoading, setLinkActionLoading] = useState(false);
   const [discordCapabilities, setDiscordCapabilities] = useState({});
   const [discordCapabilitiesReady, setDiscordCapabilitiesReady] = useState(true);
+  const [guildDmCampaignOpen, setGuildDmCampaignOpen] = useState(false);
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -1712,6 +1714,16 @@ export default function PortalGuildManagementTab({ session }) {
             </Button>
             <Button
               type="button"
+              variant="outline"
+              className="rounded-lg border-sky-500/40 bg-sky-500/10 text-sky-100 hover:bg-sky-500/20"
+              disabled={!isAdmin || loading}
+              onClick={() => setGuildDmCampaignOpen(true)}
+            >
+              <MessageSquare className="mr-2 h-4 w-4" />
+              {t("guildManagement.guildDmButton", "Envoyer un MP")}
+            </Button>
+            <Button
+              type="button"
               className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
               disabled={!isAdmin}
               onClick={() => setAddMemberOpen(true)}
@@ -1917,6 +1929,13 @@ export default function PortalGuildManagementTab({ session }) {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {guildDmCampaignOpen ? (
+        <GuildDmCampaignModal
+          activeGuildCode={activeGuildCode}
+          onClose={() => setGuildDmCampaignOpen(false)}
+        />
       ) : null}
 
       {memberEditOpen ? (
