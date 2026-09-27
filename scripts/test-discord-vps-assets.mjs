@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
+  buildPublicHeroCalqueThumbnailUrl,
   buildPublicCalqueUrl,
+  getHeroCalqueThumbnailFileName,
   resolvePublicAssetProxyUrl,
   resolveVpsAssetUrlForRuntime,
 } from "../src/lib/vpsAssets.js";
@@ -201,6 +203,24 @@ assert.equal(
   buildPublicCalqueUrl("hero", "Bayek.png"),
   "https://vps-aad12be0.vps.ovh.net/assets/calques/hero-calques/Bayek.png",
   "server/no-window context still builds absolute VPS calque URLs",
+);
+
+assert.equal(
+  getHeroCalqueThumbnailFileName("Bayek.png"),
+  "Bayek.webp",
+  "hero calque thumbnail filenames keep the source basename and switch to WebP",
+);
+
+assert.equal(
+  buildPublicHeroCalqueThumbnailUrl("Bayek.png"),
+  "https://vps-aad12be0.vps.ovh.net/assets/calques/hero-calques/thumbs/Bayek.webp",
+  "normal browser builds absolute VPS thumbnail URLs",
+);
+
+assert.equal(
+  buildPublicHeroCalqueThumbnailUrl("Bayek.png", { location: discordLocation, discordClientId }),
+  "/vps-assets/assets/calques/hero-calques/thumbs/Bayek.webp",
+  "Discord Activity maps hero thumbnails through the VPS assets prefix",
 );
 
 const rendererSource = await readFile(

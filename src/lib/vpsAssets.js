@@ -19,6 +19,11 @@ const CALQUE_FOLDERS = {
 };
 const HERO_ASSETS_VERSION = "20260718-heroes-1";
 
+export const HERO_CALQUE_THUMBNAIL_WIDTH = 320;
+export const HERO_CALQUE_THUMBNAIL_QUALITY = 82;
+export const HERO_CALQUE_THUMBNAIL_FOLDER = "thumbs";
+export const HERO_BOX_PRIORITY_IMAGE_COUNT = 8;
+
 function encodeSegment(value) {
   return encodeURIComponent(String(value || "").trim());
 }
@@ -94,6 +99,19 @@ export function buildPublicCalqueUrl(kind, fileName, options = {}) {
   const folder = CALQUE_FOLDERS[kind];
   if (!folder || !fileName) return "";
   return buildAssetUrl(["assets", "calques", folder, fileName], options);
+}
+
+export function getHeroCalqueThumbnailFileName(fileName) {
+  const value = String(fileName || "").trim();
+  if (!value) return "";
+  const cleanFileName = value.split(/[?#]/)[0].split(/[\\/]/).filter(Boolean).pop() || value;
+  return cleanFileName.replace(/\.[^.]+$/u, "") + ".webp";
+}
+
+export function buildPublicHeroCalqueThumbnailUrl(fileName, options = {}) {
+  const thumbnailFileName = getHeroCalqueThumbnailFileName(fileName);
+  if (!thumbnailFileName) return "";
+  return buildAssetUrl(["assets", "calques", CALQUE_FOLDERS.hero, HERO_CALQUE_THUMBNAIL_FOLDER, thumbnailFileName], options);
 }
 
 export function buildPublicHeroUrl(fileName, options = {}) {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bell,
@@ -103,9 +103,12 @@ import {
   normalizeLicenseStatus,
 } from "@/lib/portalLicensePlans";
 import {
+  HERO_BOX_PRIORITY_IMAGE_COUNT,
   buildPublicCalqueUrl,
   buildPublicCalquesBaseUrl,
+  buildPublicHeroCalqueThumbnailUrl,
   buildPublicDownloadUrl,
+  getHeroCalqueThumbnailFileName,
   resolveVpsAssetUrlForRuntime,
 } from "@/lib/vpsAssets";
 import {
@@ -715,6 +718,20 @@ function calqueUrl(kind, fileName, options = {}) {
   return `${options.forceProxy ? getApiBase() : ""}/api/gvg-server?action=calque&kind=${kind}&file=${encodedFile}`;
 }
 
+function heroCalqueThumbnailUrl(fileName, options = {}) {
+  const thumbnailFileName = getHeroCalqueThumbnailFileName(fileName);
+  if (!thumbnailFileName) return "";
+
+  const encodedFile = encodeURIComponent(thumbnailFileName);
+  if (calquesBaseUrl) return `${calquesBaseUrl}/hero-calques/thumbs/${encodedFile}`;
+
+  const publicUrl = buildPublicHeroCalqueThumbnailUrl(fileName, options);
+  if (publicUrl) return publicUrl;
+  if (isLocalHost() && !options.forceProxy) return `/HeroCalc/thumbs/${encodedFile}`;
+
+  return "";
+}
+
 function launcherDownloadUrl(apiBase) {
   return buildPublicDownloadUrl("PaladinGVGLauncher.zip") || `${apiBase}/api/gvg-server?action=launcher-download`;
 }
@@ -1135,6 +1152,15 @@ function buildPortalHeroCards(champions) {
 
       const imageFiles = buildHeroImageCandidates(champion, portalName);
       const imageFile = imageFiles[0] || "";
+      const thumbnailImage = imageFile ? heroCalqueThumbnailUrl(imageFile) : "";
+      const originalImage = imageFile ? calqueUrl("hero", imageFile) : "";
+      const fallbackImages = [
+        originalImage,
+        ...imageFiles.slice(1).flatMap((fileName) => [
+          heroCalqueThumbnailUrl(fileName),
+          calqueUrl("hero", fileName),
+        ]),
+      ].filter(Boolean);
       const officialImageInfo = getMoontonHeroImage(champion, portalName);
       const officialImageFile = normalizeHeroImageFile(officialImageInfo?.file || "");
       const releaseTime = getChampionReleaseTime(champion);
@@ -1153,8 +1179,9 @@ function buildPortalHeroCards(champions) {
         factions: splitChampionValues(getChampionField(champion, ["faction", "Faction", "factions", "Factions"])),
         roles: splitChampionValues(getChampionField(champion, ["role", "Role", "roles", "Roles"])),
         imageFile,
-        image: imageFile ? calqueUrl("hero", imageFile) : "",
-        fallbackImages: imageFiles.slice(1).map((fileName) => calqueUrl("hero", fileName)),
+        image: thumbnailImage || originalImage,
+        fallbackImages: [...new Set(fallbackImages.filter((url) => url && url !== (thumbnailImage || originalImage)))],
+        originalImage,
         officialImageFile,
         officialImage: officialImageFile ? calqueUrl("hero", officialImageFile, { forceProxy: true }) : "",
         officialImageSource: officialImageInfo?.source || "",
@@ -3522,8 +3549,7 @@ function HeroBoxView({ session }) {
   const [roleFilter, setRoleFilter] = useState("all");
   const [factionFilter, setFactionFilter] = useState("all");
   const [latestOnly, setLatestOnly] = useState(false);
-  const [loadedHeroImages, setLoadedHeroImages] = useState(() => new Set());
-  const preloadingHeroImagesRef = useRef(new Set());
+  const [loadedPriorityHeroImages, setLoadedPriorityHeroImages] = useState(() => new Set());
   const [heroCards, setHeroCards] = useState([]);
   const [members, setMembers] = useState([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState(session?.memberId || session?.id || "");
@@ -3675,6 +3701,7 @@ function HeroBoxView({ session }) {
         setMembers(nextMembers);
         setHeroCards(nextHeroCards);
         setHeroStates(createEmptyHeroStateMap(nextHeroCards));
+        setLoadedPriorityHeroImages(new Set());
         setSelectedPlayerId((current) => {
           const currentKey = String(current || "");
           if (currentKey && nextMembers.some((member) => String(member.id) === currentKey)) {
@@ -3805,48 +3832,14 @@ function HeroBoxView({ session }) {
     summonFamilyFilter,
   ]);
 
-  const priorityHeroes = useMemo(() => visibleHeroes.slice(0, 24), [visibleHeroes]);
+  const priorityHeroes = useMemo(() => visibleHeroes.slice(0, HERO_BOX_PRIORITY_IMAGE_COUNT), [visibleHeroes]);
   const priorityHeroImageCount = priorityHeroes.length;
-  const loadedPriorityHeroImageCount = priorityHeroes.filter((hero) => loadedHeroImages.has(hero.id)).length;
+  const loadedPriorityHeroImageCount = priorityHeroes.filter((hero) => loadedPriorityHeroImages.has(hero.id)).length;
   const heroImagesAreWarming =
-    priorityHeroImageCount > 0 && loadedPriorityHeroImageCount < Math.min(priorityHeroImageCount, 12);
+    priorityHeroImageCount > 0 &&
+    loadedPriorityHeroImageCount < Math.min(priorityHeroImageCount, HERO_BOX_PRIORITY_IMAGE_COUNT);
   const heroImageWarmProgress =
     priorityHeroImageCount > 0 ? Math.round((loadedPriorityHeroImageCount / priorityHeroImageCount) * 100) : 100;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    priorityHeroes.forEach((hero) => {
-      if (loadedHeroImages.has(hero.id) || preloadingHeroImagesRef.current.has(hero.id)) return;
-
-      preloadingHeroImagesRef.current.add(hero.id);
-      const image = new Image();
-      image.decoding = "async";
-
-      const markReady = () => {
-        preloadingHeroImagesRef.current.delete(hero.id);
-        if (cancelled) return;
-        setLoadedHeroImages((current) => {
-          if (current.has(hero.id)) return current;
-          const next = new Set(current);
-          next.add(hero.id);
-          return next;
-        });
-      };
-
-      image.onload = markReady;
-      image.onerror = markReady;
-      image.src = hero.image;
-
-      if (image.decode) {
-        image.decode().then(markReady).catch(markReady);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [loadedHeroImages, priorityHeroes]);
 
   const stats = useMemo(() => {
     const values = Object.values(heroStates);
@@ -3983,14 +3976,14 @@ function HeroBoxView({ session }) {
     saveHeroAwakening(heroId, nextAwakening);
   }
 
-  function markHeroImageReady(heroId) {
-    setLoadedHeroImages((current) => {
+  const markPriorityHeroImageReady = useCallback((heroId) => {
+    setLoadedPriorityHeroImages((current) => {
       if (current.has(heroId)) return current;
       const next = new Set(current);
       next.add(heroId);
       return next;
     });
-  }
+  }, []);
 
   function resetHeroFilters() {
     setQuery("");
@@ -4277,9 +4270,8 @@ function HeroBoxView({ session }) {
               onUnlock={unlockHero}
               onLock={lockHero}
               onAwakening={setAwakening}
-              priority={index < 24}
-              imageReady={loadedHeroImages.has(hero.id)}
-              onImageReady={markHeroImageReady}
+              priority={index < HERO_BOX_PRIORITY_IMAGE_COUNT}
+              onPriorityImageReady={markPriorityHeroImageReady}
               canEdit={canEdit}
               saving={savingHeroId === hero.id || bulkSavingRarity === hero.rarity}
               language={language}
@@ -4300,26 +4292,28 @@ function HeroBoxView({ session }) {
   );
 }
 
-function HeroLayerCard({
+const HeroLayerCard = memo(function HeroLayerCard({
   hero,
   state,
   onUnlock,
   onLock,
   onAwakening,
   priority = false,
-  imageReady = false,
-  onImageReady,
+  onPriorityImageReady,
   canEdit = false,
   saving = false,
   language = "fr",
   onOpenDetails,
 }) {
   const { t } = usePortalLanguage();
-  const [fallbackImageIndex, setFallbackImageIndex] = useState(-1);
+  const [fallbackImageState, setFallbackImageState] = useState({ baseImage: "", index: -1 });
+  const [readyImageSrc, setReadyImageSrc] = useState("");
   const [lockPressing, setLockPressing] = useState(false);
   const lockTimerRef = useRef(null);
   const lockTriggeredRef = useRef(false);
+  const fallbackImageIndex = fallbackImageState.baseImage === hero.image ? fallbackImageState.index : -1;
   const imageSrc = fallbackImageIndex === -1 ? hero.image : hero.fallbackImages?.[fallbackImageIndex] || hero.image;
+  const localImageReady = readyImageSrc === imageSrc;
   const displayName = getPortalHeroDisplayName(hero, language);
   const canLongPressLock = canEdit && state.owned && !saving;
 
@@ -4370,13 +4364,15 @@ function HeroLayerCard({
   }
 
   function handleImageReady() {
-    onImageReady?.(hero.id);
+    setReadyImageSrc(imageSrc);
+    if (priority) onPriorityImageReady?.(hero.id);
   }
 
   function handleImageError() {
     const nextFallbackImageIndex = fallbackImageIndex + 1;
     if (hero.fallbackImages?.[nextFallbackImageIndex]) {
-      setFallbackImageIndex(nextFallbackImageIndex);
+      setReadyImageSrc("");
+      setFallbackImageState({ baseImage: hero.image, index: nextFallbackImageIndex });
       return;
     }
 
@@ -4386,7 +4382,7 @@ function HeroLayerCard({
   return (
     <article
       className={`hero-layer-card ${state.owned ? "is-owned" : "is-locked"} ${
-        imageReady ? "is-image-ready" : "is-image-loading"
+        localImageReady ? "is-image-ready" : "is-image-loading"
       } ${canEdit ? "is-editable" : "is-readonly"} ${saving ? "is-saving" : ""} ${
         lockPressing ? "is-long-pressing" : ""
       }`}
@@ -4462,12 +4458,12 @@ function HeroLayerCard({
       </div>
     </article>
   );
-}
+});
 
 function HeroDetailsModal({ hero, language = "fr", onClose }) {
   const { t } = usePortalLanguage();
   const displayName = getPortalHeroDisplayName(hero, language);
-  const detailImage = hero.officialImage || hero.image;
+  const detailImage = hero.officialImage || hero.originalImage || hero.image;
   const hasOfficialImage = Boolean(hero.officialImage);
   const rarityLabel = hero.rarity ? t(`rarity.${hero.rarity}`, formatHeroFilterLabel(hero.rarity)) : "";
   const roleLabels = (hero.roles || []).map((role) => t(`heroRole.${role}`, formatHeroFilterLabel(role)));
