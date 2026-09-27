@@ -71,6 +71,12 @@ import {
   touchPortalPresence,
 } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
+import {
+  SUMMON_FAMILY_VALUES,
+  getChampionSummonFamily,
+  heroMatchesSummonFamilyFilter,
+  isNascentSummonHero,
+} from "@/lib/portalChampions";
 import { initDiscordActivity } from "@/lib/discordActivity";
 import { getGuildDisplayName, getSessionGuildDisplayName } from "@/lib/guildDisplay";
 import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
@@ -892,6 +898,23 @@ const heroRarityMeta = {
   basic: { label: "Basiques", color: "#a1a1aa" },
 };
 
+const heroSummonFamilyMeta = {
+  nascent: { labelKey: "heroBox.summonFamily.nascent", label: "Naissante", color: "#93c5fd" },
+  ancient: { labelKey: "heroBox.summonFamily.ancient", label: "Ancien", color: "#c084fc" },
+  exclusive: { labelKey: "heroBox.summonFamily.exclusive", label: "Exclusif", color: "#facc15" },
+  collab: { labelKey: "heroBox.summonFamily.collab", label: "Collab", color: "#34d399" },
+  event: { labelKey: "heroBox.summonFamily.event", label: "Evenement", color: "#fb7185" },
+};
+
+const adminSummonFamilyOptions = [
+  { value: "", labelKey: "adminChampions.summonFamilyNone", label: "Aucune" },
+  { value: "blue", labelKey: "adminChampions.summonFamilyBlue", label: "Bleu" },
+  { value: "ancient", labelKey: "adminChampions.summonFamilyAncient", label: "Ancien" },
+  { value: "exclusive", labelKey: "adminChampions.summonFamilyExclusive", label: "Exclusif" },
+  { value: "collab", labelKey: "adminChampions.summonFamilyCollab", label: "Collab" },
+  { value: "event", labelKey: "adminChampions.summonFamilyEvent", label: "Evenement" },
+];
+
 const heroRoleMeta = {
   combattant: { label: "Combattant", imageFile: "Combattant.png" },
   heal: { label: "Heal", imageFile: "Heal.png" },
@@ -1126,6 +1149,7 @@ function buildPortalHeroCards(champions) {
         portalName,
         englishName: getChampionEnglishName(champion),
         rarity: getChampionRarity(champion),
+        summonFamily: getChampionSummonFamily(champion),
         factions: splitChampionValues(getChampionField(champion, ["faction", "Faction", "factions", "Factions"])),
         roles: splitChampionValues(getChampionField(champion, ["role", "Role", "roles", "Roles"])),
         imageFile,
@@ -3494,6 +3518,7 @@ function HeroBoxView({ session }) {
   const [playerQuery, setPlayerQuery] = useState("");
   const [ownedFilter, setOwnedFilter] = useState("all");
   const [rarityFilter, setRarityFilter] = useState("all");
+  const [summonFamilyFilter, setSummonFamilyFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
   const [factionFilter, setFactionFilter] = useState("all");
   const [latestOnly, setLatestOnly] = useState(false);
@@ -3542,6 +3567,37 @@ function HeroBoxView({ session }) {
     [heroCards, t],
   );
   const hasLatestHeroes = useMemo(() => heroCards.some((hero) => hero.isLatestRelease), [heroCards]);
+  const nascentHeroCount = useMemo(
+    () =>
+      heroCards.filter((hero) => isNascentSummonHero(hero, heroStates[hero.id] || { owned: false, awakening: -1 }))
+        .length,
+    [heroCards, heroStates],
+  );
+  const heroSummonFamilyFilters = useMemo(
+    () => [
+      {
+        id: "all",
+        label: t("heroBox.summonFamilyAll", "Toutes familles"),
+        color: "#e4e4e7",
+      },
+      {
+        id: "nascent",
+        label: t(heroSummonFamilyMeta.nascent.labelKey, heroSummonFamilyMeta.nascent.label),
+        color: heroSummonFamilyMeta.nascent.color,
+        count: nascentHeroCount,
+      },
+      ...SUMMON_FAMILY_VALUES.filter((family) => family !== "blue").map((family) => ({
+        id: family,
+        label: t(heroSummonFamilyMeta[family]?.labelKey || `heroBox.summonFamily.${family}`, heroSummonFamilyMeta[family]?.label || formatHeroFilterLabel(family)),
+        color: heroSummonFamilyMeta[family]?.color || "#a1a1aa",
+      })),
+    ],
+    [nascentHeroCount, t],
+  );
+  const selectedSummonFamilyFilter = useMemo(
+    () => heroSummonFamilyFilters.find((filter) => filter.id === summonFamilyFilter) || null,
+    [heroSummonFamilyFilters, summonFamilyFilter],
+  );
   const selectedRarityFilter = useMemo(
     () => heroRarityFilters.find((filter) => filter.id === rarityFilter) || null,
     [heroRarityFilters, rarityFilter],
@@ -3589,9 +3645,19 @@ function HeroBoxView({ session }) {
 
   useEffect(() => {
     if (!heroRarityFilters.some((filter) => filter.id === rarityFilter)) setRarityFilter("all");
+    if (!heroSummonFamilyFilters.some((filter) => filter.id === summonFamilyFilter)) setSummonFamilyFilter("all");
     if (!heroRoleFilters.some((filter) => filter.id === roleFilter)) setRoleFilter("all");
     if (!heroFactionFilters.some((filter) => filter.id === factionFilter)) setFactionFilter("all");
-  }, [factionFilter, heroFactionFilters, heroRarityFilters, heroRoleFilters, rarityFilter, roleFilter]);
+  }, [
+    factionFilter,
+    heroFactionFilters,
+    heroRarityFilters,
+    heroRoleFilters,
+    heroSummonFamilyFilters,
+    rarityFilter,
+    roleFilter,
+    summonFamilyFilter,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3715,17 +3781,29 @@ function HeroBoxView({ session }) {
           (ownedFilter === "locked" && !state.owned) ||
           (ownedFilter === "a5" && state.owned && state.awakening === 5);
         const matchesRarity = rarityFilter === "all" || hero.rarity === rarityFilter;
+        const matchesSummonFamily = heroMatchesSummonFamilyFilter(hero, state, summonFamilyFilter);
         const matchesRole = roleFilter === "all" || hero.roles.includes(roleFilter);
         const matchesFaction = factionFilter === "all" || hero.factions.includes(factionFilter);
         const matchesLatest = !latestOnly || hero.isLatestRelease;
 
-        return matchesQuery && matchesState && matchesRarity && matchesRole && matchesFaction && matchesLatest;
+        return matchesQuery && matchesState && matchesRarity && matchesSummonFamily && matchesRole && matchesFaction && matchesLatest;
       })
       .sort((left, right) => {
         if (!latestOnly) return 0;
         return (left.latestReleaseRank || 999) - (right.latestReleaseRank || 999);
       });
-  }, [factionFilter, heroCards, heroStates, language, latestOnly, ownedFilter, query, rarityFilter, roleFilter]);
+  }, [
+    factionFilter,
+    heroCards,
+    heroStates,
+    language,
+    latestOnly,
+    ownedFilter,
+    query,
+    rarityFilter,
+    roleFilter,
+    summonFamilyFilter,
+  ]);
 
   const priorityHeroes = useMemo(() => visibleHeroes.slice(0, 24), [visibleHeroes]);
   const priorityHeroImageCount = priorityHeroes.length;
@@ -3914,6 +3992,16 @@ function HeroBoxView({ session }) {
     });
   }
 
+  function resetHeroFilters() {
+    setQuery("");
+    setOwnedFilter("all");
+    setRarityFilter("all");
+    setSummonFamilyFilter("all");
+    setRoleFilter("all");
+    setFactionFilter("all");
+    setLatestOnly(false);
+  }
+
   return (
     <section className="hero-box-page">
       <div className="hero-box-panel">
@@ -4029,6 +4117,9 @@ function HeroBoxView({ session }) {
                 {label}
               </button>
             ))}
+            <button type="button" onClick={resetHeroFilters}>
+              {t("heroBox.resetFilters", "Reinitialiser")}
+            </button>
           </div>
         </div>
 
@@ -4064,6 +4155,27 @@ function HeroBoxView({ session }) {
               </button>
             );
           })}
+        </div>
+
+        <div className="hero-box-filter-row" aria-label={t("heroBox.summonFamilyFilters", "Filtres de familles d'invocation")}>
+          {heroSummonFamilyFilters.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              className="hero-rarity-filter hero-summon-family-filter"
+              style={{ "--rarity-color": filter.color }}
+              aria-pressed={summonFamilyFilter === filter.id}
+              onClick={() => setSummonFamilyFilter(filter.id)}
+              title={
+                filter.id === "nascent"
+                  ? `${filter.label} - ${nascentHeroCount} ${t("heroBox.displayedHeroes", "heros affiches")}`
+                  : filter.label
+              }
+            >
+              <span className="hero-rarity-dot" />
+              {filter.label}
+            </button>
+          ))}
         </div>
 
         {bulkAwakeningRarities.has(rarityFilter) && bulkAwakeningHeroes.length > 0 ? (
@@ -4141,6 +4253,7 @@ function HeroBoxView({ session }) {
         <div className="hero-box-result-count">
           {visibleHeroes.length} {t("heroBox.displayedHeroes", "heros affiches")}
           {latestOnly ? <span>{t("heroBox.latestBadge", "Dernieres sorties ingame")}</span> : null}
+          {summonFamilyFilter !== "all" && selectedSummonFamilyFilter ? <span>{selectedSummonFamilyFilter.label}</span> : null}
         </div>
 
         {heroImagesAreWarming ? (
@@ -6350,6 +6463,7 @@ const addHeroInitialState = {
   portalName: "",
   technicalName: "",
   rarity: "legendary",
+  summonFamily: "blue",
   role: "combattant",
   factions: ["sentinelle"],
   lord: "non-lord",
@@ -6428,6 +6542,7 @@ function compressHeroCalqueFile(file, outputName) {
 }
 
 function AddHeroView({ session }) {
+  const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const heroCalqueInputRef = useRef(null);
   const [form, setForm] = useState(addHeroInitialState);
@@ -6490,6 +6605,7 @@ function AddHeroView({ session }) {
       name: form.technicalName.trim(),
       portalName: form.portalName.trim(),
       rarity: form.rarity,
+      summonFamily: form.summonFamily,
       role: form.role,
       factions: form.factions,
       lord: form.lord,
@@ -6634,6 +6750,26 @@ function AddHeroView({ session }) {
               </label>
 
               <label className="block">
+                <span className="text-sm text-zinc-400">
+                  {t("adminChampions.summonFamily", "Famille d'invocation")}
+                </span>
+                <select
+                  value={form.summonFamily}
+                  onChange={(event) => updateForm({ summonFamily: event.target.value })}
+                  className="mt-2 h-11 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-sm text-zinc-100 outline-none transition focus:border-emerald-400/60 focus:ring-2 focus:ring-emerald-400/20"
+                >
+                  {adminSummonFamilyOptions.map((option) => (
+                    <option key={option.value || "none"} value={option.value}>
+                      {t(option.labelKey, option.label)}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-xs text-zinc-600">
+                  {t("adminChampions.summonFamilyHelp", "Optionnel pour les heros non legendaires.")}
+                </span>
+              </label>
+
+              <label className="block">
                 <span className="text-sm text-zinc-400">Lord</span>
                 <select
                   value={form.lord}
@@ -6773,6 +6909,16 @@ function AddHeroView({ session }) {
             <div className="text-zinc-500">Rarity / role / faction</div>
             <div className="mt-1 text-zinc-100">
               {heroRarityMeta[form.rarity]?.label || form.rarity} / {heroRoleMeta[form.role]?.label || form.role} / {selectedFactionLabels}
+            </div>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div className="text-zinc-500">{t("adminChampions.summonFamily", "Famille d'invocation")}</div>
+            <div className="mt-1 font-medium text-zinc-100">
+              {t(
+                adminSummonFamilyOptions.find((option) => option.value === form.summonFamily)?.labelKey ||
+                  "adminChampions.summonFamilyNone",
+                adminSummonFamilyOptions.find((option) => option.value === form.summonFamily)?.label || "Aucune",
+              )}
             </div>
           </div>
           <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">

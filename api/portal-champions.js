@@ -32,6 +32,7 @@ const HERO_CALQUE_UPLOAD_ENDPOINTS = [
 ];
 const ALLOWED_RARITIES = new Set(["legendary", "epic", "rare", "ordinary", "basic"]);
 const ALLOWED_ROLES = new Set(["combattant", "heal", "soigneur", "mage", "tacticien", "tank", "tireur"]);
+const ALLOWED_SUMMON_FAMILIES = new Set(["blue", "ancient", "exclusive", "collab", "event"]);
 const ALLOWED_FACTIONS = new Set([
   "arbitre",
   "cauchemar",
@@ -327,6 +328,7 @@ async function handleCreate(body, heroCalqueFile, res) {
   const portalName = cleanText(body.portalName || body.PortalName || body.portal_name);
   const rarity = normalizeText(body.rarity || body.Rarity);
   const role = normalizeText(body.role);
+  const summonFamily = normalizeText(body.summonFamily || body.summon_family || body.SummonFamily);
   const factions = normalizeList(body.factions || body.faction, ALLOWED_FACTIONS);
   const lord = normalizeText(body.lord || "non-lord");
   const expectedCalqueFileName = normalizeHeroCalqueFileName(portalName);
@@ -343,6 +345,11 @@ async function handleCreate(body, heroCalqueFile, res) {
 
   if (!ALLOWED_ROLES.has(role)) {
     sendJson(res, 400, { error: "Role invalide." });
+    return;
+  }
+
+  if (summonFamily && !ALLOWED_SUMMON_FAMILIES.has(summonFamily)) {
+    sendJson(res, 400, { error: "Famille d'invocation invalide." });
     return;
   }
 
@@ -416,6 +423,7 @@ async function handleCreate(body, heroCalqueFile, res) {
     name,
     portal_name: portalName,
     rarity,
+    summon_family: summonFamily || null,
     role,
     faction: factions.join(";"),
     lord,
@@ -424,7 +432,7 @@ async function handleCreate(body, heroCalqueFile, res) {
   const { data, error } = await supabase
     .from("champions")
     .insert(payload)
-    .select("id, name, portal_name, rarity, role, faction, lord")
+    .select("id, name, portal_name, rarity, summon_family, role, faction, lord")
     .single();
 
   if (error) {
@@ -447,6 +455,7 @@ async function handleCreate(body, heroCalqueFile, res) {
       name,
       portal_name: portalName,
       rarity,
+      summon_family: summonFamily || null,
       role,
       faction: factions,
       lord,
