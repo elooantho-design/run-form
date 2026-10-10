@@ -950,6 +950,7 @@ const heroFactionMeta = {
   esoterique: { label: "Esoterique", imageFile: "Esoterique.png" },
   infernal: { label: "Infernal", imageFile: "Infernal.png" },
   innommable: { label: "Innommable", imageFile: "Innommable.png" },
+  "lame-grise": { label: "Lame grise", imageFile: "Lame-grise.png" },
   nordiste: { label: "Nordiste", imageFile: "Nordiste.png" },
   perceur: { label: "Perceur", imageFile: "Perceur.png" },
   sentinelle: { label: "Sentinelle", imageFile: "Sentinelle.png" },
@@ -959,6 +960,7 @@ const heroRoleOrder = Object.keys(heroRoleMeta);
 const heroFactionOrder = [
   "sentinelle",
   "nordiste",
+  "lame-grise",
   "cauchemar",
   "cultiste",
   "infernal",

@@ -444,6 +444,7 @@ const PORTAL_TRANSLATIONS = {
   "heroFaction.esoterique": "Esotericist",
   "heroFaction.infernal": "Infernal",
   "heroFaction.innommable": "Nameless",
+  "heroFaction.lame-grise": "Grey Blade",
   "heroFaction.nordiste": "Northerner",
   "heroFaction.perceur": "Piercer",
   "heroFaction.sentinelle": "Sentinel",

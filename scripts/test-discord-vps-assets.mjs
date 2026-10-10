@@ -206,6 +206,18 @@ assert.equal(
 );
 
 assert.equal(
+  buildPublicCalqueUrl("faction", "Lame-grise.png"),
+  "https://vps-aad12be0.vps.ovh.net/assets/calques/faction-calques/Lame-grise.png",
+  "normal browser builds absolute VPS Lame grise faction logo URLs",
+);
+
+assert.equal(
+  buildPublicCalqueUrl("faction", "Lame-grise.png", { location: discordLocation, discordClientId }),
+  "/vps-assets/assets/calques/faction-calques/Lame-grise.png",
+  "Discord Activity maps Lame grise faction logos through the VPS assets prefix",
+);
+
+assert.equal(
   getHeroCalqueThumbnailFileName("Bayek.png"),
   "Bayek.webp",
   "hero calque thumbnail filenames keep the source basename and switch to WebP",
@@ -222,6 +234,25 @@ assert.equal(
   "/vps-assets/assets/calques/hero-calques/thumbs/Bayek.webp",
   "Discord Activity maps hero thumbnails through the VPS assets prefix",
 );
+
+for (const fileName of ["Galloway.png", "Garroq.png", "Amelia.png"]) {
+  const thumbnailFileName = getHeroCalqueThumbnailFileName(fileName);
+  assert.equal(
+    buildPublicCalqueUrl("hero", fileName),
+    `https://vps-aad12be0.vps.ovh.net/assets/calques/hero-calques/${fileName}`,
+    `${fileName} original calque uses the public VPS hero path`,
+  );
+  assert.equal(
+    buildPublicHeroCalqueThumbnailUrl(fileName),
+    `https://vps-aad12be0.vps.ovh.net/assets/calques/hero-calques/thumbs/${thumbnailFileName}`,
+    `${fileName} thumbnail uses the public VPS thumbs path`,
+  );
+  assert.equal(
+    buildPublicHeroCalqueThumbnailUrl(fileName, { location: discordLocation, discordClientId }),
+    `/vps-assets/assets/calques/hero-calques/thumbs/${thumbnailFileName}`,
+    `${fileName} thumbnail maps through /vps-assets in Discord Activity`,
+  );
+}
 
 const rendererSource = await readFile(
   new URL("../src/components/ProfileCosmeticRenderer.jsx", import.meta.url),

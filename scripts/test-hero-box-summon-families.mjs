@@ -17,6 +17,7 @@ const blueLegendary = { id: "blue-legendary", rarity: "legendary", summonFamily:
 const blueEpic = { id: "blue-epic", rarity: "epic", summonFamily: "blue", roles: ["mage"], factions: ["sentinelle"] };
 const ancientLegendary = { id: "ancient", rarity: "legendary", summonFamily: "ancient", roles: ["mage"], factions: ["sentinelle"] };
 const eventLegendary = { id: "event", rarity: "legendary", summonFamily: "event", roles: ["tank"], factions: ["infernal"] };
+const lameGriseAncient = { id: "amelia", rarity: "legendary", summonFamily: "ancient", roles: ["tireur"], factions: ["lame-grise"] };
 
 assert.equal(normalizeSummonFamily("blue"), "blue");
 assert.equal(normalizeSummonFamily("Bleu"), "blue");
@@ -73,6 +74,26 @@ assert.equal(
   false,
   "role filter still narrows family results",
 );
+assert.equal(
+  matchesCombinedFilters(lameGriseAncient, unowned, {
+    rarity: "legendary",
+    role: "tireur",
+    faction: "lame-grise",
+    summonFamily: "ancient",
+  }),
+  true,
+  "new Lame grise faction remains cumulative with summon family, rarity and role",
+);
+assert.equal(
+  matchesCombinedFilters(lameGriseAncient, unowned, {
+    rarity: "legendary",
+    role: "tireur",
+    faction: "perceur",
+    summonFamily: "ancient",
+  }),
+  false,
+  "other faction filters do not match Lame grise-only heroes",
+);
 
 const saasPortalSource = fs.readFileSync(new URL("../src/SaasPortal.jsx", import.meta.url), "utf8");
 assert.match(saasPortalSource, /summonFamily:\s*getChampionSummonFamily\(champion\)/, "Hero Box card model carries summon_family");
@@ -80,6 +101,8 @@ assert.match(saasPortalSource, /family\) => family !== "blue"/, "Hero Box hides 
 assert.match(saasPortalSource, /heroMatchesSummonFamilyFilter\(hero, state, summonFamilyFilter\)/, "Hero Box uses the shared family filter helper");
 assert.match(saasPortalSource, /function resetHeroFilters\(\)[\s\S]*setSummonFamilyFilter\("all"\)/, "Hero Box reset clears the summon family filter");
 assert.match(saasPortalSource, /adminChampions\.summonFamilyBlue/, "admin form keeps Bleu selectable for champion metadata");
+assert.match(saasPortalSource, /"lame-grise": \{ label: "Lame grise", imageFile: "Lame-grise\.png" \}/, "Hero Box declares the Lame grise faction");
+assert.match(saasPortalSource, /"lame-grise",\s*"cauchemar"/, "Hero Box includes Lame grise in the faction filter order");
 
 const portalChampionsApiSource = fs.readFileSync(new URL("../api/portal-champions.js", import.meta.url), "utf8");
 assert.match(portalChampionsApiSource, /ALLOWED_SUMMON_FAMILIES/, "champion API validates summon family values");
