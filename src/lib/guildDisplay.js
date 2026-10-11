@@ -8,10 +8,10 @@ export const PALADIN_GUILD_DISPLAY_NAMES = {
   G1: "Legend",
   G2: "Imperatores",
   G3: "Loyalty",
-  G4: "Legacy",
+  G4: "Collegium",
   G5: "Senatores",
-  G6: "Magistratus",
-  G7: "Collegium",
+  G6: "Legacy",
+  G7: "Magistratus",
 };
 
 function normalizeOrganizationKey(value) {

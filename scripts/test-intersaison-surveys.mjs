@@ -184,6 +184,11 @@ assert.match(centerSource, /MessageCircle/, "responses have a dedicated icon in 
 assert.match(centerSource, /setSelectedResponse/, "recorded responses can be opened without hijacking member reminders");
 assert.match(centerSource, /Exporter Excel/, "official response export offers XLSX");
 assert.match(centerSource, /Exporter CSV/, "official response export keeps CSV as a complement");
+assert.match(
+  centerSource,
+  /selectedPoll === 1 && selectedCampaign \? \(/,
+  "survey exports are visible only when an official survey 1 campaign exists",
+);
 assert.match(centerSource, /Relances collectives/, "collective reminders are available");
 assert.match(centerSource, /Clôturer l'inter-saison/, "admins can finish a season before starting a new one");
 assert.match(centerSource, /Réessayer l'envoi/, "failed rows can be retried individually");
