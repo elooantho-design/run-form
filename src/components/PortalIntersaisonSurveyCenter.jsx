@@ -127,6 +127,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
   const [messageDraft, setMessageDraft] = useState(DEFAULT_SURVEY_ONE_MESSAGE);
   const [confirmLaunchOpen, setConfirmLaunchOpen] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [selectedMember, setSelectedMember] = useState(null);
   const [trackingOpen, setTrackingOpen] = useState(false);
   const [reminding, setReminding] = useState(false);
@@ -136,6 +137,10 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
   const selectedCampaign = useMemo(
     () => (center?.campaigns || []).find((row) => Number(row.pollNumber) === Number(selectedPoll)) || null,
     [center?.campaigns, selectedPoll],
+  );
+  const latestTestCampaign = useMemo(
+    () => (center?.testCampaigns || []).find((row) => Number(row.pollNumber) === 1) || null,
+    [center?.testCampaigns],
   );
   const guildCards = useMemo(() => serializeGuildCardsForPoll(center, selectedPoll), [center, selectedPoll]);
   const totalMembers = useMemo(
@@ -198,6 +203,30 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
       setError(launchError?.message || "Lancement du sondage impossible.");
     } finally {
       setLaunching(false);
+    }
+  }
+
+  async function launchSurveyOneTest() {
+    if (testing) return;
+    const confirmed = window.confirm(
+      "Envoyer un test uniquement sur ton compte Discord ? Cette réponse restera hors résultats officiels.",
+    );
+    if (!confirmed) return;
+
+    setTesting(true);
+    setError("");
+    setNotice("");
+    try {
+      const data = await callPortalIntersaison({
+        action: "launch-survey-one-test",
+        message: messageDraft,
+      });
+      setCenter(data.surveyCenter || null);
+      setNotice("Test ajouté à la file Discord pour ton compte uniquement. Il restera hors export officiel.");
+    } catch (testError) {
+      setError(testError?.message || "Création du test impossible.");
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -426,6 +455,16 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 <Send className="h-4 w-4" />
                 Lancer le sondage 1
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-violet-500/40 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20"
+                disabled={testing || !messageDraft.trim()}
+                onClick={launchSurveyOneTest}
+              >
+                <Send className="h-4 w-4" />
+                {testing ? "Test..." : "M'envoyer un test"}
+              </Button>
             </div>
             <textarea
               value={messageDraft}
@@ -460,6 +499,22 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 </div>
               </div>
             ) : null}
+          </div>
+        ) : null}
+
+        {selectedPoll === 1 && latestTestCampaign ? (
+          <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 text-sm text-violet-100">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-semibold">Dernier test personnel</div>
+                <div className="mt-1 text-violet-100/80">
+                  Statut {latestTestCampaign.dmCampaign?.status || latestTestCampaign.status} · 1 destinataire · hors résultats officiels
+                </div>
+              </div>
+              <Badge className="rounded-lg border-violet-400/40 bg-violet-500/20 text-violet-100">
+                TEST
+              </Badge>
+            </div>
           </div>
         ) : null}
 

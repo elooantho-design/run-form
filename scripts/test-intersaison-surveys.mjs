@@ -91,10 +91,20 @@ const centerSource = await readFile(
 const migrationSql = await readFile(new URL("./intersaison_surveys.sql", import.meta.url), "utf8");
 const preflightSql = await readFile(new URL("./intersaison_surveys_preflight.sql", import.meta.url), "utf8");
 const verifySql = await readFile(new URL("./intersaison_surveys_verify.sql", import.meta.url), "utf8");
+const testModePreflightSql = await readFile(
+  new URL("./intersaison_surveys_test_mode_preflight.sql", import.meta.url),
+  "utf8",
+);
+const testModeMigrationSql = await readFile(new URL("./intersaison_surveys_test_mode.sql", import.meta.url), "utf8");
+const testModeVerifySql = await readFile(
+  new URL("./intersaison_surveys_test_mode_verify.sql", import.meta.url),
+  "utf8",
+);
 
 assert.match(helperSource, /buildSurveyGuildCards/, "survey card serialization lives in a shared helper");
 assert.match(apiSource, /action === "load-survey-center"/, "survey center load action is exposed");
 assert.match(apiSource, /action === "launch-survey-one"/, "survey 1 launch action is exposed");
+assert.match(apiSource, /action === "launch-survey-one-test"/, "survey 1 personal test action is exposed");
 assert.match(apiSource, /action === "queue-survey-recipient"/, "individual retry action is exposed");
 assert.match(apiSource, /action === "queue-survey-reminders"/, "collective reminder action is exposed");
 assert.match(apiSource, /action === "export-survey-one"/, "survey 1 export action is exposed");
@@ -104,6 +114,13 @@ assert.match(apiSource, /\.eq\("organization_id", organization\.id\)[\s\S]{0,120
 assert.match(apiSource, /\.from\(GUILD_DM_RECIPIENTS_TABLE\)[\s\S]{0,220}\.eq\("organization_id", organization\.id\)/, "DM recipients are scoped by organization");
 assert.match(apiSource, /buildGuildDmRecipientPlan\(members, guildCodes\)/, "survey launch uses the existing DM queue plan");
 assert.match(apiSource, /interaction_type: INTERSAISON_SURVEY_DM_INTERACTION_OBJECTIVES/, "DM campaign stores the survey interaction type");
+assert.match(apiSource, /buildGuildDmTestMessage\(body\?\.message/, "personal survey tests reuse the DM test message wrapper");
+assert.match(apiSource, /interaction_payload: \{ pollNumber: 1, source: "intersaison", mode: "test" \}/, "personal survey tests keep the survey interaction type in test mode");
+assert.match(apiSource, /is_test: true,[\s\S]{0,140}status: "queued"/, "personal survey test DM campaigns are marked as tests");
+assert.match(apiSource, /is_test: true,[\s\S]{0,160}\.select\("id"\)/, "personal survey test survey campaigns are marked as tests");
+assert.match(apiSource, /const officialCampaigns = \(campaigns \|\| \[\]\)\.filter\(\(campaign\) => !campaign\.is_test\)/, "test survey campaigns are excluded from official tracking state");
+assert.match(apiSource, /testCampaigns:/, "test survey campaigns are exposed separately from official tracking");
+assert.match(apiSource, /campaignIds = officialCampaigns/, "recipients loaded for the center exclude test campaigns");
 assert.match(apiSource, /INTERSAISON_SURVEY_RECIPIENTS_TABLE/, "survey recipients link dashboard rows to DM recipients");
 assert.doesNotMatch(apiSource, /discord\.com\/api|DISCORD_BOT_TOKEN|user\.send|sendDiscordDm/i, "Portal API does not send real Discord DMs");
 
@@ -130,6 +147,9 @@ assert.match(centerSource, /Centre de pilotage/, "survey center has a dedicated 
 assert.match(centerSource, /Sondage 1 — Consultation des objectifs/, "survey 1 is visible");
 assert.match(centerSource, /Sondage 2 — Choix de guilde/, "survey 2 placeholder is visible");
 assert.match(centerSource, /Lancer le sondage 1/, "admin can start survey 1");
+assert.match(centerSource, /M'envoyer un test/, "admin can queue a personal survey test");
+assert.match(centerSource, /hors export officiel/, "personal survey tests are explicitly outside official exports");
+assert.match(centerSource, /Dernier test personnel/, "personal survey tests have a separate status hint");
 assert.match(centerSource, /Relances collectives/, "collective reminders are available");
 assert.match(centerSource, /Exporter les réponses/, "response export is available");
 assert.match(centerSource, /Clôturer l'inter-saison/, "admins can finish a season before starting a new one");
@@ -153,5 +173,12 @@ assert.match(verifySql, /orphan_survey_responses/, "verify checks referential in
 assert.match(verifySql, /one_active_season_index/, "verify checks that finished seasons free the active season index");
 assert.match(verifySql, /recipient_campaign_org_mismatches/, "verify checks recipient/campaign organization consistency");
 assert.match(verifySql, /response_campaign_org_mismatches/, "verify checks response/campaign organization consistency");
+assert.match(testModePreflightSql, /Read-only preflight/, "test-mode preflight is explicitly read-only");
+assert.doesNotMatch(testModePreflightSql, /\b(insert|update|delete|truncate|drop)\b/i, "test-mode preflight does not mutate data");
+assert.match(testModeMigrationSql, /add column if not exists is_test boolean not null default false/, "test-mode migration marks survey campaigns");
+assert.match(testModeMigrationSql, /where status <> 'cancelled' and is_test = false/, "official survey uniqueness excludes test campaigns");
+assert.match(testModeMigrationSql, /intersaison_survey_campaigns_org_test_created_idx/, "test survey campaigns are indexed separately");
+assert.match(testModeVerifySql, /official_campaign_duplicates/, "test-mode verify checks official duplicate campaigns");
+assert.match(testModeVerifySql, /test_campaigns_link_dm_test_campaigns/, "test-mode verify checks survey tests link to DM test campaigns");
 
 console.log("Intersaison survey tests passed.");

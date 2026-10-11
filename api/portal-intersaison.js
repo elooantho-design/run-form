@@ -26,8 +26,10 @@ import {
 import {
   GUILD_DM_CAMPAIGNS_TABLE,
   GUILD_DM_RECIPIENTS_TABLE,
+  buildGuildDmTestMessage,
   buildGuildDmRecipientPlan,
   cleanDiscordUserId,
+  isMissingGuildDmTestColumn,
   validateGuildDmMessage,
 } from "./_guild-dm-campaigns.js";
 import {
@@ -90,7 +92,11 @@ const MEMBER_VALIDATION_SELECT_FALLBACK =
 const GUILD_SELECT = "id, organization_id, guild_code, display_name, is_active";
 const SURVEY_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, role, roster_status, community_access_type, community_status, primary_member_id";
+const SURVEY_MEMBER_SELECT_FALLBACK =
+  "id, watcher_name, discord_id, guild_code, role, roster_status, community_access_type, community_status";
 const SURVEY_CAMPAIGN_SELECT =
+  "id, season_id, organization_id, poll_number, guild_dm_campaign_id, status, title, message, target_guild_codes, launched_at, closed_at, created_at, updated_at, is_test";
+const SURVEY_CAMPAIGN_SELECT_FALLBACK =
   "id, season_id, organization_id, poll_number, guild_dm_campaign_id, status, title, message, target_guild_codes, launched_at, closed_at, created_at, updated_at";
 const SURVEY_RECIPIENT_SELECT =
   "id, survey_campaign_id, organization_id, member_id, guild_code_snapshot, member_name_snapshot, discord_user_id, guild_dm_recipient_id, delivery_status, response_status, last_error, reminder_count, last_reminder_at, responded_at, created_at, updated_at";
@@ -495,6 +501,11 @@ function isMissingGuildDmInteractionColumn(error) {
   return error?.code === "PGRST204" && (message.includes("interaction_type") || message.includes("interaction_payload"));
 }
 
+function isMissingSurveyCampaignTestColumn(error) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return error?.code === "PGRST204" && message.includes("is_test");
+}
+
 function throwSurveyMigrationError(message = "Migration intersaison_surveys non executee.") {
   const error = new Error(message);
   error.statusCode = 428;
@@ -544,6 +555,34 @@ async function loadCurrentSurveyMembers(organizationId, guildCodes) {
     );
 }
 
+async function loadSurveyActorMember(actor) {
+  const actorId = validatePortalInput(actor?.id, 80);
+  if (!actorId) {
+    const error = new Error("Session admin invalide.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const { data, error } = await supabase
+    .from("guild_members")
+    .select(SURVEY_MEMBER_SELECT)
+    .eq("id", actorId)
+    .maybeSingle();
+  if (error) {
+    if (isMissingColumn(error, "primary_member_id")) {
+      const fallback = await supabase
+        .from("guild_members")
+        .select(SURVEY_MEMBER_SELECT_FALLBACK)
+        .eq("id", actorId)
+        .maybeSingle();
+      if (fallback.error) throw fallback.error;
+      return fallback.data || null;
+    }
+    throw error;
+  }
+  return data || null;
+}
+
 async function loadActiveSurveySeason(organizationId) {
   const { data, error } = await supabase
     .from(INTERSAISON_SURVEY_SEASONS_TABLE)
@@ -557,6 +596,42 @@ async function loadActiveSurveySeason(organizationId) {
   return data?.[0] || null;
 }
 
+async function loadSurveyCampaignsForSeason(season, organization) {
+  const query = (selectColumns) =>
+    supabase
+      .from(INTERSAISON_SURVEY_CAMPAIGNS_TABLE)
+      .select(selectColumns)
+      .eq("season_id", season.id)
+      .eq("organization_id", organization.id)
+      .order("poll_number", { ascending: true });
+
+  let { data, error } = await query(SURVEY_CAMPAIGN_SELECT);
+  if (error && isMissingSurveyCampaignTestColumn(error)) {
+    ({ data, error } = await query(SURVEY_CAMPAIGN_SELECT_FALLBACK));
+    if (!error) data = (data || []).map((campaign) => ({ ...campaign, is_test: false }));
+  }
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadExistingOfficialSurveyCampaign(season, organization, pollNumber) {
+  const baseQuery = () =>
+    supabase
+      .from(INTERSAISON_SURVEY_CAMPAIGNS_TABLE)
+      .select("id, status")
+      .eq("season_id", season.id)
+      .eq("organization_id", organization.id)
+      .eq("poll_number", pollNumber)
+      .neq("status", "cancelled");
+
+  let { data, error } = await baseQuery().eq("is_test", false).maybeSingle();
+  if (error && isMissingSurveyCampaignTestColumn(error)) {
+    ({ data, error } = await baseQuery().maybeSingle());
+  }
+  if (error) throw error;
+  return data || null;
+}
+
 function serializeSurveyCampaign(campaign, dmCampaign = null) {
   if (!campaign) return null;
   return {
@@ -568,6 +643,7 @@ function serializeSurveyCampaign(campaign, dmCampaign = null) {
     status: campaign.status || "preparing",
     title: campaign.title || getSurveyPollLabel(campaign.poll_number),
     message: campaign.message || "",
+    isTest: Boolean(campaign.is_test),
     targetGuildCodes: Array.isArray(campaign.target_guild_codes) ? campaign.target_guild_codes : [],
     launchedAt: campaign.launched_at || null,
     closedAt: campaign.closed_at || null,
@@ -634,21 +710,20 @@ async function loadSurveyCenterState(organization) {
         defaultSurveyOneMessage: INTERSAISON_SURVEY_ONE_DEFAULT_MESSAGE,
         season: null,
         campaigns: [],
+        testCampaigns: [],
         recipients: [],
         guildCards: buildSurveyGuildCards({ guilds, members }),
       };
     }
 
-    const { data: campaigns, error: campaignsError } = await supabase
-      .from(INTERSAISON_SURVEY_CAMPAIGNS_TABLE)
-      .select(SURVEY_CAMPAIGN_SELECT)
-      .eq("season_id", season.id)
-      .eq("organization_id", organization.id)
-      .order("poll_number", { ascending: true });
-    if (campaignsError) throw campaignsError;
+    const campaigns = await loadSurveyCampaignsForSeason(season, organization);
+    const officialCampaigns = (campaigns || []).filter((campaign) => !campaign.is_test);
+    const testCampaigns = (campaigns || []).filter((campaign) => campaign.is_test);
 
-    const campaignIds = (campaigns || []).map((campaign) => campaign.id).filter(Boolean);
-    const dmCampaignIds = (campaigns || []).map((campaign) => campaign.guild_dm_campaign_id).filter(Boolean);
+    const campaignIds = officialCampaigns.map((campaign) => campaign.id).filter(Boolean);
+    const dmCampaignIds = [...officialCampaigns, ...testCampaigns]
+      .map((campaign) => campaign.guild_dm_campaign_id)
+      .filter(Boolean);
 
     const [{ data: surveyRecipients, error: recipientsError }, { data: responses, error: responsesError }] =
       campaignIds.length > 0
@@ -699,7 +774,7 @@ async function loadSurveyCenterState(organization) {
       (responses || []).map((row) => [String(row.survey_recipient_id), row]),
     );
     const selectedPollRecipients = (surveyRecipients || []).filter((recipient) => {
-      const campaign = (campaigns || []).find((row) => String(row.id) === String(recipient.survey_campaign_id));
+      const campaign = officialCampaigns.find((row) => String(row.id) === String(recipient.survey_campaign_id));
       return Number(campaign?.poll_number || 1) === 1;
     });
     const selectedPollResponses = (responses || []).filter((response) => Number(response.poll_number || 1) === 1);
@@ -717,9 +792,15 @@ async function loadSurveyCenterState(organization) {
         createdAt: season.created_at || null,
         updatedAt: season.updated_at || null,
       },
-      campaigns: (campaigns || []).map((campaign) =>
+      campaigns: officialCampaigns.map((campaign) =>
         serializeSurveyCampaign(campaign, dmCampaignById.get(String(campaign.guild_dm_campaign_id)) || null),
       ),
+      testCampaigns: testCampaigns
+        .slice()
+        .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")))
+        .map((campaign) =>
+          serializeSurveyCampaign(campaign, dmCampaignById.get(String(campaign.guild_dm_campaign_id)) || null),
+        ),
       recipients: (surveyRecipients || []).map((recipient) =>
         serializeSurveyRecipient(
           recipient,
@@ -745,6 +826,7 @@ async function loadSurveyCenterState(organization) {
       defaultSurveyOneMessage: INTERSAISON_SURVEY_ONE_DEFAULT_MESSAGE,
       season: null,
       campaigns: [],
+      testCampaigns: [],
       recipients: [],
       guildCards: buildSurveyGuildCards({ guilds, members }),
     };
@@ -787,15 +869,10 @@ async function handleLaunchSurveyOne(body, actor, organization) {
   if (!guildCodes.length) return { status: 400, payload: { ok: false, error: "Aucune guilde active." } };
 
   const season = await ensureSurveySeason(actor, organization);
-  const { data: existingCampaign, error: existingError } = await supabase
-    .from(INTERSAISON_SURVEY_CAMPAIGNS_TABLE)
-    .select("id, status")
-    .eq("season_id", season.id)
-    .eq("organization_id", organization.id)
-    .eq("poll_number", 1)
-    .neq("status", "cancelled")
-    .maybeSingle();
-  if (existingError) {
+  let existingCampaign;
+  try {
+    existingCampaign = await loadExistingOfficialSurveyCampaign(season, organization, 1);
+  } catch (existingError) {
     if (isMissingIntersaisonSurveySchema(existingError)) throwSurveyMigrationError();
     throw existingError;
   }
@@ -832,6 +909,9 @@ async function handleLaunchSurveyOne(body, actor, organization) {
   if (dmCampaignError) {
     if (isMissingGuildDmInteractionColumn(dmCampaignError)) {
       throwSurveyMigrationError("Migration intersaison_surveys non executee sur guild_dm_campaigns.interaction_type.");
+    }
+    if (isMissingGuildDmTestColumn(dmCampaignError)) {
+      throwSurveyMigrationError("Migration guild_dm_campaigns_test_mode non executee.");
     }
     throw dmCampaignError;
   }
@@ -927,6 +1007,152 @@ async function handleLaunchSurveyOne(body, actor, organization) {
       totalRecipients: plan.recipients.length,
       missingDiscordCount: plan.missingDiscordCount,
       duplicateCount: plan.duplicateCount,
+    },
+  });
+
+  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization) } };
+}
+
+async function handleLaunchSurveyOneTest(body, actor, organization) {
+  const actorMember = await loadSurveyActorMember(actor);
+  if (!actorMember || !canManageIntersaison(actorMember)) {
+    return { status: 403, payload: { ok: false, error: "Test reserve aux admins de l'organisation." } };
+  }
+
+  const guilds = await loadActiveGuilds(organization.id);
+  const actorGuildCode = cleanText(actorMember.guild_code || actor?.guild_code);
+  const actorGuild = guilds.find((guild) => normalizeGuildCode(guild.guild_code) === normalizeGuildCode(actorGuildCode));
+  if (!actorGuild) {
+    return { status: 403, payload: { ok: false, error: "Ta guilde n'est pas disponible dans cette organisation." } };
+  }
+
+  const discordUserId = cleanDiscordUserId(actorMember.discord_id);
+  if (!discordUserId) {
+    return { status: 400, payload: { ok: false, error: "Ton compte n'a pas d'ID Discord valide." } };
+  }
+
+  const guildCode = actorGuild.guild_code;
+  await assertSurveyGuildScopeSafe(organization.id, [guildCode]);
+
+  const season = await ensureSurveySeason(actorMember, organization);
+  const message = buildGuildDmTestMessage(body?.message || INTERSAISON_SURVEY_ONE_DEFAULT_MESSAGE);
+  const now = new Date().toISOString();
+
+  const { data: dmCampaign, error: dmCampaignError } = await supabase
+    .from(GUILD_DM_CAMPAIGNS_TABLE)
+    .insert({
+      organization_id: organization.id,
+      created_by_member_id: actorMember.id,
+      created_by_name: actorMember.watcher_name || "Admin",
+      message,
+      target_guild_codes: [guildCode],
+      interaction_type: INTERSAISON_SURVEY_DM_INTERACTION_OBJECTIVES,
+      interaction_payload: { pollNumber: 1, source: "intersaison", mode: "test" },
+      is_test: true,
+      status: "queued",
+      total_recipients: 1,
+      missing_discord_count: 0,
+      created_at: now,
+      updated_at: now,
+    })
+    .select("id")
+    .single();
+  if (dmCampaignError) {
+    if (isMissingGuildDmInteractionColumn(dmCampaignError)) {
+      throwSurveyMigrationError("Migration intersaison_surveys non executee sur guild_dm_campaigns.interaction_type.");
+    }
+    if (isMissingGuildDmTestColumn(dmCampaignError)) {
+      throwSurveyMigrationError("Migration guild_dm_campaigns_test_mode non executee.");
+    }
+    throw dmCampaignError;
+  }
+
+  const failDmCampaign = async () => {
+    await supabase
+      .from(GUILD_DM_CAMPAIGNS_TABLE)
+      .update({ status: "failed", updated_at: new Date().toISOString() })
+      .eq("id", dmCampaign.id)
+      .eq("organization_id", organization.id);
+  };
+
+  const { data: surveyCampaign, error: surveyCampaignError } = await supabase
+    .from(INTERSAISON_SURVEY_CAMPAIGNS_TABLE)
+    .insert({
+      season_id: season.id,
+      organization_id: organization.id,
+      poll_number: 1,
+      guild_dm_campaign_id: dmCampaign.id,
+      status: "open",
+      title: `${getSurveyPollLabel(1)} — Test`,
+      message,
+      target_guild_codes: [guildCode],
+      launched_by_member_id: actorMember.id,
+      launched_by_name: actorMember.watcher_name || "Admin",
+      launched_at: now,
+      created_at: now,
+      updated_at: now,
+      is_test: true,
+    })
+    .select("id")
+    .single();
+  if (surveyCampaignError) {
+    await failDmCampaign();
+    if (isMissingSurveyCampaignTestColumn(surveyCampaignError)) {
+      throwSurveyMigrationError("Migration intersaison_surveys_test_mode non executee.");
+    }
+    if (isMissingIntersaisonSurveySchema(surveyCampaignError)) throwSurveyMigrationError();
+    throw surveyCampaignError;
+  }
+
+  const { data: dmRecipient, error: dmRecipientError } = await supabase
+    .from(GUILD_DM_RECIPIENTS_TABLE)
+    .insert({
+      campaign_id: dmCampaign.id,
+      organization_id: organization.id,
+      member_id: actorMember.id,
+      guild_code: guildCode,
+      member_name_snapshot: actorMember.watcher_name || "Admin",
+      discord_user_id: discordUserId,
+      status: "queued",
+      created_at: now,
+      updated_at: now,
+    })
+    .select("id")
+    .single();
+  if (dmRecipientError) {
+    await failDmCampaign();
+    throw dmRecipientError;
+  }
+
+  const { error: surveyRecipientError } = await supabase.from(INTERSAISON_SURVEY_RECIPIENTS_TABLE).insert({
+    survey_campaign_id: surveyCampaign.id,
+    organization_id: organization.id,
+    member_id: actorMember.id,
+    guild_code_snapshot: guildCode,
+    member_name_snapshot: actorMember.watcher_name || "Admin",
+    discord_user_id: discordUserId,
+    guild_dm_recipient_id: dmRecipient.id,
+    delivery_status: "queued",
+    response_status: "none",
+    created_at: now,
+    updated_at: now,
+  });
+  if (surveyRecipientError) {
+    await failDmCampaign();
+    throw surveyRecipientError;
+  }
+
+  await logPortalActivity(actorMember, {
+    actionType: "intersaison_survey1_test",
+    entityType: "intersaison_survey_campaign",
+    entityId: surveyCampaign.id,
+    summary: `${actorMember.watcher_name || "Admin"} a lance un test personnel du sondage 1`,
+    metadata: {
+      organizationId: organization.id,
+      dmCampaignId: dmCampaign.id,
+      surveyCampaignId: surveyCampaign.id,
+      guildCode,
+      isTest: true,
     },
   });
 
@@ -1417,6 +1643,7 @@ export default async function handler(req, res) {
     if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState(organization) } };
     else if (action === "load-survey-center") result = await handleLoadSurveyCenter(organization);
     else if (action === "launch-survey-one") result = await handleLaunchSurveyOne(body, sessionCheck.member, organization);
+    else if (action === "launch-survey-one-test") result = await handleLaunchSurveyOneTest(body, sessionCheck.member, organization);
     else if (action === "queue-survey-recipient") result = await handleQueueSurveyRecipient(body, sessionCheck.member, organization);
     else if (action === "queue-survey-reminders") result = await handleQueueCollectiveSurveyReminders(body, sessionCheck.member, organization);
     else if (action === "export-survey-one") result = await handleExportSurveyOne(organization);
