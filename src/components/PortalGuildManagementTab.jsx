@@ -76,6 +76,59 @@ function openDiscordTarget(value) {
   window.open(targetUrl, "_blank", "noopener,noreferrer");
 }
 
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function sortAdminVisionMembers(rows) {
+  return [...(rows || [])].sort((left, right) => {
+    if (Boolean(left.manualVerified) !== Boolean(right.manualVerified)) {
+      return left.manualVerified ? 1 : -1;
+    }
+    return String(left.name || "").localeCompare(String(right.name || ""), "fr", { sensitivity: "base" });
+  });
+}
+
+function getDiscordVerificationBadge(status) {
+  if (status === "verified") {
+    return {
+      label: "Verifie",
+      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+    };
+  }
+  if (status === "missing_invalid") {
+    return {
+      label: "Manquant / invalide",
+      className: "border-red-500/30 bg-red-500/10 text-red-200",
+    };
+  }
+  if (status === "not_found") {
+    return {
+      label: "Non trouve",
+      className: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+    };
+  }
+  if (status === "error") {
+    return {
+      label: "Erreur technique",
+      className: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200",
+    };
+  }
+  return {
+    label: "Non verifie",
+    className: "border-zinc-700 bg-zinc-900 text-zinc-300",
+  };
+}
+
 function getSessionGuildCode(session) {
   return session?.guildCode || session?.guild_code || "G1";
 }
@@ -122,7 +175,10 @@ async function postPortalAccess(action, payload = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data?.error || `HTTP ${response.status}`);
+    const error = new Error(data?.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = data;
+    throw error;
   }
   return data;
 }
@@ -596,6 +652,14 @@ export default function PortalGuildManagementTab({ session }) {
   const [discordCapabilities, setDiscordCapabilities] = useState({});
   const [discordCapabilitiesReady, setDiscordCapabilitiesReady] = useState(true);
   const [guildDmCampaignOpen, setGuildDmCampaignOpen] = useState(false);
+  const [adminVisionEnabled, setAdminVisionEnabled] = useState(false);
+  const [adminVisionMembers, setAdminVisionMembers] = useState([]);
+  const [adminVisionLoading, setAdminVisionLoading] = useState(false);
+  const [adminVisionAction, setAdminVisionAction] = useState("");
+  const [adminVisionMessage, setAdminVisionMessage] = useState("");
+  const [adminVisionError, setAdminVisionError] = useState("");
+  const [adminVisionDiscordDrafts, setAdminVisionDiscordDrafts] = useState({});
+  const [adminVisionLaunchModalOpen, setAdminVisionLaunchModalOpen] = useState(false);
 
   const connectedMemberId = session?.memberId || session?.id || "";
   const isAdmin = isAdminSession(session);
@@ -606,6 +670,7 @@ export default function PortalGuildManagementTab({ session }) {
     const sessionGuildCode = getSessionGuildCode(session);
     return sessionGuildCode ? [sessionGuildCode] : [];
   }, [session]);
+  const canLaunchAdminVisionCluster = isPaladinSession(session);
   const removeMemberLabel = isPaladinSession(session)
     ? t("guildManagement.leaveCluster", "Quitte le cluster")
     : t("guildManagement.leaveGuild", "Quitte la guilde");
@@ -643,6 +708,14 @@ export default function PortalGuildManagementTab({ session }) {
     () => members.filter((member) => normalizeGuildCodeKey(member.guildCode) === normalizeGuildCodeKey(activeGuildCode)),
     [activeGuildCode, members]
   );
+  const sortedAdminVisionMembers = useMemo(() => sortAdminVisionMembers(adminVisionMembers), [adminVisionMembers]);
+  const adminVisionStats = useMemo(() => {
+    const total = adminVisionMembers.length;
+    const verified = adminVisionMembers.filter((member) => member.manualVerified).length;
+    const remaining = Math.max(0, total - verified);
+    const percentage = total > 0 ? Math.round((verified / total) * 100) : 0;
+    return { total, verified, remaining, percentage };
+  }, [adminVisionMembers]);
 
   const activeDefenses = useMemo(
     () =>
@@ -765,6 +838,46 @@ export default function PortalGuildManagementTab({ session }) {
   }, [activeGuildCode, connectedMemberId, refreshTick]);
 
   useEffect(() => {
+    if (!isAdmin || !adminVisionEnabled) return;
+    let cancelled = false;
+
+    async function loadAdminVisionData() {
+      setAdminVisionLoading(true);
+      setAdminVisionError("");
+
+      try {
+        const payload = await postPortalAccess("guild-admin-vision-load", {
+          guildCode: activeGuildCode,
+        });
+        if (cancelled) return;
+        setAdminVisionMembers(payload.members || []);
+        setAdminVisionDiscordDrafts((previous) => {
+          const next = { ...previous };
+          (payload.members || []).forEach((member) => {
+            if (!Object.prototype.hasOwnProperty.call(next, member.id)) {
+              next[member.id] = member.discordId || "";
+            }
+          });
+          return next;
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.error("Erreur chargement Vision admin:", error);
+        setAdminVisionMembers([]);
+        setAdminVisionError(error?.message || "Chargement Vision admin impossible.");
+      } finally {
+        if (!cancelled) setAdminVisionLoading(false);
+      }
+    }
+
+    loadAdminVisionData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGuildCode, adminVisionEnabled, isAdmin, refreshTick]);
+
+  useEffect(() => {
     if (!trackedMetaDefenseId) return;
     if (activeDefenses.some((defense) => String(defense.id) === String(trackedMetaDefenseId))) return;
     setTrackedMetaDefenseId(null);
@@ -774,6 +887,154 @@ export default function PortalGuildManagementTab({ session }) {
     setMembers((previous) =>
       previous.map((member) => (String(member.id) === String(memberId) ? { ...member, ...patch } : member))
     );
+  }
+
+  function updateAdminVisionMemberLocal(nextMember) {
+    if (!nextMember?.id) return;
+    setAdminVisionMembers((previous) =>
+      previous.map((member) => (String(member.id) === String(nextMember.id) ? { ...member, ...nextMember } : member))
+    );
+    updateMemberLocal(nextMember.id, {
+      discordId: nextMember.discordId,
+      guildCode: nextMember.guildCode,
+      role: nextMember.role,
+      name: nextMember.name,
+    });
+  }
+
+  async function reloadAdminVisionData() {
+    setAdminVisionLoading(true);
+    setAdminVisionError("");
+
+    try {
+      const payload = await postPortalAccess("guild-admin-vision-load", {
+        guildCode: activeGuildCode,
+      });
+      setAdminVisionMembers(payload.members || []);
+      setAdminVisionDiscordDrafts((previous) => {
+        const next = { ...previous };
+        (payload.members || []).forEach((member) => {
+          next[member.id] = previous[member.id] ?? member.discordId ?? "";
+        });
+        return next;
+      });
+      return payload;
+    } catch (error) {
+      setAdminVisionError(error?.message || "Chargement Vision admin impossible.");
+      throw error;
+    } finally {
+      setAdminVisionLoading(false);
+    }
+  }
+
+  async function toggleAdminVisionMember(member) {
+    if (!isAdmin || !member?.id || adminVisionAction) return;
+    const actionKey = `toggle:${member.id}`;
+    setAdminVisionAction(actionKey);
+    setAdminVisionError("");
+    setAdminVisionMessage("");
+
+    try {
+      const payload = await postPortalAccess("guild-admin-vision-toggle-member", {
+        guildCode: activeGuildCode,
+        memberId: member.id,
+      });
+      updateAdminVisionMemberLocal(payload.member);
+    } catch (error) {
+      setAdminVisionError(error?.message || "Mise a jour verification impossible.");
+    } finally {
+      setAdminVisionAction("");
+    }
+  }
+
+  async function verifyAdminVisionDiscordMember(member) {
+    if (!isAdmin || !member?.id || adminVisionAction) return;
+    const actionKey = `discord:${member.id}`;
+    setAdminVisionAction(actionKey);
+    setAdminVisionError("");
+    setAdminVisionMessage("");
+
+    try {
+      const payload = await postPortalAccess("guild-admin-vision-verify-discord", {
+        guildCode: activeGuildCode,
+        memberId: member.id,
+      });
+      updateAdminVisionMemberLocal(payload.member);
+    } catch (error) {
+      setAdminVisionError(error?.message || "Verification Discord impossible.");
+    } finally {
+      setAdminVisionAction("");
+    }
+  }
+
+  async function launchAdminVisionCheck(scope, confirmed = false) {
+    if (!isAdmin || adminVisionAction) return;
+    const actionKey = scope === "cluster" ? "launch-cluster" : "launch-guild";
+    setAdminVisionAction(actionKey);
+    setAdminVisionError("");
+    setAdminVisionMessage(
+      scope === "cluster"
+        ? "Verification du cluster en cours..."
+        : "Verification de la guilde en cours..."
+    );
+
+    try {
+      const payload = await postPortalAccess("guild-admin-vision-launch-check", {
+        guildCode: activeGuildCode,
+        scope,
+        confirmed,
+      });
+      setAdminVisionMembers(payload.members || []);
+      setAdminVisionLaunchModalOpen(false);
+      setAdminVisionMessage(
+        scope === "cluster"
+          ? `${payload.checkedCount || 0} joueurs verifies sur ${payload.guilds?.length || 0} guildes.`
+          : `${payload.checkedCount || 0} joueurs verifies.`
+      );
+    } catch (error) {
+      if (error?.payload?.requiresConfirmation && !confirmed) {
+        const confirmMessage =
+          scope === "cluster"
+            ? "Une verification existe deja sur le cluster. Recommencer pour les sept guildes G1 a G7 ?"
+            : "Une verification existe deja sur cette guilde. Recommencer ?";
+        if (window.confirm(confirmMessage)) {
+          setAdminVisionAction("");
+          await launchAdminVisionCheck(scope, true);
+          return;
+        }
+      }
+      setAdminVisionError(error?.message || "Lancement verification impossible.");
+      setAdminVisionMessage("");
+    } finally {
+      setAdminVisionAction("");
+    }
+  }
+
+  async function saveAdminVisionDiscordId(member) {
+    if (!isAdmin || !member?.id || adminVisionAction) return;
+    const actionKey = `save-discord:${member.id}`;
+    const discordId = (adminVisionDiscordDrafts[member.id] ?? member.discordId ?? "").trim();
+    setAdminVisionAction(actionKey);
+    setAdminVisionError("");
+    setAdminVisionMessage("");
+
+    try {
+      const payload = await postPortalAccess("guild-admin-vision-update-discord-id", {
+        guildCode: activeGuildCode,
+        memberId: member.id,
+        discordId,
+      });
+      updateAdminVisionMemberLocal(payload.member);
+      setAdminVisionDiscordDrafts((previous) => ({
+        ...previous,
+        [member.id]: payload.member?.discordId || "",
+      }));
+      setAdminVisionMessage("ID Discord sauvegarde. Verification Discord invalidee.");
+    } catch (error) {
+      setAdminVisionError(error?.message || "Sauvegarde Discord ID impossible.");
+    } finally {
+      setAdminVisionAction("");
+    }
   }
 
   async function updateMemberField(memberId, patch, errorLabel) {
@@ -1672,6 +1933,196 @@ export default function PortalGuildManagementTab({ session }) {
     }
   }
 
+  function renderAdminVisionPanel() {
+    return (
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold text-zinc-50">Vision admin · {activeGuildCode}</h3>
+              <Badge className="rounded-lg border-cyan-500/30 bg-cyan-500/10 text-cyan-200">
+                {adminVisionStats.verified}/{adminVisionStats.total} verifies · {adminVisionStats.percentage}%
+              </Badge>
+              <Badge className="rounded-lg border-red-500/30 bg-red-500/10 text-red-200">
+                {adminVisionStats.remaining} restants
+              </Badge>
+            </div>
+            <p className="mt-2 max-w-3xl text-sm text-zinc-400">
+              Verification manuelle du roster et controle des ID Discord. Les clics sur les lignes changent uniquement
+              l'etat rouge/vert et n'ouvrent pas les defenses GvG.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+              disabled={adminVisionLoading || Boolean(adminVisionAction)}
+              onClick={() => void reloadAdminVisionData()}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Rafraichir
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-lg border-cyan-500/40 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20"
+              disabled={adminVisionLoading || Boolean(adminVisionAction)}
+              onClick={() => setAdminVisionLaunchModalOpen(true)}
+            >
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              Lancer une verification
+            </Button>
+          </div>
+        </div>
+
+        {adminVisionMessage ? (
+          <div className="mt-4 rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
+            {adminVisionMessage}
+          </div>
+        ) : null}
+
+        {adminVisionError ? (
+          <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            {adminVisionError}
+          </div>
+        ) : null}
+
+        {adminVisionLoading ? (
+          <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/70 px-4 py-6 text-center text-sm text-zinc-400">
+            Chargement Vision admin...
+          </div>
+        ) : (
+          <div className="mt-5 overflow-x-auto rounded-lg border border-zinc-800">
+            <div className="min-w-[980px]">
+              <div className="grid grid-cols-[minmax(180px,1fr)_260px_250px_180px] gap-3 border-b border-zinc-800 bg-zinc-900/70 px-4 py-3 text-xs uppercase tracking-[0.18em] text-zinc-500">
+                <div>Joueur</div>
+                <div>ID Discord</div>
+                <div>Verification Discord</div>
+                <div>Derniere modification</div>
+              </div>
+
+              <div className="divide-y divide-zinc-800">
+                {sortedAdminVisionMembers.length ? (
+                  sortedAdminVisionMembers.map((member) => {
+                    const discordStatus = member.discordVerification?.status || "not_checked";
+                    const badge = getDiscordVerificationBadge(discordStatus);
+                    const actionDisabled = Boolean(adminVisionAction) || adminVisionLoading;
+                    const isRowAction = adminVisionAction === `toggle:${member.id}`;
+                    const draftDiscordId = adminVisionDiscordDrafts[member.id] ?? member.discordId ?? "";
+                    const statusTitle = [
+                      member.discordVerification?.displayName
+                        ? `Nom Discord : ${member.discordVerification.displayName}`
+                        : "",
+                      member.discordVerification?.error
+                        ? `Erreur : ${member.discordVerification.error}`
+                        : "",
+                      member.discordVerification?.checkedAt
+                        ? `Verifie le ${formatDateTime(member.discordVerification.checkedAt)}`
+                        : "",
+                    ].filter(Boolean).join("\n");
+
+                    return (
+                      <div
+                        key={member.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => toggleAdminVisionMember(member)}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          toggleAdminVisionMember(member);
+                        }}
+                        className={`grid grid-cols-[minmax(180px,1fr)_260px_250px_180px] items-center gap-3 px-4 py-3 text-left transition ${
+                          member.manualVerified
+                            ? "bg-emerald-500/5 hover:bg-emerald-500/10"
+                            : "bg-red-500/5 hover:bg-red-500/10"
+                        }`}
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-zinc-50">{member.name}</span>
+                            <span
+                              className={`rounded-md border px-2 py-0.5 text-[11px] ${
+                                member.manualVerified
+                                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                                  : "border-red-500/30 bg-red-500/10 text-red-200"
+                              }`}
+                            >
+                              {isRowAction ? "..." : member.manualVerified ? "Vu" : "A verifier"}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-zinc-500">{member.role || "member"}</div>
+                        </div>
+
+                        <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={draftDiscordId}
+                            onChange={(event) =>
+                              setAdminVisionDiscordDrafts((previous) => ({
+                                ...previous,
+                                [member.id]: event.target.value,
+                              }))
+                            }
+                            className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-400/60 focus:ring-2 focus:ring-cyan-400/20"
+                            placeholder="ID Discord"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-9 rounded-lg border-zinc-700 px-3 text-zinc-200"
+                            disabled={actionDisabled || draftDiscordId.trim() === (member.discordId || "")}
+                            onClick={() => saveAdminVisionDiscordId(member)}
+                            title="Sauvegarder l'ID Discord"
+                          >
+                            <Save className="h-4 w-4" />
+                          </Button>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                          <span
+                            className={`rounded-lg border px-2 py-1 text-xs ${badge.className}`}
+                            title={statusTitle || undefined}
+                          >
+                            {badge.label}
+                          </span>
+                          {member.discordVerification?.displayName ? (
+                            <span className="max-w-[120px] truncate text-xs text-zinc-400" title={member.discordVerification.displayName}>
+                              {member.discordVerification.displayName}
+                            </span>
+                          ) : null}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-8 rounded-lg border-zinc-700 px-2 text-xs text-zinc-200"
+                            disabled={actionDisabled}
+                            onClick={() => verifyAdminVisionDiscordMember(member)}
+                          >
+                            {adminVisionAction === `discord:${member.id}` ? "..." : "Recheck"}
+                          </Button>
+                        </div>
+
+                        <div className="text-sm text-zinc-300" title={member.lastModifiedAt || undefined}>
+                          {formatDateTime(member.lastModifiedAt)}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="px-4 py-8 text-center text-sm text-zinc-500">
+                    Aucun membre actif pour cette guilde.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const memberEditMember = memberEditProfile?.member || null;
   const memberEditLinkedAccounts = (memberEditProfile?.linkedAccounts || []).filter(
     (member) => String(member.id) !== String(memberEditMember?.id),
@@ -1702,6 +2153,26 @@ export default function PortalGuildManagementTab({ session }) {
             <Badge className="rounded-lg border-sky-500/30 bg-sky-500/10 text-sky-300">
               {activeDefenses.length} {t("guildManagement.defenses", "defenses")}
             </Badge>
+            {isAdmin ? (
+              <Button
+                type="button"
+                variant="outline"
+                className={`rounded-lg ${
+                  adminVisionEnabled
+                    ? "border-cyan-400/60 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/20"
+                    : "border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800"
+                }`}
+                disabled={loading}
+                onClick={() => {
+                  setAdminVisionEnabled((current) => !current);
+                  setAdminVisionError("");
+                  setAdminVisionMessage("");
+                }}
+              >
+                <ShieldCheck className="mr-2 h-4 w-4" />
+                Vision admin
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -1803,6 +2274,8 @@ export default function PortalGuildManagementTab({ session }) {
         <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-sm text-zinc-400">
           {t("guildManagement.loading", "Chargement de la gestion des guildes...")}
         </div>
+      ) : adminVisionEnabled && isAdmin ? (
+        renderAdminVisionPanel()
       ) : (
         <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/70">
           <div className="min-w-[1080px] lg:min-w-0">
@@ -1936,6 +2409,79 @@ export default function PortalGuildManagementTab({ session }) {
           activeGuildCode={activeGuildCode}
           onClose={() => setGuildDmCampaignOpen(false)}
         />
+      ) : null}
+
+      {adminVisionLaunchModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-xl rounded-lg border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-cyan-500/30 bg-cyan-500/10">
+                  <ShieldCheck className="h-5 w-5 text-cyan-200" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-zinc-50">Lancer une verification</h3>
+                  <p className="mt-1 text-sm leading-6 text-zinc-400">
+                    La campagne remet les lignes concernees en rouge et relance aussi le controle des ID Discord.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+                disabled={Boolean(adminVisionAction)}
+                onClick={() => setAdminVisionLaunchModalOpen(false)}
+                title={t("common.close", "Fermer")}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-cyan-400/50 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={Boolean(adminVisionAction)}
+                onClick={() => launchAdminVisionCheck("guild")}
+              >
+                <div className="text-sm font-semibold text-zinc-50">Ma guilde</div>
+                <div className="mt-2 text-sm leading-6 text-zinc-400">
+                  Reinitialise uniquement {activeGuildCode} et verifie les ID Discord des joueurs de cette guilde.
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 text-left transition hover:border-cyan-400/50 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={Boolean(adminVisionAction) || !canLaunchAdminVisionCluster}
+                onClick={() => launchAdminVisionCheck("cluster")}
+              >
+                <div className="text-sm font-semibold text-zinc-50">Ensemble du cluster</div>
+                <div className="mt-2 text-sm leading-6 text-zinc-400">
+                  Lance une nouvelle campagne pour G1 a G7. Reserve aux administrateurs du site.
+                </div>
+              </button>
+            </div>
+
+            {!canLaunchAdminVisionCluster ? (
+              <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                Ton perimetre actuel permet uniquement la verification de ta guilde.
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-lg border-zinc-700 text-zinc-200"
+                disabled={Boolean(adminVisionAction)}
+                onClick={() => setAdminVisionLaunchModalOpen(false)}
+              >
+                {t("common.cancel", "Annuler")}
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {memberEditOpen ? (

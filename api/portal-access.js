@@ -45,6 +45,7 @@ const MAX_MEMBER_ROWS = 600;
 const MAX_SUGGESTIONS = 20;
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFENSE_FOLLOWUP_TABLE = "guild_defense_discord_followups";
+const GUILD_ADMIN_VISION_TABLE = "guild_member_admin_vision_state";
 const COMMUNITY_REQUESTS_TABLE = "portal_community_access_requests";
 const TODO_STATUS = "\u00c0 faire";
 const VERIFY_STATUS = "\u00c0 v\u00e9rifier";
@@ -64,6 +65,7 @@ const DEFAULT_MEMBER_PASSWORD = "motdepassemembre";
 const HERO_SEARCH_PAGE_SIZE = 1000;
 const HERO_SEARCH_MAX_REQUIREMENTS = 10;
 const PALADIN_ORGANIZATION_KEY = "paladin";
+const PALADIN_CLUSTER_GUILD_CODES_SERVER = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const SAFE_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, primary_member_id";
 const SAFE_MEMBER_SELECT_WITH_DEFENSE_IDS =
@@ -72,6 +74,10 @@ const EDIT_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, roster_status, primary_member_id";
 const HERO_SEARCH_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, role, community_access_type, community_status";
+const ADMIN_VISION_MEMBER_SELECT =
+  "id, watcher_name, discord_id, guild_code, role, created_at, updated_at, roster_status, community_access_type, community_status, primary_member_id";
+const ADMIN_VISION_MEMBER_SELECT_FALLBACK =
+  "id, watcher_name, discord_id, guild_code, role, created_at, roster_status, community_access_type, community_status, primary_member_id";
 const SAFE_MEMBER_SELECT_WITH_AWAKENINGS = `
   id,
   watcher_name,
@@ -334,6 +340,10 @@ function isMissingFollowupTable(error) {
     error?.code === "PGRST205" ||
     message.includes(DEFENSE_FOLLOWUP_TABLE)
   );
+}
+
+function isMissingAdminVisionTable(error) {
+  return isMissingOptionalTable(error, GUILD_ADMIN_VISION_TABLE);
 }
 
 function isMissingOptionalTable(error, tableName) {
@@ -1337,6 +1347,97 @@ async function sendDiscordDm(userId, content) {
   }
 
   return sendDiscordMessages(channel.id, content);
+}
+
+function isDiscordSnowflake(value) {
+  return /^\d{15,25}$/.test(cleanText(value));
+}
+
+function getConfiguredDiscordGuildId() {
+  return cleanText(
+    process.env.DISCORD_GUILD_ID ||
+      process.env.DISCORD_SERVER_ID ||
+      process.env.DISCORD_REPRO_GUILD_ID ||
+      process.env.DISCORD_MAIN_GUILD_ID ||
+      ""
+  );
+}
+
+function getDiscordReproChannelIdForGuild(guildCode) {
+  const normalizedGuild = normalizeGuildCode(guildCode);
+  const guildEnvKey = normalizedGuild ? `DISCORD_REPRO_CHANNEL_ID_${normalizedGuild}` : "";
+  return cleanText((guildEnvKey && process.env[guildEnvKey]) || process.env.DISCORD_REPRO_CHANNEL_ID || "");
+}
+
+async function resolveDiscordGuildIdForVerification(guildCode) {
+  const configuredGuildId = getConfiguredDiscordGuildId();
+  if (configuredGuildId) return configuredGuildId;
+
+  const channelId = getDiscordReproChannelIdForGuild(guildCode);
+  if (!channelId) {
+    const error = new Error("Serveur Discord non configure pour cette verification.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const channel = await discordRequest(`/channels/${encodeURIComponent(channelId)}`, {
+    method: "GET",
+  });
+  const guildId = cleanText(channel?.guild_id);
+  if (!guildId) {
+    const error = new Error("Serveur Discord introuvable depuis le salon configure.");
+    error.statusCode = 500;
+    throw error;
+  }
+  return guildId;
+}
+
+function getDiscordDisplayName(memberPayload) {
+  const user = memberPayload?.user || {};
+  return cleanText(
+    memberPayload?.nick ||
+      user.global_name ||
+      user.username ||
+      user.id ||
+      ""
+  );
+}
+
+async function verifyDiscordGuildMember(discordId, guildCode) {
+  const cleanDiscordId = cleanText(discordId);
+  if (!isDiscordSnowflake(cleanDiscordId)) {
+    return {
+      status: "missing_invalid",
+      discordDisplayName: "",
+      errorMessage: cleanDiscordId ? "Format Discord ID invalide." : "Discord ID manquant.",
+    };
+  }
+
+  try {
+    const guildId = await resolveDiscordGuildIdForVerification(guildCode);
+    const member = await discordRequest(
+      `/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(cleanDiscordId)}`,
+      { method: "GET" },
+    );
+    return {
+      status: "verified",
+      discordDisplayName: getDiscordDisplayName(member),
+      errorMessage: "",
+    };
+  } catch (error) {
+    if (error?.statusCode === 404) {
+      return {
+        status: "not_found",
+        discordDisplayName: "",
+        errorMessage: "ID non trouve sur le serveur Discord.",
+      };
+    }
+    return {
+      status: "error",
+      discordDisplayName: "",
+      errorMessage: error?.message || "Erreur technique Discord.",
+    };
+  }
 }
 
 function normalizeDefenseName(value) {
@@ -2613,6 +2714,656 @@ async function handleGuildManagementLoad(body, res) {
     discordCapabilitiesReady: discordCapabilityAccess.schemaReady !== false,
     discordCapabilities: discordCapabilityAccess.capabilities,
   });
+}
+
+async function resolveAdminVisionGuildScope(admin, rawGuildCode) {
+  const requestedGuildCode = normalizePortalGuildCodeValue(rawGuildCode || admin?.guild_code);
+  const guildCode = await resolveCanonicalPortalGuildCode(requestedGuildCode);
+  const actorScope = await resolveGuildManagementActorScope(admin);
+  const canUseClusterScope = isLeaderRole(admin?.role) || isPaladinGlobalGuildAdmin(admin, actorScope);
+
+  if (!canViewGuildCode(admin, guildCode, { leaderSeesAll: true })) {
+    const error = new Error("Guilde hors perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (!canUseClusterScope && normalizeGuildCode(admin?.guild_code) !== normalizeGuildCode(guildCode)) {
+    const error = new Error("Vision admin limitee a ta propre guilde.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const guild = await loadActivePortalGuildByCode(guildCode);
+  if (!guild?.organization_id) {
+    const error = new Error("Organisation Portal introuvable pour cette guilde.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return {
+    guildCode: guild.guild_code,
+    organizationId: guild.organization_id,
+    portalGuildId: guild.id,
+    canUseClusterScope,
+    actorScope,
+  };
+}
+
+async function loadAdminVisionMembers(guildCode) {
+  let { data, error } = await supabase
+    .from("guild_members")
+    .select(ADMIN_VISION_MEMBER_SELECT)
+    .eq("guild_code", guildCode)
+    .order("watcher_name", { ascending: true })
+    .limit(MAX_MEMBER_ROWS);
+
+  if (error && isMissingColumn(error, "updated_at")) {
+    const fallback = await supabase
+      .from("guild_members")
+      .select(ADMIN_VISION_MEMBER_SELECT_FALLBACK)
+      .eq("guild_code", guildCode)
+      .order("watcher_name", { ascending: true })
+      .limit(MAX_MEMBER_ROWS);
+    data = fallback.data;
+    error = fallback.error;
+  }
+
+  if (error) {
+    throw new Error(error.message || "Chargement membres vision admin impossible.");
+  }
+
+  return (data || [])
+    .filter((member) => !isCommunityAccount(member))
+    .filter((member) => normalizeRosterStatus(member.roster_status) === "active");
+}
+
+async function ensureAdminVisionStateRows({ organizationId, guildCode, members }) {
+  const rows = (members || [])
+    .filter((member) => member?.id)
+    .map((member) => ({
+      organization_id: organizationId,
+      guild_code: guildCode,
+      member_id: member.id,
+      discord_id_snapshot: cleanText(member.discord_id) || null,
+    }));
+
+  if (!rows.length) return;
+
+  const { error } = await supabase
+    .from(GUILD_ADMIN_VISION_TABLE)
+    .upsert(rows, {
+      onConflict: "organization_id,guild_code,member_id",
+      ignoreDuplicates: true,
+    });
+
+  if (error) {
+    if (isMissingAdminVisionTable(error)) {
+      const missing = new Error("Migration Vision admin non executee : table guild_member_admin_vision_state manquante.");
+      missing.statusCode = 428;
+      throw missing;
+    }
+    throw new Error(error.message || "Initialisation Vision admin impossible.");
+  }
+}
+
+async function loadAdminVisionStates({ organizationId, guildCode, memberIds }) {
+  const ids = [...new Set((memberIds || []).map(cleanText).filter(Boolean))];
+  if (!ids.length) return new Map();
+
+  const { data, error } = await supabase
+    .from(GUILD_ADMIN_VISION_TABLE)
+    .select(
+      "id, organization_id, guild_code, member_id, manual_verified, manual_verified_at, manual_verified_by_member_id, discord_status, discord_checked_at, discord_checked_by_member_id, discord_id_snapshot, discord_display_name, discord_error, updated_at",
+    )
+    .eq("organization_id", organizationId)
+    .eq("guild_code", guildCode)
+    .in("member_id", ids);
+
+  if (error) {
+    if (isMissingAdminVisionTable(error)) {
+      const missing = new Error("Migration Vision admin non executee : table guild_member_admin_vision_state manquante.");
+      missing.statusCode = 428;
+      throw missing;
+    }
+    throw new Error(error.message || "Chargement etats Vision admin impossible.");
+  }
+
+  return (data || []).reduce((states, row) => {
+    states.set(String(row.member_id), row);
+    return states;
+  }, new Map());
+}
+
+function serializeAdminVisionMember(member, state = null) {
+  const discordStatus = state?.discord_status || "not_checked";
+  return {
+    id: member.id,
+    name: getMemberName(member),
+    discordId: member.discord_id || "",
+    guildCode: member.guild_code || "",
+    role: member.role || "member",
+    lastModifiedAt: member.updated_at || member.created_at || null,
+    manualVerified: Boolean(state?.manual_verified),
+    manualVerifiedAt: state?.manual_verified_at || null,
+    discordVerification: {
+      status: discordStatus,
+      checkedAt: state?.discord_checked_at || null,
+      discordIdSnapshot: state?.discord_id_snapshot || "",
+      displayName: state?.discord_display_name || "",
+      error: state?.discord_error || "",
+    },
+  };
+}
+
+async function buildAdminVisionPayload(admin, rawGuildCode) {
+  const scope = await resolveAdminVisionGuildScope(admin, rawGuildCode);
+  const members = await loadAdminVisionMembers(scope.guildCode);
+  await ensureAdminVisionStateRows({ ...scope, members });
+  const states = await loadAdminVisionStates({
+    organizationId: scope.organizationId,
+    guildCode: scope.guildCode,
+    memberIds: members.map((member) => member.id),
+  });
+
+  return {
+    scope,
+    members: members.map((member) => serializeAdminVisionMember(member, states.get(String(member.id)))),
+  };
+}
+
+async function handleGuildAdminVisionLoad(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const payload = await buildAdminVisionPayload(adminCheck.admin, body.guildCode || body.guild_code);
+    sendJson(res, 200, { ok: true, ...payload });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Chargement Vision admin impossible." });
+  }
+}
+
+async function handleGuildAdminVisionStart(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const scope = await resolveAdminVisionGuildScope(adminCheck.admin, body.guildCode || body.guild_code);
+    const members = await loadAdminVisionMembers(scope.guildCode);
+    await ensureAdminVisionStateRows({ ...scope, members });
+
+    const memberIds = members.map((member) => member.id).filter(Boolean);
+    if (memberIds.length) {
+      const { error } = await supabase
+        .from(GUILD_ADMIN_VISION_TABLE)
+        .update({
+          manual_verified: false,
+          manual_verified_at: null,
+          manual_verified_by_member_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("organization_id", scope.organizationId)
+        .eq("guild_code", scope.guildCode)
+        .in("member_id", memberIds);
+
+      if (error) {
+        if (isMissingAdminVisionTable(error)) {
+          sendJson(res, 428, { error: "Migration Vision admin non executee : table guild_member_admin_vision_state manquante." });
+          return;
+        }
+        throw new Error(error.message || "Demarrage verification impossible.");
+      }
+    }
+
+    const payload = await buildAdminVisionPayload(adminCheck.admin, scope.guildCode);
+    sendJson(res, 200, { ok: true, ...payload });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Demarrage verification impossible." });
+  }
+}
+
+async function loadAdminVisionTarget({ admin, memberId, guildCode }) {
+  const scope = await resolveAdminVisionGuildScope(admin, guildCode);
+  const target = await loadEditableMemberById(memberId);
+  if (!target) {
+    const error = new Error("Joueur introuvable.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!canViewGuildCode(admin, target.guild_code, { leaderSeesAll: true })) {
+    const error = new Error("Ce joueur n'est pas dans ton perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (isCommunityAccount(target) || normalizeRosterStatus(target.roster_status) !== "active") {
+    const error = new Error("Ce joueur n'est pas dans le roster actif de la guilde.");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (!sameGuildSpace(target.guild_code, scope.guildCode) || normalizeGuildCode(target.guild_code) !== normalizeGuildCode(scope.guildCode)) {
+    const error = new Error("Ce joueur n'appartient pas a la guilde active.");
+    error.statusCode = 403;
+    throw error;
+  }
+  return { scope, target };
+}
+
+async function handleGuildAdminVisionToggleMember(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const memberId = cleanText(body.memberId || body.member_id);
+    if (!memberId) {
+      sendJson(res, 400, { error: "Membre manquant." });
+      return;
+    }
+
+    const { scope, target } = await loadAdminVisionTarget({
+      admin: adminCheck.admin,
+      memberId,
+      guildCode: body.guildCode || body.guild_code,
+    });
+    await ensureAdminVisionStateRows({ ...scope, members: [target] });
+    const states = await loadAdminVisionStates({
+      organizationId: scope.organizationId,
+      guildCode: scope.guildCode,
+      memberIds: [target.id],
+    });
+    const currentState = states.get(String(target.id));
+    const nextValue = !currentState?.manual_verified;
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from(GUILD_ADMIN_VISION_TABLE)
+      .update({
+        manual_verified: nextValue,
+        manual_verified_at: nextValue ? now : null,
+        manual_verified_by_member_id: nextValue ? adminCheck.admin.id : null,
+        updated_at: now,
+      })
+      .eq("organization_id", scope.organizationId)
+      .eq("guild_code", scope.guildCode)
+      .eq("member_id", target.id)
+      .select(
+        "id, organization_id, guild_code, member_id, manual_verified, manual_verified_at, manual_verified_by_member_id, discord_status, discord_checked_at, discord_checked_by_member_id, discord_id_snapshot, discord_display_name, discord_error, updated_at",
+      )
+      .maybeSingle();
+
+    if (error) throw new Error(error.message || "Mise a jour verification impossible.");
+    sendJson(res, 200, { ok: true, member: serializeAdminVisionMember(target, data) });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Mise a jour verification impossible." });
+  }
+}
+
+async function updateAdminVisionDiscordState({ scope, target, actor, result }) {
+  await ensureAdminVisionStateRows({ ...scope, members: [target] });
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from(GUILD_ADMIN_VISION_TABLE)
+    .update({
+      discord_status: result.status,
+      discord_checked_at: now,
+      discord_checked_by_member_id: actor.id,
+      discord_id_snapshot: cleanText(target.discord_id) || null,
+      discord_display_name: result.discordDisplayName || null,
+      discord_error: result.errorMessage || null,
+      updated_at: now,
+    })
+    .eq("organization_id", scope.organizationId)
+    .eq("guild_code", scope.guildCode)
+    .eq("member_id", target.id)
+    .select(
+      "id, organization_id, guild_code, member_id, manual_verified, manual_verified_at, manual_verified_by_member_id, discord_status, discord_checked_at, discord_checked_by_member_id, discord_id_snapshot, discord_display_name, discord_error, updated_at",
+    )
+    .maybeSingle();
+
+  if (error) throw new Error(error.message || "Sauvegarde verification Discord impossible.");
+  return data;
+}
+
+async function handleGuildAdminVisionVerifyDiscord(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const memberId = cleanText(body.memberId || body.member_id);
+    if (!memberId) {
+      sendJson(res, 400, { error: "Membre manquant." });
+      return;
+    }
+    const { scope, target } = await loadAdminVisionTarget({
+      admin: adminCheck.admin,
+      memberId,
+      guildCode: body.guildCode || body.guild_code,
+    });
+    const result = await verifyDiscordGuildMember(target.discord_id, scope.guildCode);
+    const state = await updateAdminVisionDiscordState({
+      scope,
+      target,
+      actor: adminCheck.admin,
+      result,
+    });
+
+    sendJson(res, 200, { ok: true, member: serializeAdminVisionMember(target, state) });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Verification Discord impossible." });
+  }
+}
+
+async function handleGuildAdminVisionVerifyDiscordGuild(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const scope = await resolveAdminVisionGuildScope(adminCheck.admin, body.guildCode || body.guild_code);
+    const members = await loadAdminVisionMembers(scope.guildCode);
+    await ensureAdminVisionStateRows({ ...scope, members });
+
+    const updatedMembers = [];
+    for (const member of members) {
+      const result = await verifyDiscordGuildMember(member.discord_id, scope.guildCode);
+      const state = await updateAdminVisionDiscordState({
+        scope,
+        target: member,
+        actor: adminCheck.admin,
+        result,
+      });
+      updatedMembers.push(serializeAdminVisionMember(member, state));
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      scope,
+      members: updatedMembers,
+      checkedCount: updatedMembers.length,
+    });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Verification Discord guilde impossible." });
+  }
+}
+
+async function resolveAdminVisionLaunchTargets(admin, body) {
+  const mode = cleanText(body.scope || body.mode) === "cluster" ? "cluster" : "guild";
+  if (mode === "guild") {
+    return [await resolveAdminVisionGuildScope(admin, body.guildCode || body.guild_code)];
+  }
+
+  const currentScope = await resolveAdminVisionGuildScope(admin, body.guildCode || body.guild_code || admin?.guild_code);
+  if (!currentScope.canUseClusterScope) {
+    const error = new Error("Verification cluster reservee aux administrateurs du site.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const allowedGuildCodes = new Set(
+    (currentScope.actorScope?.allowedGuildCodes || [])
+      .filter((guildCode) => PALADIN_CLUSTER_GUILD_CODES_SERVER.includes(normalizeGuildCode(guildCode)))
+      .map((guildCode) => normalizeGuildCode(guildCode)),
+  );
+  const targetCodes = PALADIN_CLUSTER_GUILD_CODES_SERVER.filter((guildCode) => allowedGuildCodes.has(guildCode));
+  if (targetCodes.length === 0) {
+    const error = new Error("Aucune guilde cluster active dans ton perimetre.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const targets = [];
+  for (const guildCode of targetCodes) {
+    targets.push(await resolveAdminVisionGuildScope(admin, guildCode));
+  }
+  return targets;
+}
+
+async function hasAdminVisionExistingProgress(targetsWithMembers) {
+  for (const target of targetsWithMembers) {
+    const memberIds = target.members.map((member) => member.id).filter(Boolean);
+    if (!memberIds.length) continue;
+    const states = await loadAdminVisionStates({
+      organizationId: target.organizationId,
+      guildCode: target.guildCode,
+      memberIds,
+    });
+    const hasProgress = [...states.values()].some(
+      (state) => state?.manual_verified || state?.manual_verified_at || state?.discord_checked_at,
+    );
+    if (hasProgress) return true;
+  }
+  return false;
+}
+
+async function resetAdminVisionLaunchTarget(target) {
+  const memberIds = target.members.map((member) => member.id).filter(Boolean);
+  if (!memberIds.length) return;
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from(GUILD_ADMIN_VISION_TABLE)
+    .update({
+      manual_verified: false,
+      manual_verified_at: null,
+      manual_verified_by_member_id: null,
+      discord_status: "not_checked",
+      discord_checked_at: null,
+      discord_checked_by_member_id: null,
+      discord_display_name: null,
+      discord_error: null,
+      updated_at: now,
+    })
+    .eq("organization_id", target.organizationId)
+    .eq("guild_code", target.guildCode)
+    .in("member_id", memberIds);
+
+  if (error) throw new Error(error.message || "Reinitialisation Vision admin impossible.");
+}
+
+async function verifyAdminVisionMembersForTarget(target, actor) {
+  const updatedMembers = [];
+  for (const member of target.members) {
+    const result = await verifyDiscordGuildMember(member.discord_id, target.guildCode);
+    const state = await updateAdminVisionDiscordState({
+      scope: target,
+      target: member,
+      actor,
+      result,
+    });
+    updatedMembers.push(serializeAdminVisionMember(member, state));
+  }
+  return updatedMembers;
+}
+
+async function handleGuildAdminVisionLaunchCheck(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const targets = await resolveAdminVisionLaunchTargets(adminCheck.admin, body);
+    const targetsWithMembers = [];
+    for (const target of targets) {
+      const members = await loadAdminVisionMembers(target.guildCode);
+      await ensureAdminVisionStateRows({ ...target, members });
+      targetsWithMembers.push({ ...target, members });
+    }
+
+    const hasProgress = await hasAdminVisionExistingProgress(targetsWithMembers);
+    if (hasProgress && body.confirmed !== true) {
+      sendJson(res, 409, {
+        error: "Une verification existe deja sur ce perimetre. Confirmation requise.",
+        requiresConfirmation: true,
+      });
+      return;
+    }
+
+    for (const target of targetsWithMembers) {
+      await resetAdminVisionLaunchTarget(target);
+    }
+
+    let checkedCount = 0;
+    let visibleMembers = [];
+    const requestedVisibleGuild = normalizeGuildCode(body.guildCode || body.guild_code || targetsWithMembers[0]?.guildCode);
+    for (const target of targetsWithMembers) {
+      const updatedMembers = await verifyAdminVisionMembersForTarget(target, adminCheck.admin);
+      checkedCount += updatedMembers.length;
+      if (normalizeGuildCode(target.guildCode) === requestedVisibleGuild) {
+        visibleMembers = updatedMembers;
+      }
+    }
+
+    if (!visibleMembers.length && targetsWithMembers[0]) {
+      const payload = await buildAdminVisionPayload(adminCheck.admin, targetsWithMembers[0].guildCode);
+      visibleMembers = payload.members || [];
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      scope: cleanText(body.scope || body.mode) === "cluster" ? "cluster" : "guild",
+      checkedCount,
+      guilds: targetsWithMembers.map((target) => target.guildCode),
+      members: visibleMembers,
+    });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Lancement verification impossible." });
+  }
+}
+
+async function handleGuildAdminVisionUpdateDiscordId(body, res) {
+  const adminCheck = await requireAdminById(res._portalReq);
+  if (adminCheck.error) {
+    sendJson(res, adminCheck.status, { error: adminCheck.error });
+    return;
+  }
+
+  try {
+    const memberId = cleanText(body.memberId || body.member_id);
+    const discordId = cleanText(body.discordId || body.discord_id);
+    if (!memberId) {
+      sendJson(res, 400, { error: "Membre manquant." });
+      return;
+    }
+
+    const { scope, target } = await loadAdminVisionTarget({
+      admin: adminCheck.admin,
+      memberId,
+      guildCode: body.guildCode || body.guild_code,
+    });
+    const actorScope = await resolveGuildManagementActorScope(adminCheck.admin);
+    if (!canManageEditableGuildMember(adminCheck.admin, target, actorScope)) {
+      sendJson(res, 403, { error: "Ce joueur n'est pas dans ton perimetre editable." });
+      return;
+    }
+    if (getPrimaryMemberId(target)) {
+      sendJson(res, 400, { error: "Le Discord ID d'un compte secondaire est herite du compte principal." });
+      return;
+    }
+
+    let patch = applyMemberEditUpdatePolicy({
+      admin: adminCheck.admin,
+      target,
+      patch: { discord_id: discordId || null },
+      editableScope: true,
+      scope: actorScope,
+    });
+
+    const { data: updated, error } = await supabase
+      .from("guild_members")
+      .update(patch)
+      .eq("id", target.id)
+      .select(ADMIN_VISION_MEMBER_SELECT)
+      .maybeSingle();
+
+    if (error) {
+      if (isMissingColumn(error, "updated_at")) {
+        const fallback = await supabase
+          .from("guild_members")
+          .update(patch)
+          .eq("id", target.id)
+          .select(ADMIN_VISION_MEMBER_SELECT_FALLBACK)
+          .maybeSingle();
+        if (fallback.error) throw new Error(fallback.error.message || "Mise a jour Discord ID impossible.");
+        const state = await resetAdminVisionDiscordStateAfterIdChange({ scope, target: fallback.data, actor: adminCheck.admin });
+        sendJson(res, 200, { ok: true, member: serializeAdminVisionMember(fallback.data, state) });
+        return;
+      }
+      throw new Error(error.message || "Mise a jour Discord ID impossible.");
+    }
+
+    if (!updated) {
+      sendJson(res, 404, { error: "Joueur introuvable." });
+      return;
+    }
+
+    const { error: syncError } = await supabase
+      .from("guild_members")
+      .update({ discord_id: cleanText(updated.discord_id) || null })
+      .eq("primary_member_id", updated.id);
+
+    if (syncError && !isMissingColumn(syncError, "primary_member_id")) {
+      throw new Error(syncError.message || "Synchronisation Discord des comptes secondaires impossible.");
+    }
+
+    await supabase.from("portal_activity_logs").insert({
+      actor_member_id: adminCheck.admin.id,
+      actor_name: getMemberName(adminCheck.admin),
+      target_member_id: updated.id,
+      target_name: getMemberName(updated),
+      action_type: "guild_admin_vision_discord_id_update",
+      entity_type: "guild_members",
+      entity_id: updated.id,
+      summary: `${getMemberName(adminCheck.admin)} a modifie l'ID Discord de ${getMemberName(updated)} depuis la Vision admin`,
+      metadata: { guildCode: updated.guild_code || scope.guildCode, hasDiscordId: Boolean(updated.discord_id) },
+    });
+
+    const state = await resetAdminVisionDiscordStateAfterIdChange({ scope, target: updated, actor: adminCheck.admin });
+    sendJson(res, 200, { ok: true, member: serializeAdminVisionMember(updated, state) });
+  } catch (error) {
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Mise a jour Discord ID impossible." });
+  }
+}
+
+async function resetAdminVisionDiscordStateAfterIdChange({ scope, target, actor }) {
+  await ensureAdminVisionStateRows({ ...scope, members: [target] });
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from(GUILD_ADMIN_VISION_TABLE)
+    .update({
+      discord_status: "not_checked",
+      discord_checked_at: null,
+      discord_checked_by_member_id: null,
+      discord_id_snapshot: cleanText(target.discord_id) || null,
+      discord_display_name: null,
+      discord_error: null,
+      updated_at: now,
+    })
+    .eq("organization_id", scope.organizationId)
+    .eq("guild_code", scope.guildCode)
+    .eq("member_id", target.id)
+    .select(
+      "id, organization_id, guild_code, member_id, manual_verified, manual_verified_at, manual_verified_by_member_id, discord_status, discord_checked_at, discord_checked_by_member_id, discord_id_snapshot, discord_display_name, discord_error, updated_at",
+    )
+    .maybeSingle();
+
+  if (error) throw new Error(error.message || "Invalidation verification Discord impossible.");
+  void actor;
+  return data;
 }
 
 async function handleGuildMemberUpdate(body, res) {
@@ -4137,6 +4888,41 @@ export default async function handler(req, res) {
 
     if (action === "guild-management-load") {
       await handleGuildManagementLoad(body, res);
+      return;
+    }
+
+    if (action === "guild-admin-vision-load") {
+      await handleGuildAdminVisionLoad(body, res);
+      return;
+    }
+
+    if (action === "guild-admin-vision-start") {
+      await handleGuildAdminVisionStart(body, res);
+      return;
+    }
+
+    if (action === "guild-admin-vision-launch-check") {
+      await handleGuildAdminVisionLaunchCheck(body, res);
+      return;
+    }
+
+    if (action === "guild-admin-vision-toggle-member") {
+      await handleGuildAdminVisionToggleMember(body, res);
+      return;
+    }
+
+    if (action === "guild-admin-vision-verify-discord") {
+      await handleGuildAdminVisionVerifyDiscord(body, res);
+      return;
+    }
+
+    if (action === "guild-admin-vision-verify-discord-guild") {
+      await handleGuildAdminVisionVerifyDiscordGuild(body, res);
+      return;
+    }
+
+    if (action === "guild-admin-vision-update-discord-id") {
+      await handleGuildAdminVisionUpdateDiscordId(body, res);
       return;
     }
 
