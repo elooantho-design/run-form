@@ -23,6 +23,7 @@ import {
   getLinkedWatcherName,
   getPrimaryMemberId,
 } from "../src/lib/linkedAccounts.js";
+import { getGuildDisplayName } from "../src/lib/guildDisplay.js";
 import {
   GUILD_DM_CAMPAIGNS_TABLE,
   GUILD_DM_RECIPIENTS_TABLE,
@@ -35,10 +36,12 @@ import {
 import {
   INTERSAISON_SURVEY_CAMPAIGNS_TABLE,
   INTERSAISON_SURVEY_DM_INTERACTION_OBJECTIVES,
+  INTERSAISON_SURVEY_GUILD_OBJECTIVES_TABLE,
   INTERSAISON_SURVEY_ONE_DEFAULT_MESSAGE,
   INTERSAISON_SURVEY_RECIPIENTS_TABLE,
   INTERSAISON_SURVEY_RESPONSES_TABLE,
   INTERSAISON_SURVEY_SEASONS_TABLE,
+  buildSurveyResponsesWorkbook,
   buildSurveyGuildCards,
   getSurveyPollLabel,
   isMissingIntersaisonSurveySchema,
@@ -95,9 +98,9 @@ const SURVEY_MEMBER_SELECT =
 const SURVEY_MEMBER_SELECT_FALLBACK =
   "id, watcher_name, discord_id, guild_code, role, roster_status, community_access_type, community_status";
 const SURVEY_CAMPAIGN_SELECT =
-  "id, season_id, organization_id, poll_number, guild_dm_campaign_id, status, title, message, target_guild_codes, launched_at, closed_at, created_at, updated_at, is_test";
+  "id, season_id, organization_id, poll_number, guild_dm_campaign_id, status, title, message, target_guild_codes, launched_by_member_id, launched_by_name, launched_at, closed_at, created_at, updated_at, is_test";
 const SURVEY_CAMPAIGN_SELECT_FALLBACK =
-  "id, season_id, organization_id, poll_number, guild_dm_campaign_id, status, title, message, target_guild_codes, launched_at, closed_at, created_at, updated_at";
+  "id, season_id, organization_id, poll_number, guild_dm_campaign_id, status, title, message, target_guild_codes, launched_by_member_id, launched_by_name, launched_at, closed_at, created_at, updated_at";
 const SURVEY_RECIPIENT_SELECT =
   "id, survey_campaign_id, organization_id, member_id, guild_code_snapshot, member_name_snapshot, discord_user_id, guild_dm_recipient_id, delivery_status, response_status, last_error, reminder_count, last_reminder_at, responded_at, created_at, updated_at";
 const SURVEY_RESPONSE_SELECT =
@@ -645,6 +648,8 @@ function serializeSurveyCampaign(campaign, dmCampaign = null) {
     message: campaign.message || "",
     isTest: Boolean(campaign.is_test),
     targetGuildCodes: Array.isArray(campaign.target_guild_codes) ? campaign.target_guild_codes : [],
+    launchedByMemberId: campaign.launched_by_member_id || null,
+    launchedByName: campaign.launched_by_name || "",
     launchedAt: campaign.launched_at || null,
     closedAt: campaign.closed_at || null,
     createdAt: campaign.created_at || null,
@@ -694,7 +699,170 @@ function serializeSurveyRecipient(row, dmRecipient = null, response = null) {
   };
 }
 
-async function loadSurveyCenterState(organization) {
+function getSurveyGuildDisplayName(guildCode, guilds, organization) {
+  return getGuildDisplayName({
+    guildCode,
+    guilds,
+    organizationId: organization?.id,
+    organizationKey: organization?.organization_key || organization?.organizationKey,
+    emptyFallback: guildCode || "",
+  });
+}
+
+async function loadSurveyObjectivesForSeason(season, organization) {
+  if (!season?.id) return [];
+  const { data, error } = await supabase
+    .from(INTERSAISON_SURVEY_GUILD_OBJECTIVES_TABLE)
+    .select("id, season_id, organization_id, guild_code, objective_text, created_at, updated_at")
+    .eq("season_id", season.id)
+    .eq("organization_id", organization.id);
+  if (error) {
+    if (isMissingIntersaisonSurveySchema(error)) return [];
+    throw error;
+  }
+  return data || [];
+}
+
+function buildSurveyExportRows({ center, campaign, guilds, organization, objectives }) {
+  const objectivesByGuild = new Map(
+    (objectives || []).map((objective) => [normalizeGuildCode(objective.guild_code), objective]),
+  );
+  return (center.recipients || [])
+    .filter((recipient) => !campaign || String(recipient.surveyCampaignId) === String(campaign.id))
+    .map((recipient) => {
+      const guildCode = normalizeGuildCode(recipient.guildCode);
+      const guildName = getSurveyGuildDisplayName(guildCode, guilds, organization);
+      const objective = objectivesByGuild.get(guildCode) || null;
+      return {
+        memberId: recipient.memberId,
+        memberName: recipient.memberName,
+        guildCode,
+        guildName,
+        discordUserId: recipient.discordUserId,
+        deliveryStatus: recipient.deliveryStatus,
+        responseStatus: recipient.responseStatus,
+        respondedAt: recipient.respondedAt,
+        responseText: recipient.response?.objectiveText || "",
+        guildReferenceObjectives: objective?.objective_text || "",
+      };
+    });
+}
+
+function escapeCsvCell(value) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function buildSurveyResponsesCsv(exportRows) {
+  const headers = [
+    "member_id",
+    "pseudo",
+    "guild_code",
+    "guild_name",
+    "discord_id",
+    "delivery_status",
+    "response_status",
+    "responded_at",
+    "response_text",
+    "guild_reference_objectives",
+  ];
+  const rows = [headers.map(escapeCsvCell).join(",")];
+  for (const row of exportRows) {
+    rows.push(
+      [
+        row.memberId,
+        row.memberName,
+        row.guildCode,
+        row.guildName,
+        row.discordUserId,
+        row.deliveryStatus,
+        row.responseStatus,
+        row.respondedAt,
+        row.responseText,
+        row.guildReferenceObjectives,
+      ]
+        .map(escapeCsvCell)
+        .join(","),
+    );
+  }
+  return rows.join("\n");
+}
+
+function buildSurveyResponsesWorkbookPayload({ center, campaign, guilds, organization, objectives, exportRows }) {
+  const generatedAt = new Date().toISOString();
+  const responseCount = exportRows.filter((row) => row.responseStatus === "responded").length;
+  const targetCount = exportRows.length;
+  const participationRate = targetCount > 0 ? `${((responseCount / targetCount) * 100).toFixed(1)}%` : "0.0%";
+  const objectivesByGuild = new Map(
+    (objectives || []).map((objective) => [normalizeGuildCode(objective.guild_code), objective]),
+  );
+
+  const responseSheet = [
+    [
+      "member_id",
+      "pseudo",
+      "guild_code",
+      "guild_name",
+      "discord_id",
+      "delivery_status",
+      "response_status",
+      "responded_at",
+      "response_text",
+      "guild_reference_objectives",
+    ],
+    ...exportRows.map((row) => [
+      row.memberId,
+      row.memberName,
+      row.guildCode,
+      row.guildName,
+      row.discordUserId,
+      row.deliveryStatus,
+      row.responseStatus,
+      row.respondedAt,
+      row.responseText,
+      row.guildReferenceObjectives,
+    ]),
+  ];
+  const objectivesSheet = [
+    ["guild_code", "guild_name", "reference_objectives", "season_id", "updated_at"],
+    ...(guilds || []).map((guild) => {
+      const guildCode = normalizeGuildCode(guild.guild_code);
+      const objective = objectivesByGuild.get(guildCode) || null;
+      return [
+        guildCode,
+        getSurveyGuildDisplayName(guildCode, guilds, organization),
+        objective?.objective_text || "",
+        center.season?.id || "",
+        objective?.updated_at || objective?.created_at || "",
+      ];
+    }),
+  ];
+  const campaignSheet = [
+    ["field", "value"],
+    ["season_id", center.season?.id || ""],
+    ["season_label", center.season?.label || ""],
+    ["season_status", center.season?.status || ""],
+    ["campaign_id", campaign?.id || ""],
+    ["poll_number", campaign?.pollNumber || 1],
+    ["campaign_title", campaign?.title || getSurveyPollLabel(1)],
+    ["campaign_status", campaign?.status || ""],
+    ["launched_at", campaign?.launchedAt || ""],
+    ["closed_at", campaign?.closedAt || ""],
+    ["target_count", targetCount],
+    ["response_count", responseCount],
+    ["participation_rate", participationRate],
+    ["generated_at", generatedAt],
+    ["test_campaigns_excluded", "true"],
+  ];
+
+  return buildSurveyResponsesWorkbook([
+    { name: "Réponses joueurs", rows: responseSheet },
+    { name: "Objectifs guildes", rows: objectivesSheet },
+    { name: "Campagne", rows: campaignSheet },
+  ]);
+}
+
+async function loadSurveyCenterState(organization, actor = null) {
   const guilds = await loadActiveGuilds(organization.id);
   const guildCodes = guilds.map((guild) => guild.guild_code).filter(Boolean);
   const members = await loadCurrentSurveyMembers(organization.id, guildCodes);
@@ -718,9 +886,13 @@ async function loadSurveyCenterState(organization) {
 
     const campaigns = await loadSurveyCampaignsForSeason(season, organization);
     const officialCampaigns = (campaigns || []).filter((campaign) => !campaign.is_test);
-    const testCampaigns = (campaigns || []).filter((campaign) => campaign.is_test);
+    const actorMemberId = cleanText(actor?.id);
+    const testCampaigns = (campaigns || [])
+      .filter((campaign) => campaign.is_test)
+      .filter((campaign) => !actorMemberId || String(campaign.launched_by_member_id || "") === String(actorMemberId));
 
     const campaignIds = officialCampaigns.map((campaign) => campaign.id).filter(Boolean);
+    const testCampaignIds = testCampaigns.map((campaign) => campaign.id).filter(Boolean);
     const dmCampaignIds = [...officialCampaigns, ...testCampaigns]
       .map((campaign) => campaign.guild_dm_campaign_id)
       .filter(Boolean);
@@ -744,7 +916,26 @@ async function loadSurveyCenterState(organization) {
     if (recipientsError) throw recipientsError;
     if (responsesError) throw responsesError;
 
-    const dmRecipientIds = (surveyRecipients || [])
+    const [{ data: testSurveyRecipients, error: testRecipientsError }, { data: testResponses, error: testResponsesError }] =
+      testCampaignIds.length > 0
+        ? await Promise.all([
+            supabase
+              .from(INTERSAISON_SURVEY_RECIPIENTS_TABLE)
+              .select(SURVEY_RECIPIENT_SELECT)
+              .in("survey_campaign_id", testCampaignIds)
+              .eq("organization_id", organization.id),
+            supabase
+              .from(INTERSAISON_SURVEY_RESPONSES_TABLE)
+              .select(SURVEY_RESPONSE_SELECT)
+              .in("survey_campaign_id", testCampaignIds)
+              .eq("organization_id", organization.id)
+              .eq("is_current", true),
+          ])
+        : [{ data: [], error: null }, { data: [], error: null }];
+    if (testRecipientsError) throw testRecipientsError;
+    if (testResponsesError) throw testResponsesError;
+
+    const dmRecipientIds = [...(surveyRecipients || []), ...(testSurveyRecipients || [])]
       .map((recipient) => recipient.guild_dm_recipient_id)
       .filter(Boolean);
 
@@ -773,6 +964,22 @@ async function loadSurveyCenterState(organization) {
     const responseByRecipientId = new Map(
       (responses || []).map((row) => [String(row.survey_recipient_id), row]),
     );
+    const testResponseByRecipientId = new Map(
+      (testResponses || []).map((row) => [String(row.survey_recipient_id), row]),
+    );
+    const testRecipientsByCampaignId = new Map();
+    for (const recipient of testSurveyRecipients || []) {
+      const key = String(recipient.survey_campaign_id);
+      const list = testRecipientsByCampaignId.get(key) || [];
+      list.push(
+        serializeSurveyRecipient(
+          recipient,
+          recipient.guild_dm_recipient_id ? dmRecipientById.get(String(recipient.guild_dm_recipient_id)) || null : null,
+          testResponseByRecipientId.get(String(recipient.id)) || null,
+        ),
+      );
+      testRecipientsByCampaignId.set(key, list);
+    }
     const selectedPollRecipients = (surveyRecipients || []).filter((recipient) => {
       const campaign = officialCampaigns.find((row) => String(row.id) === String(recipient.survey_campaign_id));
       return Number(campaign?.poll_number || 1) === 1;
@@ -798,9 +1005,10 @@ async function loadSurveyCenterState(organization) {
       testCampaigns: testCampaigns
         .slice()
         .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")))
-        .map((campaign) =>
-          serializeSurveyCampaign(campaign, dmCampaignById.get(String(campaign.guild_dm_campaign_id)) || null),
-        ),
+        .map((campaign) => ({
+          ...serializeSurveyCampaign(campaign, dmCampaignById.get(String(campaign.guild_dm_campaign_id)) || null),
+          recipients: testRecipientsByCampaignId.get(String(campaign.id)) || [],
+        })),
       recipients: (surveyRecipients || []).map((recipient) =>
         serializeSurveyRecipient(
           recipient,
@@ -859,8 +1067,8 @@ async function ensureSurveySeason(actor, organization) {
   return data;
 }
 
-async function handleLoadSurveyCenter(organization) {
-  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization) } };
+async function handleLoadSurveyCenter(organization, actor) {
+  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization, actor) } };
 }
 
 async function handleLaunchSurveyOne(body, actor, organization) {
@@ -1010,7 +1218,7 @@ async function handleLaunchSurveyOne(body, actor, organization) {
     },
   });
 
-  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization) } };
+  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization, actor) } };
 }
 
 async function handleLaunchSurveyOneTest(body, actor, organization) {
@@ -1156,7 +1364,7 @@ async function handleLaunchSurveyOneTest(body, actor, organization) {
     },
   });
 
-  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization) } };
+  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization, actorMember) } };
 }
 
 async function handleQueueSurveyRecipient(body, actor, organization) {
@@ -1232,7 +1440,7 @@ async function handleQueueSurveyRecipient(body, actor, organization) {
     metadata: { organizationId: organization.id },
   });
 
-  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization) } };
+  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization, actor) } };
 }
 
 async function handleQueueCollectiveSurveyReminders(body, actor, organization) {
@@ -1262,7 +1470,7 @@ async function handleQueueCollectiveSurveyReminders(body, actor, organization) {
 
   const dmIds = (recipients || []).map((recipient) => recipient.guild_dm_recipient_id).filter(Boolean);
   if (!dmIds.length) {
-    return { status: 200, payload: { ok: true, queuedCount: 0, surveyCenter: await loadSurveyCenterState(organization) } };
+    return { status: 200, payload: { ok: true, queuedCount: 0, surveyCenter: await loadSurveyCenterState(organization, actor) } };
   }
 
   const now = new Date().toISOString();
@@ -1318,7 +1526,7 @@ async function handleQueueCollectiveSurveyReminders(body, actor, organization) {
     payload: {
       ok: true,
       queuedCount: queuedRows?.length || 0,
-      surveyCenter: await loadSurveyCenterState(organization),
+      surveyCenter: await loadSurveyCenterState(organization, actor),
     },
   };
 }
@@ -1384,43 +1592,41 @@ async function handleFinishSurveySeason(body, actor, organization) {
     },
   });
 
-  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization) } };
+  return { status: 200, payload: { ok: true, surveyCenter: await loadSurveyCenterState(organization, actor) } };
 }
 
-async function handleExportSurveyOne(organization) {
+async function handleExportSurveyOne(body, organization) {
   const center = await loadSurveyCenterState(organization);
   const campaign = (center.campaigns || []).find((row) => Number(row.pollNumber) === 1);
-  const headers = [
-    "member_id",
-    "pseudo",
-    "guild_at_launch",
-    "discord_id",
-    "delivery_status",
-    "participation_status",
-    "responded_at",
-    "response_text",
-  ];
-  const escapeCell = (value) => {
-    const text = String(value ?? "");
-    return `"${text.replace(/"/g, '""')}"`;
-  };
-  const rows = [headers.map(escapeCell).join(",")];
-  for (const recipient of center.recipients || []) {
-    if (campaign && String(recipient.surveyCampaignId) !== String(campaign.id)) continue;
-    rows.push(
-      [
-        recipient.memberId,
-        recipient.memberName,
-        recipient.guildCode,
-        recipient.discordUserId,
-        recipient.deliveryStatus,
-        recipient.responseStatus,
-        recipient.respondedAt,
-        recipient.response?.objectiveText || "",
-      ]
-        .map(escapeCell)
-        .join(","),
-    );
+  const format = cleanText(body?.format || "csv").toLowerCase();
+  const objectives = center.season ? await loadSurveyObjectivesForSeason(center.season, organization) : [];
+  const exportRows = buildSurveyExportRows({
+    center,
+    campaign,
+    guilds: center.guilds || [],
+    organization,
+    objectives,
+  });
+
+  if (format === "xlsx") {
+    const workbook = buildSurveyResponsesWorkbookPayload({
+      center,
+      campaign,
+      guilds: center.guilds || [],
+      organization,
+      objectives,
+      exportRows,
+    });
+    return {
+      status: 200,
+      payload: {
+        ok: true,
+        fileName: `intersaison-sondage-1-${new Date().toISOString().slice(0, 10)}.xlsx`,
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        encoding: "base64",
+        content: workbook.toString("base64"),
+      },
+    };
   }
 
   return {
@@ -1429,7 +1635,7 @@ async function handleExportSurveyOne(organization) {
       ok: true,
       fileName: `intersaison-sondage-1-${new Date().toISOString().slice(0, 10)}.csv`,
       contentType: "text/csv;charset=utf-8",
-      content: rows.join("\n"),
+      content: buildSurveyResponsesCsv(exportRows),
     },
   };
 }
@@ -1641,12 +1847,12 @@ export default async function handler(req, res) {
     let result;
 
     if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState(organization) } };
-    else if (action === "load-survey-center") result = await handleLoadSurveyCenter(organization);
+    else if (action === "load-survey-center") result = await handleLoadSurveyCenter(organization, sessionCheck.member);
     else if (action === "launch-survey-one") result = await handleLaunchSurveyOne(body, sessionCheck.member, organization);
     else if (action === "launch-survey-one-test") result = await handleLaunchSurveyOneTest(body, sessionCheck.member, organization);
     else if (action === "queue-survey-recipient") result = await handleQueueSurveyRecipient(body, sessionCheck.member, organization);
     else if (action === "queue-survey-reminders") result = await handleQueueCollectiveSurveyReminders(body, sessionCheck.member, organization);
-    else if (action === "export-survey-one") result = await handleExportSurveyOne(organization);
+    else if (action === "export-survey-one") result = await handleExportSurveyOne(body, organization);
     else if (action === "finish-survey-season") result = await handleFinishSurveySeason(body, sessionCheck.member, organization);
     else if (action === "create-campaign") result = await handleCreateCampaign(sessionCheck.member, organization);
     else if (action === "save-note") result = await handleSaveNote(body, sessionCheck.member, organization);

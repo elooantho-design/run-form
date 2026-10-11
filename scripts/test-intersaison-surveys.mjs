@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import {
   INTERSAISON_SURVEY_DM_INTERACTION_OBJECTIVES,
   INTERSAISON_SURVEY_ONE_DEFAULT_MESSAGE,
+  buildSurveyResponsesWorkbook,
   buildSurveyGuildCards,
   getSurveyMemberDeliveryStatus,
 } from "../api/_intersaison-surveys.js";
@@ -79,6 +80,28 @@ assert.equal(
   "red",
   "queued DM is treated as awaiting action",
 );
+assert.equal(
+  getSurveyMemberDeliveryStatus({
+    surveyRecipient: { delivery_status: "confirmed" },
+    dmRecipient: { status: "confirmed" },
+  }).color,
+  "orange",
+  "Discord confirmation without a stored response is not counted as green",
+);
+
+const workbook = buildSurveyResponsesWorkbook([
+  {
+    name: "Réponses joueurs",
+    rows: [
+      ["pseudo", "response_text"],
+      ["Élodie", "Réponse longue avec accents, retours et objectif officiel."],
+    ],
+  },
+  { name: "Objectifs guildes", rows: [["guild_code", "objective"], ["G1", "Objectif G1"]] },
+  { name: "Campagne", rows: [["field", "value"], ["test_campaigns_excluded", "true"]] },
+]);
+assert.equal(workbook.subarray(0, 2).toString("utf8"), "PK", "XLSX export is a ZIP workbook");
+assert.ok(workbook.includes(Buffer.from("Réponse longue avec accents", "utf8")), "XLSX export preserves accents");
 
 const apiSource = await readFile(new URL("../api/portal-intersaison.js", import.meta.url), "utf8");
 const helperSource = await readFile(new URL("../api/_intersaison-surveys.js", import.meta.url), "utf8");
@@ -121,6 +144,12 @@ assert.match(apiSource, /is_test: true,[\s\S]{0,160}\.select\("id"\)/, "personal
 assert.match(apiSource, /const officialCampaigns = \(campaigns \|\| \[\]\)\.filter\(\(campaign\) => !campaign\.is_test\)/, "test survey campaigns are excluded from official tracking state");
 assert.match(apiSource, /testCampaigns:/, "test survey campaigns are exposed separately from official tracking");
 assert.match(apiSource, /campaignIds = officialCampaigns/, "recipients loaded for the center exclude test campaigns");
+assert.match(apiSource, /testCampaignIds = testCampaigns/, "personal test recipients are loaded separately");
+assert.match(apiSource, /launched_by_member_id/, "personal tests are filtered by their launching admin");
+assert.match(apiSource, /format === "xlsx"/, "survey export supports XLSX");
+assert.match(apiSource, /buildSurveyResponsesWorkbookPayload/, "survey export builds a structured workbook");
+assert.match(apiSource, /test_campaigns_excluded/, "survey export documents that tests are excluded");
+assert.match(apiSource, /INTERSAISON_SURVEY_GUILD_OBJECTIVES_TABLE/, "survey export includes guild reference objectives");
 assert.match(apiSource, /INTERSAISON_SURVEY_RECIPIENTS_TABLE/, "survey recipients link dashboard rows to DM recipients");
 assert.doesNotMatch(apiSource, /discord\.com\/api|DISCORD_BOT_TOKEN|user\.send|sendDiscordDm/i, "Portal API does not send real Discord DMs");
 
@@ -150,8 +179,12 @@ assert.match(centerSource, /Lancer le sondage 1/, "admin can start survey 1");
 assert.match(centerSource, /M'envoyer un test/, "admin can queue a personal survey test");
 assert.match(centerSource, /hors export officiel/, "personal survey tests are explicitly outside official exports");
 assert.match(centerSource, /Dernier test personnel/, "personal survey tests have a separate status hint");
+assert.match(centerSource, /setSelectedTestCampaign/, "personal survey test details can be opened");
+assert.match(centerSource, /MessageCircle/, "responses have a dedicated icon in guild cards");
+assert.match(centerSource, /setSelectedResponse/, "recorded responses can be opened without hijacking member reminders");
+assert.match(centerSource, /Exporter Excel/, "official response export offers XLSX");
+assert.match(centerSource, /Exporter CSV/, "official response export keeps CSV as a complement");
 assert.match(centerSource, /Relances collectives/, "collective reminders are available");
-assert.match(centerSource, /Exporter les réponses/, "response export is available");
 assert.match(centerSource, /Clôturer l'inter-saison/, "admins can finish a season before starting a new one");
 assert.match(centerSource, /Réessayer l'envoi/, "failed rows can be retried individually");
 

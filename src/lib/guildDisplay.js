@@ -5,13 +5,13 @@ import {
 } from "./guildScope.js";
 
 export const PALADIN_GUILD_DISPLAY_NAMES = {
-  G1: "Légende",
+  G1: "Legend",
   G2: "Imperatores",
   G3: "Loyalty",
-  G4: "Collegium",
+  G4: "Legacy",
   G5: "Senatores",
-  G6: "Legacy",
-  G7: "Magistratus",
+  G6: "Magistratus",
+  G7: "Collegium",
 };
 
 function normalizeOrganizationKey(value) {
@@ -54,7 +54,8 @@ function findGuildDisplayNameInRows(guildCode, guilds, organizationKey, organiza
     return true;
   });
 
-  return getGuildRowDisplayName(row);
+  const displayName = getGuildRowDisplayName(row);
+  return normalizeGuildCodeKey(displayName) === codeKey ? "" : displayName;
 }
 
 function shouldUsePaladinFallback(guildCode, organizationKey, guilds, organizationId) {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, CheckCircle2, Download, RefreshCw, Send, X, XCircle } from "lucide-react";
+import { Bell, CheckCircle2, Download, MessageCircle, RefreshCw, Send, X, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,6 +56,42 @@ function formatDateTime(value) {
   } catch {
     return String(value);
   }
+}
+
+function createBlobFromApiExport(data) {
+  if (data?.encoding === "base64") {
+    const binary = window.atob(data.content || "");
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: data.contentType || "application/octet-stream" });
+  }
+  return new Blob([data?.content || ""], { type: data?.contentType || "text/csv;charset=utf-8" });
+}
+
+function getResponseText(response) {
+  return (
+    response?.objectiveText ||
+    response?.objective_text ||
+    response?.commentText ||
+    response?.comment_text ||
+    ""
+  );
+}
+
+function getRecipientStatusLabel(recipient, fallbackStatus = "") {
+  if (recipient?.responseStatus === "responded" || recipient?.respondedAt || getResponseText(recipient?.response)) {
+    return "Réponse enregistrée";
+  }
+  const status = recipient?.deliveryStatus || fallbackStatus || "";
+  if (status === "sent") return "Envoyé sans réponse";
+  if (status === "confirmed") return "Confirmation sans réponse";
+  if (status === "queued") return "En file";
+  if (status === "sending") return "Envoi en cours";
+  if (status === "failed") return "Échec";
+  if (status === "missing_invalid") return "ID Discord invalide";
+  return status || "-";
 }
 
 function getMemberToneClass(color) {
@@ -129,6 +165,8 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
   const [launching, setLaunching] = useState(false);
   const [testing, setTesting] = useState(false);
   const [selectedMember, setSelectedMember] = useState(null);
+  const [selectedResponse, setSelectedResponse] = useState(null);
+  const [selectedTestCampaign, setSelectedTestCampaign] = useState(null);
   const [trackingOpen, setTrackingOpen] = useState(false);
   const [reminding, setReminding] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -141,6 +179,10 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
   const latestTestCampaign = useMemo(
     () => (center?.testCampaigns || []).find((row) => Number(row.pollNumber) === 1) || null,
     [center?.testCampaigns],
+  );
+  const latestTestRecipient = useMemo(
+    () => latestTestCampaign?.recipients?.[0] || null,
+    [latestTestCampaign],
   );
   const guildCards = useMemo(() => serializeGuildCardsForPoll(center, selectedPoll), [center, selectedPoll]);
   const totalMembers = useMemo(
@@ -272,15 +314,15 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
     }
   }
 
-  async function exportSurveyOne() {
+  async function exportSurveyOne(format = "csv") {
     setError("");
     try {
-      const data = await callPortalIntersaison({ action: "export-survey-one" });
-      const blob = new Blob([data.content || ""], { type: data.contentType || "text/csv;charset=utf-8" });
+      const data = await callPortalIntersaison({ action: "export-survey-one", format });
+      const blob = createBlobFromApiExport(data);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = data.fileName || "intersaison-sondage-1.csv";
+      link.download = data.fileName || `intersaison-sondage-1.${format === "xlsx" ? "xlsx" : "csv"}`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -349,15 +391,26 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
               </Button>
             ) : null}
             {selectedPoll === 1 && selectedCampaign ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-lg border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20"
-                onClick={exportSurveyOne}
-              >
-                <Download className="h-4 w-4" />
-                Exporter les réponses
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-lg border-emerald-500/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20"
+                  onClick={() => exportSurveyOne("xlsx")}
+                >
+                  <Download className="h-4 w-4" />
+                  Exporter Excel
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-lg border-zinc-700 bg-zinc-950/80 text-zinc-100 hover:bg-zinc-900"
+                  onClick={() => exportSurveyOne("csv")}
+                >
+                  <Download className="h-4 w-4" />
+                  Exporter CSV
+                </Button>
+              </>
             ) : null}
             {center?.season?.id ? (
               <Button
@@ -503,19 +556,28 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
         ) : null}
 
         {selectedPoll === 1 && latestTestCampaign ? (
-          <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 text-sm text-violet-100">
+          <button
+            type="button"
+            className="w-full rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 text-left text-sm text-violet-100 transition hover:bg-violet-500/15"
+            onClick={() => setSelectedTestCampaign(latestTestCampaign)}
+          >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="font-semibold">Dernier test personnel</div>
                 <div className="mt-1 text-violet-100/80">
-                  Statut {latestTestCampaign.dmCampaign?.status || latestTestCampaign.status} · 1 destinataire · hors résultats officiels
+                  Statut {getRecipientStatusLabel(latestTestRecipient, latestTestCampaign.dmCampaign?.status || latestTestCampaign.status)} · 1 destinataire · hors résultats officiels
                 </div>
+                {latestTestRecipient?.response?.objectiveText ? (
+                  <div className="mt-1 text-xs text-violet-100/70">
+                    Réponse reçue le {formatDateTime(latestTestRecipient.respondedAt)}
+                  </div>
+                ) : null}
               </div>
               <Badge className="rounded-lg border-violet-400/40 bg-violet-500/20 text-violet-100">
                 TEST
               </Badge>
             </div>
-          </div>
+          </button>
         ) : null}
 
         {selectedPoll === 2 ? (
@@ -553,17 +615,34 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
               </div>
               <div className="max-h-[360px] space-y-2 overflow-y-auto p-3">
                 {card.members.length ? (
-                  card.members.map((member) => (
-                    <button
-                      key={member.id}
-                      type="button"
-                      onClick={() => setSelectedMember(member)}
-                      className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition ${getMemberToneClass(member.delivery.color)}`}
-                    >
-                      <span className="min-w-0 truncate font-medium">{member.watcherName || "-"}</span>
-                      <span className="shrink-0 text-[11px] opacity-80">{member.delivery.label}</span>
-                    </button>
-                  ))
+                  card.members.map((member) => {
+                    const hasResponse = Boolean(getResponseText(member.response));
+                    return (
+                      <div
+                        key={member.id}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${getMemberToneClass(member.delivery.color)}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setSelectedMember(member)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <span className="block min-w-0 truncate font-medium">{member.watcherName || "-"}</span>
+                        </button>
+                        {hasResponse ? (
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-md border border-emerald-400/30 bg-emerald-500/15 p-1.5 text-emerald-100 hover:bg-emerald-500/25"
+                            onClick={() => setSelectedResponse({ member, campaign: selectedCampaign })}
+                            title="Voir la réponse"
+                          >
+                            <MessageCircle className="h-4 w-4" />
+                          </button>
+                        ) : null}
+                        <span className="shrink-0 text-[11px] opacity-80">{member.delivery.label}</span>
+                      </div>
+                    );
+                  })
                 ) : (
                   <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-sm text-zinc-500">
                     Aucun membre actif.
@@ -614,6 +693,129 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
           </div>
         ) : null}
 
+        {selectedTestCampaign ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-xl rounded-xl border border-violet-500/30 bg-zinc-950 p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.18em] text-violet-300">Campagne de test</div>
+                  <div className="mt-1 text-xl font-semibold text-zinc-50">Dernier test personnel</div>
+                  <div className="text-sm text-zinc-500">Hors résultats officiels</div>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+                  onClick={() => setSelectedTestCampaign(null)}
+                  title="Fermer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {selectedTestCampaign.recipients?.[0] ? (
+                <div className="mt-4 space-y-3 text-sm">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+                      <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">Pseudo</div>
+                      <div className="mt-1 font-semibold text-zinc-100">
+                        {selectedTestCampaign.recipients[0].memberName || "-"}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+                      <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">Guilde</div>
+                      <div className="mt-1 font-semibold text-zinc-100">
+                        {getGuildLabel(
+                          selectedTestCampaign.recipients[0].guildCode,
+                          selectedTestCampaign.recipients[0].guildCode,
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+                      <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">Statut envoi</div>
+                      <div className="mt-1 font-semibold text-zinc-100">
+                        {getRecipientStatusLabel(
+                          selectedTestCampaign.recipients[0],
+                          selectedTestCampaign.dmCampaign?.status,
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+                      <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">Participation</div>
+                      <div className="mt-1 font-semibold text-zinc-100">
+                        {formatDateTime(selectedTestCampaign.recipients[0].respondedAt)}
+                      </div>
+                    </div>
+                  </div>
+                  {selectedTestCampaign.recipients[0].response?.objectiveText ? (
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-100">
+                      <div className="mb-2 flex items-center gap-2 font-semibold">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Réponse de test enregistrée
+                      </div>
+                      <div className="whitespace-pre-wrap leading-6">
+                        {selectedTestCampaign.recipients[0].response.objectiveText}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-zinc-400">
+                      Aucune réponse enregistrée pour ce test personnel.
+                      {selectedTestCampaign.recipients[0].lastError ? (
+                        <div className="mt-2 text-red-200">{selectedTestCampaign.recipients[0].lastError}</div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-sm text-zinc-400">
+                  Aucun destinataire de test retrouvé.
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {selectedResponse ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-xl rounded-xl border border-emerald-500/30 bg-zinc-950 p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.18em] text-emerald-300">Réponse joueur</div>
+                  <div className="mt-1 text-xl font-semibold text-zinc-50">
+                    {selectedResponse.member?.watcherName || "-"}
+                  </div>
+                  <div className="text-sm text-zinc-500">
+                    {getGuildLabel(selectedResponse.member?.guildCode, selectedResponse.member?.guildCode)}
+                    {" · "}
+                    Sondage {selectedResponse.campaign?.pollNumber || selectedPoll}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100"
+                  onClick={() => setSelectedResponse(null)}
+                  title="Fermer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-4 space-y-3 text-sm">
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+                  <div className="text-xs uppercase tracking-[0.14em] text-zinc-500">Date de participation</div>
+                  <div className="mt-1 text-zinc-100">
+                    {formatDateTime(selectedResponse.member?.response?.responded_at || selectedResponse.member?.response?.respondedAt)}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-100">
+                  <div className="mb-2 flex items-center gap-2 font-semibold">
+                    <MessageCircle className="h-4 w-4" />
+                    Réponse complète
+                  </div>
+                  <div className="whitespace-pre-wrap leading-6">{getResponseText(selectedResponse.member?.response) || "-"}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {selectedMember ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
             <div className="w-full max-w-lg rounded-xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
@@ -642,13 +844,13 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-zinc-300">
                   {selectedMember.delivery.detail}
                 </div>
-                {selectedMember.response?.objectiveText ? (
+                {getResponseText(selectedMember.response) ? (
                   <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-100">
                     <div className="mb-2 flex items-center gap-2 font-semibold">
                       <CheckCircle2 className="h-4 w-4" />
                       Réponse enregistrée
                     </div>
-                    <div className="whitespace-pre-wrap leading-6">{selectedMember.response.objectiveText}</div>
+                    <div className="whitespace-pre-wrap leading-6">{getResponseText(selectedMember.response)}</div>
                   </div>
                 ) : selectedMember.delivery.color === "orange" ? (
                   <Button
