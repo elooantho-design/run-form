@@ -29,6 +29,14 @@ assert.match(portalAccessSource, /resolveAdminVisionLaunchTargets/);
 assert.match(portalAccessSource, /requiresConfirmation: true/);
 assert.match(portalAccessSource, /verifyDiscordGuildMember\(member\.discord_id, target\.guildCode\)/);
 assert.match(portalAccessSource, /discord_status: "not_checked"/);
+assert.match(portalAccessSource, /function getConfiguredDiscordGuildIdForGuild/, "Discord guild resolution supports guild-specific fallback");
+assert.match(portalAccessSource, /DISCORD_GUILD_ID_\$\{normalizedGuild\}/, "Discord guild resolution supports per-guild server overrides");
+assert.match(portalAccessSource, /getConfiguredDiscordGuildIdForGuild\(guildCode\)/, "Vision admin verification uses the shared Discord server resolver first");
+assert.ok(
+  portalAccessSource.indexOf("getConfiguredDiscordGuildIdForGuild(guildCode)") <
+    portalAccessSource.indexOf("getDiscordReproChannelIdForGuild(guildCode)"),
+  "Vision admin checks DISCORD_GUILD_ID before falling back to repro channel inference",
+);
 assert.match(portalAccessSource, /isPaladinGlobalGuildAdmin\(admin, actorScope\)/);
 assert.match(portalAccessSource, /Vision admin limitee a ta propre guilde/);
 assert.match(portalAccessSource, /Verification cluster reservee aux administrateurs du site/);
@@ -42,6 +50,9 @@ assert.match(guildManagementSource, /guild-admin-vision-launch-check/);
 assert.match(guildManagementSource, /error\.payload = data/);
 assert.match(guildManagementSource, /sortAdminVisionMembers/);
 assert.match(guildManagementSource, /left\.manualVerified \? 1 : -1/);
+assert.match(guildManagementSource, /status === "checking"/, "Discord recheck shows an in-progress state instead of stale success");
+assert.match(guildManagementSource, /markAdminVisionDiscordCheckFailed/, "Discord recheck hard failures update the visible row state");
+assert.match(guildManagementSource, /status: "error"/, "Discord recheck hard failures render as technical errors");
 assert.doesNotMatch(guildManagementSource, /onClick=\{startAdminVisionRosterCheck\}/);
 assert.doesNotMatch(guildManagementSource, />\s*Verifier les ID Discord\s*</);
 

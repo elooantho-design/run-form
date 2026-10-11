@@ -123,6 +123,12 @@ function getDiscordVerificationBadge(status) {
       className: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200",
     };
   }
+  if (status === "checking") {
+    return {
+      label: "Verification...",
+      className: "border-sky-500/30 bg-sky-500/10 text-sky-200",
+    };
+  }
   return {
     label: "Non verifie",
     className: "border-zinc-700 bg-zinc-900 text-zinc-300",
@@ -902,6 +908,27 @@ export default function PortalGuildManagementTab({ session }) {
     });
   }
 
+  function markAdminVisionDiscordCheckFailed(memberId, message) {
+    const errorMessage = message || "Verification Discord impossible.";
+    const checkedAt = new Date().toISOString();
+    setAdminVisionMembers((previous) =>
+      previous.map((member) =>
+        String(member.id) === String(memberId)
+          ? {
+              ...member,
+              discordVerification: {
+                ...(member.discordVerification || {}),
+                status: "error",
+                checkedAt,
+                displayName: "",
+                error: errorMessage,
+              },
+            }
+          : member
+      )
+    );
+  }
+
   async function reloadAdminVisionData() {
     setAdminVisionLoading(true);
     setAdminVisionError("");
@@ -953,6 +980,14 @@ export default function PortalGuildManagementTab({ session }) {
     setAdminVisionAction(actionKey);
     setAdminVisionError("");
     setAdminVisionMessage("");
+    updateAdminVisionMemberLocal({
+      ...member,
+      discordVerification: {
+        ...(member.discordVerification || {}),
+        status: "checking",
+        error: "",
+      },
+    });
 
     try {
       const payload = await postPortalAccess("guild-admin-vision-verify-discord", {
@@ -961,7 +996,9 @@ export default function PortalGuildManagementTab({ session }) {
       });
       updateAdminVisionMemberLocal(payload.member);
     } catch (error) {
-      setAdminVisionError(error?.message || "Verification Discord impossible.");
+      const errorMessage = error?.message || "Verification Discord impossible.";
+      markAdminVisionDiscordCheckFailed(member.id, errorMessage);
+      setAdminVisionError(errorMessage);
     } finally {
       setAdminVisionAction("");
     }

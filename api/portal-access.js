@@ -1363,6 +1363,32 @@ function getConfiguredDiscordGuildId() {
   );
 }
 
+function getConfiguredDiscordGuildIdForGuild(guildCode) {
+  const globalGuildId = getConfiguredDiscordGuildId();
+  if (globalGuildId) {
+    return {
+      guildId: globalGuildId,
+      source: "global",
+    };
+  }
+
+  const normalizedGuild = normalizeGuildCode(guildCode);
+  if (!normalizedGuild) return { guildId: "", source: "missing" };
+
+  const guildId = cleanText(
+    process.env[`DISCORD_GUILD_ID_${normalizedGuild}`] ||
+      process.env[`DISCORD_SERVER_ID_${normalizedGuild}`] ||
+      process.env[`DISCORD_REPRO_GUILD_ID_${normalizedGuild}`] ||
+      process.env[`DISCORD_MAIN_GUILD_ID_${normalizedGuild}`] ||
+      ""
+  );
+
+  return {
+    guildId,
+    source: guildId ? "guild_specific" : "missing",
+  };
+}
+
 function getDiscordReproChannelIdForGuild(guildCode) {
   const normalizedGuild = normalizeGuildCode(guildCode);
   const guildEnvKey = normalizedGuild ? `DISCORD_REPRO_CHANNEL_ID_${normalizedGuild}` : "";
@@ -1370,12 +1396,17 @@ function getDiscordReproChannelIdForGuild(guildCode) {
 }
 
 async function resolveDiscordGuildIdForVerification(guildCode) {
-  const configuredGuildId = getConfiguredDiscordGuildId();
-  if (configuredGuildId) return configuredGuildId;
+  const configuredGuild = getConfiguredDiscordGuildIdForGuild(guildCode);
+  if (configuredGuild.guildId) return configuredGuild.guildId;
 
   const channelId = getDiscordReproChannelIdForGuild(guildCode);
   if (!channelId) {
-    const error = new Error("Serveur Discord non configure pour cette verification.");
+    const normalizedGuild = normalizeGuildCode(guildCode);
+    const error = new Error(
+      normalizedGuild
+        ? `Serveur Discord non configure pour ${normalizedGuild}. Ajoute DISCORD_GUILD_ID dans Vercel, ou DISCORD_GUILD_ID_${normalizedGuild} si cette guilde utilise un serveur separe.`
+        : "Serveur Discord non configure pour cette verification. Ajoute DISCORD_GUILD_ID dans Vercel.",
+    );
     error.statusCode = 500;
     throw error;
   }

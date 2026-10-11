@@ -23,6 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import PortalIntersaisonSurveyCenter from "@/components/PortalIntersaisonSurveyCenter";
 
 function getApiBase() {
   const configured = import.meta.env.VITE_API_BASE_URL;
@@ -652,6 +653,8 @@ export default function PortalIntersaisonTab({ session }) {
 
   return (
     <section className="space-y-5">
+      <PortalIntersaisonSurveyCenter organizationFallback={organization} />
+
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent className="max-w-md rounded-xl border-zinc-800 bg-zinc-950 text-zinc-100">
           <DialogHeader>

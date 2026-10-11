@@ -11,6 +11,11 @@ const DEFENSE_FOLLOWUP_TABLE = "guild_defense_discord_followups";
 const GUILD_DM_CAMPAIGNS_TABLE = "guild_dm_campaigns";
 const GUILD_DM_RECIPIENTS_TABLE = "guild_dm_recipients";
 const GUILD_DM_ACK_PREFIX = "gdmack:";
+const INTERSAISON_SURVEY_RECIPIENTS_TABLE = "intersaison_survey_recipients";
+const INTERSAISON_SURVEY_CAMPAIGNS_TABLE = "intersaison_survey_campaigns";
+const INTERSAISON_SURVEY_RESPONSES_TABLE = "intersaison_survey_responses";
+const INTERSAISON_OBJECTIVES_PREFIX = "interobj:";
+const INTERSAISON_OBJECTIVES_SUBMIT_PREFIX = "interobj_submit:";
 const DEFAULT_PUBLIC_ASSETS_BASE_URL = "https://vps-aad12be0.vps.ovh.net";
 const DEFENSE_STATUS_VALID = "Valid\u00e9";
 const DISCORD_STATUS_DONE = "\u2705";
@@ -73,6 +78,14 @@ function isGuildDmAckCustomId(customId) {
   return String(customId || "").startsWith(GUILD_DM_ACK_PREFIX);
 }
 
+function isIntersaisonObjectivesCustomId(customId) {
+  return String(customId || "").startsWith(INTERSAISON_OBJECTIVES_PREFIX);
+}
+
+function isIntersaisonObjectivesSubmitCustomId(customId) {
+  return String(customId || "").startsWith(INTERSAISON_OBJECTIVES_SUBMIT_PREFIX);
+}
+
 function buildGuildDmAckComponents(recipientId, { disabled = false } = {}) {
   return [
     {
@@ -89,6 +102,60 @@ function buildGuildDmAckComponents(recipientId, { disabled = false } = {}) {
       ],
     },
   ];
+}
+
+function buildIntersaisonObjectivesComponents(recipientId, { disabled = false } = {}) {
+  return [
+    {
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 1,
+          custom_id: `${INTERSAISON_OBJECTIVES_PREFIX}${recipientId}`,
+          label: disabled ? "Avis enregistré" : "Donner mon avis",
+          emoji: { name: "📝" },
+          disabled: Boolean(disabled),
+        },
+      ],
+    },
+  ];
+}
+
+export function buildGuildDmInteractionComponents(campaign, recipientId, options = {}) {
+  const interactionType = String(campaign?.interaction_type || campaign?.interactionType || "ack").trim();
+  if (interactionType === "intersaison_objectives") {
+    return buildIntersaisonObjectivesComponents(recipientId, options);
+  }
+  if (interactionType === "none") return [];
+  return buildGuildDmAckComponents(recipientId, options);
+}
+
+function buildIntersaisonObjectivesModal(recipientId) {
+  return {
+    type: 9,
+    data: {
+      custom_id: `${INTERSAISON_OBJECTIVES_SUBMIT_PREFIX}${recipientId}`,
+      title: "Sondage inter-saison",
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 4,
+              custom_id: "objective_text",
+              label: "Ton avis",
+              style: 2,
+              min_length: 2,
+              max_length: 1900,
+              required: true,
+              placeholder: "Explique librement tes attentes pour la prochaine saison.",
+            },
+          ],
+        },
+      ],
+    },
+  };
 }
 
 function normalizeGuildCode(value) {
@@ -589,7 +656,7 @@ async function refreshGuildDmCampaignCounters(supabase, campaignId) {
   if (updateError) throw updateError;
 }
 
-async function confirmGuildDmRecipientFromInteraction(supabase, interaction, recipient) {
+async function confirmGuildDmRecipientFromInteraction(supabase, interaction, recipient, options = {}) {
   if (!recipient?.id) return null;
   let confirmedRecipient = recipient;
 
@@ -614,7 +681,7 @@ async function confirmGuildDmRecipientFromInteraction(supabase, interaction, rec
   const channelId = interaction?.message?.channel_id || interaction?.channel_id || "";
   const messageId = interaction?.message?.id || "";
   await editDiscordChannelMessage(channelId, messageId, {
-    components: buildGuildDmAckComponents(recipient.id, { disabled: true }),
+    components: options.components || buildGuildDmAckComponents(recipient.id, { disabled: true }),
   }).catch((error) => {
     console.warn("[guild-dm-http] ack button disable failed:", error?.message || error);
   });
@@ -644,6 +711,138 @@ function handleGuildDmAckHttpInteraction(supabase, interaction) {
     });
     return "Lu et confirme.";
   }, { label: "guild_dm_ack", fallback: "Confirmation temporairement indisponible. Reessaie dans un instant." });
+}
+
+async function loadIntersaisonSurveyRecipientForDmRecipient(supabase, dmRecipientId) {
+  const cleanRecipientId = String(dmRecipientId || "").trim();
+  if (!cleanRecipientId) return null;
+
+  const { data, error } = await supabase
+    .from(INTERSAISON_SURVEY_RECIPIENTS_TABLE)
+    .select(`
+      id,
+      survey_campaign_id,
+      organization_id,
+      member_id,
+      guild_code_snapshot,
+      member_name_snapshot,
+      discord_user_id,
+      guild_dm_recipient_id,
+      response_status,
+      responded_at,
+      survey_campaign:${INTERSAISON_SURVEY_CAMPAIGNS_TABLE}(
+        id,
+        organization_id,
+        poll_number,
+        status
+      )
+    `)
+    .eq("guild_dm_recipient_id", cleanRecipientId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data || null;
+}
+
+async function saveIntersaisonObjectivesResponse(supabase, interaction, dmRecipientId, text) {
+  const cleanText = String(text || "").trim();
+  if (!cleanText) throw new Error("Réponse vide.");
+  if (cleanText.length > 1900) throw new Error("Réponse trop longue.");
+
+  const surveyRecipient = await loadIntersaisonSurveyRecipientForDmRecipient(supabase, dmRecipientId);
+  if (!surveyRecipient) throw new Error("Destinataire du sondage introuvable.");
+
+  const user = interaction?.member?.user || interaction?.user || null;
+  const interactionUserId = String(user?.id || "");
+  if (interactionUserId !== String(surveyRecipient.discord_user_id || "")) {
+    throw new Error("Ce sondage est réservé au destinataire du message.");
+  }
+
+  const campaign = surveyRecipient.survey_campaign || null;
+  if (campaign && String(campaign.organization_id || "") !== String(surveyRecipient.organization_id || "")) {
+    throw new Error("Configuration du sondage incohérente.");
+  }
+  if (!campaign || campaign.status !== "open") {
+    throw new Error("Ce sondage n'est plus ouvert.");
+  }
+  if (Number(campaign.poll_number || 1) !== 1) {
+    throw new Error("Ce formulaire ne correspond pas au sondage objectifs.");
+  }
+
+  const now = new Date().toISOString();
+  const { data: previousResponses, error: previousError } = await supabase
+    .from(INTERSAISON_SURVEY_RESPONSES_TABLE)
+    .select("id, response_version")
+    .eq("survey_recipient_id", surveyRecipient.id)
+    .eq("survey_campaign_id", surveyRecipient.survey_campaign_id)
+    .eq("organization_id", surveyRecipient.organization_id)
+    .eq("is_current", true)
+    .order("response_version", { ascending: false })
+    .limit(1);
+  if (previousError) throw previousError;
+
+  const previous = previousResponses?.[0] || null;
+  if (previous) {
+    const { error: archiveError } = await supabase
+      .from(INTERSAISON_SURVEY_RESPONSES_TABLE)
+      .update({ is_current: false })
+      .eq("id", previous.id)
+      .eq("organization_id", surveyRecipient.organization_id);
+    if (archiveError) throw archiveError;
+  }
+
+  const responseVersion = Number(previous?.response_version || 0) + 1;
+  const { error: insertError } = await supabase.from(INTERSAISON_SURVEY_RESPONSES_TABLE).insert({
+    survey_campaign_id: surveyRecipient.survey_campaign_id,
+    survey_recipient_id: surveyRecipient.id,
+    organization_id: surveyRecipient.organization_id,
+    member_id: surveyRecipient.member_id,
+    discord_user_id: surveyRecipient.discord_user_id,
+    poll_number: 1,
+    guild_code_snapshot: surveyRecipient.guild_code_snapshot,
+    member_name_snapshot: surveyRecipient.member_name_snapshot,
+    objective_text: cleanText,
+    response_version: responseVersion,
+    is_current: true,
+    responded_at: now,
+    created_at: now,
+  });
+  if (insertError) throw insertError;
+
+  const { error: recipientUpdateError } = await supabase
+    .from(INTERSAISON_SURVEY_RECIPIENTS_TABLE)
+    .update({
+      response_status: "responded",
+      delivery_status: "confirmed",
+      responded_at: now,
+      last_error: null,
+      updated_at: now,
+    })
+    .eq("id", surveyRecipient.id)
+    .eq("organization_id", surveyRecipient.organization_id);
+  if (recipientUpdateError) throw recipientUpdateError;
+
+  const dmRecipient = await loadGuildDmRecipientForAck(supabase, dmRecipientId);
+  if (dmRecipient) {
+    await confirmGuildDmRecipientFromInteraction(supabase, interaction, dmRecipient, {
+      components: buildIntersaisonObjectivesComponents(dmRecipient.id, { disabled: true }),
+    });
+  }
+
+  return { surveyRecipient, responseVersion };
+}
+
+function handleIntersaisonObjectivesSubmit(supabase, interaction) {
+  const customId = String(interaction?.data?.custom_id || "");
+  const dmRecipientId = parseRequestIdFromCustomId(customId, INTERSAISON_OBJECTIVES_SUBMIT_PREFIX);
+  const values = flattenModalValues(interaction?.data?.components || []);
+  return discordDeferredEphemeral(interaction, async () => {
+    await saveIntersaisonObjectivesResponse(supabase, interaction, dmRecipientId, values.objective_text);
+    return "Merci, ta réponse a bien été enregistrée.";
+  }, {
+    label: "intersaison_objectives_submit",
+    fallback: "Réponse inter-saison temporairement indisponible. Réessaie dans un instant.",
+  });
 }
 
 async function deleteDeferredInteractionResponse(interaction) {
@@ -2805,6 +3004,10 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
     return handleGuildDmAckHttpInteraction(supabase, interaction);
   }
 
+  if (isIntersaisonObjectivesCustomId(customId)) {
+    return buildIntersaisonObjectivesModal(parseRequestIdFromCustomId(customId, INTERSAISON_OBJECTIVES_PREFIX));
+  }
+
   if (customId.startsWith("gvg_repro_start:")) {
     return buildBastionSelectResponse(parseRequestIdFromCustomId(customId, "gvg_repro_start:"));
   }
@@ -2997,6 +3200,10 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
 export async function handleDiscordReproModalInteraction(supabase, interaction) {
   const customId = String(interaction?.data?.custom_id || "");
   const user = interaction?.member?.user || interaction?.user || null;
+
+  if (isIntersaisonObjectivesSubmitCustomId(customId)) {
+    return handleIntersaisonObjectivesSubmit(supabase, interaction);
+  }
 
   if (customId.startsWith("gvg_repro_create:") || customId.startsWith("gvg_repro_create_wizard:")) {
     const isWizardCreate = customId.startsWith("gvg_repro_create_wizard:");
