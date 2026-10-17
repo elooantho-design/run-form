@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
+import IntersaisonObjectivesPreparation from "@/components/IntersaisonObjectivesPreparation";
 
 const DEFAULT_SURVEY_ONE_MESSAGE = `⚔️ Cluster Paladin — Préparation de la prochaine saison
 
@@ -581,9 +582,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
         ) : null}
 
         {selectedPoll === 2 ? (
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm leading-6 text-zinc-400">
-            Sondage 2 préparé côté architecture : les objectifs par guilde et le choix de future guilde seront branchés après validation du sondage 1.
-          </div>
+          <IntersaisonObjectivesPreparation request={callPortalIntersaison} />
         ) : null}
 
         <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">

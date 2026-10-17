@@ -25,6 +25,11 @@ import {
 } from "../src/lib/linkedAccounts.js";
 import { getGuildDisplayName } from "../src/lib/guildDisplay.js";
 import {
+  loadSurveyObjectivesPreparation,
+  saveSurveyObjectivesDraft,
+  validateSurveyObjectivesDraft,
+} from "./_intersaison-survey-objectives.js";
+import {
   GUILD_DM_CAMPAIGNS_TABLE,
   GUILD_DM_RECIPIENTS_TABLE,
   buildGuildDmTestMessage,
@@ -1847,6 +1852,15 @@ export default async function handler(req, res) {
     let result;
 
     if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState(organization) } };
+    else if (["load-survey-two-preparation", "save-survey-two-objectives", "validate-survey-two-objectives"].includes(action)) {
+      const season = await loadActiveSurveySeason(organization.id);
+      const preparation = action === "save-survey-two-objectives"
+        ? await saveSurveyObjectivesDraft(supabase, sessionCheck.member, organization, season, body)
+        : action === "validate-survey-two-objectives"
+          ? await validateSurveyObjectivesDraft(supabase, sessionCheck.member, organization, season, body)
+          : await loadSurveyObjectivesPreparation(supabase, sessionCheck.member, organization, season);
+      result = { status: 200, payload: { ok: true, preparation } };
+    }
     else if (action === "load-survey-center") result = await handleLoadSurveyCenter(organization, sessionCheck.member);
     else if (action === "launch-survey-one") result = await handleLaunchSurveyOne(body, sessionCheck.member, organization);
     else if (action === "launch-survey-one-test") result = await handleLaunchSurveyOneTest(body, sessionCheck.member, organization);
