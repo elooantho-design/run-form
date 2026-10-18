@@ -1,4 +1,6 @@
 /* global process */
+import { buildSurveyTwoDiscordPayload } from "./intersaisonSurveyObjectives.js";
+import { buildSurveyChoiceModal, saveSurveyChoiceResponse, SURVEY_CHOICE_PREFIX, SURVEY_CHOICE_SUBMIT_PREFIX } from "./intersaisonSurveyChoices.js";
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_REPRO_CHANNEL_IDS = {
   G1: "1501512158637457408",
@@ -126,6 +128,11 @@ export function buildGuildDmInteractionComponents(campaign, recipientId, options
   const interactionType = String(campaign?.interaction_type || campaign?.interactionType || "ack").trim();
   if (interactionType === "intersaison_objectives") {
     return buildIntersaisonObjectivesComponents(recipientId, options);
+  }
+  if (interactionType === "intersaison_choice") {
+    return buildSurveyTwoDiscordPayload(campaign?.interaction_payload?.objectives || {}, {
+      recipientId, discordUserId: options.discordUserId || "", isTest: Boolean(campaign?.interaction_payload?.isTest),
+    }).components;
   }
   if (interactionType === "none") return [];
   return buildGuildDmAckComponents(recipientId, options);
@@ -3000,6 +3007,11 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
   const customId = String(interaction?.data?.custom_id || "");
   const user = interaction?.member?.user || interaction?.user || null;
 
+  if (customId.startsWith(SURVEY_CHOICE_PREFIX)) {
+    try { return buildSurveyChoiceModal(customId, user?.id); }
+    catch (error) { return discordEphemeral(error.message); }
+  }
+
   if (isGuildDmAckCustomId(customId)) {
     return handleGuildDmAckHttpInteraction(supabase, interaction);
   }
@@ -3200,6 +3212,14 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
 export async function handleDiscordReproModalInteraction(supabase, interaction) {
   const customId = String(interaction?.data?.custom_id || "");
   const user = interaction?.member?.user || interaction?.user || null;
+
+  if (customId.startsWith(SURVEY_CHOICE_SUBMIT_PREFIX)) {
+    return discordDeferredEphemeral(interaction, async () => {
+      await saveSurveyChoiceResponse(supabase, { customId, userId: user?.id, interactionId: interaction.id,
+        components: interaction?.data?.components || [] });
+      return "Tes choix ont été enregistrés. Tu peux les modifier avec le même bouton tant que le sondage reste ouvert.";
+    }, { label: "intersaison_choice_submit", fallback: "Enregistrement impossible. Réessaie, ta réponse n’a pas été confirmée." });
+  }
 
   if (isIntersaisonObjectivesSubmitCustomId(customId)) {
     return handleIntersaisonObjectivesSubmit(supabase, interaction);

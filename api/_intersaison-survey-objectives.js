@@ -14,7 +14,7 @@ export function supportsSurveyObjectives(organization) {
   return ["paladin", "paladin_cluster"].includes(String(organization?.organization_key || organization?.organizationKey || "").toLowerCase());
 }
 
-async function authorizeObjectives(supabase, actor, organization) {
+export async function authorizeObjectives(supabase, actor, organization) {
   if (!isPortalAdminRole(actor?.role) || !supportsSurveyObjectives(organization) || !SURVEY_OBJECTIVE_GUILDS.includes(actor?.guild_code)) {
     throw failure("Préparation réservée aux admins Paladin autorisés.", 403);
   }
@@ -40,6 +40,17 @@ function serializeVersion(row) {
     createdAt: row.created_at, validatedAt: row.validated_at, officialAt: row.official_at,
     objectives: Object.fromEntries((row.intersaison_survey_objective_items || []).map((item) => [item.guild_code, item.objective_text])),
   };
+}
+
+export async function loadSurveyReferenceObjectives(supabase, organizationId, seasonId) {
+  const { data, error } = await supabase.from(VERSIONS_TABLE)
+    .select("id, created_at, intersaison_survey_objective_items(guild_code, objective_text)")
+    .eq("organization_id", organizationId).eq("season_id", seasonId).eq("purpose", "reference")
+    .order("version_number", { ascending: false }).limit(1);
+  if (error) { if (missingSchema(error)) return null; throw error; }
+  const reference = data?.[0];
+  return reference ? (reference.intersaison_survey_objective_items || []).map((item) => ({ ...item,
+    organization_id: organizationId, season_id: seasonId, created_at: reference.created_at })) : null;
 }
 
 export async function loadSurveyObjectivesPreparation(supabase, actor, organization, season) {

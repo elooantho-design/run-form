@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
-import IntersaisonObjectivesPreparation from "@/components/IntersaisonObjectivesPreparation";
+import IntersaisonSurveyTwoWorkspace, { SurveyChoiceAnswer } from "@/components/IntersaisonSurveyTwoWorkspace";
 
 const DEFAULT_SURVEY_ONE_MESSAGE = `⚔️ Cluster Paladin — Préparation de la prochaine saison
 
@@ -81,6 +81,10 @@ function getResponseText(response) {
   );
 }
 
+function hasSurveyAnswer(response) {
+  return Boolean(getResponseText(response) || response?.firstChoiceGuildCode || response?.first_choice_guild_code);
+}
+
 function getRecipientStatusLabel(recipient, fallbackStatus = "") {
   if (recipient?.responseStatus === "responded" || recipient?.respondedAt || getResponseText(recipient?.response)) {
     return "Réponse enregistrée";
@@ -121,6 +125,7 @@ function getSurveyStatusLabel(center, pollNumber) {
 
 function serializeGuildCardsForPoll(center, pollNumber) {
   if (Number(pollNumber) === 1) return center?.guildCards || [];
+  if (center?.guildCardsByPoll?.[pollNumber]) return center.guildCardsByPoll[pollNumber];
   return (center?.guilds || []).map((guild) => {
     const guildCode = guild.guild_code || guild.guildCode || "";
     const members = (center?.members || [])
@@ -171,6 +176,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
   const [trackingOpen, setTrackingOpen] = useState(false);
   const [reminding, setReminding] = useState(false);
   const [finishing, setFinishing] = useState(false);
+  const [forecastVisible, setForecastVisible] = useState(false);
 
   const organization = center?.organization || organizationFallback || null;
   const selectedCampaign = useMemo(
@@ -178,8 +184,8 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
     [center?.campaigns, selectedPoll],
   );
   const latestTestCampaign = useMemo(
-    () => (center?.testCampaigns || []).find((row) => Number(row.pollNumber) === 1) || null,
-    [center?.testCampaigns],
+    () => (center?.testCampaigns || []).find((row) => Number(row.pollNumber) === Number(selectedPoll)) || null,
+    [center?.testCampaigns, selectedPoll],
   );
   const latestTestRecipient = useMemo(
     () => latestTestCampaign?.recipients?.[0] || null,
@@ -318,12 +324,12 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
   async function exportSurveyOne(format = "csv") {
     setError("");
     try {
-      const data = await callPortalIntersaison({ action: "export-survey-one", format });
+      const data = await callPortalIntersaison({ action: selectedPoll === 2 ? "export-survey-two" : "export-survey-one", format, campaignId: selectedCampaign?.id });
       const blob = createBlobFromApiExport(data);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = data.fileName || `intersaison-sondage-1.${format === "xlsx" ? "xlsx" : "csv"}`;
+      link.download = data.fileName || `intersaison-sondage-${selectedPoll}.${format === "xlsx" ? "xlsx" : "csv"}`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -391,7 +397,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 Relances collectives
               </Button>
             ) : null}
-            {selectedPoll === 1 && selectedCampaign ? (
+            {selectedCampaign ? (
               <>
                 <Button
                   type="button"
@@ -556,7 +562,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
           </div>
         ) : null}
 
-        {selectedPoll === 1 && latestTestCampaign ? (
+        {latestTestCampaign ? (
           <button
             type="button"
             className="w-full rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 text-left text-sm text-violet-100 transition hover:bg-violet-500/15"
@@ -568,7 +574,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 <div className="mt-1 text-violet-100/80">
                   Statut {getRecipientStatusLabel(latestTestRecipient, latestTestCampaign.dmCampaign?.status || latestTestCampaign.status)} · 1 destinataire · hors résultats officiels
                 </div>
-                {latestTestRecipient?.response?.objectiveText ? (
+                {hasSurveyAnswer(latestTestRecipient?.response) ? (
                   <div className="mt-1 text-xs text-violet-100/70">
                     Réponse reçue le {formatDateTime(latestTestRecipient.respondedAt)}
                   </div>
@@ -581,10 +587,11 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
           </button>
         ) : null}
 
-        {selectedPoll === 2 ? (
-          <IntersaisonObjectivesPreparation request={callPortalIntersaison} />
-        ) : null}
+        {["paladin", "paladin_cluster"].includes(organization?.organization_key || organization?.organizationKey) ?
+          <IntersaisonSurveyTwoWorkspace request={callPortalIntersaison} center={center} pollNumber={selectedPoll}
+            onCenterChange={setCenter} onRefresh={loadCenter} forecastVisible={forecastVisible} onForecastVisibleChange={setForecastVisible} /> : null}
 
+        {!(selectedPoll === 2 && forecastVisible) ? <>
         <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
           {guildCards.map((card, index) => (
             <div
@@ -615,7 +622,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
               <div className="max-h-[360px] space-y-2 overflow-y-auto p-3">
                 {card.members.length ? (
                   card.members.map((member) => {
-                    const hasResponse = Boolean(getResponseText(member.response));
+                    const hasResponse = hasSurveyAnswer(member.response);
                     return (
                       <div
                         key={member.id}
@@ -651,6 +658,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
             </div>
           ))}
         </div>
+        </> : null}
 
         {selectedCampaign ? (
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/80">
@@ -667,7 +675,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
             {trackingOpen ? (
               <div className="border-t border-zinc-800 p-4">
                 <div className="max-h-96 overflow-y-auto">
-                  {(center?.recipients || []).map((recipient) => (
+                  {(center?.recipients || []).filter((recipient) => recipient.surveyCampaignId === selectedCampaign.id).map((recipient) => (
                     <div
                       key={recipient.id}
                       className="grid gap-2 border-b border-zinc-900 px-1 py-3 text-sm last:border-b-0 md:grid-cols-[minmax(0,1fr)_90px_110px_130px_minmax(0,1fr)]"
@@ -682,7 +690,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                       </Badge>
                       <div className="text-zinc-400">{formatDateTime(recipient.respondedAt || recipient.lastSentAt)}</div>
                       <div className="min-w-0 truncate text-zinc-500">
-                        {recipient.response?.objectiveText || recipient.lastError || "-"}
+                        {selectedPoll === 2 && recipient.response?.firstChoiceGuildCode ? getGuildLabel(recipient.response.firstChoiceGuildCode) : recipient.response?.objectiveText || recipient.lastError || "-"}
                       </div>
                     </div>
                   ))}
@@ -744,14 +752,14 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                       </div>
                     </div>
                   </div>
-                  {selectedTestCampaign.recipients[0].response?.objectiveText ? (
+                  {hasSurveyAnswer(selectedTestCampaign.recipients[0].response) ? (
                     <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-100">
                       <div className="mb-2 flex items-center gap-2 font-semibold">
                         <CheckCircle2 className="h-4 w-4" />
                         Réponse de test enregistrée
                       </div>
                       <div className="whitespace-pre-wrap leading-6">
-                        {selectedTestCampaign.recipients[0].response.objectiveText}
+                        {selectedTestCampaign.pollNumber === 2 ? <SurveyChoiceAnswer response={selectedTestCampaign.recipients[0].response} /> : selectedTestCampaign.recipients[0].response.objectiveText}
                       </div>
                     </div>
                   ) : (
@@ -782,7 +790,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                     {selectedResponse.member?.watcherName || "-"}
                   </div>
                   <div className="text-sm text-zinc-500">
-                    {getGuildLabel(selectedResponse.member?.guildCode, selectedResponse.member?.guildCode)}
+                    {getGuildLabel(selectedResponse.member?.surveyRecipient?.guild_code_snapshot || selectedResponse.member?.guildCode, selectedResponse.member?.guildCode)}
                     {" · "}
                     Sondage {selectedResponse.campaign?.pollNumber || selectedPoll}
                   </div>
@@ -808,7 +816,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                     <MessageCircle className="h-4 w-4" />
                     Réponse complète
                   </div>
-                  <div className="whitespace-pre-wrap leading-6">{getResponseText(selectedResponse.member?.response) || "-"}</div>
+                  <div className="whitespace-pre-wrap leading-6">{(selectedResponse.campaign?.pollNumber || selectedPoll) === 2 ? <SurveyChoiceAnswer response={selectedResponse.member?.response} /> : getResponseText(selectedResponse.member?.response) || "-"}</div>
                 </div>
               </div>
             </div>
@@ -843,13 +851,13 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-zinc-300">
                   {selectedMember.delivery.detail}
                 </div>
-                {getResponseText(selectedMember.response) ? (
+                {hasSurveyAnswer(selectedMember.response) ? (
                   <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-100">
                     <div className="mb-2 flex items-center gap-2 font-semibold">
                       <CheckCircle2 className="h-4 w-4" />
                       Réponse enregistrée
                     </div>
-                    <div className="whitespace-pre-wrap leading-6">{getResponseText(selectedMember.response)}</div>
+                    <div className="whitespace-pre-wrap leading-6">{selectedPoll === 2 ? <SurveyChoiceAnswer response={selectedMember.response} /> : getResponseText(selectedMember.response)}</div>
                   </div>
                 ) : selectedMember.delivery.color === "orange" ? (
                   <Button

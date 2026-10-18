@@ -1,0 +1,43 @@
+// The release preparation script copies the Portal's shared ESM helpers next to this service.
+let shared;
+function helpers() { return shared ||= import("../shared/intersaisonSurveyChoices.js"); }
+
+async function buildChoicePayload(campaign, recipient) {
+  const { buildSurveyTwoDiscordPayload } = await import("../shared/intersaisonSurveyObjectives.js");
+  const { parseSurveyChoiceId } = await helpers();
+  const objectives = campaign?.interaction_payload?.objectives;
+  if (!objectives || Object.keys(objectives).length !== 7 || Object.values(objectives).some((v) => typeof v !== "string" || !v.trim())) {
+    throw new Error("Snapshot des sept objectifs incomplet. Aucun message envoyé.");
+  }
+  parseSurveyChoiceId(`interchoice:${recipient.id}:${recipient.discord_user_id}`);
+  return buildSurveyTwoDiscordPayload(objectives, { recipientId: recipient.id, discordUserId: recipient.discord_user_id,
+    isTest: Boolean(campaign.interaction_payload.isTest) });
+}
+
+async function handleChoiceInteraction(interaction, { supabase } = {}) {
+  const customId = String(interaction?.customId || "");
+  const isButton = interaction?.isButton?.() && customId.startsWith("interchoice:");
+  const isSubmit = interaction?.isModalSubmit?.() && customId.startsWith("interchoice_submit:");
+  if (!isButton && !isSubmit) return false;
+  const { buildSurveyChoiceModal, saveSurveyChoiceResponse } = await helpers();
+  if (isButton) {
+    // No database/network work before the type 9 modal response.
+    try { await interaction.showModal(buildSurveyChoiceModal(customId, interaction.user?.id).data); }
+    catch (error) {
+      if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: error.message, ephemeral: true, allowedMentions: { parse: [] } });
+    }
+    return true;
+  }
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    await saveSurveyChoiceResponse(supabase, { customId, userId: interaction.user?.id, interactionId: interaction.id,
+      components: interaction.components || [] });
+    // Keep the original button usable so a player can revise their choices while open.
+    await interaction.editReply({ content: "Tes choix ont été enregistrés. Tu peux les modifier avec le même bouton tant que le sondage reste ouvert.", allowedMentions: { parse: [] } });
+  } catch (error) {
+    await interaction.editReply({ content: error.message || "Enregistrement impossible. Ta réponse n’a pas été confirmée, réessaie.", allowedMentions: { parse: [] } });
+  }
+  return true;
+}
+
+module.exports = { buildChoicePayload, handleChoiceInteraction };

@@ -186,9 +186,11 @@ assert.match(centerSource, /Exporter Excel/, "official response export offers XL
 assert.match(centerSource, /Exporter CSV/, "official response export keeps CSV as a complement");
 assert.match(
   centerSource,
-  /selectedPoll === 1 && selectedCampaign \? \(/,
-  "survey exports are visible only when an official survey 1 campaign exists",
+  /selectedCampaign \? \(/,
+  "survey exports are visible only when the selected official campaign exists",
 );
+assert.match(centerSource, /selectedPoll === 2 \? "export-survey-two" : "export-survey-one"/, "export follows the selected poll without changing survey 1");
+assert.match(centerSource, /recipient\.surveyCampaignId === selectedCampaign\.id/, "detailed tracking never mixes the two polls");
 assert.match(centerSource, /Relances collectives/, "collective reminders are available");
 assert.match(centerSource, /Clôturer l'inter-saison/, "admins can finish a season before starting a new one");
 assert.match(centerSource, /Réessayer l'envoi/, "failed rows can be retried individually");

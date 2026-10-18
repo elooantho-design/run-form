@@ -26,9 +26,14 @@ import {
 import { getGuildDisplayName } from "../src/lib/guildDisplay.js";
 import {
   loadSurveyObjectivesPreparation,
+  loadSurveyReferenceObjectives,
   saveSurveyObjectivesDraft,
   validateSurveyObjectivesDraft,
+  supportsSurveyObjectives,
 } from "./_intersaison-survey-objectives.js";
+import {
+  exportSurveyChoices, isSurveyChoiceAction, queueSurveyChoiceReminders, runSurveyChoiceAction,
+} from "./_intersaison-survey-choices.js";
 import {
   GUILD_DM_CAMPAIGNS_TABLE,
   GUILD_DM_RECIPIENTS_TABLE,
@@ -716,6 +721,8 @@ function getSurveyGuildDisplayName(guildCode, guilds, organization) {
 
 async function loadSurveyObjectivesForSeason(season, organization) {
   if (!season?.id) return [];
+  const reference = await loadSurveyReferenceObjectives(supabase, organization.id, season.id);
+  if (reference?.length) return reference;
   const { data, error } = await supabase
     .from(INTERSAISON_SURVEY_GUILD_OBJECTIVES_TABLE)
     .select("id, season_id, organization_id, guild_code, objective_text, created_at, updated_at")
@@ -1028,6 +1035,12 @@ async function loadSurveyCenterState(organization, actor = null) {
         dmRecipients: dmRecipients || [],
         responses: selectedPollResponses,
       }),
+      guildCardsByPoll: {
+        2: buildSurveyGuildCards({ guilds, members,
+          surveyRecipients: (surveyRecipients || []).filter((recipient) => officialCampaigns.some((c) => c.poll_number === 2 && c.id === recipient.survey_campaign_id)),
+          dmRecipients: dmRecipients || [], responses: (responses || []).filter((response) => response.poll_number === 2),
+        }),
+      },
     };
   } catch (error) {
     if (!isMissingIntersaisonSurveySchema(error)) throw error;
@@ -1403,6 +1416,11 @@ async function handleQueueSurveyRecipient(body, actor, organization) {
   if (campaignError) throw campaignError;
   if (!campaign) return { status: 404, payload: { ok: false, error: "Campagne introuvable." } };
 
+  if (supportsSurveyObjectives(organization)) {
+    const queuedCount = await queueSurveyChoiceReminders(supabase, actor, organization, campaign.id, recipient.id);
+    return { status: 200, payload: { ok: true, queuedCount, surveyCenter: await loadSurveyCenterState(organization, actor) } };
+  }
+
   const now = new Date().toISOString();
   const { error: updateError } = await supabase
     .from(GUILD_DM_RECIPIENTS_TABLE)
@@ -1463,6 +1481,11 @@ async function handleQueueCollectiveSurveyReminders(body, actor, organization) {
     throw campaignError;
   }
   if (!campaign) return { status: 404, payload: { ok: false, error: "Campagne introuvable." } };
+
+  if (supportsSurveyObjectives(organization)) {
+    const queuedCount = await queueSurveyChoiceReminders(supabase, actor, organization, campaign.id);
+    return { status: 200, payload: { ok: true, queuedCount, surveyCenter: await loadSurveyCenterState(organization, actor) } };
+  }
 
   const { data: recipients, error: recipientsError } = await supabase
     .from(INTERSAISON_SURVEY_RECIPIENTS_TABLE)
@@ -1852,6 +1875,15 @@ export default async function handler(req, res) {
     let result;
 
     if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState(organization) } };
+    else if (isSurveyChoiceAction(action)) {
+      const season = await loadActiveSurveySeason(organization.id);
+      const payload = await runSurveyChoiceAction(supabase, sessionCheck.member, organization, season, action, body);
+      result = { status: 200, payload: { ok: true, ...payload,
+        ...(action.startsWith("load-") || action.startsWith("preview-") ? {} : { surveyCenter: await loadSurveyCenterState(organization, sessionCheck.member) }) } };
+    }
+    else if (action === "export-survey-two") {
+      result = { status: 200, payload: { ok: true, ...await exportSurveyChoices(supabase, sessionCheck.member, organization, body) } };
+    }
     else if (["load-survey-two-preparation", "save-survey-two-objectives", "validate-survey-two-objectives"].includes(action)) {
       const season = await loadActiveSurveySeason(organization.id);
       const preparation = action === "save-survey-two-objectives"

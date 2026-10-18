@@ -28,7 +28,7 @@ export function getSurveyObjectivesState(version, objectives, { dirty = false } 
   return complete ? "complete" : "incomplete";
 }
 
-export function buildSurveyTwoDiscordPayload(value) {
+export function buildSurveyTwoDiscordPayload(value, { recipientId = "", discordUserId = "", isTest = false } = {}) {
   const objectives = normalizeSurveyObjectives(value);
   const embed = {
     title: "Objectifs de la prochaine saison",
@@ -40,7 +40,7 @@ export function buildSurveyTwoDiscordPayload(value) {
     })),
     footer: { text: "Message transmis via le dashboard Paladin." },
   };
-  const content = `${SURVEY_TWO_INTRODUCTION}\n\n${SURVEY_TWO_INSTRUCTIONS}`;
+  const content = `${isTest ? "Message de test personnel\n\n" : ""}${SURVEY_TWO_INTRODUCTION}\n\n${SURVEY_TWO_INSTRUCTIONS}`;
   const embedCharacters = embed.title.length + embed.footer.text.length
     + embed.fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
   if (content.length > 2000 || embedCharacters > 6000 || embed.fields.some((field) => field.value.length > 1024)) {
@@ -50,6 +50,7 @@ export function buildSurveyTwoDiscordPayload(value) {
     content,
     embeds: [embed],
     allowedMentions: { parse: [] },
-    components: [{ type: 1, components: [{ type: 2, style: 1, label: "Choisir ma guilde", custom_id: "interchoice:preview", disabled: true }] }],
+    components: [{ type: 1, components: [{ type: 2, style: 1, label: "Choisir ma guilde",
+      custom_id: recipientId ? `interchoice:${recipientId}:${discordUserId}` : "interchoice:preview", disabled: !recipientId }] }],
   };
 }

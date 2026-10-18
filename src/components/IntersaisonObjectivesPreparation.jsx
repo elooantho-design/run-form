@@ -18,7 +18,7 @@ const STATE_LABELS = {
   official: "Objectifs officiels publiés",
 };
 
-export default function IntersaisonObjectivesPreparation({ request }) {
+export default function IntersaisonObjectivesPreparation({ request, onStateChange }) {
   const fieldId = useId();
   const [preparation, setPreparation] = useState(null);
   const [objectives, setObjectives] = useState(() => normalizeSurveyObjectives());
@@ -49,6 +49,10 @@ export default function IntersaisonObjectivesPreparation({ request }) {
   const state = getSurveyObjectivesState(preparation?.version, objectives, { dirty });
   const frozen = ["official", "archived"].includes(preparation?.version?.status);
   const canSave = Boolean(preparation?.schemaReady && preparation?.seasonId && !frozen && !busy);
+
+  useEffect(() => {
+    onStateChange?.({ dirty, versionId: preparation?.version?.id || null, status: preparation?.version?.status || "draft" });
+  }, [dirty, preparation?.version?.id, preparation?.version?.status, onStateChange]);
 
   async function reloadObjectives() {
     if (dirty && !window.confirm("Abandonner les modifications non enregistrées et recharger les objectifs ?")) return;
