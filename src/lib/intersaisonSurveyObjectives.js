@@ -28,7 +28,7 @@ export function getSurveyObjectivesState(version, objectives, { dirty = false } 
   return complete ? "complete" : "incomplete";
 }
 
-export function buildSurveyTwoDiscordPayload(value, { recipientId = "", discordUserId = "", isTest = false } = {}) {
+export function buildSurveyTwoDiscordPayload(value, { recipientId = "", discordUserId = "", isTest = false, account = null } = {}) {
   const objectives = normalizeSurveyObjectives(value);
   const embed = {
     title: "Objectifs de la prochaine saison",
@@ -40,7 +40,13 @@ export function buildSurveyTwoDiscordPayload(value, { recipientId = "", discordU
     })),
     footer: { text: "Message transmis via le dashboard Paladin." },
   };
-  const content = `${isTest ? "Message de test personnel\n\n" : ""}${SURVEY_TWO_INTRODUCTION}\n\n${SURVEY_TWO_INSTRUCTIONS}`;
+  const escapeName = (name) => Array.from(String(name).replace(/[\r\n]+/g, " "))
+    .map((character) => "\\*_`~[]<>|".includes(character) ? `\\${character}` : character).join("");
+  if (account && (!String(account.name || "").trim() || !SURVEY_OBJECTIVE_GUILDS.includes(account.guildCode))) {
+    throw new Error("Compte de jeu du destinataire incomplet.");
+  }
+  const accountText = account ? `Ce sondage concerne ton compte Watcher of Realms :\n\n**${escapeName(account.name)} — ${PALADIN_GUILD_DISPLAY_NAMES[account.guildCode]} (${account.guildCode})**\n\nMerci d’indiquer tes préférences pour ce compte précis.\n\n` : "";
+  const content = `${isTest ? "Message de test personnel\n\n" : ""}${SURVEY_TWO_INTRODUCTION}\n\n${accountText}${SURVEY_TWO_INSTRUCTIONS}`;
   const embedCharacters = embed.title.length + embed.footer.text.length
     + embed.fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
   if (content.length > 2000 || embedCharacters > 6000 || embed.fields.some((field) => field.value.length > 1024)) {

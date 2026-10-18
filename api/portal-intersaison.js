@@ -32,7 +32,7 @@ import {
   supportsSurveyObjectives,
 } from "./_intersaison-survey-objectives.js";
 import {
-  exportSurveyChoices, isSurveyChoiceAction, queueSurveyChoiceReminders, runSurveyChoiceAction,
+  exportSurveyChoices, inspectSurveyChoiceRecipient, retrySurveyChoiceRecipient, isSurveyChoiceAction, queueSurveyChoiceReminders, runSurveyChoiceAction,
 } from "./_intersaison-survey-choices.js";
 import {
   GUILD_DM_CAMPAIGNS_TABLE,
@@ -1403,21 +1403,26 @@ async function handleQueueSurveyRecipient(body, actor, organization) {
   if (recipient.responded_at || recipient.response_status === "responded") {
     return { status: 409, payload: { ok: false, error: "Ce joueur a deja repondu." } };
   }
-  if (!recipient.guild_dm_recipient_id) {
-    return { status: 409, payload: { ok: false, error: recipient.last_error || "Aucun MP Discord reutilisable pour ce joueur." } };
-  }
-
   const { data: campaign, error: campaignError } = await supabase
     .from(INTERSAISON_SURVEY_CAMPAIGNS_TABLE)
-    .select("id, guild_dm_campaign_id, status")
+    .select("id, guild_dm_campaign_id, status, poll_number")
     .eq("id", recipient.survey_campaign_id)
     .eq("organization_id", organization.id)
     .maybeSingle();
   if (campaignError) throw campaignError;
   if (!campaign) return { status: 404, payload: { ok: false, error: "Campagne introuvable." } };
 
+  if (campaign.poll_number === 2 && supportsSurveyObjectives(organization) && body.confirmed === true) {
+    const result = await retrySurveyChoiceRecipient(supabase, actor, organization, body);
+    return { status: 200, payload: { ok: true, ...result, surveyCenter: await loadSurveyCenterState(organization, actor) } };
+  }
+  if (!recipient.guild_dm_recipient_id) {
+    return { status: 409, payload: { ok: false, error: recipient.last_error || "Aucun MP Discord reutilisable pour ce joueur." } };
+  }
+
   if (supportsSurveyObjectives(organization)) {
     const queuedCount = await queueSurveyChoiceReminders(supabase, actor, organization, campaign.id, recipient.id);
+    if (campaign.poll_number === 2 && !queuedCount) return { status: 409, payload: { ok: false, error: "Réessai refusé : vérifier le rattachement et confirmer individuellement, ou actualiser le statut." } };
     return { status: 200, payload: { ok: true, queuedCount, surveyCenter: await loadSurveyCenterState(organization, actor) } };
   }
 
@@ -1883,6 +1888,10 @@ export default async function handler(req, res) {
     }
     else if (action === "export-survey-two") {
       result = { status: 200, payload: { ok: true, ...await exportSurveyChoices(supabase, sessionCheck.member, organization, body) } };
+    }
+    else if (action === "inspect-survey-recipient") {
+      result = { status: 200, payload: { ok: true, inspection: await inspectSurveyChoiceRecipient(
+        supabase, sessionCheck.member, organization, validatePortalInput(body.surveyRecipientId, 80)) } };
     }
     else if (["load-survey-two-preparation", "save-survey-two-objectives", "validate-survey-two-objectives"].includes(action)) {
       const season = await loadActiveSurveySeason(organization.id);

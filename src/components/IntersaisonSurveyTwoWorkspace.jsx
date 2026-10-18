@@ -157,8 +157,8 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
         <div className="grid gap-2 text-sm sm:grid-cols-2">{Object.entries(PALADIN_GUILD_DISPLAY_NAMES).map(([code, label]) => <div key={code}>{code} — {label}</div>)}</div>
         <dl className="space-y-2 border-y border-zinc-800 py-3 text-sm">{[
           ["Joueurs actifs ciblés", "total"], ["IDs absents ou invalides", "missing"],
-          ["IDs Discord distincts après déduplication", "distinctDiscordIds"], ["IDs partagés écartés", "duplicateDiscordIds"],
-          ["Joueurs aux IDs partagés, exclus des MP", "duplicates"], ["Destinataires éligibles aux MP", "eligible"],
+          ["IDs Discord distincts", "distinctDiscordIds"], ["IDs partagés non vérifiés", "duplicateDiscordIds"],
+          ["Comptes aux rattachements ambigus, exclus des MP", "duplicates"], ["Comptes éligibles aux MP", "eligible"],
         ].map(([label, key]) => <div key={key} className="flex justify-between gap-4"><dt>{label}</dt><dd>{launchPreview?.counts?.[key] || 0}</dd></div>)}</dl>
         {launchPreview?.blockers?.map((reason) => <div key={reason} className="text-sm text-amber-200">{reason}</div>)}
         <div className="flex justify-end gap-2"><Button type="button" variant="outline" className={buttonStyle} onClick={() => setLaunchPreview(null)} disabled={busy}>Annuler</Button>

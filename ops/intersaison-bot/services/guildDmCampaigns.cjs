@@ -6,7 +6,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require("discord.js");
-const { buildChoicePayload, handleChoiceInteraction } = require("./intersaisonChoice.cjs");
+const { buildChoicePayload, handleChoiceInteraction, authorizeChoiceDelivery } = require("./intersaisonChoice.cjs");
 
 const CAMPAIGNS_TABLE = "guild_dm_campaigns";
 const RECIPIENTS_TABLE = "guild_dm_recipients";
@@ -213,6 +213,8 @@ async function fetchQueuedRecipients(supabase, limit = DEFAULT_BATCH_SIZE) {
       id,
       campaign_id,
       discord_user_id,
+      member_name_snapshot,
+      guild_code,
       status,
       sent_at,
       send_attempts,
@@ -327,7 +329,7 @@ async function markRecipientQueuedAfterRateLimit(supabase, recipient, error) {
 
 async function markRecipientFailed(supabase, recipient, error) {
   const now = new Date().toISOString();
-  const { error: updateError } = await supabase
+  let query = supabase
     .from(RECIPIENTS_TABLE)
     .update({
       status: "failed",
@@ -335,6 +337,8 @@ async function markRecipientFailed(supabase, recipient, error) {
       updated_at: now,
     })
     .eq("id", recipient.id);
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") query = query.eq("status", "sending");
+  const { error: updateError } = await query;
 
   if (updateError) throw updateError;
 }
@@ -453,6 +457,8 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
   if (!sendingRecipient) return;
   await markCampaignSending(supabase, sendingRecipient.campaign_id);
 
+  let sentMessage = null;
+  const isChoice = sendingRecipient.guild_dm_campaigns.interaction_type === "intersaison_choice";
   try {
     const deliveryState = await loadRecipientDeliveryState(supabase, sendingRecipient.id);
     if (
@@ -462,11 +468,12 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
       return;
     }
 
+    if (isChoice) await authorizeChoiceDelivery(supabase, sendingRecipient);
     const user = await client.users.fetch(sendingRecipient.discord_user_id);
     const payload = sendingRecipient.guild_dm_campaigns.interaction_type === "intersaison_choice"
       ? await buildChoicePayload(sendingRecipient.guild_dm_campaigns, sendingRecipient)
       : buildGuildDmPayload(sendingRecipient.guild_dm_campaigns, sendingRecipient);
-    const sentMessage = await user.send(payload);
+    sentMessage = await user.send(payload);
     await markRecipientSent(supabase, sendingRecipient, sentMessage);
     console.log("[guild-dm] sent", {
       campaignId: sendingRecipient.campaign_id,
@@ -474,9 +481,10 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
       discordUserId: sendingRecipient.discord_user_id,
     });
   } catch (error) {
-    if (isRateLimitError(error)) {
-      const retryAfterMs = getRetryAfterMs(error) || 5000;
-      await markRecipientQueuedAfterRateLimit(supabase, sendingRecipient, error);
+    const failure = isChoice && sentMessage ? new Error("DELIVERY_UNCERTAIN : message transmis à Discord, confirmation en base impossible. Ne pas renvoyer.") : error;
+    if (isRateLimitError(failure) && (!isChoice || sendingRecipient.send_attempts < 5)) {
+      const retryAfterMs = getRetryAfterMs(failure) || 5000;
+      await markRecipientQueuedAfterRateLimit(supabase, sendingRecipient, failure);
       console.warn("[guild-dm] rate limited", {
         campaignId: sendingRecipient.campaign_id,
         recipientId: sendingRecipient.id,
@@ -486,11 +494,11 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
       return;
     }
 
-    await markRecipientFailed(supabase, sendingRecipient, error);
+    await markRecipientFailed(supabase, sendingRecipient, failure);
     console.warn("[guild-dm] failed", {
       campaignId: sendingRecipient.campaign_id,
       recipientId: sendingRecipient.id,
-      error: sanitizeDiscordError(error),
+      error: sanitizeDiscordError(failure),
     });
   } finally {
     await refreshCampaignCounters(supabase, sendingRecipient.campaign_id).catch((error) => {

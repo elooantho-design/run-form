@@ -10,8 +10,15 @@ async function buildChoicePayload(campaign, recipient) {
     throw new Error("Snapshot des sept objectifs incomplet. Aucun message envoyé.");
   }
   parseSurveyChoiceId(`interchoice:${recipient.id}:${recipient.discord_user_id}`);
+  if (!recipient.member_name_snapshot || !recipient.guild_code) throw new Error("Compte de jeu du destinataire manquant. Aucun message envoyé.");
   return buildSurveyTwoDiscordPayload(objectives, { recipientId: recipient.id, discordUserId: recipient.discord_user_id,
-    isTest: Boolean(campaign.interaction_payload.isTest) });
+    isTest: Boolean(campaign.interaction_payload.isTest), account: { name: recipient.member_name_snapshot, guildCode: recipient.guild_code } });
+}
+
+async function authorizeChoiceDelivery(supabase, recipient) {
+  const { data, error } = await supabase.rpc("check_intersaison_choice_delivery", { p_dm_recipient: recipient.id });
+  if (error) throw new Error(error.message || "Vérification du compte de jeu impossible.");
+  if (data !== true) throw new Error("Compte de jeu non autorisé pour cet envoi.");
 }
 
 async function handleChoiceInteraction(interaction, { supabase } = {}) {
@@ -40,4 +47,4 @@ async function handleChoiceInteraction(interaction, { supabase } = {}) {
   return true;
 }
 
-module.exports = { buildChoicePayload, handleChoiceInteraction };
+module.exports = { buildChoicePayload, handleChoiceInteraction, authorizeChoiceDelivery };

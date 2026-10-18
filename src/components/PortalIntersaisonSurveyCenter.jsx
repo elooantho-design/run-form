@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import IntersaisonSurveyTwoWorkspace, { SurveyChoiceAnswer } from "@/components/IntersaisonSurveyTwoWorkspace";
+import IntersaisonRecipientRecovery from "@/components/IntersaisonRecipientRecovery";
 
 const DEFAULT_SURVEY_ONE_MESSAGE = `⚔️ Cluster Paladin — Préparation de la prochaine saison
 
@@ -279,7 +280,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
     }
   }
 
-  async function queueRecipient(member) {
+  async function queueRecipient(member, identityFingerprint = "") {
     if (!member?.surveyRecipient?.id || reminding) return;
     setReminding(true);
     setError("");
@@ -288,6 +289,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
       const data = await callPortalIntersaison({
         action: "queue-survey-recipient",
         surveyRecipientId: member.surveyRecipient.id,
+        ...(identityFingerprint ? { confirmed: true, identityFingerprint } : {}),
       });
       setCenter(data.surveyCenter || null);
       setSelectedMember(null);
@@ -859,6 +861,9 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                     </div>
                     <div className="whitespace-pre-wrap leading-6">{selectedPoll === 2 ? <SurveyChoiceAnswer response={selectedMember.response} /> : getResponseText(selectedMember.response)}</div>
                   </div>
+                ) : selectedPoll === 2 && selectedMember.delivery.color === "red" ? (
+                  <IntersaisonRecipientRecovery key={selectedMember.surveyRecipient?.id} recipientId={selectedMember.surveyRecipient?.id} request={callPortalIntersaison}
+                    busy={reminding} onRetry={(fingerprint) => queueRecipient(selectedMember, fingerprint)} />
                 ) : selectedMember.delivery.color === "orange" ? (
                   <Button
                     type="button"

@@ -130,3 +130,65 @@ perimetre, sans toucher aux autres services ni supprimer les reponses.
 
 Le sondage 1 actuellement ouvert n'est pas cloture par le deploiement. Sa cloture
 reste une action distincte, explicite, avant un futur lancement officiel du n 2.
+
+## Preparation comptes secondaires et recuperation (non deployee)
+
+Le suivi reste fonde sur le compte de jeu, jamais sur un regroupement des reponses
+par Discord ID. Le serveur valide les liens `guild_members.primary_member_id` :
+un seul principal dans Paladin, pas de cycle/chaine, Discord du secondaire absent
+ou identique a celui du principal, et aucune autre famille active partageant cet ID.
+Une ambiguite demande une correction explicite dans Gestion guilde ; l'interface
+de recuperation ne propose ni saisie de Discord ID ni derogation manuelle.
+
+Scripts a examiner puis executer uniquement apres autorisation :
+
+- `scripts/intersaison_survey_accounts_preflight.sql` (lecture seule).
+- `scripts/intersaison_survey_accounts.sql` (transaction).
+- `scripts/intersaison_survey_accounts_verify.sql` (lecture seule).
+
+La migration ajoute `guild_dm_recipients.account_member_key`, initialise cette
+identite uniquement sur les lignes du sondage 2 existantes, puis remplace l'index
+Discord global par deux index uniques partiels : campagne/compte pour le sondage 2,
+campagne/Discord pour les campagnes classiques. Les IDs de destinataires restent
+identiques. Aucun statut, objectif, reponse, historique ou file n'est reinitialise.
+Les triggers protegent l'identite et les nouvelles reponses. Les RPC de lecture,
+reprise individuelle et verification avant envoi sont service-only.
+
+Chaque futur MP du sondage 2 inclut le pseudo et la guilde du compte concerne.
+Le worker lit les snapshots de compte dans la file existante, verifie l'autorisation
+avant d'appeler Discord et garde les memes components/interactions. Les MP deja
+envoyes ne sont ni edites ni renvoyes. Les autres campagnes gardent leur payload.
+Les retries 429 du sondage 2 s'arretent apres cinq tentatives ; aucun retry infini
+n'est ajoute aux autres echecs. Une erreur apres transmission mais avant sauvegarde
+est marquee `DELIVERY_UNCERTAIN` : reprise bloquee, audit du MP indispensable.
+
+Procedure ulterieure sans recreation ni fermeture du sondage ouvert :
+
+1. Conserver les snapshots/exports des reponses et objectifs, lancer le preflight.
+   Ne declencher aucun nouvel envoi administratif pendant la maintenance.
+2. Apres autorisation SQL, appliquer la migration et le verify. Les anciennes
+   interactions restent disponibles et les reponses existantes ne sont pas modifiees.
+3. Verifier la file vide avant toute intervention sur le bot. Sauvegarder sources
+   et image. Preparer le paquet hors depot, comparer le worker actif puis deployer
+   uniquement les services/shared et le Dockerfile prevus ; aucune nouvelle dependance.
+   Rebuild/restart du seul bot apres autorisation, tests mockes et controle de sante.
+4. Apres autorisation commit/push, deployer le Portal et verifier Vercel READY.
+   Ne pas activer les reprises tant que le nouveau worker n'est pas confirme actif.
+5. Dans le sondage 2, ouvrir chaque compte rouge, examiner le principal et les
+   comptes lies, puis confirmer individuellement « Reessayer l'envoi ».
+   La RPC revalide le lien et son empreinte, refuse les reponses deja presentes,
+   messages deja recus et envois deja en file, puis ajoute UN recipient a la campagne
+   existante ou reprend sa ligne en echec, avec le meme snapshot officiel.
+   Les relances collectives ne recuperent pas les echecs du sondage 2.
+6. Pour un refus Discord 50278, faire rejoindre le serveur au bon compte Discord.
+   Pour 50007, faire autoriser les MP. Corriger un ID introuvable dans Gestion guilde.
+   Aucun renvoi automatique, aucune nouvelle campagne, aucune modification d'objectif.
+
+Le rollback ne doit pas restaurer l'ancien index unique Discord une fois plusieurs
+comptes d'un meme proprietaire mis en file. Ne pas retablir un worker sans la
+personnalisation/verification pendant ces envois. Garder la campagne ouverte,
+arreter les actions administratives et auditer avant tout retour de version.
+
+Validation isolee supplementaire : `node scripts/test-intersaison-survey-accounts.mjs`
+(meme `PGLITE_MODULE_PATH` que ci-dessus). Aucune migration de production n'est
+executee par les tests et tous les envois du worker sont mockes.

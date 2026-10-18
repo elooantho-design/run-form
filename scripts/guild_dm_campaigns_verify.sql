@@ -79,8 +79,12 @@ with checks as (
   select
     'recipient_unique_campaign_discord',
     'present',
-    case when to_regclass('public.guild_dm_recipients_campaign_discord_uidx') is not null then 'present' else 'missing' end,
-    case when to_regclass('public.guild_dm_recipients_campaign_discord_uidx') is not null then 'OK' else 'ERROR' end
+    case when to_regclass('public.guild_dm_recipients_campaign_discord_uidx') is not null
+      or (to_regclass('public.guild_dm_recipients_legacy_discord_uidx') is not null
+        and to_regclass('public.guild_dm_recipients_campaign_account_uidx') is not null) then 'present' else 'missing' end,
+    case when to_regclass('public.guild_dm_recipients_campaign_discord_uidx') is not null
+      or (to_regclass('public.guild_dm_recipients_legacy_discord_uidx') is not null
+        and to_regclass('public.guild_dm_recipients_campaign_account_uidx') is not null) then 'OK' else 'ERROR' end
 
   union all
 

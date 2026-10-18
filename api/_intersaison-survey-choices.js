@@ -65,7 +65,8 @@ export async function loadSurveyChoiceWorkspace(db, actor, organization, season)
 async function callChoiceRpc(db, name, args) {
   const { data, error } = await db.rpc(name, args);
   if (error) {
-    if (isMissingSchema(error)) throw failure("Migration intersaison_survey_choices requise.", 428);
+    if (isMissingSchema(error)) throw failure(["inspect_intersaison_choice_recipient", "requeue_intersaison_choice_recipient"].includes(name)
+      ? "Migration intersaison_survey_accounts requise." : "Migration intersaison_survey_choices requise.", 428);
     throw failure(error.message || "Action inter-saison impossible.", error.code === "42501" ? 403 : 409);
   }
   return data;
@@ -75,6 +76,24 @@ export async function queueSurveyChoiceReminders(db, actor, organization, campai
   await authorizeObjectives(db, actor, organization);
   return callChoiceRpc(db, "queue_intersaison_survey_reminders", { p_org: organization.id, p_actor: actor.id,
     p_campaign: campaignId, p_recipient: recipientId });
+}
+
+export async function inspectSurveyChoiceRecipient(db, actor, organization, recipientId) {
+  await authorizeObjectives(db, actor, organization);
+  return callChoiceRpc(db, "inspect_intersaison_choice_recipient", {
+    p_org: organization.id, p_actor: actor.id, p_recipient: recipientId,
+  });
+}
+
+export async function retrySurveyChoiceRecipient(db, actor, organization, body) {
+  await authorizeObjectives(db, actor, organization);
+  if (body.confirmed !== true || typeof body.identityFingerprint !== "string" || !body.identityFingerprint) {
+    throw failure("Vérification du rattachement et confirmation individuelle requises.", 400);
+  }
+  return callChoiceRpc(db, "requeue_intersaison_choice_recipient", {
+    p_org: organization.id, p_actor: actor.id, p_recipient: body.surveyRecipientId,
+    p_fingerprint: body.identityFingerprint, p_confirmed: true,
+  });
 }
 
 const CHOICE_ACTIONS = new Set(["load-survey-two-workspace", "preview-survey-two-launch", "launch-survey-two", "launch-survey-two-test",
