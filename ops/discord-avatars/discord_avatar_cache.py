@@ -34,6 +34,7 @@ VERSION = re.compile(r"^[a-f0-9]{16}$")
 MAX_IMAGE_BYTES = 512 * 1024
 MAX_JSON_BYTES = 1024 * 1024
 SAFE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp"}
+DISCORD_USER_AGENT = "DiscordBot (https://github.com/elooantho-design/run-form, 1.0)"
 
 
 class SyncError(Exception):
@@ -85,6 +86,8 @@ class HttpSource:
         parsed = urlsplit(url)
         if parsed.scheme != "https" or parsed.hostname not in hosts or parsed.port not in (None, 443) or parsed.username or parsed.password:
             raise SyncError("unsafe_url")
+        if parsed.hostname in {"discord.com", "cdn.discordapp.com"}:
+            headers = {**headers, "User-Agent": DISCORD_USER_AGENT}
         try:
             with self.opener.open(Request(url, headers=headers, method="GET"), timeout=8) as response:
                 length = int(response.headers.get("Content-Length", 0))

@@ -276,6 +276,26 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(failure.exception.code, "rate_limited")
             self.assertEqual(failure.exception.retry_after, 42)
 
+    def test_discord_requests_identify_the_bot_without_leaking_authorization_to_cdn(self):
+        source = module.HttpSource(self.config)
+        class Response(io.BytesIO):
+            def __init__(self, content, content_type):
+                super().__init__(content)
+                self.headers = Message()
+                self.headers["Content-Type"] = content_type
+        def open_profile(request, timeout):
+            self.assertEqual(request.get_header("User-agent"), module.DISCORD_USER_AGENT)
+            self.assertEqual(request.get_header("Authorization"), "Bot fake")
+            return Response(json.dumps({"id": ID, "avatar": "a" * 32}).encode(), "application/json")
+        with patch.object(source.opener, "open", side_effect=open_profile):
+            profile, _ = source.profile(ID)
+        def open_image(request, timeout):
+            self.assertEqual(request.get_header("User-agent"), module.DISCORD_USER_AGENT)
+            self.assertIsNone(request.get_header("Authorization"))
+            return Response(png(), "image/png")
+        with patch.object(source.opener, "open", side_effect=open_image):
+            source.image(module.profile_image(profile)[1])
+
     def test_admin_endpoints_require_existing_token_and_no_arbitrary_targets(self):
         from fastapi import FastAPI, Header, HTTPException
         from fastapi.testclient import TestClient

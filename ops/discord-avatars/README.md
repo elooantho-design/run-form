@@ -121,6 +121,10 @@ qualite 78, maximum 32 KiB. Les pixels sont copies dans une image neuve pour
 eliminer les metadonnees ; voir les
 [limites de decodage Pillow](https://pillow.readthedocs.io/en/stable/reference/Image.html).
 
+Les appels API/CDN Discord identifient explicitement le client avec le User-Agent
+`DiscordBot` conforme a la [reference Discord](https://github.com/discord/discord-api-docs/blob/main/developers/reference.mdx).
+Le token reste reserve a l'API Discord et n'est jamais transmis au CDN.
+
 Les operations d'administration reutilisent `require_token()` et `GVG_API_TOKEN`.
 Elles ne sont pas exposees dans le frontend. La CLI requiert l'acces administrateur
 SSH/Docker, utilise uniquement l'API locale et n'affiche pas le token.
