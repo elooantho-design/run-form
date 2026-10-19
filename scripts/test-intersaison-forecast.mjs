@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { setTimeout as wait } from "node:timers/promises";
+import { createHash } from "node:crypto";
 import { buildSurveyChoiceForecast } from "../src/lib/intersaisonSurveyChoices.js";
-import { buildForecastAvatarUrl, createForecastAvatarQueue } from "../src/lib/intersaisonForecast.js";
+import { resolveForecastAvatarUrl } from "../src/lib/intersaisonForecast.js";
 import { createForecastAvatarReader } from "../api/_intersaison-forecast-avatars.js";
 import { runSurveyChoiceAction } from "../api/_intersaison-survey-choices.js";
 
 globalThis.fetch = () => { throw Error("Real network forbidden in forecast tests"); };
-const owner = "111111111111111111", secondOwner = "222222222222222222";
+const owner = "111111111111111111";
 const members = [
   { id: "root", watcher_name: "Principal", guild_code: "G3", discord_id: owner, role: "member" },
   { id: "alt", watcher_name: "Secondaire", guild_code: "G2", discord_id: "", primary_member_id: "root", role: "member" },
@@ -43,46 +43,52 @@ const next = buildSurveyChoiceForecast({ members, recipients, placements, roles,
 assert.equal(next.players.find((p) => p.memberKey === "root").answer.comment_text, "Dernière version");
 assert.equal(next.players.find((p) => p.memberKey === "root").targetGuild, "G5");
 assert.equal(buildSurveyChoiceForecast({ members: [members[1]], roles }).players[0].discordUserId, "", "unresolved principal uses the generic fallback");
-assert.equal(buildForecastAvatarUrl({ id: owner, avatar: "a_" + "a".repeat(32) }), `https://cdn.discordapp.com/avatars/${owner}/a_${"a".repeat(32)}.png?size=64`);
-assert.match(buildForecastAvatarUrl({ id: owner }), /^https:\/\/cdn\.discordapp\.com\/embed\/avatars\/[0-5]\.png$/);
-assert.equal(buildForecastAvatarUrl({ id: "not-an-id" }), "");
-
-const savedEnv = Object.fromEntries(["DISCORD_BOT_TOKEN", "DISCORD_DEFENSE_BOT_TOKEN", "DISCORD_TOKEN"].map((key) => [key, process.env[key]]));
-for (const key of Object.keys(savedEnv)) delete process.env[key];
-let calls = 0, clock = 1000;
+const assetKey = createHash("sha256").update(owner).digest("hex");
+const version = "0123456789abcdef";
+const expectedUrl = `https://vps-aad12be0.vps.ovh.net/assets/discord-avatars/${assetKey}.webp?v=${version}`;
+assert.equal(resolveForecastAvatarUrl(expectedUrl), expectedUrl);
+assert.equal(resolveForecastAvatarUrl(expectedUrl, { discordActivity: true }), `/vps-assets/assets/discord-avatars/${assetKey}.webp?v=${version}`);
+assert.equal(resolveForecastAvatarUrl(`https://cdn.discordapp.com/avatars/${owner}/avatar.png`), "");
+assert.equal(resolveForecastAvatarUrl("https://evil.example/avatars/test.webp"), "");
+let calls = 0, clock = 1000, unavailable = false;
 const reader = createForecastAvatarReader({ now: () => clock, fetchImpl: async (url, options) => {
-  calls++; assert.equal(options.method, "GET"); assert.equal(options.body, undefined);
-  assert.equal(url, `https://discord.com/api/v10/users/${owner}`);
-  return { ok: true, status: 200, json: async () => ({ id: owner, avatar: "b".repeat(32) }) };
+  calls++;
+  assert.equal(url, "https://vps-aad12be0.vps.ovh.net/assets/discord-avatars/manifest.json");
+  assert.equal(options.method, "GET"); assert.equal(options.body, undefined); assert.equal(options.headers.Authorization, undefined);
+  if (unavailable) throw Error("VPS temporarily unavailable");
+  return new Response(JSON.stringify({ version: 1, avatars: { [assetKey]: version, "../invalid": "bad" } }), {
+    headers: { "Content-Type": "application/json", ETag: '"manifest-1"' },
+  });
 } });
-assert.deepEqual(await reader(members, ["root", "alt"], "paladin"), { root: "", alt: "" });
-assert.equal(calls, 0, "missing token never breaks the plan or performs a request");
-process.env.DISCORD_BOT_TOKEN = "fake-test-token";
-const avatars = await reader(members, ["root", "alt", "solo"], "paladin");
-assert.equal(calls, 1, "one GET per unique Discord identity, including secondary accounts");
-assert.equal(avatars.root, avatars.alt); assert.equal(avatars.solo, "");
-await reader(members, ["root", "alt"], "paladin"); assert.equal(calls, 1, "successful avatars are cached");
-clock += 600001; await reader(members, ["root"], "paladin"); assert.equal(calls, 2);
-const failed = createForecastAvatarReader({ fetchImpl: async () => { throw Error("unavailable"); } });
-assert.equal((await failed(members, ["root"], "paladin")).root, "");
-let limitedCalls = 0;
-const limited = createForecastAvatarReader({ now: () => clock, fetchImpl: async () => { limitedCalls++; return { status: 429, json: async () => ({ retry_after: 30 }) }; } });
-await limited(members, ["root"], "paladin");
-await limited([...members, { id: "new", discord_id: secondOwner }], ["new"], "paladin");
-assert.equal(limitedCalls, 1, "rate limit pauses further calls, with no automatic retry loop");
-for (const [key, value] of Object.entries(savedEnv)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-
-const requests = [], results = [];
-const queue = createForecastAvatarQueue(async (body) => {
-  requests.push(body); return { avatars: Object.fromEntries(body.memberIds.map((id) => [id, `https://cdn.discordapp.com/embed/avatars/0.png`])) };
-}, (key, url) => results.push([key, url]));
-for (let i = 0; i < 25; i++) queue.add(`member-${i}`, `identity-${i}`);
-await wait(300);
-assert.deepEqual(requests.map((r) => r.memberIds.length), [12, 12, 1]);
-assert.ok(requests.every((r) => r.action === "load-survey-forecast-avatars"));
-assert.equal(results.length, 25);
-queue.add("another-alt", "identity-0"); assert.equal(results.length, 26); assert.equal(requests.length, 3);
-queue.dispose(); queue.add("hidden", "new"); await wait(80); assert.equal(requests.length, 3);
+const [avatars, duplicateRead] = await Promise.all([reader(members, ["root", "alt", "solo"]), reader(members, ["root"])]);
+assert.equal(avatars.root, expectedUrl); assert.equal(avatars.alt, expectedUrl); assert.equal(avatars.solo, "");
+assert.equal(duplicateRead.root, expectedUrl); assert.equal(calls, 1, "one manifest request shared by every visible avatar");
+await reader(members, ["root", "alt"]); assert.equal(calls, 1, "refresh inside cache lifetime does not fetch again");
+clock += 60001; unavailable = true;
+assert.equal((await reader(members, ["root"])).root, expectedUrl, "keep known URLs during a VPS outage");
+assert.equal(calls, 2);
+const absent = createForecastAvatarReader({ fetchImpl: async () => new Response("", { status: 404 }) });
+assert.equal((await absent(members, ["root"])).root, "", "missing initial sync uses a neutral icon, never Discord");
+const oversized = createForecastAvatarReader({ fetchImpl: async () => new Response("{}", { headers: { "Content-Length": "1048577" } }) });
+assert.equal((await oversized(members, ["root"])).root, "");
+const streamedOversize = createForecastAvatarReader({ fetchImpl: async () => new Response("x".repeat(1048577)) });
+assert.equal((await streamedOversize(members, ["root"])).root, "", "stream is bounded even without Content-Length");
+let conditionalCalls = 0;
+const conditional = createForecastAvatarReader({ now: () => clock, fetchImpl: async (url, options) => {
+  conditionalCalls++;
+  if (conditionalCalls === 1) return new Response(JSON.stringify({ version: 1, avatars: { [assetKey]: version } }), { headers: { ETag: '"index-1"' } });
+  assert.equal(options.headers["If-None-Match"], '"index-1"');
+  return new Response(null, { status: 304 });
+} });
+assert.equal((await conditional(members, ["root"])).root, expectedUrl);
+clock += 60001;
+assert.equal((await conditional(members, ["root"])).root, expectedUrl, "304 preserves the cached index without transferring its body");
+assert.equal(conditionalCalls, 2);
+const code = await readFile(new URL("../src/components/IntersaisonSurveyTwoWorkspace.jsx", import.meta.url), "utf8");
+assert.doesNotMatch(code, /createForecastAvatarQueue|load-survey-forecast-avatars/);
+const rowCode = await readFile(new URL("../src/components/IntersaisonForecastPlayer.jsx", import.meta.url), "utf8");
+assert.match(rowCode, /loading="lazy"/);
+assert.doesNotMatch(rowCode, /fetch\(|cdn\.discordapp/);
 await assert.rejects(runSurveyChoiceAction({ from() { throw Error("No query before authorization"); } }, { role: "member" }, { organization_key: "paladin" }, {}, "load-survey-forecast-avatars", { memberIds: ["root"] }), /admins/);
 for (const suffix of ["preflight", "verify"]) {
   const sql = await readFile(new URL(`intersaison_survey_forecast_roles_${suffix}.sql`, import.meta.url), "utf8");
@@ -90,4 +96,4 @@ for (const suffix of ["preflight", "verify"]) {
 }
 const migration = await readFile(new URL("intersaison_survey_forecast_roles.sql", import.meta.url), "utf8");
 assert.doesNotMatch(migration, /\b(?:update|insert into|delete from)\s+(?:public\.)?(?:guild_members|guild_dm_\w+|intersaison_survey_(?:responses|recipients|campaigns|objective_\w+))\b/i);
-console.log("Forecast tests passed: current guild, latest comment, 2nd choice, roles, alts, counts, avatar batching/cache/fallback/rate limit. No real network or sends.");
+console.log("Forecast tests passed: current guild, latest comment, 2nd choice, roles, alts, counts, VPS manifest/cache/fallback, zero per-avatar requests. No real network or sends.");

@@ -1,0 +1,8 @@
+FROM __API_BASE_IMAGE__
+WORKDIR /app
+COPY requirements.txt avatar-runtime-constraints.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN python -m pip check
+RUN python -c "import importlib.metadata as m; from pathlib import Path; from PIL import features; assert features.check('webp'); versions=[line.split('==') for line in Path('avatar-runtime-constraints.txt').read_text().splitlines() if line]; assert all(m.version(name)==version for name,version in versions)"
+COPY app ./app
+RUN python -m compileall -q app

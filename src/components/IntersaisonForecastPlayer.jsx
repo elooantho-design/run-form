@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Crown, MessageCircle, Shield, UserRound } from "lucide-react";
 import { PALADIN_GUILD_DISPLAY_NAMES } from "@/lib/guildDisplay";
 import { FORECAST_ROLES } from "@/lib/intersaisonForecast";
@@ -10,23 +10,12 @@ function DiscordAvatar({ url }) {
   </span>;
 }
 
-export default function IntersaisonForecastPlayer({ player, avatarUrl = "", onAvatarVisible, onOpen, onComment }) {
-  const row = useRef(null);
-  useEffect(() => {
-    if (!player.discordUserId || !onAvatarVisible) return undefined;
-    const visible = () => onAvatarVisible(player.memberKey, player.discordUserId);
-    if (typeof IntersectionObserver === "undefined") { queueMicrotask(visible); return undefined; }
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) { observer.disconnect(); visible(); }
-    }, { rootMargin: "64px" });
-    observer.observe(row.current);
-    return () => observer.disconnect();
-  }, [player.memberKey, player.discordUserId, onAvatarVisible]);
+export default function IntersaisonForecastPlayer({ player, avatarUrl = "", onOpen, onComment }) {
   const role = player.forecastRole || "member";
   const color = role === "leader" ? "border-yellow-600/60 bg-yellow-500/10" : role === "officer" ? "border-purple-500/50 bg-purple-500/10" : "border-zinc-800 bg-zinc-950";
   const comment = player.answer?.comment_text || "";
   const second = player.answer?.second_choice_guild_code;
-  return <div ref={row} className={`flex w-full min-w-0 items-start gap-1 rounded border p-1 ${color}`} data-forecast-role={role}>
+  return <div className={`flex w-full min-w-0 items-start gap-1 rounded border p-1 ${color}`} data-forecast-role={role}>
     <button type="button" onClick={onOpen} aria-label={`Ouvrir ${player.name}`} className="flex min-w-0 flex-1 items-start gap-2 rounded p-1 text-left text-sm hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-sky-400">
       <DiscordAvatar key={avatarUrl} url={avatarUrl} />
       <span className="min-w-0 flex-1">

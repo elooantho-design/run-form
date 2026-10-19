@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { ArrowLeftRight, ClipboardList, History, MessageCircle, Plus, RefreshCw, Send, Trash2, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import IntersaisonObjectivesPreparation from "@/components/IntersaisonObjectivesPreparation";
 import { PALADIN_GUILD_DISPLAY_NAMES } from "@/lib/guildDisplay";
 import IntersaisonForecastPlayer from "@/components/IntersaisonForecastPlayer";
-import { createForecastAvatarQueue, FORECAST_ROLES } from "@/lib/intersaisonForecast";
+import { resolveForecastAvatarUrl, FORECAST_ROLES } from "@/lib/intersaisonForecast";
 
 const guildLabel = (code) => code ? `${code} — ${PALADIN_GUILD_DISPLAY_NAMES[code] || code}` : "Non renseigné";
 const dateLabel = (value) => value ? new Date(value).toLocaleString("fr-FR") : "";
@@ -39,18 +39,8 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
   const [placementVersions, setPlacementVersions] = useState({ placement: 0, role: 0 });
   const [selectedPlayerKey, setSelectedPlayerKey] = useState(null);
   const [commentPlayerKey, setCommentPlayerKey] = useState(null);
-  const [avatars, setAvatars] = useState({});
-  const avatarQueue = useRef(null);
   const selectedPlayer = workspace?.forecast?.players.find((p) => p.memberKey === selectedPlayerKey);
   const commentPlayer = workspace?.forecast?.players.find((p) => p.memberKey === commentPlayerKey);
-  const showAvatars = pollNumber === 2 && forecastVisible;
-  useEffect(() => {
-    if (!showAvatars) return undefined;
-    const queue = createForecastAvatarQueue(request, (key, url) => setAvatars((prev) => ({ ...prev, [key]: url })));
-    avatarQueue.current = queue;
-    return () => { queue.dispose(); avatarQueue.current = null; };
-  }, [request, showAvatars, center?.season?.id]);
-  const onAvatarVisible = useCallback((memberId, identity) => avatarQueue.current?.add(memberId, identity), []);
 
   const campaign = center?.campaigns?.find((c) => c.pollNumber === pollNumber && c.status !== "cancelled");
   const candidates = workspace?.candidates?.[pollNumber] || [];
@@ -127,8 +117,8 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
     selectPlacementMember(player?.memberKey || ""); setSelectedPlayerKey(null); setSearch(""); setPlacementOpen(true);
   }
   function renderPlayer(player) {
-    return <IntersaisonForecastPlayer key={player.memberKey} player={player} avatarUrl={avatars[`${player.memberKey}:${player.discordUserId}`] || ""}
-      onAvatarVisible={onAvatarVisible} onOpen={() => { setSelectedPlayerKey(player.memberKey); void loadWorkspace(); }}
+    return <IntersaisonForecastPlayer key={player.memberKey} player={player} avatarUrl={resolveForecastAvatarUrl(player.avatarUrl)}
+      onOpen={() => { setSelectedPlayerKey(player.memberKey); void loadWorkspace(); }}
       onComment={() => { setCommentPlayerKey(player.memberKey); void loadWorkspace(); }} />;
   }
   if (workspace?.supported === false) return null;

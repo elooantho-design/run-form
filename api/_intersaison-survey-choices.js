@@ -59,11 +59,13 @@ export async function loadSurveyChoiceWorkspace(db, actor, organization, season)
       const included = new Set(recipients.filter((r) => r.survey_campaign_id === campaign.id).map((r) => r.member_key || r.member_id));
       return [campaign.poll_number, members.filter((m) => !included.has(m.id))];
     }));
+    const avatars = await readForecastAvatars(members, members.map((member) => member.id));
+    const forecastMembers = members.map((member) => ({ ...member, discord_avatar_url: avatars[member.id] || "" }));
     return {
       supported: true, schemaReady: true, forecastRolesReady, seasonId: season.id, members, candidates,
       campaigns, choiceCampaign,
       preview: await callChoiceRpc(db, "preview_intersaison_survey_two", { p_org: organization.id, p_season: season.id, p_actor: actor.id }),
-      forecast: buildSurveyChoiceForecast({ members, recipients: recipients.filter((r) => r.survey_campaign_id === choiceCampaign?.id),
+      forecast: buildSurveyChoiceForecast({ members: forecastMembers, recipients: recipients.filter((r) => r.survey_campaign_id === choiceCampaign?.id),
         responses, placements, roles, objectives: choiceCampaign?.objective_snapshot || {} }),
     };
   } catch (error) {

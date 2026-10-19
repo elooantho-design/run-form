@@ -95,6 +95,7 @@ export function buildSurveyChoiceForecast({ members = [], recipients = [], respo
   const people = new Map(members.map((m) => [m.id, {
     memberKey: m.id, memberId: m.id, name: m.watcher_name, currentGuild: m.guild_code, activeNow: true,
     discordUserId: getForecastDiscordId(m, membersById),
+    avatarUrl: m.discord_avatar_url || "",
   }]));
   const answers = new Map(responses.filter((r) => r.poll_number === 2 && r.is_current).map((r) => [r.survey_recipient_id, r]));
   for (const recipient of recipients) {

@@ -1,0 +1,10 @@
+# Add to the EXISTING API environment only after deployment approval.
+# Keep disabled during the first rollout. No automatic initial synchronization.
+DISCORD_AVATAR_WORKER_ENABLED=0
+DISCORD_AVATAR_REFRESH_SECONDS=604800
+DISCORD_AVATAR_SCAN_SECONDS=300
+DISCORD_AVATAR_REQUEST_SPACING=2
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+DISCORD_AVATAR_BOT_TOKEN=
+# Existing GVG_STORAGE_ROOT, GVG_ASSETS_ROOT and GVG_API_TOKEN remain unchanged.

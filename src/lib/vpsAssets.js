@@ -37,6 +37,11 @@ export function getPublicAssetsBaseUrl() {
   return PUBLIC_ASSETS_BASE_URL;
 }
 
+export function buildPublicDiscordAvatarUrl(key, version, options = {}) {
+  if (!/^[a-f0-9]{64}$/.test(String(key || "")) || !/^[a-f0-9]{16}$/.test(String(version || ""))) return "";
+  return `${buildAssetUrl(["assets", "discord-avatars", `${key}.webp`], options)}?v=${version}`;
+}
+
 export function resolveVpsAssetUrlForRuntime(url, options = {}) {
   const value = String(url || "").trim();
   if (!value || !PUBLIC_ASSETS_BASE_URL) return value;

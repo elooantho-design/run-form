@@ -1,0 +1,30 @@
+# Insert inside the existing HTTPS site BEFORE handle_path /assets/*.
+# The public index contains opaque hashes and content versions, no Discord IDs.
+handle /assets/discord-avatars/manifest.json {
+    root * /srv/storage
+    @discordAvatarManifest file {path}
+    handle @discordAvatarManifest {
+        header Cache-Control "public, max-age=60, must-revalidate"
+        file_server
+    }
+    handle {
+        header Cache-Control "no-store"
+        respond "Not found" 404
+    }
+}
+# Serve only complete, generated WebP files. Never cache a missing avatar for a year.
+handle_path /assets/discord-avatars/* {
+    root * /srv/storage/assets/discord-avatars
+    @cachedDiscordAvatar {
+        path_regexp cachedDiscordAvatar ^/[a-f0-9]{64}\.webp$
+        file {path}
+    }
+    handle @cachedDiscordAvatar {
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+    }
+    handle {
+        header Cache-Control "no-store"
+        respond "Not found" 404
+    }
+}
