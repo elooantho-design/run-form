@@ -168,5 +168,21 @@ assert.match(personalized.content,/Principal.*Imperatores \(G2\)/);assert.equal(
 assert.equal(describeIntersaisonDeliveryError("HTTP 403 - code 50278").kind,"intervention");
 assert.equal(describeIntersaisonDeliveryError("HTTP 503").kind,"temporary");assert.equal(describeIntersaisonDeliveryError("DELIVERY_UNCERTAIN").retry,false);
 await assert.rejects(retrySurveyChoiceRecipient({from:()=>{throw Error("must reject non-admin before any query");}},{id:admin,role:"member",guild_code:"G1"},{id:org,organization_key:"paladin"},{confirmed:true}),/admins/);
+const forecastBefore={responses:await query("select * from intersaison_survey_responses order by id"),
+  recipients:await query("select * from intersaison_survey_recipients order by id"),members:await query("select * from guild_members order by id"),
+  placements:await query("select * from intersaison_survey_placements order by id")};
+await db.exec(await readFile(new URL("intersaison_survey_forecast_roles.sql",import.meta.url),"utf8"));
+for(const [n,role] of [[10,"leader"],[11,"officer"]])await rpc("save_intersaison_survey_forecast_entry",{
+  ...context,p_season:season,p_member:id(n),p_guild:null,p_role:role,p_expected_placement_revision:0,p_expected_role_revision:0});
+const accountForecast=buildSurveyChoiceForecast({members:forecastBefore.members.filter(m=>m.guild_code!=="MAD G1"),
+  recipients:forecastBefore.recipients.filter(r=>r.survey_campaign_id===campaign),responses:forecastBefore.responses,
+  roles:await query("select * from intersaison_survey_forecast_roles order by id")});
+const rootForecast=accountForecast.players.find(p=>p.memberKey===id(10)),altForecast=accountForecast.players.find(p=>p.memberKey===id(11));
+assert.equal(rootForecast.discordUserId,altForecast.discordUserId);assert.equal(rootForecast.forecastRole,"leader");assert.equal(altForecast.forecastRole,"officer");
+assert.equal(rootForecast.targetGuild,"G2");assert.equal(altForecast.targetGuild,"G4");
+assert.deepEqual(await query("select * from intersaison_survey_responses order by id"),forecastBefore.responses);
+assert.deepEqual(await query("select * from intersaison_survey_recipients order by id"),forecastBefore.recipients);
+assert.deepEqual(await query("select * from guild_members order by id"),forecastBefore.members);
+assert.deepEqual(await query("select * from intersaison_survey_placements order by id"),forecastBefore.placements);
 await db.close();
 console.log("Account survey tests passed: legacy recovery, principal + secondary + three alts, ambiguity, independent edits, retry bounds, no resend, late account, classic uniqueness, tenant and preservation. No production access or Discord sends.");

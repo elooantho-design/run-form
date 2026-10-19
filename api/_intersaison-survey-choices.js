@@ -3,8 +3,10 @@ import { buildSurveyResponsesWorkbook } from "./_intersaison-surveys.js";
 import { buildSurveyChoiceForecast } from "../src/lib/intersaisonSurveyChoices.js";
 import { SURVEY_OBJECTIVE_GUILDS } from "../src/lib/intersaisonSurveyObjectives.js";
 import { PALADIN_GUILD_DISPLAY_NAMES } from "../src/lib/guildDisplay.js";
+import { FORECAST_ROLES } from "../src/lib/intersaisonForecast.js";
+import { readForecastAvatars } from "./_intersaison-forecast-avatars.js";
 
-const MEMBER_SELECT = "id,watcher_name,guild_code,discord_id,roster_status,community_access_type";
+const MEMBER_SELECT = "id,watcher_name,guild_code,discord_id,primary_member_id,roster_status,community_access_type";
 const CAMPAIGN_SELECT = "id,season_id,organization_id,poll_number,is_test,status,objective_snapshot,objective_version_id,guild_dm_campaign_id,launched_at,closed_at";
 function failure(message, statusCode = 409) { return Object.assign(new Error(message), { statusCode }); }
 function isMissingSchema(error) { return ["42P01", "42703", "PGRST202", "PGRST204", "PGRST205"].includes(error?.code); }
@@ -45,16 +47,24 @@ export async function loadSurveyChoiceWorkspace(db, actor, organization, season)
       .eq("organization_id", organization.id).eq("survey_campaign_id", choiceCampaign.id).eq("poll_number", 2).eq("is_current", true).order("id")) : [];
     const placements = await all(() => db.from("intersaison_survey_placements").select("*")
       .eq("organization_id", organization.id).eq("season_id", season.id).order("id"));
+    let roles = [], forecastRolesReady = true;
+    try {
+      roles = await all(() => db.from("intersaison_survey_forecast_roles").select("*")
+        .eq("organization_id", organization.id).eq("season_id", season.id).order("id"));
+    } catch (error) {
+      if (!isMissingSchema(error)) throw error;
+      forecastRolesReady = false;
+    }
     const candidates = Object.fromEntries(campaigns.map((campaign) => {
       const included = new Set(recipients.filter((r) => r.survey_campaign_id === campaign.id).map((r) => r.member_key || r.member_id));
       return [campaign.poll_number, members.filter((m) => !included.has(m.id))];
     }));
     return {
-      supported: true, schemaReady: true, seasonId: season.id, members, candidates,
+      supported: true, schemaReady: true, forecastRolesReady, seasonId: season.id, members, candidates,
       campaigns, choiceCampaign,
       preview: await callChoiceRpc(db, "preview_intersaison_survey_two", { p_org: organization.id, p_season: season.id, p_actor: actor.id }),
       forecast: buildSurveyChoiceForecast({ members, recipients: recipients.filter((r) => r.survey_campaign_id === choiceCampaign?.id),
-        responses, placements, objectives: choiceCampaign?.objective_snapshot || {} }),
+        responses, placements, roles, objectives: choiceCampaign?.objective_snapshot || {} }),
     };
   } catch (error) {
     if (isMissingSchema(error) || error.statusCode === 428) return { supported: true, schemaReady: false, seasonId: season.id };
@@ -65,8 +75,10 @@ export async function loadSurveyChoiceWorkspace(db, actor, organization, season)
 async function callChoiceRpc(db, name, args) {
   const { data, error } = await db.rpc(name, args);
   if (error) {
-    if (isMissingSchema(error)) throw failure(["inspect_intersaison_choice_recipient", "requeue_intersaison_choice_recipient"].includes(name)
-      ? "Migration intersaison_survey_accounts requise." : "Migration intersaison_survey_choices requise.", 428);
+    if (isMissingSchema(error)) throw failure(name === "save_intersaison_survey_forecast_entry"
+      ? "Migration intersaison_survey_forecast_roles requise."
+      : ["inspect_intersaison_choice_recipient", "requeue_intersaison_choice_recipient"].includes(name)
+        ? "Migration intersaison_survey_accounts requise." : "Migration intersaison_survey_choices requise.", 428);
     throw failure(error.message || "Action inter-saison impossible.", error.code === "42501" ? 403 : 409);
   }
   return data;
@@ -97,11 +109,19 @@ export async function retrySurveyChoiceRecipient(db, actor, organization, body) 
 }
 
 const CHOICE_ACTIONS = new Set(["load-survey-two-workspace", "preview-survey-two-launch", "launch-survey-two", "launch-survey-two-test",
-  "close-survey", "add-survey-members", "save-survey-placement"]);
+  "close-survey", "add-survey-members", "save-survey-placement", "save-survey-forecast-entry", "load-survey-forecast-avatars"]);
 export function isSurveyChoiceAction(action) { return CHOICE_ACTIONS.has(action); }
 
 export async function runSurveyChoiceAction(db, actor, organization, season, action, body) {
   await authorizeObjectives(db, actor, organization);
+  if (action === "load-survey-forecast-avatars") {
+    if (!Array.isArray(body.memberIds) || !body.memberIds.length || body.memberIds.length > 12
+      || body.memberIds.some((id) => typeof id !== "string")) throw failure("Lot d'avatars invalide.", 400);
+    const members = await loadSurveyChoiceRoster(db, organization);
+    const allowed = new Set(members.map((member) => member.id));
+    if (body.memberIds.some((id) => !allowed.has(id))) throw failure("Joueur hors des effectifs Paladin.", 403);
+    return { avatars: await readForecastAvatars(members, body.memberIds, organization.id) };
+  }
   if (action === "load-survey-two-workspace") return { workspace: await loadSurveyChoiceWorkspace(db, actor, organization, season) };
   if (!season) throw failure("Aucune inter-saison active.");
   const context = { p_org: organization.id, p_actor: actor.id };
@@ -121,6 +141,12 @@ export async function runSurveyChoiceAction(db, actor, organization, season, act
   } else if (action === "add-survey-members") {
     if (!Array.isArray(body.memberIds) || !body.memberIds.length || body.memberIds.length > 250) throw failure("Sélection de membres invalide.", 400);
     result = await callChoiceRpc(db, "add_intersaison_survey_members", { ...context, p_campaign: body.campaignId, p_members: body.memberIds });
+  } else if (action === "save-survey-forecast-entry") {
+    if (!Object.hasOwn(FORECAST_ROLES, body.forecastRole) || !Number.isInteger(body.expectedRevision) || body.expectedRevision < 0
+      || !Number.isInteger(body.expectedRoleRevision) || body.expectedRoleRevision < 0) throw failure("Rôle ou version prévisionnelle invalide.", 400);
+    result = await callChoiceRpc(db, "save_intersaison_survey_forecast_entry", { ...context, p_season: season.id,
+      p_member: body.memberId, p_guild: body.guildCode || null, p_role: body.forecastRole,
+      p_expected_placement_revision: body.expectedRevision, p_expected_role_revision: body.expectedRoleRevision });
   } else if (action === "save-survey-placement") {
     if (!Number.isInteger(body.expectedRevision) || body.expectedRevision < 0) throw failure("Version du placement requise.", 400);
     result = await callChoiceRpc(db, "save_intersaison_survey_placement", { ...context, p_season: season.id,

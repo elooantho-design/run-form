@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeftRight, ClipboardList, History, MessageCircle, Plus, RefreshCw, Send, Trash2, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import IntersaisonObjectivesPreparation from "@/components/IntersaisonObjectivesPreparation";
 import { PALADIN_GUILD_DISPLAY_NAMES } from "@/lib/guildDisplay";
+import IntersaisonForecastPlayer from "@/components/IntersaisonForecastPlayer";
+import { createForecastAvatarQueue, FORECAST_ROLES } from "@/lib/intersaisonForecast";
 
 const guildLabel = (code) => code ? `${code} — ${PALADIN_GUILD_DISPLAY_NAMES[code] || code}` : "Non renseigné";
 const dateLabel = (value) => value ? new Date(value).toLocaleString("fr-FR") : "";
@@ -33,7 +35,22 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
   const [placementOpen, setPlacementOpen] = useState(false);
   const [placementMemberId, setPlacementMemberId] = useState("");
   const [placementGuild, setPlacementGuild] = useState("G1");
-  const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [placementRole, setPlacementRole] = useState("member");
+  const [placementVersions, setPlacementVersions] = useState({ placement: 0, role: 0 });
+  const [selectedPlayerKey, setSelectedPlayerKey] = useState(null);
+  const [commentPlayerKey, setCommentPlayerKey] = useState(null);
+  const [avatars, setAvatars] = useState({});
+  const avatarQueue = useRef(null);
+  const selectedPlayer = workspace?.forecast?.players.find((p) => p.memberKey === selectedPlayerKey);
+  const commentPlayer = workspace?.forecast?.players.find((p) => p.memberKey === commentPlayerKey);
+  const showAvatars = pollNumber === 2 && forecastVisible;
+  useEffect(() => {
+    if (!showAvatars) return undefined;
+    const queue = createForecastAvatarQueue(request, (key, url) => setAvatars((prev) => ({ ...prev, [key]: url })));
+    avatarQueue.current = queue;
+    return () => { queue.dispose(); avatarQueue.current = null; };
+  }, [request, showAvatars, center?.season?.id]);
+  const onAvatarVisible = useCallback((memberId, identity) => avatarQueue.current?.add(memberId, identity), []);
 
   const campaign = center?.campaigns?.find((c) => c.pollNumber === pollNumber && c.status !== "cancelled");
   const candidates = workspace?.candidates?.[pollNumber] || [];
@@ -48,12 +65,12 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
   useEffect(() => {
     if (pollNumber !== 2) return undefined;
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible" || busy || addOpen || placementOpen || launchPreview || selectedPlayer) return;
+      if (document.visibilityState !== "visible" || busy || addOpen || placementOpen || launchPreview || selectedPlayer || commentPlayer) return;
       void loadWorkspace();
       void onRefresh?.();
     }, 30000);
     return () => window.clearInterval(timer);
-  }, [pollNumber, busy, addOpen, placementOpen, launchPreview, selectedPlayer, loadWorkspace, onRefresh]);
+  }, [pollNumber, busy, addOpen, placementOpen, launchPreview, selectedPlayer, commentPlayer, loadWorkspace, onRefresh]);
 
   async function perform(payload, success) {
     if (busy) return null;
@@ -93,12 +110,26 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
     const memberId = player?.memberKey || placementMemberId;
     const existing = workspace.forecast?.players.find((p) => p.memberKey === memberId);
     if (remove && !window.confirm("Retirer ce placement manuel ? Son historique et la réponse du joueur seront conservés.")) return;
-    const data = await perform({ action: "save-survey-placement", memberId, guildCode: remove ? null : placementGuild,
-      expectedRevision: existing?.placementRevision || 0 }, remove ? "Placement retiré. Historique conservé." : "Placement administratif enregistré.");
-    if (data) { setPlacementOpen(false); setSelectedPlayer(null); }
+    const payload = remove || !workspace.forecastRolesReady
+      ? { action: "save-survey-placement", memberId, guildCode: remove ? null : placementGuild || null,
+        expectedRevision: remove ? existing?.placementRevision || 0 : placementVersions.placement }
+      : { action: "save-survey-forecast-entry", memberId, guildCode: placementGuild || null, forecastRole: placementRole,
+        expectedRevision: placementVersions.placement, expectedRoleRevision: placementVersions.role };
+    const data = await perform(payload, remove ? "Placement retiré. Historique conservé." : "Plan prévisionnel enregistré.");
+    if (data) { setPlacementOpen(false); setSelectedPlayerKey(null); }
+  }
+  function selectPlacementMember(memberId) {
+    const player = workspace?.forecast?.players.find((p) => p.memberKey === memberId);
+    setPlacementMemberId(memberId); setPlacementGuild(player?.manual?.guild_code || ""); setPlacementRole(player?.forecastRole || "member");
+    setPlacementVersions({ placement: player?.placementRevision || 0, role: player?.roleRevision || 0 });
   }
   function openPlacement(player = null) {
-    setPlacementMemberId(player?.memberKey || ""); setPlacementGuild(player?.targetGuild || "G1"); setSearch(""); setPlacementOpen(true);
+    selectPlacementMember(player?.memberKey || ""); setSelectedPlayerKey(null); setSearch(""); setPlacementOpen(true);
+  }
+  function renderPlayer(player) {
+    return <IntersaisonForecastPlayer key={player.memberKey} player={player} avatarUrl={avatars[`${player.memberKey}:${player.discordUserId}`] || ""}
+      onAvatarVisible={onAvatarVisible} onOpen={() => { setSelectedPlayerKey(player.memberKey); void loadWorkspace(); }}
+      onComment={() => { setCommentPlayerKey(player.memberKey); void loadWorkspace(); }} />;
   }
   if (workspace?.supported === false) return null;
   const ready = workspace?.schemaReady && workspace?.seasonId;
@@ -142,12 +173,12 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
             <div className="flex justify-between gap-2"><h3 className="font-semibold text-zinc-100">{guild.name}</h3><span className={`shrink-0 text-sm ${guild.overCapacity ? "text-red-200" : "text-zinc-400"}`}>{guild.count} / 30</span></div>
             <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-sm text-zinc-400">{guild.objective || "Objectifs non publiés"}</div>
           </div>
-          <div className="max-h-96 space-y-1 overflow-y-auto p-2">{guild.players.map((player) => <ForecastPlayer key={player.memberKey} player={player} onClick={() => setSelectedPlayer(player)} />)}
+          <div className="max-h-96 space-y-1 overflow-y-auto p-2">{guild.players.map(renderPlayer)}
             {!guild.players.length ? <div className="p-2 text-sm text-zinc-500">Aucun placement</div> : null}</div>
         </div>)}
       </div>
       <div className="border-t border-zinc-800 pt-4"><h3 className="mb-3 text-sm font-semibold text-zinc-300">Sans affectation prévisionnelle ({workspace.forecast.unassigned.length})</h3>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{workspace.forecast.unassigned.map((player) => <ForecastPlayer key={player.memberKey} player={player} onClick={() => setSelectedPlayer(player)} />)}</div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{workspace.forecast.unassigned.map(renderPlayer)}</div>
       </div>
     </> : null}
     <Dialog open={Boolean(launchPreview)} onOpenChange={(open) => { if (!open) setLaunchPreview(null); }}>
@@ -181,27 +212,41 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
       <DialogContent className="max-h-[90dvh] overflow-y-auto border-zinc-700 bg-zinc-950 text-zinc-100">
         <DialogHeader><DialogTitle>Placement administratif</DialogTitle><DialogDescription className="text-zinc-400">Plan prévisionnel uniquement · aucun transfert réel</DialogDescription></DialogHeader>
         {dialogError}<SearchField value={search} onChange={setSearch} />
-        <label className="text-sm">Joueur<select aria-label="Joueur du dashboard" value={placementMemberId} onChange={(e) => setPlacementMemberId(e.target.value)} className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 p-2">
+        <label className="text-sm">Joueur<select aria-label="Joueur du dashboard" value={placementMemberId} onChange={(e) => selectPlacementMember(e.target.value)} className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 p-2">
           <option value="">Sélectionner un joueur</option>{matchingMembers.map((m) => <option key={m.id} value={m.id}>{m.watcher_name} · {m.guild_code}</option>)}
         </select></label>
         <label className="text-sm">Guilde prévisionnelle<select aria-label="Guilde prévisionnelle" value={placementGuild} onChange={(e) => setPlacementGuild(e.target.value)} className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 p-2">
+          <option value="">Suivre le premier choix</option>
           {Object.keys(PALADIN_GUILD_DISPLAY_NAMES).map((code) => <option key={code} value={code}>{guildLabel(code)}</option>)}
         </select></label>
-        <Button type="button" disabled={busy || !placementMemberId} onClick={() => savePlacement(null)}>Enregistrer le placement</Button>
+        <label className="text-sm">Rôle prévisionnel<select aria-label="Rôle prévisionnel" value={placementRole} onChange={(e) => setPlacementRole(e.target.value)} disabled={!workspace?.forecastRolesReady} className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 p-2 disabled:opacity-50">
+          {Object.entries(FORECAST_ROLES).map(([role, label]) => <option key={role} value={role}>{label}</option>)}
+        </select></label>
+        {!workspace?.forecastRolesReady ? <div className="text-xs text-amber-200">Migration des rôles prévisionnels requise. Les placements existants restent disponibles.</div> : null}
+        <Button type="button" disabled={busy || !placementMemberId || (!workspace?.forecastRolesReady && !placementGuild)} onClick={() => savePlacement(null)}>Enregistrer</Button>
       </DialogContent>
     </Dialog>
-    <Dialog open={Boolean(selectedPlayer)} onOpenChange={(open) => { if (!open) setSelectedPlayer(null); }}>
+    <Dialog open={Boolean(commentPlayer)} onOpenChange={(open) => { if (!open) setCommentPlayerKey(null); }}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto border-zinc-700 bg-zinc-950 text-zinc-100 sm:max-w-xl">
+        <DialogHeader><DialogTitle>Commentaire de {commentPlayer?.name}</DialogTitle><DialogDescription className="text-zinc-400">Dernière réponse · {dateLabel(commentPlayer?.answer?.responded_at)}</DialogDescription></DialogHeader>
+        <div className="whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere]">{commentPlayer?.answer?.comment_text || "Aucun commentaire."}</div>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={Boolean(selectedPlayer)} onOpenChange={(open) => { if (!open) setSelectedPlayerKey(null); }}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto border-zinc-700 bg-zinc-950 text-zinc-100 sm:max-w-2xl">
-        <DialogHeader><DialogTitle>{selectedPlayer?.name}</DialogTitle><DialogDescription className="text-zinc-400">Guilde d’origine : {guildLabel(selectedPlayer?.originGuild)}</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>{selectedPlayer?.name}</DialogTitle><DialogDescription className="text-zinc-400">Guilde active : {guildLabel(selectedPlayer?.currentGuild)}</DialogDescription></DialogHeader>
         {dialogError}
         {selectedPlayer?.answer ? <section className="space-y-3 border-b border-zinc-800 pb-3"><h3 className="flex items-center gap-2 font-semibold"><MessageCircle className="h-4 w-4" /> Choix exprimé par le joueur</h3><SurveyChoiceAnswer response={selectedPlayer.answer} /><div className="text-xs text-zinc-500">{dateLabel(selectedPlayer.answer.responded_at)}</div></section> : <div className="text-sm text-zinc-400">Aucune réponse au sondage.</div>}
         <section className="space-y-2"><h3 className="font-semibold">Placement administratif</h3>
+          <div className="text-sm text-zinc-300">Rôle prévisionnel : {FORECAST_ROLES[selectedPlayer?.forecastRole] || "Membre"}</div>
+          {selectedPlayer?.forecastRoleEvent ? <div className="text-xs text-zinc-400">{selectedPlayer.forecastRoleEvent.actor_name} · {dateLabel(selectedPlayer.forecastRoleEvent.created_at)}</div> : null}
           {selectedPlayer?.manual ? <div className="text-sm">{guildLabel(selectedPlayer.manual.guild_code)}<div className="mt-1 text-xs text-zinc-400">{selectedPlayer.manual.actor_name} · {dateLabel(selectedPlayer.manual.created_at)}</div></div> : <div className="text-sm text-zinc-400">Aucun placement manuel actif.</div>}
           {selectedPlayer?.hasDifference ? <div className="text-sm text-amber-200">Le choix du joueur diffère du placement administratif.</div> : null}
           <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" className={buttonStyle} disabled={busy || !selectedPlayer?.activeNow} onClick={() => openPlacement(selectedPlayer)}><ArrowLeftRight className="h-4 w-4" /> Modifier le placement</Button>
             {selectedPlayer?.manual ? <Button type="button" variant="outline" className={buttonStyle} disabled={busy} onClick={() => savePlacement(selectedPlayer, true)}><Trash2 className="h-4 w-4" /> Retirer</Button> : null}</div>
         </section>
         {selectedPlayer?.manualHistory?.length ? <details className="border-t border-zinc-800 pt-3"><summary className="cursor-pointer text-sm"><History className="mr-2 inline h-4 w-4" />Historique des placements</summary><ul className="mt-2 space-y-2 text-xs text-zinc-400">{selectedPlayer.manualHistory.map((e) => <li key={e.id}>{e.action === "set" ? guildLabel(e.guild_code) : "Placement retiré"} · {e.actor_name} · {dateLabel(e.created_at)}</li>)}</ul></details> : null}
+        {selectedPlayer?.forecastRoleHistory?.length ? <details className="border-t border-zinc-800 pt-3"><summary className="cursor-pointer text-sm">Historique des rôles prévisionnels</summary><ul className="mt-2 space-y-2 text-xs text-zinc-400">{selectedPlayer.forecastRoleHistory.map((event) => <li key={event.id}>{FORECAST_ROLES[event.forecast_role]} · {event.actor_name} · {dateLabel(event.created_at)}</li>)}</ul></details> : null}
       </DialogContent>
     </Dialog>
   </section>;
@@ -209,10 +254,4 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
 
 function SearchField({ value, onChange }) {
   return <input type="search" aria-label="Rechercher un joueur" placeholder="Rechercher un joueur" value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100" />;
-}
-function ForecastPlayer({ player, onClick }) {
-  return <button type="button" onClick={onClick} className={`w-full min-w-0 rounded border p-2 text-left text-sm ${player.hasDifference ? "border-amber-500/50 bg-amber-500/10" : "border-zinc-800 bg-zinc-950"}`}>
-    <span className="block break-words font-medium text-zinc-100">{player.name}</span>
-    <span className="mt-1 block text-xs text-zinc-400">{player.manual ? "Placement admin" : player.answer ? "Choix du joueur" : "Sans réponse"}{!player.activeNow ? " · Absent des effectifs actuels" : ""}{player.hasDifference ? " · Choix différent" : ""}</span>
-  </button>;
 }

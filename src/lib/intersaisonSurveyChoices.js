@@ -1,6 +1,17 @@
 import { PALADIN_GUILD_DISPLAY_NAMES } from "./guildDisplay.js";
 import { SURVEY_OBJECTIVE_GUILDS } from "./intersaisonSurveyObjectives.js";
 
+export const FORECAST_ROLES = { member: "Membre", officer: "Officier", leader: "Leader" };
+
+export function getForecastDiscordId(member, membersById) {
+  const root = member?.primary_member_id ? membersById.get(member.primary_member_id) : member;
+  if (!root || root.primary_member_id) return "";
+  const id = String(root.discord_id || "").trim();
+  const own = String(member?.discord_id || "").trim();
+  if (!/^\d{15,22}$/.test(id) || (member?.primary_member_id && own && own !== id)) return "";
+  return id;
+}
+
 export const SURVEY_CHOICE_PREFIX = "interchoice:";
 export const SURVEY_CHOICE_SUBMIT_PREFIX = "interchoice_submit:";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -79,9 +90,11 @@ export async function saveSurveyChoiceResponse(supabase, { customId, userId, int
 }
 
 // The forecast is a projection only: a manual decision never becomes a survey answer.
-export function buildSurveyChoiceForecast({ members = [], recipients = [], responses = [], placements = [], objectives = {} } = {}) {
+export function buildSurveyChoiceForecast({ members = [], recipients = [], responses = [], placements = [], roles = [], objectives = {} } = {}) {
+  const membersById = new Map(members.map((m) => [m.id, m]));
   const people = new Map(members.map((m) => [m.id, {
     memberKey: m.id, memberId: m.id, name: m.watcher_name, currentGuild: m.guild_code, activeNow: true,
+    discordUserId: getForecastDiscordId(m, membersById),
   }]));
   const answers = new Map(responses.filter((r) => r.poll_number === 2 && r.is_current).map((r) => [r.survey_recipient_id, r]));
   for (const recipient of recipients) {
@@ -101,12 +114,20 @@ export function buildSurveyChoiceForecast({ members = [], recipients = [], respo
     person.placementRevision = event.revision;
     people.set(key, person);
   }
+  for (const event of [...roles].sort((a, b) => a.revision - b.revision)) {
+    const person = people.get(event.member_key);
+    if (!person || !Object.hasOwn(FORECAST_ROLES, event.forecast_role)) continue;
+    person.forecastRoleEvent = event;
+    person.forecastRoleHistory = [...(person.forecastRoleHistory || []), event];
+  }
   const rows = [...people.values()].map((person) => {
     const firstChoice = person.answer?.first_choice_guild_code || "";
     const targetGuild = person.manual?.guild_code || firstChoice;
     return { ...person, firstChoice, targetGuild, originGuild: person.originGuild || person.currentGuild || "",
       hasDifference: Boolean(person.manual && firstChoice && person.manual.guild_code !== firstChoice),
       placementRevision: person.placementRevision || 0,
+      forecastRole: person.forecastRoleEvent?.forecast_role || "member",
+      roleRevision: person.forecastRoleEvent?.revision || 0,
     };
   }).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "fr"));
   return {
