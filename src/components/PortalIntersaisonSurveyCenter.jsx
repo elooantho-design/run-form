@@ -43,7 +43,9 @@ async function callPortalIntersaison(payload) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error || `Erreur Portal (${response.status})`);
+    const error = new Error(data?.error || `Erreur Portal (${response.status})`);
+    error.statusCode = response.status;
+    throw error;
   }
   return data;
 }
@@ -302,7 +304,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
   }
 
   async function queueCollectiveReminders() {
-    if (!selectedCampaign?.id || reminding) return;
+    if (!selectedCampaign?.id || reminding || selectedPoll === 2) return;
     const confirmed = window.confirm("Lancer les relances collectives pour les joueurs sans réponse ?");
     if (!confirmed) return;
 
@@ -387,7 +389,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               Actualiser
             </Button>
-            {selectedCampaign?.status === "open" ? (
+            {selectedCampaign?.status === "open" && selectedPoll !== 2 ? (
               <Button
                 type="button"
                 variant="outline"
@@ -864,7 +866,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 ) : selectedPoll === 2 && selectedMember.delivery.color === "red" ? (
                   <IntersaisonRecipientRecovery key={selectedMember.surveyRecipient?.id} recipientId={selectedMember.surveyRecipient?.id} request={callPortalIntersaison}
                     busy={reminding} onRetry={(fingerprint) => queueRecipient(selectedMember, fingerprint)} />
-                ) : selectedMember.delivery.color === "orange" ? (
+                ) : selectedPoll !== 2 && selectedMember.delivery.color === "orange" ? (
                   <Button
                     type="button"
                     className="w-full rounded-lg bg-amber-500 text-zinc-950 hover:bg-amber-400"

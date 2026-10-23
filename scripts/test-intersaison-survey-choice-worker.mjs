@@ -58,9 +58,12 @@ const state={campaign:{...choiceCampaign},recipient:{id,campaign_id:campaign.id,
 class Query {
   constructor(table){this.table=table;this.filters=[];this.patch=null;}
   select(){return this;} update(patch){this.patch=patch;return this;} eq(k,v){this.filters.push(r=>r[k]===v);return this;}
-  in(k,v){this.filters.push(r=>v.includes(r[k]));return this;} order(){return this;} limit(){return this;}
+  in(k,v){this.filters.push(r=>v.includes(k==="guild_dm_campaigns.status" ? state.campaign.status : r[k]));return this;} order(){return this;} limit(){return this;}
   run(single=false){const source=this.table==="guild_dm_campaigns" ? [state.campaign] : state.recipients || [state.recipient];
+    if(this.patch?.status==="sending" && this.table==="guild_dm_recipients" && state.bumpGeneration){state.recipient.reminder_count++;state.bumpGeneration=false;}
     const rows=source.filter(row=>this.filters.every(f=>f(row)));
+    if(this.patch?.status==="sending" && this.table==="guild_dm_recipients" && state.confirmClaimError){state.recipient.status="confirmed";state.confirmClaimError=false;return Promise.resolve({data:null,error:{message:"Claim failed after concurrent confirmation"}});}
+    if(this.patch?.status==="sending" && rows.some(r=>r.id===state.claimErrorId)) return Promise.resolve({data:null,error:{message:"Account outside campaign organization"}});
     if(this.patch?.status==="sent" && state.failPersist){state.failPersist=false;return Promise.resolve({data:null,error:{message:"mock persistence failure"}});}
     if(this.patch) rows.forEach(r=>Object.assign(r,this.patch));
     const data=rows.map(r=>({...r,...(this.table==="guild_dm_recipients" ? {guild_dm_campaigns:{...state.campaign}} : {})}));
@@ -68,7 +71,20 @@ class Query {
   maybeSingle(){return this.run(true);}single(){return this.run(true);}then(resolve,reject){return this.run().then(resolve,reject);}
 }
 let sends=0;
-const db={from:table=>new Query(table),rpc:async(name,args)=>{assert.equal(name,"check_intersaison_choice_delivery");assert.ok(args.p_dm_recipient);return {data:true,error:null};}};
+const db={from:table=>new Query(table),rpc:async(name,args)=>{
+  if(name==="intersaison_choice_delivery_attempts") {
+    assert.equal(args.p_dm_recipient,state.recipient.id);assert.equal(args.p_reminder,state.recipient.reminder_count);
+    state.budgetCalls=(state.budgetCalls||0)+1;
+    return {data:state.waveAttempts||1,error:null};
+  }
+  if(name==="refresh_intersaison_choice_delivery_counters") {
+    assert.equal(args.p_campaign,state.campaign.id);
+    const recipients=state.recipients||[state.recipient];
+    state.campaign.status=recipients.some(r=>["queued","sending"].includes(r.status))?"sending":recipients.some(r=>r.status==="failed")?"partial":"completed";
+    return {data:null,error:null};
+  }
+  assert.equal(name,"check_intersaison_choice_delivery");assert.ok(args.p_dm_recipient);return {data:true,error:null};
+}};
 const client={users:{fetch:async(uid)=>{assert.equal(uid,user);return {send:async(data)=>{sends++;assert.equal(data.components[0].components[0].label,"Choisir ma guilde");return {id:"fake-message"};}};}}};
 await worker.processGuildDmBatch({client,supabase:db});
 await worker.processGuildDmBatch({client,supabase:db});
@@ -101,11 +117,82 @@ assert.equal(messages.length,2,"two game accounts sharing one Discord owner each
 assert.match(messages[0].content,/Compte Alpha/);assert.match(messages[1].content,/Compte Beta/);
 assert.notEqual(messages[0].components[0].components[0].custom_id,messages[1].components[0].components[0].custom_id);
 state.recipients=null;
+state.campaign.interaction_type="intersaison_choice";
+state.campaign.status="queued";state.recipient.status="queued";
+let authorizationCalls=0,lateSends=0;
+const responseDuringLookup={users:{fetch:async()=>{
+  state.recipient.status="confirmed";state.recipient.confirmed_at="2026-10-23T12:00:00Z";
+  return {send:async()=>{lateSends++;return {id:"must-not-send"};}};
+}}};
+await worker.processGuildDmBatch({client:responseDuringLookup,supabase:{...db,rpc:async(name,args)=>{
+  if(name==="refresh_intersaison_choice_delivery_counters") return db.rpc(name,args);
+  authorizationCalls++;return {data:state.recipient.status==="sending",error:null};
+}}});
+assert.equal(authorizationCalls,2,"delivery is authorized again after the slow Discord lookup");
+assert.equal(lateSends,0,"a response received during preparation suppresses the reminder");
+assert.equal(state.recipient.status,"confirmed","failed authorization cannot downgrade a response");
+state.campaign.status="queued";state.recipient.status="queued";
+const confirmsWhileSending={users:{fetch:async()=>({send:async()=>{
+  state.recipient.status="confirmed";return {id:"accepted-before-answer-arrived"};
+}})}};
+await worker.processGuildDmBatch({client:confirmsWhileSending,supabase:db});
+assert.equal(state.recipient.status,"confirmed","a response arriving during the outgoing request stays confirmed");
+assert.equal(state.recipient.discord_message_id,"accepted-before-answer-arrived","delivery metadata is still recorded");
+state.campaign.status="queued";state.recipient.status="queued";
+const closesWhileSending={users:{fetch:async()=>({send:async()=>{
+  state.recipient.status="cancelled";return {id:"accepted-during-closure"};
+}})}};
+await worker.processGuildDmBatch({client:closesWhileSending,supabase:db});
+assert.equal(state.recipient.status,"cancelled","campaign closure is not undone by the delivery result");
+assert.equal(state.recipient.discord_message_id,"accepted-during-closure","an accepted message is recorded even during closure");
+state.campaign.status="queued";state.recipient.status="queued";state.recipient.send_attempts=0;
+await worker.processGuildDmBatch({client:{users:{fetch:async()=>({send:async()=>{
+  state.recipient.status="confirmed";throw {status:429,retry_after:0.001};
+}})}},supabase:db});
+assert.equal(state.recipient.status,"confirmed","rate-limit retries never requeue a player who has answered");
+state.campaign.status="queued";state.recipient.status="queued";
+let permanentSends=0;
+const permanentFailure={users:{fetch:async()=>({send:async()=>{permanentSends++;throw {status:403,code:50007,message:"Cannot send messages to this user"};}})}};
+await worker.processGuildDmBatch({client:permanentFailure,supabase:db});
+await worker.processGuildDmBatch({client:permanentFailure,supabase:db});
+assert.equal(permanentSends,1,"permanent failures are not automatically retried");
+assert.equal(state.recipient.status,"failed");
+state.campaign.status="queued";state.recipient.status="queued";state.recipient.reminder_count=1;state.bumpGeneration=true;
+let staleSends=0;
+await worker.processGuildDmBatch({client:{users:{fetch:async()=>({send:async()=>{staleSends++;return {id:"stale"};}})}},supabase:db});
+assert.equal(staleSends,0,"a stale worker snapshot cannot claim a different reminder generation");
+assert.equal(state.recipient.status,"queued");assert.equal(state.recipient.reminder_count,2);
+state.campaign.status="queued";state.recipient.status="queued";
+state.recipients=[{...state.recipient,id,status:"queued"},{...state.recipient,id:altId,status:"queued"}];
+state.claimErrorId=id;
+let validAfterFailure=0;
+await worker.processGuildDmBatch({client:{users:{fetch:async()=>({send:async()=>{validAfterFailure++;return {id:"valid-account"};}})}},supabase:db});
+assert.equal(validAfterFailure,1,"an invalid account does not interrupt delivery of the other accounts");
+assert.equal(state.recipients[0].status,"failed");assert.equal(state.recipients[1].status,"sent");
+state.claimErrorId=null;state.recipients=null;
+state.campaign.status="queued";state.recipient.status="queued";
+let concurrentSends=0;
+const concurrentClient={users:{fetch:async()=>({send:async()=>{concurrentSends++;return {id:"concurrent"};}})}};
+await Promise.all([worker.processGuildDmBatch({client:concurrentClient,supabase:db}),worker.processGuildDmBatch({client:concurrentClient,supabase:db})]);
+assert.equal(concurrentSends,1,"overlapping worker batches still claim a queued account only once");
+state.campaign.status="queued";state.recipient.status="queued";state.recipient.send_attempts=20;state.recipient.reminder_count=6;state.waveAttempts=1;
+const reminderRateLimit={users:{fetch:async()=>({send:async()=>{throw {status:429,retry_after:0.001};}})}};
+await worker.processGuildDmBatch({client:reminderRateLimit,supabase:db});
+assert.equal(state.recipient.status,"queued","successful previous waves do not exhaust the new wave retry budget");
+assert.equal(state.recipient.send_attempts,21,"cumulative delivery history is not reset");
+state.waveAttempts=5;
+await worker.processGuildDmBatch({client:reminderRateLimit,supabase:db});
+assert.equal(state.recipient.status,"failed","each reminder wave still stops after five attempts");
+assert.equal(state.budgetCalls,2);
 for(const [type,label] of [["ack","J'ai lu"],["intersaison_objectives","Donner mon avis"]]) {
   state.campaign.interaction_type=type;state.campaign.status="queued";state.recipient.status="queued";
   let legacySends=0;
   await worker.processGuildDmBatch({supabase:{...db,rpc:()=>{throw Error("Account RPC must not affect legacy campaigns");}},
     client:{users:{fetch:async()=>({send:async(data)=>{legacySends++;assert.equal(data.components[0].toJSON().components[0].label,label);return {id:"legacy-mock"};}})}}});
   assert.equal(legacySends,1);
+  state.campaign.status="queued";state.recipient.status="queued";state.confirmClaimError=true;
+  await worker.processGuildDmBatch({supabase:{...db,rpc:()=>{throw Error("No choice RPC for a legacy claim failure");}},
+    client:{users:{fetch:async()=>{throw Error("A failed claim must never fetch the Discord user");}}}});
+  assert.equal(state.recipient.status,"confirmed",`${type} claim failure preserves a concurrent confirmation`);
 }
 console.log(`Bot worker tests passed with discord.js ${discord.version}: ack, survey 1, survey 2, modal, security, save errors, CAS, rate limits. All sends mocked.`);

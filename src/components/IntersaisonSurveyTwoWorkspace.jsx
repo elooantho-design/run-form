@@ -1,15 +1,32 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { ArrowLeftRight, ClipboardList, History, MessageCircle, Plus, RefreshCw, Send, Trash2, Users, XCircle } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeftRight, Bell, ClipboardList, History, MessageCircle, Plus, RefreshCw, Send, Trash2, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import IntersaisonObjectivesPreparation from "@/components/IntersaisonObjectivesPreparation";
 import { PALADIN_GUILD_DISPLAY_NAMES } from "@/lib/guildDisplay";
 import IntersaisonForecastPlayer from "@/components/IntersaisonForecastPlayer";
-import { resolveForecastAvatarUrl, FORECAST_ROLES } from "@/lib/intersaisonForecast";
+import { getSurveyTwoNonRespondents, resolveForecastAvatarUrl, FORECAST_ROLES } from "@/lib/intersaisonForecast";
 
 const guildLabel = (code) => code ? `${code} — ${PALADIN_GUILD_DISPLAY_NAMES[code] || code}` : "Non renseigné";
 const dateLabel = (value) => value ? new Date(value).toLocaleString("fr-FR") : "";
 const buttonStyle = "border-zinc-700 bg-zinc-900 text-zinc-100 hover:bg-zinc-800";
+const reminderCountLabels = [
+  ["Destinataires de la campagne", "total"], ["Destinataires sans réponse", "nonRespondents"],
+  ["Relances éligibles", "eligible"], ["Déjà répondants, non relancés", "responded"],
+  ["En attente ou en cours, non relancés", "pending"], ["Comptes exclus", "excluded"],
+  ["Envois en échec, non relancés", "failed"], ["IDs absents ou invalides, non relancés", "invalid"],
+  ["Comptes inactifs, non relancés", "inactive"],
+];
+
+function isGlobalReminderPreview(preview, campaignId) {
+  const guilds = Object.keys(PALADIN_GUILD_DISPLAY_NAMES);
+  return preview?.campaignId === campaignId && typeof preview.fingerprint === "string" && Boolean(preview.fingerprint)
+    && typeof preview.canQueue === "boolean" && Array.isArray(preview.blockers)
+    && preview.blockers.every((reason) => typeof reason === "string")
+    && Array.isArray(preview.scopeGuilds) && preview.scopeGuilds.length === guilds.length
+    && guilds.every((code) => preview.scopeGuilds.includes(code))
+    && reminderCountLabels.every(([, key]) => Number.isSafeInteger(preview.counts?.[key]) && preview.counts[key] >= 0);
+}
 
 export function SurveyChoiceAnswer({ response }) {
   const first = response?.firstChoiceGuildCode || response?.first_choice_guild_code;
@@ -29,6 +46,12 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [launchPreview, setLaunchPreview] = useState(null);
+  const [currentGuildFilter, setCurrentGuildFilter] = useState("");
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderPreview, setReminderPreview] = useState(null);
+  const [reminderNeedsPreview, setReminderNeedsPreview] = useState(false);
+  const actionLock = useRef(false);
+  const reminderSession = useRef(null);
   const [addOpen, setAddOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const [search, setSearch] = useState("");
@@ -43,6 +66,15 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
   const commentPlayer = workspace?.forecast?.players.find((p) => p.memberKey === commentPlayerKey);
 
   const campaign = center?.campaigns?.find((c) => c.pollNumber === pollNumber && c.status !== "cancelled");
+  const ready = workspace?.schemaReady && workspace?.seasonId;
+  const reminderCampaign = workspace?.choiceCampaign;
+  const canRemind = Boolean(pollNumber === 2 && ready && center?.surveySchemaReady
+    && center?.season?.id === workspace.seasonId && reminderCampaign?.id
+    && reminderCampaign.poll_number === 2 && reminderCampaign.is_test === false && reminderCampaign.status === "open"
+    && campaign?.id === reminderCampaign.id && campaign.isTest === false && campaign.status === "open");
+  const nonRespondents = getSurveyTwoNonRespondents(workspace?.forecast?.players);
+  const filteredNonRespondents = getSurveyTwoNonRespondents(workspace?.forecast?.players, currentGuildFilter);
+  const unassignedRespondents = workspace?.forecast?.unassigned.filter((player) => player.answer) || [];
   const candidates = workspace?.candidates?.[pollNumber] || [];
   const loadWorkspace = useCallback(async () => {
     try {
@@ -55,15 +87,16 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
   useEffect(() => {
     if (pollNumber !== 2) return undefined;
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== "visible" || busy || addOpen || placementOpen || launchPreview || selectedPlayer || commentPlayer) return;
+      if (document.visibilityState !== "visible" || actionLock.current || busy || reminderOpen || addOpen || placementOpen || launchPreview || selectedPlayer || commentPlayer) return;
       void loadWorkspace();
       void onRefresh?.();
     }, 30000);
     return () => window.clearInterval(timer);
-  }, [pollNumber, busy, addOpen, placementOpen, launchPreview, selectedPlayer, commentPlayer, loadWorkspace, onRefresh]);
+  }, [pollNumber, busy, reminderOpen, addOpen, placementOpen, launchPreview, selectedPlayer, commentPlayer, loadWorkspace, onRefresh]);
 
   async function perform(payload, success) {
-    if (busy) return null;
+    if (actionLock.current) return null;
+    actionLock.current = true;
     setBusy(true); setError(""); setNotice("");
     try {
       const data = await request(payload);
@@ -72,7 +105,57 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
       setNotice(typeof success === "function" ? success(data) : success || "");
       return data;
     } catch (actionError) { setError(actionError.message); return null; }
-    finally { setBusy(false); }
+    finally { actionLock.current = false; setBusy(false); }
+  }
+  async function previewReminders() {
+    if (!canRemind || actionLock.current) return;
+    actionLock.current = true;
+    reminderSession.current = null;
+    setBusy(true); setError(""); setNotice(""); setReminderOpen(true);
+    setReminderPreview(null); setReminderNeedsPreview(false);
+    try {
+      const data = await request({ action: "preview-survey-two-reminders", campaignId: reminderCampaign.id });
+      if (!isGlobalReminderPreview(data?.preview, reminderCampaign.id)) throw new Error("Prévisualisation globale des relances invalide.");
+      reminderSession.current = { preview: data.preview, requestId: crypto.randomUUID(), needsPreview: false };
+      setReminderPreview(data.preview);
+    } catch (previewError) {
+      setReminderNeedsPreview(true);
+      setError(previewError.message || "Prévisualisation des relances impossible.");
+    } finally { actionLock.current = false; setBusy(false); }
+  }
+  async function confirmReminders() {
+    const session = reminderSession.current;
+    if (!canRemind || actionLock.current || !reminderOpen || !session || session.needsPreview
+      || session.preview !== reminderPreview || session.preview.campaignId !== reminderCampaign.id
+      || !session.preview.canQueue || session.preview.blockers.length || session.preview.counts.eligible === 0) return;
+    actionLock.current = true;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const data = await request({ action: "queue-survey-two-reminders", campaignId: session.preview.campaignId,
+        confirmed: true, previewFingerprint: session.preview.fingerprint, requestId: session.requestId });
+      if (!Number.isSafeInteger(data?.result?.queuedCount) || data.result.queuedCount < 0) throw new Error("Résultat de mise en file invalide.");
+      reminderSession.current = null;
+      setReminderOpen(false); setReminderPreview(null);
+      if (data.workspace) setWorkspace(data.workspace);
+      if (data.surveyCenter) onCenterChange(data.surveyCenter);
+      setNotice(data.result.alreadyQueued
+        ? `${data.result.queuedCount} relance(s) déjà en file. Aucun doublon ajouté.`
+        : `${data.result.queuedCount} relance(s) ajoutée(s) à la file Discord globale G1 à G7.`);
+    } catch (reminderError) {
+      const status = Number(reminderError.statusCode ?? reminderError.status ?? reminderError.response?.status);
+      // Unknown failures require a fresh preview; transient failures reuse the request key.
+      const retryable = status !== 409 && (reminderError instanceof TypeError || [0, 408, 429].includes(status) || (status >= 500 && status <= 599));
+      if (!retryable) {
+        session.needsPreview = true;
+        setReminderNeedsPreview(true);
+      }
+      setError(`${reminderError.message || "Relance impossible."}${retryable ? "" : " Nouvelle prévisualisation requise avant confirmation."}`);
+    } finally { actionLock.current = false; setBusy(false); }
+  }
+  function closeReminders(open) {
+    if (open || actionLock.current) return;
+    reminderSession.current = null;
+    setReminderOpen(false); setReminderPreview(null); setReminderNeedsPreview(false);
   }
   async function previewLaunch() {
     const data = await perform({ action: "preview-survey-two-launch" });
@@ -122,7 +205,6 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
       onComment={() => { setCommentPlayerKey(player.memberKey); void loadWorkspace(); }} />;
   }
   if (workspace?.supported === false) return null;
-  const ready = workspace?.schemaReady && workspace?.seasonId;
   const matchingMembers = (workspace?.members || []).filter((m) => String(m.watcher_name).toLowerCase().includes(search.toLowerCase()));
   const dialogError = error ? <div role="alert" className="text-sm text-red-200">{error}</div> : null;
 
@@ -168,7 +250,31 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
         </div>)}
       </div>
       <div className="border-t border-zinc-800 pt-4"><h3 className="mb-3 text-sm font-semibold text-zinc-300">Sans affectation prévisionnelle ({workspace.forecast.unassigned.length})</h3>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{workspace.forecast.unassigned.map(renderPlayer)}</div>
+        <div className="mb-2 text-xs text-zinc-500">Total global sans affectation : {workspace.forecast.unassigned.length}</div>
+        {unassignedRespondents.length ? <div className="space-y-2">
+          <h4 className="text-sm text-zinc-400">Avec réponse, sans affectation prévisionnelle ({unassignedRespondents.length})</h4>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{unassignedRespondents.map(renderPlayer)}</div>
+        </div> : null}
+        <section aria-label="Joueurs sans réponse au sondage n° 2" className="mt-4 space-y-3 border-t border-zinc-800 pt-4">
+          <h4 className="text-sm font-semibold text-zinc-300">Sans réponse au sondage n° 2 ({nonRespondents.length} au total)</h4>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <label className="min-w-0 text-sm text-zinc-400">Guilde actuelle
+              <select aria-label="Guilde actuelle des non-répondants" value={currentGuildFilter} onChange={(event) => setCurrentGuildFilter(event.target.value)}
+                className="mt-1 block w-full max-w-full rounded border border-zinc-700 bg-zinc-900 p-2 text-zinc-100 sm:w-72">
+                <option value="">Toutes les guildes</option>{Object.entries(PALADIN_GUILD_DISPLAY_NAMES).map(([code, label]) => <option key={code} value={code}>{code} — {label}</option>)}
+              </select>
+            </label>
+            <Button type="button" variant="outline" className={`${buttonStyle} h-auto min-h-9 max-w-full whitespace-normal text-left`} disabled={!canRemind || busy || reminderOpen} onClick={previewReminders}>
+              <Bell className="h-4 w-4 shrink-0" /> Relancer tous les sans réponse
+            </Button>
+          </div>
+          <p role="status" className="text-xs text-zinc-400">{filteredNonRespondents.length} affiché(s) sur {nonRespondents.length} sans réponse au total · {currentGuildFilter ? guildLabel(currentGuildFilter) : "Toutes les guildes actuelles"}</p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{filteredNonRespondents.map((player) => <div key={player.memberKey} className="min-w-0">
+            {renderPlayer(player)}
+            {player.targetGuild ? <div className="mt-1 break-words text-xs text-zinc-400">Affectation prévisionnelle : {guildLabel(player.targetGuild)}</div> : null}
+          </div>)}</div>
+          {!filteredNonRespondents.length ? <p className="text-sm text-zinc-500">Aucun joueur sans réponse pour cette guilde actuelle.</p> : null}
+        </section>
       </div>
     </> : null}
     <Dialog open={Boolean(launchPreview)} onOpenChange={(open) => { if (!open) setLaunchPreview(null); }}>
@@ -184,6 +290,26 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
         {launchPreview?.blockers?.map((reason) => <div key={reason} className="text-sm text-amber-200">{reason}</div>)}
         <div className="flex justify-end gap-2"><Button type="button" variant="outline" className={buttonStyle} onClick={() => setLaunchPreview(null)} disabled={busy}>Annuler</Button>
           <Button type="button" onClick={() => launch(false)} disabled={busy || !launchPreview?.canLaunch}>Confirmer le lancement</Button></div>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={reminderOpen} onOpenChange={closeReminders}>
+      <DialogContent showCloseButton={!busy} className="max-h-[90dvh] overflow-y-auto border-zinc-700 bg-zinc-950 text-zinc-100 sm:max-w-2xl">
+        <DialogHeader><DialogTitle>Relance globale du sondage n° 2</DialogTitle><DialogDescription className="text-zinc-400">Destinataires de la campagne officielle du sondage n° 2 · Toutes les guildes G1 à G7, indépendamment du filtre de la liste.</DialogDescription></DialogHeader>
+        {dialogError}
+        {reminderPreview ? <>
+          <p className="text-sm font-semibold text-sky-200">{reminderPreview.counts.eligible} relance(s) éligible(s) exactement sur le périmètre global G1 à G7.</p>
+          <dl className="space-y-2 border-y border-zinc-800 py-3 text-sm">{reminderCountLabels.map(([label, key]) => <div key={key} className="flex justify-between gap-4"><dt className="min-w-0 break-words">{label}</dt><dd className="shrink-0">{reminderPreview.counts[key]}</dd></div>)}</dl>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">{reminderPreview.scopeGuilds.map((code) => <span key={code}>{guildLabel(code)}</span>)}</div>
+          {reminderPreview.blockers.map((reason, index) => <p key={`${index}-${reason}`} className="text-sm text-amber-200">{reason}</p>)}
+        </> : busy ? <p role="status" className="text-sm text-zinc-400">Prévisualisation globale en cours...</p> : null}
+        {!canRemind ? <p className="text-sm text-amber-200">La relance nécessite une campagne officielle du sondage n° 2 ouverte et prête.</p> : null}
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+          <Button type="button" variant="outline" className={buttonStyle} onClick={() => closeReminders(false)} disabled={busy}>Annuler</Button>
+          {reminderNeedsPreview ? <Button type="button" className="h-auto min-h-9 whitespace-normal" onClick={previewReminders} disabled={busy || !canRemind}><RefreshCw className="h-4 w-4 shrink-0" /> Nouvelle prévisualisation</Button>
+            : <Button type="button" className="h-auto min-h-9 whitespace-normal" onClick={confirmReminders} disabled={busy || !canRemind || !reminderPreview?.canQueue || Boolean(reminderPreview?.blockers.length) || !reminderPreview?.counts.eligible}>
+              <Bell className="h-4 w-4 shrink-0" /> Confirmer {reminderPreview?.counts.eligible ?? 0} relance(s) globales
+            </Button>}
+        </div>
       </DialogContent>
     </Dialog>
     <Dialog open={addOpen} onOpenChange={setAddOpen}>

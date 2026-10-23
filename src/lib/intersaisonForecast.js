@@ -1,6 +1,16 @@
 import { getPublicAssetsBaseUrl, resolveVpsAssetUrlForRuntime } from "./vpsAssets.js";
 export { FORECAST_ROLES, getForecastDiscordId } from "./intersaisonSurveyChoices.js";
 
+export function getSurveyTwoNonRespondents(players = [], currentGuild = "") {
+  const seen = new Set();
+  return players.filter((player) => {
+    // Delivery status and administrative placement are not survey answers.
+    if (player.answer || (currentGuild && player.currentGuild !== currentGuild) || seen.has(player.memberKey)) return false;
+    seen.add(player.memberKey);
+    return true;
+  });
+}
+
 export function resolveForecastAvatarUrl(value, options = {}) {
   try {
     const url = new URL(value);

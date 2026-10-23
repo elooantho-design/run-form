@@ -168,11 +168,16 @@ function buildIntersaisonObjectivesModal(recipientId) {
 async function refreshCampaignCounters(supabase, campaignId) {
   const { data: campaign, error: campaignError } = await supabase
     .from(CAMPAIGNS_TABLE)
-    .select("id, status")
+    .select("id, status, interaction_type")
     .eq("id", campaignId)
     .maybeSingle();
 
   if (campaignError) throw campaignError;
+  if (campaign?.interaction_type === "intersaison_choice") {
+    const { error } = await supabase.rpc("refresh_intersaison_choice_delivery_counters", { p_campaign: campaignId });
+    if (error) throw error;
+    return;
+  }
 
   const { data, error } = await supabase
     .from(RECIPIENTS_TABLE)
@@ -228,6 +233,7 @@ async function fetchQueuedRecipients(supabase, limit = DEFAULT_BATCH_SIZE) {
       )
     `)
     .eq("status", "queued")
+    .in("guild_dm_campaigns.status", [...DELIVERABLE_CAMPAIGN_STATUSES])
     .order("last_attempt_at", { ascending: true, nullsFirst: true })
     .order("created_at", { ascending: true })
     .limit(limit);
@@ -247,7 +253,7 @@ async function fetchQueuedRecipients(supabase, limit = DEFAULT_BATCH_SIZE) {
 async function markRecipientSending(supabase, recipient) {
   const attempts = Number(recipient?.send_attempts || 0) + 1;
   const now = new Date().toISOString();
-  const { data, error } = await supabase
+  let query = supabase
     .from(RECIPIENTS_TABLE)
     .update({
       status: "sending",
@@ -256,8 +262,12 @@ async function markRecipientSending(supabase, recipient) {
       updated_at: now,
     })
     .eq("id", recipient.id)
-    .eq("status", "queued")
-    .select("id, campaign_id, discord_user_id, status, sent_at, send_attempts")
+    .eq("status", "queued");
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") {
+    query = query.eq("reminder_count", Number(recipient.reminder_count || 0))
+      .eq("send_attempts", Number(recipient.send_attempts || 0));
+  }
+  const { data, error } = await query.select("id, campaign_id, discord_user_id, status, sent_at, send_attempts")
     .maybeSingle();
 
   if (error) throw error;
@@ -298,24 +308,40 @@ async function loadRecipientDeliveryState(supabase, recipientId) {
 
 async function markRecipientSent(supabase, recipient, sentMessage) {
   const now = new Date().toISOString();
-  const { error } = await supabase
+  const delivered = {
+    sent_at: recipient.sent_at || now,
+    last_sent_at: now,
+    discord_message_id: sentMessage?.id || null,
+    updated_at: now,
+  };
+  const query = supabase
     .from(RECIPIENTS_TABLE)
     .update({
+      ...delivered,
       status: "sent",
-      sent_at: recipient.sent_at || now,
-      last_sent_at: now,
-      discord_message_id: sentMessage?.id || null,
       last_error: null,
-      updated_at: now,
     })
     .eq("id", recipient.id);
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") {
+    const { data, error } = await query.eq("status", "sending").select("id").maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      // Preserve confirmation or closure while recording an already accepted message.
+      const { data: recorded, error: confirmationError } = await supabase.from(RECIPIENTS_TABLE)
+        .update(delivered).eq("id", recipient.id).in("status", ["confirmed", "cancelled"]).select("id").maybeSingle();
+      if (confirmationError) throw confirmationError;
+      if (!recorded) throw new Error("Livraison acceptée mais état du destinataire indisponible.");
+    }
+    return;
+  }
+  const { error } = await query;
 
   if (error) throw error;
 }
 
 async function markRecipientQueuedAfterRateLimit(supabase, recipient, error) {
   const now = new Date().toISOString();
-  const { error: updateError } = await supabase
+  let query = supabase
     .from(RECIPIENTS_TABLE)
     .update({
       status: "queued",
@@ -323,11 +349,13 @@ async function markRecipientQueuedAfterRateLimit(supabase, recipient, error) {
       updated_at: now,
     })
     .eq("id", recipient.id);
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") query = query.eq("status", "sending");
+  const { error: updateError } = await query;
 
   if (updateError) throw updateError;
 }
 
-async function markRecipientFailed(supabase, recipient, error) {
+async function markRecipientFailed(supabase, recipient, error, expectedStatus = "sending") {
   const now = new Date().toISOString();
   let query = supabase
     .from(RECIPIENTS_TABLE)
@@ -336,8 +364,11 @@ async function markRecipientFailed(supabase, recipient, error) {
       last_error: sanitizeDiscordError(error),
       updated_at: now,
     })
-    .eq("id", recipient.id);
-  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") query = query.eq("status", "sending");
+    .eq("id", recipient.id).eq("status", expectedStatus);
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") {
+    query = query.eq("reminder_count", Number(recipient.reminder_count || 0));
+    if (expectedStatus === "queued") query = query.eq("send_attempts", Number(recipient.send_attempts || 0));
+  }
   const { error: updateError } = await query;
 
   if (updateError) throw updateError;
@@ -453,13 +484,12 @@ async function saveIntersaisonObjectivesResponse(supabase, interaction, dmRecipi
 }
 
 async function deliverGuildDmRecipient({ client, supabase, recipient }) {
-  const sendingRecipient = await markRecipientSending(supabase, recipient);
-  if (!sendingRecipient) return;
-  await markCampaignSending(supabase, sendingRecipient.campaign_id);
-
-  let sentMessage = null;
-  const isChoice = sendingRecipient.guild_dm_campaigns.interaction_type === "intersaison_choice";
+  let sendingRecipient = null, sentMessage = null;
+  const isChoice = recipient.guild_dm_campaigns.interaction_type === "intersaison_choice";
   try {
+    sendingRecipient = await markRecipientSending(supabase, recipient);
+    if (!sendingRecipient) return;
+    await markCampaignSending(supabase, sendingRecipient.campaign_id);
     const deliveryState = await loadRecipientDeliveryState(supabase, sendingRecipient.id);
     if (
       deliveryState?.status !== "sending" ||
@@ -473,6 +503,8 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
     const payload = sendingRecipient.guild_dm_campaigns.interaction_type === "intersaison_choice"
       ? await buildChoicePayload(sendingRecipient.guild_dm_campaigns, sendingRecipient)
       : buildGuildDmPayload(sendingRecipient.guild_dm_campaigns, sendingRecipient);
+    // Recheck after the potentially slow Discord lookup, immediately before sending.
+    if (isChoice) await authorizeChoiceDelivery(supabase, sendingRecipient);
     sentMessage = await user.send(payload);
     await markRecipientSent(supabase, sendingRecipient, sentMessage);
     console.log("[guild-dm] sent", {
@@ -481,8 +513,21 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
       discordUserId: sendingRecipient.discord_user_id,
     });
   } catch (error) {
+    const attemptedRecipient = sendingRecipient || recipient;
     const failure = isChoice && sentMessage ? new Error("DELIVERY_UNCERTAIN : message transmis à Discord, confirmation en base impossible. Ne pas renvoyer.") : error;
-    if (isRateLimitError(failure) && (!isChoice || sendingRecipient.send_attempts < 5)) {
+    let canRetryRateLimit = !isChoice || attemptedRecipient.send_attempts < 5;
+    if (sendingRecipient && isChoice && sendingRecipient.reminder_count > 0 && isRateLimitError(failure)) {
+      const { data: attempts, error: attemptError } = await supabase.rpc("intersaison_choice_delivery_attempts", {
+        p_dm_recipient: sendingRecipient.id, p_reminder: sendingRecipient.reminder_count,
+      });
+      if (attemptError || !Number.isInteger(attempts) || attempts < 1) {
+        await markRecipientFailed(supabase, sendingRecipient, new Error("Budget de relance invérifiable. Aucun nouvel envoi automatique."));
+        console.warn("[guild-dm] reminder retry budget unavailable");
+        return;
+      }
+      canRetryRateLimit = attempts < 5;
+    }
+    if (sendingRecipient && isRateLimitError(failure) && canRetryRateLimit) {
       const retryAfterMs = getRetryAfterMs(failure) || 5000;
       await markRecipientQueuedAfterRateLimit(supabase, sendingRecipient, failure);
       console.warn("[guild-dm] rate limited", {
@@ -494,14 +539,14 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
       return;
     }
 
-    await markRecipientFailed(supabase, sendingRecipient, failure);
+    await markRecipientFailed(supabase, attemptedRecipient, failure, sendingRecipient ? "sending" : "queued");
     console.warn("[guild-dm] failed", {
-      campaignId: sendingRecipient.campaign_id,
-      recipientId: sendingRecipient.id,
+      campaignId: attemptedRecipient.campaign_id,
+      recipientId: attemptedRecipient.id,
       error: sanitizeDiscordError(failure),
     });
   } finally {
-    await refreshCampaignCounters(supabase, sendingRecipient.campaign_id).catch((error) => {
+    await refreshCampaignCounters(supabase, recipient.campaign_id).catch((error) => {
       console.warn("[guild-dm] campaign counter refresh failed", error?.message || error);
     });
   }
@@ -510,7 +555,8 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
 async function processGuildDmBatch({ client, supabase, batchSize = DEFAULT_BATCH_SIZE }) {
   const recipients = await fetchQueuedRecipients(supabase, batchSize);
   for (const recipient of recipients) {
-    await deliverGuildDmRecipient({ client, supabase, recipient });
+    try { await deliverGuildDmRecipient({ client, supabase, recipient }); }
+    catch (error) { console.warn("[guild-dm] recipient delivery unavailable", sanitizeDiscordError(error)); }
   }
   return recipients.length;
 }

@@ -9,6 +9,7 @@ import { readForecastAvatars } from "./_intersaison-forecast-avatars.js";
 const MEMBER_SELECT = "id,watcher_name,guild_code,discord_id,primary_member_id,roster_status,community_access_type";
 const CAMPAIGN_SELECT = "id,season_id,organization_id,poll_number,is_test,status,objective_snapshot,objective_version_id,guild_dm_campaign_id,launched_at,closed_at";
 function failure(message, statusCode = 409) { return Object.assign(new Error(message), { statusCode }); }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isMissingSchema(error) { return ["42P01", "42703", "PGRST202", "PGRST204", "PGRST205"].includes(error?.code); }
 async function read(query) {
   const { data, error } = await query;
@@ -79,6 +80,7 @@ async function callChoiceRpc(db, name, args) {
   if (error) {
     if (isMissingSchema(error)) throw failure(name === "save_intersaison_survey_forecast_entry"
       ? "Migration intersaison_survey_forecast_roles requise."
+      : name.endsWith("survey_two_reminders") ? "Migration intersaison_survey_reminders requise."
       : ["inspect_intersaison_choice_recipient", "requeue_intersaison_choice_recipient"].includes(name)
         ? "Migration intersaison_survey_accounts requise." : "Migration intersaison_survey_choices requise.", 428);
     throw failure(error.message || "Action inter-saison impossible.", error.code === "42501" ? 403 : 409);
@@ -111,7 +113,8 @@ export async function retrySurveyChoiceRecipient(db, actor, organization, body) 
 }
 
 const CHOICE_ACTIONS = new Set(["load-survey-two-workspace", "preview-survey-two-launch", "launch-survey-two", "launch-survey-two-test",
-  "close-survey", "add-survey-members", "save-survey-placement", "save-survey-forecast-entry", "load-survey-forecast-avatars"]);
+  "close-survey", "add-survey-members", "save-survey-placement", "save-survey-forecast-entry", "load-survey-forecast-avatars",
+  "preview-survey-two-reminders", "queue-survey-two-reminders"]);
 export function isSurveyChoiceAction(action) { return CHOICE_ACTIONS.has(action); }
 
 export async function runSurveyChoiceAction(db, actor, organization, season, action, body) {
@@ -127,6 +130,21 @@ export async function runSurveyChoiceAction(db, actor, organization, season, act
   if (action === "load-survey-two-workspace") return { workspace: await loadSurveyChoiceWorkspace(db, actor, organization, season) };
   if (!season) throw failure("Aucune inter-saison active.");
   const context = { p_org: organization.id, p_actor: actor.id };
+  if (["preview-survey-two-reminders", "queue-survey-two-reminders"].includes(action)) {
+    if (!UUID.test(body.campaignId || "")) throw failure("Campagne de sondage invalide.", 400);
+    // No guild filter or recipient list is accepted as a delivery scope.
+    const args = { ...context, p_campaign: body.campaignId };
+    if (action === "preview-survey-two-reminders") {
+      return { preview: await callChoiceRpc(db, "preview_intersaison_survey_two_reminders", args) };
+    }
+    if (body.confirmed !== true || !UUID.test(body.requestId || "") || !/^[a-f0-9]{32}$/.test(body.previewFingerprint || "")) {
+      throw failure("Prévisualisation globale et confirmation explicite requises.", 400);
+    }
+    const result = await callChoiceRpc(db, "queue_intersaison_survey_two_reminders", {
+      ...args, p_fingerprint: body.previewFingerprint, p_request: body.requestId, p_confirmed: true,
+    });
+    return { result, workspace: await loadSurveyChoiceWorkspace(db, actor, organization, season) };
+  }
   if (action === "preview-survey-two-launch") {
     return { preview: await callChoiceRpc(db, "preview_intersaison_survey_two", { ...context, p_season: season.id }) };
   }
