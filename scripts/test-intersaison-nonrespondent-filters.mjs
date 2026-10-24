@@ -158,7 +158,7 @@ async function testBrowser() {
     counts: { total: 100, nonRespondents: 60, eligible: 37, responded: 40, pending: 5, excluded: 7, failed: 3, invalid: 4, inactive: 4 },
     scopeGuilds: guilds, blockers: [] };
   const success = { result: { queuedCount: 37, batchId: "mock-batch", alreadyQueued: false } };
-  // Bundle the real workspace, player rows, buttons and Radix modal. Only request is mocked.
+  // Real workspace and contact validation; API calls and OS protocol handoff are mocked.
   const entry = `
     import React, { useState } from 'react';
     import { createRoot } from 'react-dom/client';
@@ -166,7 +166,8 @@ async function testBrowser() {
     const config = window.__config || {};
     let workspace = config.workspace || ${JSON.stringify(workspace)};
     const initialCenter = config.center || ${JSON.stringify(center)};
-    window.__calls = []; window.__refreshes = 0;
+    window.__calls = []; window.__refreshes = 0; window.__nativeDiscordRequests = []; window.__windowOpenCalls = 0;
+    window.open = () => { window.__windowOpenCalls++; throw Error('Web window forbidden'); };
     let previews = 0, queues = 0;
     async function request(payload) {
       window.__calls.push(structuredClone(payload));
@@ -203,6 +204,21 @@ async function testBrowser() {
   `;
   const bundle = await build({ stdin: { contents: entry, resolveDir: root, loader: "jsx" }, bundle: true, write: false,
     format: "iife", platform: "browser", jsx: "automatic", alias: { "@": join(root, "src") },
+    plugins: [{ name: "mock-native-handoff", setup(build) {
+      const path = join(root, "src/lib/discordNativeContact.js");
+      build.onResolve({ filter: /discordNativeContact(?:\.js)?$/ }, (args) => args.namespace === "native-contact-test"
+        ? { path, namespace: "file" } : { path: "native-contact-test", namespace: "native-contact-test" });
+      build.onLoad({ filter: /.*/, namespace: "native-contact-test" }, () => ({ loader: "js", contents: `
+        import { getForecastDiscordContact, requestDiscordNativeProfile as realRequest } from ${JSON.stringify(path)};
+        export { getForecastDiscordContact };
+        export function requestDiscordNativeProfile(userId) {
+          return realRequest(userId, { windowRef: { location: { set href(url) {
+            window.__nativeDiscordRequests.push(url);
+            if (window.__config?.nativeContactBlocked) throw Error('No protocol handler');
+          } } } });
+        }
+      ` }));
+    } }],
     define: { "process.env.NODE_ENV": '"test"', "import.meta.env": "{}" }, logLevel: "silent" });
   const javascript = bundle.outputFiles[0].text;
   const indexCss = (await readFile(join(root, "src/index.css"), "utf8")).replace('@import "@fontsource-variable/geist";', "");
@@ -309,6 +325,49 @@ async function testBrowser() {
     assert.ok(await page.evaluate(() => window.__refreshes > 0), "polling resumes after modal");
     await page.close();
 
+    const contactPage = await open();
+    for (const [name, expected] of [["Nonrespondent G1", "ready"], ["Nonrespondent G2", "ready"], ["Nonrespondent G3", "invalid"], ["Answered", "missing"]]) {
+      await contactPage.getByRole("button", { name: `Ouvrir ${name}`, exact: true }).click();
+      const playerDialog = contactPage.getByRole("dialog", { name, exact: true });
+      const contactButton = playerDialog.getByRole("button", { name: "MP le joueur", exact: true });
+      await contactButton.waitFor();
+      assert.equal(await contactButton.isEnabled(), expected === "ready");
+      const siblings = await playerDialog.getByRole("button", { name: "Modifier le placement", exact: true }).locator("..").getByRole("button", { name: "MP le joueur", exact: true }).count();
+      assert.equal(siblings, 1, "contact remains next to the placement action");
+      if (expected === "ready") {
+        const before = await contactPage.evaluate(() => window.__calls.length);
+        await contactButton.click();
+        await playerDialog.getByRole("status").filter({ hasText: "Ouverture du profil Discord demandée, non confirmée" }).waitFor();
+        assert.equal(await contactPage.evaluate(() => window.__calls.length), before, "no API write or Discord API call when opening contact");
+        assert.equal(contactPage.url(), origin + "/");
+        assert.equal(contactPage.context().pages().length, 1);
+        assert.equal(await contactPage.evaluate(() => window.__windowOpenCalls), 0);
+      } else if (expected === "invalid") {
+        assert.match(await playerDialog.getByRole("alert").innerText(), /Identifiant Discord invalide/);
+      } else {
+        assert.match(await contactButton.locator("..").getAttribute("title"), /Aucun identifiant Discord/);
+      }
+      await playerDialog.getByRole("button", { name: "Close", exact: true }).click();
+      await playerDialog.waitFor({ state: "hidden" });
+    }
+    assert.deepEqual(await contactPage.evaluate(() => window.__nativeDiscordRequests), ["discord://-/users/111111111111111111", "discord://-/users/111111111111111111"],
+      "both game accounts resolve the same associated user without mixing in a DM channel ID");
+    await contactPage.getByRole("button", { name: "Ouvrir Nonrespondent G2", exact: true }).click();
+    await contactPage.getByRole("dialog", { name: "Nonrespondent G2", exact: true }).getByRole("button", { name: "Modifier le placement", exact: true }).click();
+    await contactPage.getByRole("combobox", { name: "Guilde prévisionnelle", exact: true }).waitFor();
+    assert.equal((await calls(contactPage, "save-survey-placement")).length, 0, "opening the existing placement menu never saves");
+    await contactPage.close();
+
+    const noAppPage = await open({ nativeContactBlocked: true });
+    await noAppPage.getByRole("button", { name: "Ouvrir Nonrespondent G2", exact: true }).click();
+    const noAppDialog = noAppPage.getByRole("dialog", { name: "Nonrespondent G2", exact: true });
+    await noAppDialog.getByRole("button", { name: "MP le joueur", exact: true }).click();
+    await noAppDialog.getByRole("alert").filter({ hasText: "installée" }).waitFor();
+    assert.equal(noAppPage.url(), origin + "/");
+    assert.equal(noAppPage.context().pages().length, 1);
+    assert.equal((await calls(noAppPage, "queue-survey-two-reminders")).length, 0);
+    await noAppPage.close();
+
     const removalPage = await open({ placementResult: { ...workspace, forecast: afterRemoval } });
     await select(removalPage).selectOption("G1");
     assert.equal(await section(removalPage).getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).count(), 0);
@@ -404,6 +463,16 @@ async function testBrowser() {
       await responsivePage.clock.resume();
       await noOverflow(responsivePage);
       const prefix = viewport.width === 1440 ? "desktop-1440" : `mobile-${viewport.width}`;
+      await responsivePage.getByRole("button", { name: "Ouvrir Nonrespondent G2", exact: true }).click();
+      const contactDialog = responsivePage.getByRole("dialog", { name: "Nonrespondent G2", exact: true });
+      await contactDialog.getByRole("button", { name: "MP le joueur", exact: true }).click();
+      await contactDialog.getByRole("status").waitFor();
+      assert.equal(await responsivePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      const contactBounds = await contactDialog.getByRole("button", { name: "MP le joueur", exact: true }).boundingBox();
+      assert.ok(contactBounds.width > 0 && contactBounds.x >= 0 && contactBounds.x + contactBounds.width <= viewport.width);
+      if (screenshotDirectory) await responsivePage.screenshot({ path: join(screenshotDirectory, `${prefix}-contact.png`), animations: "disabled" });
+      await contactDialog.getByRole("button", { name: "Close", exact: true }).click();
+      await contactDialog.waitFor({ state: "hidden" });
       if (screenshotDirectory) {
         await responsivePage.screenshot({ path: join(screenshotDirectory, `${prefix}-full.png`), fullPage: true, animations: "disabled" });
         await responsivePage.getByRole("heading", { name: /^Sans affectation prévisionnelle/ }).locator("..").screenshot({ path: join(screenshotDirectory, `${prefix}-list.png`), animations: "disabled" });
@@ -427,7 +496,7 @@ async function testBrowser() {
     }
     assert.deepEqual(pageErrors, []);
     assert.deepEqual(externalRequests, []);
-    console.log("Headless real React UI passed: all/G1-G7, assigned players absent only from unassigned list, removal restores player without duplicate, intact guild cards/counters, unchanged global preview/queue, double-click, polling, same-ID retries, 409 refresh, successive waves, blockers/gating, desktop/375/320px. No external network or DMs.");
+    console.log("Headless real React UI passed: native contact/linked identity/missing-invalid IDs/blocked app, no web window/navigation/API write, existing placement actions, all/G1-G7, intact counters and global queue, races/retries, desktop/375/320px. No external network or DMs; OS handoff mocked.");
     if (screenshotDirectory) console.log(`Screenshots: ${screenshotDirectory}`);
   } finally {
     await browser?.close();

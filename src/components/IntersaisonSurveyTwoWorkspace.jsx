@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import IntersaisonObjectivesPreparation from "@/components/IntersaisonObjectivesPreparation";
 import { PALADIN_GUILD_DISPLAY_NAMES } from "@/lib/guildDisplay";
 import IntersaisonForecastPlayer from "@/components/IntersaisonForecastPlayer";
+import IntersaisonDiscordContact from "@/components/IntersaisonDiscordContact";
 import { getSurveyTwoNonRespondents, resolveForecastAvatarUrl, FORECAST_ROLES } from "@/lib/intersaisonForecast";
 
 const guildLabel = (code) => code ? `${code} — ${PALADIN_GUILD_DISPLAY_NAMES[code] || code}` : "Non renseigné";
@@ -351,6 +352,7 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
           {selectedPlayer?.manual ? <div className="text-sm">{guildLabel(selectedPlayer.manual.guild_code)}<div className="mt-1 text-xs text-zinc-400">{selectedPlayer.manual.actor_name} · {dateLabel(selectedPlayer.manual.created_at)}</div></div> : <div className="text-sm text-zinc-400">Aucun placement manuel actif.</div>}
           {selectedPlayer?.hasDifference ? <div className="text-sm text-amber-200">Le choix du joueur diffère du placement administratif.</div> : null}
           <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" className={buttonStyle} disabled={busy || !selectedPlayer?.activeNow} onClick={() => openPlacement(selectedPlayer)}><ArrowLeftRight className="h-4 w-4" /> Modifier le placement</Button>
+            <IntersaisonDiscordContact key={selectedPlayer?.memberKey} member={workspace?.members?.find((member) => member.id === selectedPlayer?.memberKey)} members={workspace?.members} disabled={busy} className={buttonStyle} />
             {selectedPlayer?.manual ? <Button type="button" variant="outline" className={buttonStyle} disabled={busy} onClick={() => savePlacement(selectedPlayer, true)}><Trash2 className="h-4 w-4" /> Retirer</Button> : null}</div>
         </section>
         {selectedPlayer?.manualHistory?.length ? <details className="border-t border-zinc-800 pt-3"><summary className="cursor-pointer text-sm"><History className="mr-2 inline h-4 w-4" />Historique des placements</summary><ul className="mt-2 space-y-2 text-xs text-zinc-400">{selectedPlayer.manualHistory.map((e) => <li key={e.id}>{e.action === "set" ? guildLabel(e.guild_code) : "Placement retiré"} · {e.actor_name} · {dateLabel(e.created_at)}</li>)}</ul></details> : null}

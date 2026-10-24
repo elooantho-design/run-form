@@ -16,6 +16,7 @@ import {
 } from "@/lib/guildScope";
 import { getChampionDisplayName } from "@/lib/championDisplay";
 import { isDiscordActivityRuntime, openExternalUrlForRuntime } from "@/lib/discordActivity";
+import { requestDiscordNativeNavigation } from "@/lib/discordNativeNavigation";
 import { resolveAssignedDefense, resolveDefenseVariantsForGuild } from "@/lib/defenseVariants";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 
@@ -69,7 +70,7 @@ function openDiscordTarget(value) {
   }
 
   if (targetUrl.startsWith("discord://")) {
-    window.location.href = targetUrl;
+    requestDiscordNativeNavigation(targetUrl);
     return;
   }
 
