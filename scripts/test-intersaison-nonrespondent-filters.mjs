@@ -27,7 +27,7 @@ const recipients = members.filter((member) => member.id !== "G7").map((member, i
   excluded_reason: member.id === "G4" ? "Ambiguous shared account" : null,
 }));
 recipients.push({ id: "r-inactive", member_key: "inactive", member_name_snapshot: "Inactive", guild_code_snapshot: "G2" });
-const forecast = buildSurveyChoiceForecast({
+const forecastInput = {
   members, recipients,
   responses: [
     { id: "answer", survey_recipient_id: "r-answered", poll_number: 2, is_current: true, first_choice_guild_code: "G2" },
@@ -37,7 +37,8 @@ const forecast = buildSurveyChoiceForecast({
     { member_key: "G1", revision: 1, action: "set", guild_code: "G7" },
     { member_key: "manual-only", member_name_snapshot: "Manual only", revision: 1, action: "set", guild_code: "G3" },
   ],
-});
+};
+const forecast = buildSurveyChoiceForecast(forecastInput);
 const baseline = structuredClone(forecast);
 function freeze(value) {
   if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
@@ -70,21 +71,65 @@ assert.ok(!all.some((player) => player.answer));
 assert.deepEqual(forecast, baseline, "projection, guild cards, placements and counters are unchanged");
 assert.equal(forecast.guilds.reduce((sum, guild) => sum + guild.count, 0) + forecast.unassigned.length, forecast.players.length);
 
+const unassigned = getSurveyTwoNonRespondents(forecast.unassigned);
+assert.equal(unassigned.length, 7);
+assert.ok(unassigned.every((player) => !player.answer && !player.manual && !player.targetGuild));
+assert.ok(!unassigned.some((player) => ["G1", "manual-only", "answered", "answered-unassigned"].includes(player.memberKey)));
+assert.ok(unassigned.some((player) => player.memberKey === "G2"), "an unplaced secondary remains visible even when its owner is placed");
+assert.ok(forecast.guilds.find((guild) => guild.code === "G7").players.some((player) => player.memberKey === "G1"));
+assert.ok(forecast.guilds.find((guild) => guild.code === "G2").players.some((player) => player.memberKey === "answered"));
+assert.equal(getSurveyTwoNonRespondents([...forecast.unassigned, ...forecast.unassigned]).length, unassigned.length);
+for (const code of ["", ...guilds]) {
+  assert.deepEqual(getSurveyTwoNonRespondents(forecast.unassigned, code), unassigned.filter((player) => !code || player.currentGuild === code));
+}
+const afterRemoval = buildSurveyChoiceForecast({ ...forecastInput, placements: [
+  ...forecastInput.placements, { member_key: "G1", revision: 2, action: "remove", guild_code: null },
+] });
+assert.equal(getSurveyTwoNonRespondents(afterRemoval.unassigned).length, 8);
+assert.equal(getSurveyTwoNonRespondents(afterRemoval.unassigned, "G1").length, 1);
+assert.equal(getSurveyTwoNonRespondents(afterRemoval.unassigned).filter((player) => player.discordUserId === "111111111111111111").length, 2,
+  "removing an owner's placement restores both game accounts independently, not one Discord row");
+assert.equal(afterRemoval.players.find((player) => player.memberKey === "G1").manualHistory.length, 2);
+assert.deepEqual(getSurveyTwoNonRespondents(afterRemoval.players).map((player) => player.memberKey), all.map((player) => player.memberKey),
+  "a placement change affects the display, never the set of survey nonrespondents");
+for (const code of guilds) {
+  const input = { members: [
+    { id: "waiting", watcher_name: "Waiting", guild_code: code },
+    { id: "manual", watcher_name: "Manual", guild_code: code },
+    { id: "responded", watcher_name: "Responded", guild_code: code },
+  ], recipients: [{ id: "response-recipient", member_id: "responded" }],
+  responses: [{ survey_recipient_id: "response-recipient", poll_number: 2, is_current: true, first_choice_guild_code: code }],
+  placements: [{ member_key: "manual", revision: 1, action: "set", guild_code: code }] };
+  const projected = buildSurveyChoiceForecast(input);
+  const pending = getSurveyTwoNonRespondents(projected.unassigned, code);
+  assert.deepEqual(pending.map((player) => player.memberKey), ["waiting"], `${code}: only the truly unassigned nonrespondent is listed`);
+  assert.equal(projected.guilds.find((guild) => guild.code === code).count, 2);
+  const removed = buildSurveyChoiceForecast({ ...input, placements: [...input.placements,
+    { member_key: "manual", revision: 2, action: "remove" },
+    { member_key: "responded", revision: 1, action: "set", guild_code: "G7" },
+    { member_key: "responded", revision: 2, action: "remove" },
+  ] });
+  assert.equal(getSurveyTwoNonRespondents(removed.unassigned, code).length, 2, `${code}: removing a placement restores the nonrespondent`);
+  assert.equal(removed.players.find((player) => player.memberKey === "responded").targetGuild, code,
+    "removing an answered player's placement falls back to their answer, not the unassigned list");
+}
+assert.deepEqual(forecast, baseline, "display filtering and removal simulations leave the original projection intact");
+
 const componentPath = join(root, "src/components/IntersaisonSurveyTwoWorkspace.jsx");
 const source = await readFile(componentPath, "utf8");
-assert.match(source, /getSurveyTwoNonRespondents\(workspace\?\.forecast\?\.players, currentGuildFilter\)/);
+assert.match(source, /getSurveyTwoNonRespondents\(workspace\?\.forecast\?\.unassigned, currentGuildFilter\)/);
 assert.match(source, /workspace\.forecast\.guilds\.map/);
-assert.match(source, /workspace\.forecast\.unassigned\.length/);
-assert.match(source, /unassigned\.filter\(\(player\) => player\.answer\)/, "no duplicate nonrespondents in historical grid");
+assert.match(source, /Sans affectation prévisionnelle \(\{unassignedPlayers\.length\}\)/);
+assert.doesNotMatch(source, /unassignedRespondents|filteredNonRespondents|forecast\?\.players, currentGuildFilter/);
 assert.equal(source.match(/Relancer tous les sans réponse/g)?.length, 1);
-assert.match(source, /aria-label="Guilde actuelle des non-répondants"/);
-assert.match(source, /aria-label="Joueurs sans réponse au sondage n° 2"/);
+assert.match(source, /aria-label="Guilde actuelle des joueurs sans affectation"/);
+assert.match(source, /aria-label="Joueurs sans affectation prévisionnelle"/);
 assert.match(source, /<option value="">Toutes les guildes<\/option>/);
 assert.match(source, /<DialogTitle>Relance globale du sondage n° 2<\/DialogTitle>/);
 assert.match(source, /actionLock\.current \|\| busy \|\| reminderOpen/);
 assert.match(source, /requestId: crypto\.randomUUID\(\)/);
 assert.doesNotMatch(source, /action: "queue-survey-reminders"|action: "queue-survey-recipient"/);
-console.log("Pure helpers/source passed: all + G1-G7, current guild only, shared accounts, anomalies, manual/inactive/unincluded, no mutation, stable labels and global separation.");
+console.log("Pure projection/source passed: all + G1-G7, assigned nonrespondents excluded only from display, removal/fallback, separate game accounts, intact counters and global reminder scope.");
 
 if (process.argv.includes("--browser")) await testBrowser();
 
@@ -119,7 +164,7 @@ async function testBrowser() {
     import { createRoot } from 'react-dom/client';
     import Workspace from './src/components/IntersaisonSurveyTwoWorkspace.jsx';
     const config = window.__config || {};
-    const workspace = config.workspace || ${JSON.stringify(workspace)};
+    let workspace = config.workspace || ${JSON.stringify(workspace)};
     const initialCenter = config.center || ${JSON.stringify(center)};
     window.__calls = []; window.__refreshes = 0;
     let previews = 0, queues = 0;
@@ -127,6 +172,10 @@ async function testBrowser() {
       window.__calls.push(structuredClone(payload));
       if (payload.action === 'load-survey-two-workspace') return { workspace };
       if (payload.action === 'load-survey-two-preparation') return { preparation: { supported: false } };
+      if (payload.action === 'save-survey-placement' && config.placementResult) {
+        workspace = config.placementResult;
+        return { workspace };
+      }
       let reply;
       if (payload.action === 'preview-survey-two-reminders') {
         reply = (config.previews || [{ preview: ${JSON.stringify(preview)} }])[previews++];
@@ -190,8 +239,8 @@ async function testBrowser() {
       await page.getByRole("heading", { name: /^Sans affectation prévisionnelle/ }).waitFor();
       return page;
     }
-    const section = (page) => page.getByRole("region", { name: "Joueurs sans réponse au sondage n° 2", exact: true });
-    const select = (page) => page.getByRole("combobox", { name: "Guilde actuelle des non-répondants", exact: true });
+    const section = (page) => page.getByRole("region", { name: "Joueurs sans affectation prévisionnelle", exact: true });
+    const select = (page) => page.getByRole("combobox", { name: "Guilde actuelle des joueurs sans affectation", exact: true });
     const launchButton = (page) => page.getByRole("button", { name: "Relancer tous les sans réponse", exact: true });
     const modal = (page) => page.getByRole("dialog", { name: "Relance globale du sondage n° 2", exact: true });
     const confirm = (page) => modal(page).getByRole("button", { name: /^Confirmer \d+ relance/ });
@@ -208,20 +257,26 @@ async function testBrowser() {
     const page = await open({ deferQueue: true });
     const initialReads = await page.evaluate(() => window.__calls.length);
     assert.equal(await launchButton(page).count(), 1);
-    assert.equal(await section(page).getByRole("button", { name: /^Ouvrir / }).count(), 9);
+    assert.equal(await section(page).getByRole("button", { name: /^Ouvrir / }).count(), unassigned.length);
     const unassignedArea = page.getByRole("heading", { name: /^Sans affectation prévisionnelle/ }).locator("..");
     assert.equal(await unassignedArea.getByRole("button", { name: "Ouvrir Nonrespondent G4", exact: true }).count(), 1, "no local duplicate grid");
-    assert.equal(await unassignedArea.getByRole("button", { name: "Ouvrir Answered unassigned", exact: true }).count(), 1);
+    for (const name of ["Nonrespondent G1", "Manual only", "Answered", "Answered unassigned"]) {
+      assert.equal(await unassignedArea.getByRole("button", { name: `Ouvrir ${name}`, exact: true }).count(), 0);
+    }
+    assert.equal(await page.getByRole("heading", { name: "Magistratus", exact: true }).locator("../../..").getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).count(), 1);
+    assert.equal(await page.getByRole("heading", { name: "Imperatores", exact: true }).locator("../../..").getByRole("button", { name: "Ouvrir Answered", exact: true }).count(), 1);
     for (const code of ["", ...guilds]) {
       await select(page).selectOption(code);
-      assert.equal(await section(page).getByRole("button", { name: /^Ouvrir / }).count(), code ? 1 : 9);
-      assert.equal(await page.getByRole("heading", { name: `Sans affectation prévisionnelle (${forecast.unassigned.length})`, exact: true }).count(), 1);
+      const expected = getSurveyTwoNonRespondents(forecast.unassigned, code).length;
+      assert.equal(await section(page).getByRole("button", { name: /^Ouvrir / }).count(), expected);
+      assert.match(await section(page).getByRole("status").innerText(), new RegExp(`^${expected} affiché\\(s\\) sur ${unassigned.length} sans affectation au total`));
+      assert.equal(await page.getByRole("heading", { name: `Sans affectation prévisionnelle (${unassigned.length})`, exact: true }).count(), 1);
       for (const guild of forecast.guilds) {
         assert.equal(await page.getByRole("heading", { name: guild.name, exact: true }).locator("..").locator("span").textContent(), `${guild.count} / 30`);
       }
     }
     await select(page).selectOption("G1");
-    assert.match(await section(page).innerText(), /Affectation prévisionnelle : G7/);
+    assert.match(await section(page).innerText(), /Aucun joueur sans affectation pour cette guilde actuelle/);
     assert.equal(await page.evaluate(() => window.__calls.length), initialReads, "opening/filtering is read-only");
     await doubleClick(launchButton(page));
     await modal(page).waitFor();
@@ -253,6 +308,27 @@ async function testBrowser() {
     await page.clock.runFor(31000);
     assert.ok(await page.evaluate(() => window.__refreshes > 0), "polling resumes after modal");
     await page.close();
+
+    const removalPage = await open({ placementResult: { ...workspace, forecast: afterRemoval } });
+    await select(removalPage).selectOption("G1");
+    assert.equal(await section(removalPage).getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).count(), 0);
+    await removalPage.getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).click();
+    const playerModal = removalPage.getByRole("dialog", { name: "Nonrespondent G1", exact: true });
+    await playerModal.waitFor();
+    removalPage.once("dialog", (dialog) => dialog.accept());
+    await playerModal.getByRole("button", { name: "Retirer", exact: true }).click();
+    await playerModal.waitFor({ state: "hidden" });
+    await section(removalPage).getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).waitFor();
+    assert.deepEqual(await calls(removalPage, "save-survey-placement"), [{ action: "save-survey-placement", memberId: "G1", guildCode: null, expectedRevision: 1 }]);
+    assert.equal(await section(removalPage).getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).count(), 1);
+    assert.match(await section(removalPage).getByRole("status").innerText(), /^1 affiché\(s\) sur 8 sans affectation au total/);
+    await select(removalPage).selectOption("");
+    assert.equal(await section(removalPage).getByRole("button", { name: /^Ouvrir / }).count(), 8);
+    assert.equal(await section(removalPage).getByRole("button", { name: "Ouvrir Nonrespondent G2", exact: true }).count(), 1,
+      "the secondary's independent row survives its owner's placement removal");
+    assert.equal(await removalPage.getByRole("heading", { name: "Magistratus", exact: true }).locator("../../..").getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).count(), 0);
+    assert.equal((await calls(removalPage, "queue-survey-two-reminders")).length, 0);
+    await removalPage.close();
 
     for (const failure of [{ error: "Temporary failure", status: 503 }, { error: "Failed to fetch", network: true }]) {
       const retryPage = await open({ queues: [failure, { result: { ...success.result, alreadyQueued: true } }] });
@@ -351,7 +427,7 @@ async function testBrowser() {
     }
     assert.deepEqual(pageErrors, []);
     assert.deepEqual(externalRequests, []);
-    console.log("Headless real React UI passed: all/G1-G7, no local duplicate, intact guild cards/counters, exact global preview, double-click, polling, same-ID retries, 409 refresh, successive waves, blockers/gating, desktop/375/320px. No external network or DMs.");
+    console.log("Headless real React UI passed: all/G1-G7, assigned players absent only from unassigned list, removal restores player without duplicate, intact guild cards/counters, unchanged global preview/queue, double-click, polling, same-ID retries, 409 refresh, successive waves, blockers/gating, desktop/375/320px. No external network or DMs.");
     if (screenshotDirectory) console.log(`Screenshots: ${screenshotDirectory}`);
   } finally {
     await browser?.close();

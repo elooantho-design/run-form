@@ -72,9 +72,8 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
     && center?.season?.id === workspace.seasonId && reminderCampaign?.id
     && reminderCampaign.poll_number === 2 && reminderCampaign.is_test === false && reminderCampaign.status === "open"
     && campaign?.id === reminderCampaign.id && campaign.isTest === false && campaign.status === "open");
-  const nonRespondents = getSurveyTwoNonRespondents(workspace?.forecast?.players);
-  const filteredNonRespondents = getSurveyTwoNonRespondents(workspace?.forecast?.players, currentGuildFilter);
-  const unassignedRespondents = workspace?.forecast?.unassigned.filter((player) => player.answer) || [];
+  const unassignedPlayers = getSurveyTwoNonRespondents(workspace?.forecast?.unassigned);
+  const filteredUnassignedPlayers = getSurveyTwoNonRespondents(workspace?.forecast?.unassigned, currentGuildFilter);
   const candidates = workspace?.candidates?.[pollNumber] || [];
   const loadWorkspace = useCallback(async () => {
     try {
@@ -249,17 +248,11 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
             {!guild.players.length ? <div className="p-2 text-sm text-zinc-500">Aucun placement</div> : null}</div>
         </div>)}
       </div>
-      <div className="border-t border-zinc-800 pt-4"><h3 className="mb-3 text-sm font-semibold text-zinc-300">Sans affectation prévisionnelle ({workspace.forecast.unassigned.length})</h3>
-        <div className="mb-2 text-xs text-zinc-500">Total global sans affectation : {workspace.forecast.unassigned.length}</div>
-        {unassignedRespondents.length ? <div className="space-y-2">
-          <h4 className="text-sm text-zinc-400">Avec réponse, sans affectation prévisionnelle ({unassignedRespondents.length})</h4>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{unassignedRespondents.map(renderPlayer)}</div>
-        </div> : null}
-        <section aria-label="Joueurs sans réponse au sondage n° 2" className="mt-4 space-y-3 border-t border-zinc-800 pt-4">
-          <h4 className="text-sm font-semibold text-zinc-300">Sans réponse au sondage n° 2 ({nonRespondents.length} au total)</h4>
+      <div className="border-t border-zinc-800 pt-4"><h3 className="mb-3 text-sm font-semibold text-zinc-300">Sans affectation prévisionnelle ({unassignedPlayers.length})</h3>
+        <section aria-label="Joueurs sans affectation prévisionnelle" className="space-y-3">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <label className="min-w-0 text-sm text-zinc-400">Guilde actuelle
-              <select aria-label="Guilde actuelle des non-répondants" value={currentGuildFilter} onChange={(event) => setCurrentGuildFilter(event.target.value)}
+              <select aria-label="Guilde actuelle des joueurs sans affectation" value={currentGuildFilter} onChange={(event) => setCurrentGuildFilter(event.target.value)}
                 className="mt-1 block w-full max-w-full rounded border border-zinc-700 bg-zinc-900 p-2 text-zinc-100 sm:w-72">
                 <option value="">Toutes les guildes</option>{Object.entries(PALADIN_GUILD_DISPLAY_NAMES).map(([code, label]) => <option key={code} value={code}>{code} — {label}</option>)}
               </select>
@@ -268,12 +261,11 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
               <Bell className="h-4 w-4 shrink-0" /> Relancer tous les sans réponse
             </Button>
           </div>
-          <p role="status" className="text-xs text-zinc-400">{filteredNonRespondents.length} affiché(s) sur {nonRespondents.length} sans réponse au total · {currentGuildFilter ? guildLabel(currentGuildFilter) : "Toutes les guildes actuelles"}</p>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{filteredNonRespondents.map((player) => <div key={player.memberKey} className="min-w-0">
+          <p role="status" className="text-xs text-zinc-400">{filteredUnassignedPlayers.length} affiché(s) sur {unassignedPlayers.length} sans affectation au total · {currentGuildFilter ? guildLabel(currentGuildFilter) : "Toutes les guildes actuelles"}</p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{filteredUnassignedPlayers.map((player) => <div key={player.memberKey} className="min-w-0">
             {renderPlayer(player)}
-            {player.targetGuild ? <div className="mt-1 break-words text-xs text-zinc-400">Affectation prévisionnelle : {guildLabel(player.targetGuild)}</div> : null}
           </div>)}</div>
-          {!filteredNonRespondents.length ? <p className="text-sm text-zinc-500">Aucun joueur sans réponse pour cette guilde actuelle.</p> : null}
+          {!filteredUnassignedPlayers.length ? <p className="text-sm text-zinc-500">Aucun joueur sans affectation pour cette guilde actuelle.</p> : null}
         </section>
       </div>
     </> : null}
