@@ -1,6 +1,19 @@
 export const PALADIN_CLUSTER_GUILD_CODES = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 export const PALADIN_SPACE_KEY = "PALADIN";
 export const COMMUNITY_SPACE_KEY = "COMMUNITY";
+let portalGuildCatalog = null;
+
+// Browser display catalog only. Server permissions must always use database ownership.
+export function configurePortalGuildCatalog(catalog) {
+  if (typeof window === "undefined") return;
+  portalGuildCatalog = catalog;
+  const ownPaladin = ["paladin", "paladin_cluster"].includes(String(catalog?.organizationKey || "").toLowerCase());
+  const codes = ownPaladin ? (catalog.guilds || []).map((g) => g.guild_code).filter(isPaladinGuildCode) : [];
+  PALADIN_CLUSTER_GUILD_CODES.splice(0, PALADIN_CLUSTER_GUILD_CODES.length,
+    ...(codes.length ? codes.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))) : ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]));
+}
+
+export function getPortalGuildCatalog() { return portalGuildCatalog; }
 
 function normalizeRoleValue(role) {
   return String(role || "")
@@ -41,7 +54,7 @@ export function normalizeGvgGuildCode(value) {
 }
 
 export function isPaladinGuildCode(value) {
-  return PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(value));
+  return /^G([1-9]|1[0-9]|2[0-5])$/.test(normalizeGuildCodeKey(value));
 }
 
 export function getGuildSpaceKey(guildCode) {
@@ -118,7 +131,7 @@ export function isPaladinAdminSession(session) {
 
 export function getVisibleGvgGuildCodes(session) {
   if (isCommunitySession(session)) return [];
-  if (isPaladinSession(session)) return PALADIN_CLUSTER_GUILD_CODES;
+  if (isPaladinSession(session)) return [...new Set([...PALADIN_CLUSTER_GUILD_CODES, normalizeGuildCodeKey(getSessionGuildCode(session))])];
 
   const guildCode = normalizeGvgGuildCode(getSessionGuildCode(session));
   return guildCode ? [guildCode] : [];
@@ -164,7 +177,7 @@ export function getGuildScopeDescription(session) {
 
   const guildCode = getSessionGuildCode(session);
   if (isPaladinGuildCode(guildCode)) {
-    return "Cluster Paladin G1-G7";
+    return "Cluster Paladin";
   }
 
   return `Espace externe ${getGuildSpaceLabel(guildCode)}`;

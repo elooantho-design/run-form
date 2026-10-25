@@ -82,6 +82,7 @@ import { getGuildDisplayName, getSessionGuildDisplayName } from "@/lib/guildDisp
 import { PORTAL_LANGUAGES, PortalLanguageProvider, usePortalLanguage } from "@/lib/portalLanguage";
 import moontonHeroImages from "@/data/moontonHeroImages.json";
 import {
+  configurePortalGuildCatalog,
   getControlBrand,
   getGvgGuildLabel,
   getGuildScopeDescription,
@@ -2125,18 +2126,37 @@ function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogo
   const [profileCosmeticsLoading, setProfileCosmeticsLoading] = useState(false);
   const [editRunInitialId, setEditRunInitialId] = useState("");
   const [rolePreviewMode, setRolePreviewMode] = useState(PORTAL_REAL_VIEW_MODE);
+  const [guildCatalog, setGuildCatalog] = useState(null);
   const profileCosmeticsRequestRef = useRef(0);
   const cosmeticsSyncSourceIdRef = useRef(createPortalSyncSourceId("cosmetics"));
   const cosmeticsSyncChannelRef = useRef(null);
   const loggedTabViewsRef = useRef(new Set());
   const presenceHeartbeatRef = useRef(0);
   const realSessionSignature = useMemo(() => getPortalSessionSignature(session), [session]);
+  useEffect(() => {
+    let cancelled = false;
+    let last = "";
+    const refresh = async () => {
+      try {
+        const catalog = await callPortalAccessApi({ action: "guild-catalog" });
+        const signature = JSON.stringify(catalog);
+        if (!cancelled && signature !== last) {
+          configurePortalGuildCatalog(catalog);
+          setGuildCatalog(catalog);
+          last = signature;
+        }
+      } catch { /* Keep the last known catalog during a temporary connection failure. */ }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 30000);
+    return () => { cancelled = true; window.clearInterval(timer); configurePortalGuildCatalog(null); };
+  }, [realSessionSignature]);
   const realIsPaladinUser = isPaladinSession(session);
   const realIsCommunityUser = isPortalCommunitySession(session);
   const canUseRolePreview = isPortalRolePreviewManagerSession(session);
   const effectiveSession = useMemo(
-    () => (canUseRolePreview ? buildPortalRolePreviewSession(session, rolePreviewMode) : session),
-    [canUseRolePreview, rolePreviewMode, session],
+    () => ({ ...(canUseRolePreview ? buildPortalRolePreviewSession(session, rolePreviewMode) : session), guildCatalog }),
+    [canUseRolePreview, rolePreviewMode, session, guildCatalog],
   );
   const isAdminUser = isAdminSession(effectiveSession);
   const isLeaderUser = isLeaderSession(effectiveSession);

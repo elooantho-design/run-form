@@ -29,7 +29,10 @@ export default function IntersaisonObjectivesPreparation({ request, onStateChang
 
   const acceptPreparation = useCallback((data) => {
     setPreparation(data);
-    setObjectives(normalizeSurveyObjectives(data?.version?.objectives || {}));
+    const codes = data?.guilds?.map((g) => g.code) || SURVEY_OBJECTIVE_GUILDS;
+    const source = data?.version?.objectives || {};
+    // An official version retains the exact scope originally sent to players.
+    setObjectives(normalizeSurveyObjectives(source, {}, ["official", "archived"].includes(data?.version?.status) ? Object.keys(source) : codes));
   }, []);
 
   useEffect(() => {
@@ -44,9 +47,12 @@ export default function IntersaisonObjectivesPreparation({ request, onStateChang
     return () => { cancelled = true; };
   }, [request, acceptPreparation]);
 
-  const savedObjectives = useMemo(() => normalizeSurveyObjectives(preparation?.version?.objectives || {}), [preparation]);
+  const guildCodes = useMemo(() => ["official", "archived"].includes(preparation?.version?.status)
+    ? Object.keys(preparation.version.objectives) : preparation?.guilds?.map((g) => g.code) || SURVEY_OBJECTIVE_GUILDS, [preparation]);
+  const guildNames = useMemo(() => ({ ...PALADIN_GUILD_DISPLAY_NAMES, ...Object.fromEntries((preparation?.guilds || []).map((g) => [g.code, g.name])) }), [preparation]);
+  const savedObjectives = useMemo(() => normalizeSurveyObjectives(preparation?.version?.objectives || {}, {}, guildCodes), [preparation, guildCodes]);
   const dirty = JSON.stringify(objectives) !== JSON.stringify(savedObjectives);
-  const state = getSurveyObjectivesState(preparation?.version, objectives, { dirty });
+  const state = getSurveyObjectivesState(preparation?.version, objectives, { dirty, guildCodes });
   const frozen = ["official", "archived"].includes(preparation?.version?.status);
   const canSave = Boolean(preparation?.schemaReady && preparation?.seasonId && !frozen && !busy);
 
@@ -89,7 +95,7 @@ export default function IntersaisonObjectivesPreparation({ request, onStateChang
   }
 
   async function validateObjectives() {
-    if (!window.confirm("Valider cette version des sept objectifs ? Cette validation ne lance pas le sondage et ne publie pas les objectifs.")) return;
+    if (!window.confirm(`Valider cette version des ${guildCodes.length} objectifs ? Cette validation ne lance pas le sondage et ne publie pas les objectifs.`)) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -127,9 +133,9 @@ export default function IntersaisonObjectivesPreparation({ request, onStateChang
       {preparation?.schemaReady === false ? <div className="mt-3 text-sm text-amber-200">La migration des objectifs doit être installée avant l’enregistrement.</div> : null}
       {preparation && !preparation.seasonId ? <div className="mt-3 text-sm text-amber-200">Aucune inter-saison active. Les objectifs ne peuvent pas encore être enregistrés.</div> : null}
       <div className="mt-5 grid gap-x-6 sm:grid-cols-2">
-        {SURVEY_OBJECTIVE_GUILDS.map((code) => (
+        {guildCodes.map((code) => (
           <div key={code} className="min-w-0 border-b border-zinc-800 py-4">
-            <label htmlFor={`${fieldId}-${code}`} className="font-semibold text-zinc-100">{code} — {PALADIN_GUILD_DISPLAY_NAMES[code]}</label>
+            <label htmlFor={`${fieldId}-${code}`} className="font-semibold text-zinc-100">{code} — {guildNames[code]}</label>
             <textarea id={`${fieldId}-${code}`} value={objectives[code]} rows={5} maxLength={SURVEY_OBJECTIVE_MAX_LENGTH}
               disabled={busy || frozen} onChange={(event) => {
                 setObjectives((previous) => ({ ...previous, [code]: event.target.value }));
@@ -171,15 +177,17 @@ export default function IntersaisonObjectivesPreparation({ request, onStateChang
             <DialogTitle className="pr-8">{preview?.title}</DialogTitle>
             <DialogDescription className="text-zinc-400">Aperçu uniquement · aucune interaction ni aucun envoi</DialogDescription>
           </DialogHeader>
-          {preview ? <SurveyTwoMessagePreview objectives={preview.objectives} /> : null}
+          {preview ? <SurveyTwoMessagePreview objectives={preview.objectives} guildNames={guildNames} /> : null}
         </DialogContent>
       </Dialog>
     </section>
   );
 }
 
-function SurveyTwoMessagePreview({ objectives }) {
-  const payload = buildSurveyTwoDiscordPayload(objectives);
+function SurveyTwoMessagePreview({ objectives, guildNames }) {
+  let payload;
+  try { payload = buildSurveyTwoDiscordPayload(objectives, { guildCodes: Object.keys(objectives), guildNames }); }
+  catch (error) { return <div role="alert" className="text-red-200">{error.message}</div>; }
   return (
     <div className="min-w-0 space-y-4 rounded-lg bg-[#313338] p-4 text-sm text-zinc-100">
       <div className="font-semibold">Bot 2.0</div>

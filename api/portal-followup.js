@@ -18,7 +18,6 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
   auth: { persistSession: false },
 });
 
-const PALADIN_CLUSTER_GUILD_CODES = new Set(["G1", "G2", "G3", "G4", "G5", "G6", "G7"]);
 const EMPTY_DEFENSE_LABEL = "Aucune defense";
 const MAX_COMMENT_LENGTH = 4000;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -40,7 +39,7 @@ function normalizeGuildCode(value) {
 }
 
 function isPaladinGuildCode(value) {
-  return PALADIN_CLUSTER_GUILD_CODES.has(normalizeGuildCode(value));
+  return /^G([1-9]|1[0-9]|2[0-5])$/.test(normalizeGuildCode(value));
 }
 
 function getGuildSpaceKey(value) {

@@ -37,6 +37,20 @@ const interaction={id:"123456789012345678",customId:`interchoice:${id}:${user}`,
 };
 await worker.handleGuildDmInteraction(interaction,{supabase:new Proxy({}, {get(){throw new Error("Database before modal forbidden");}})});
 assert.deepEqual(calls,["modal"],"real discord.js validates the modal without any pre-modal query");
+const nine=Object.fromEntries(Array.from({length:9},(_,i)=>[`G${i+1}`,`Objectif ${i+1}`]));
+const extended=await choice.buildChoicePayload({...choiceCampaign,interaction_payload:{objectives:nine,guildNames:{G8:"Octava",G9:"Nona"}}},
+  {id,discord_user_id:user,member_name_snapshot:"Compte neuf",guild_code:"G8"});
+assert.equal(extended.embeds[0].fields.length,9);
+assert.match(extended.content,/Octava \(G8\)/);
+let choices;
+await worker.handleGuildDmInteraction({...interaction,message:{embeds:extended.embeds},showModal:async(data)=>{
+  choices=new discord.ModalBuilder(data).toJSON().components[0].component.options;
+}}, {supabase:new Proxy({}, {get(){throw new Error("Database before modal forbidden");}})});
+assert.equal(choices.length,9);assert.deepEqual(choices[7],{label:"G8 — Octava",value:"G8"});
+await worker.handleGuildDmInteraction({...interaction,message:{embeds:payload.embeds},showModal:async(data)=>{
+  choices=new discord.ModalBuilder(data).toJSON().components[0].component.options;
+}}, {supabase:new Proxy({}, {get(){throw new Error("Database before modal forbidden");}})});
+assert.equal(choices.length,7,"old messages retain their frozen seven-guild choices");
 const denied=[];
 await worker.handleGuildDmInteraction({...interaction,user:{id:"222222222222222222"},reply:async(d)=>denied.push(d.content)});
 assert.match(denied[0],/destinataire/);

@@ -65,7 +65,7 @@ class Query {
   order(column, options) { assert.equal(column, "version_number"); this.desc = !options.ascending; return this; }
   limit(value) { this.maximum = value; return this; }
   async run(single = false) {
-    assert.ok(["portal_guilds", "intersaison_survey_objective_versions"].includes(this.table));
+    assert.ok(["portal_guilds", "intersaison_survey_objective_versions", "intersaison_plan_cycles"].includes(this.table));
     const filter = this.filters.map(([col], index) => `${col} = $${index + 1}`).join(" and ");
     try {
       const { rows } = await db.query(`select * from public.${this.table}${filter ? ` where ${filter}` : ""}${this.desc ? " order by version_number desc" : ""}${this.maximum ? ` limit ${this.maximum}` : ""}`, this.filters.map(([, value]) => value));

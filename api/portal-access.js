@@ -1,5 +1,6 @@
 /* global process */
 import { randomInt } from "node:crypto";
+import { loadPortalGuildCatalog } from "./_portal-guild-catalog.js";
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
@@ -65,7 +66,6 @@ const DEFAULT_MEMBER_PASSWORD = "motdepassemembre";
 const HERO_SEARCH_PAGE_SIZE = 1000;
 const HERO_SEARCH_MAX_REQUIREMENTS = 10;
 const PALADIN_ORGANIZATION_KEY = "paladin";
-const PALADIN_CLUSTER_GUILD_CODES_SERVER = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const SAFE_MEMBER_SELECT =
   "id, watcher_name, discord_id, guild_code, assignment, status, defense_1, defense_2, created_at, awakening_status, personal_forum_post_url, role, preferred_language, community_access_type, community_status, password_change_required, primary_member_id";
 const SAFE_MEMBER_SELECT_WITH_DEFENSE_IDS =
@@ -330,7 +330,7 @@ async function canonicalizeMemberPatchGuildCode(patch, { allowNull = false } = {
 }
 
 function isPaladinGuildCode(value) {
-  return /^G[1-7]$/.test(normalizeGuildCode(value));
+  return /^G([1-9]|1[0-9]|2[0-5])$/.test(normalizeGuildCode(value));
 }
 
 function isMissingFollowupTable(error) {
@@ -3144,12 +3144,9 @@ async function resolveAdminVisionLaunchTargets(admin, body) {
     throw error;
   }
 
-  const allowedGuildCodes = new Set(
-    (currentScope.actorScope?.allowedGuildCodes || [])
-      .filter((guildCode) => PALADIN_CLUSTER_GUILD_CODES_SERVER.includes(normalizeGuildCode(guildCode)))
-      .map((guildCode) => normalizeGuildCode(guildCode)),
-  );
-  const targetCodes = PALADIN_CLUSTER_GUILD_CODES_SERVER.filter((guildCode) => allowedGuildCodes.has(guildCode));
+  const catalog = await loadPortalGuildCatalog(supabase, admin);
+  const allowedGuildCodes = new Set(currentScope.actorScope?.allowedGuildCodes || []);
+  const targetCodes = catalog.guilds.map((g) => g.guild_code).filter((code) => allowedGuildCodes.has(code));
   if (targetCodes.length === 0) {
     const error = new Error("Aucune guilde cluster active dans ton perimetre.");
     error.statusCode = 403;
@@ -4851,6 +4848,12 @@ export default async function handler(req, res) {
 
     const body = await readBody(req);
     const action = cleanText(body.action);
+
+    if (action === "guild-catalog") {
+      const check = await requirePortalSession(req, supabase);
+      if (check.error) return sendJson(res, check.status, { error: check.error });
+      return sendJson(res, 200, { ok: true, ...await loadPortalGuildCatalog(supabase, check.member) });
+    }
 
     if (action === "search") {
       await handleSearch(body, res);

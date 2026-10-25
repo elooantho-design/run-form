@@ -1,5 +1,6 @@
 /* global process */
 import { createClient } from "@supabase/supabase-js";
+import { isForecastPlanAction, loadForecastPlan, runForecastPlanAction } from "./_intersaison-plan.js";
 import {
   applyPortalCorsHeaders,
   isPortalCommunityRole,
@@ -721,6 +722,13 @@ function getSurveyGuildDisplayName(guildCode, guilds, organization) {
 
 async function loadSurveyObjectivesForSeason(season, organization) {
   if (!season?.id) return [];
+  const { data: memory, error: memoryError } = await supabase.from("intersaison_plan_cycles")
+    .select("reference_objectives").eq("organization_id", organization.id).eq("season_id", season.id).maybeSingle();
+  if (memoryError && !["42P01", "PGRST205"].includes(memoryError.code)) throw memoryError;
+  if (memory?.reference_objectives && Object.keys(memory.reference_objectives).length) {
+    return Object.entries(memory.reference_objectives).map(([guild_code, item]) => ({ guild_code, objective_text: item.objective,
+      season_id: season.id, organization_id: organization.id }));
+  }
   const reference = await loadSurveyReferenceObjectives(supabase, organization.id, season.id);
   if (reference?.length) return reference;
   const { data, error } = await supabase
@@ -1565,6 +1573,9 @@ async function handleQueueCollectiveSurveyReminders(body, actor, organization) {
 }
 
 async function handleFinishSurveySeason(body, actor, organization) {
+  if (await loadForecastPlan(supabase, actor, organization)) {
+    return { status: 409, payload: { ok: false, error: "Utiliser la clôture du plan après application et prévisualisation des effectifs." } };
+  }
   const season = await loadActiveSurveySeason(organization.id);
   const requestedSeasonId = validatePortalInput(body?.seasonId, 80);
   if (!season || (requestedSeasonId && String(season.id) !== String(requestedSeasonId))) {
@@ -1818,6 +1829,9 @@ async function handlePreviewValidation(organization) {
 }
 
 async function handleLaunchTransfers(body, actor, organization) {
+  if (await loadForecastPlan(supabase, actor, organization)) {
+    return { status: 409, payload: { ok: false, error: "Utiliser la validation du plan prévisionnel actuel, pas l’ancienne campagne." } };
+  }
   const campaignId = validatePortalInput(body.campaignId, 80);
   const { state, preview } = await buildValidationPreviewForOrganization(organization);
   if (!state.campaign || String(state.campaign.id) !== String(campaignId)) {
@@ -1880,6 +1894,11 @@ export default async function handler(req, res) {
     let result;
 
     if (action === "load") result = { status: 200, payload: { ok: true, state: await loadState(organization) } };
+    else if (isForecastPlanAction(action)) {
+      const payload = await runForecastPlanAction(supabase, sessionCheck.member, organization, action, body);
+      result = { status: 200, payload: { ok: true, ...payload,
+        ...(action === "preview-forecast-application" ? {} : { surveyCenter: await loadSurveyCenterState(organization, sessionCheck.member) }) } };
+    }
     else if (isSurveyChoiceAction(action)) {
       const season = await loadActiveSurveySeason(organization.id);
       const payload = await runSurveyChoiceAction(supabase, sessionCheck.member, organization, season, action, body);

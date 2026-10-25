@@ -423,7 +423,7 @@ export default function PortalIntersaisonSurveyCenter({ organizationFallback = n
                 </Button>
               </>
             ) : null}
-            {center?.season?.id ? (
+            {center?.season?.id && !["paladin", "paladin_cluster"].includes(organization?.organization_key || organization?.organizationKey) ? (
               <Button
                 type="button"
                 variant="outline"

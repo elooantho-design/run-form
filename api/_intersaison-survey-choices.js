@@ -5,9 +5,10 @@ import { SURVEY_OBJECTIVE_GUILDS } from "../src/lib/intersaisonSurveyObjectives.
 import { PALADIN_GUILD_DISPLAY_NAMES } from "../src/lib/guildDisplay.js";
 import { FORECAST_ROLES } from "../src/lib/intersaisonForecast.js";
 import { readForecastAvatars } from "./_intersaison-forecast-avatars.js";
+import { loadForecastPlan } from "./_intersaison-plan.js";
 
 const MEMBER_SELECT = "id,watcher_name,guild_code,discord_id,primary_member_id,roster_status,community_access_type";
-const CAMPAIGN_SELECT = "id,season_id,organization_id,poll_number,is_test,status,objective_snapshot,objective_version_id,guild_dm_campaign_id,launched_at,closed_at";
+const CAMPAIGN_SELECT = "id,season_id,organization_id,poll_number,is_test,status,objective_snapshot,objective_version_id,guild_dm_campaign_id,launched_at,closed_at,target_guild_codes";
 function failure(message, statusCode = 409) { return Object.assign(new Error(message), { statusCode }); }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isMissingSchema(error) { return ["42P01", "42703", "PGRST202", "PGRST204", "PGRST205"].includes(error?.code); }
@@ -25,9 +26,9 @@ async function all(query) {
   }
 }
 export async function loadSurveyChoiceRoster(db, organization) {
-  const guilds = await read(db.from("portal_guilds").select("organization_id,guild_code").eq("is_active", true).in("guild_code", SURVEY_OBJECTIVE_GUILDS));
-  if (guilds.length !== 7 || guilds.some((g) => g.organization_id !== organization.id)) throw failure("Périmètre des sept guildes ambigu.", 403);
-  return all(() => db.from("guild_members").select(MEMBER_SELECT).in("guild_code", SURVEY_OBJECTIVE_GUILDS)
+  const guilds = await read(db.from("portal_guilds").select("organization_id,guild_code").eq("is_active", true).eq("organization_id", organization.id));
+  if (!guilds.length || guilds.some((g) => !/^G([1-9]|1[0-9]|2[0-5])$/.test(g.guild_code))) throw failure("Périmètre Paladin invalide.", 403);
+  return all(() => db.from("guild_members").select(MEMBER_SELECT).in("guild_code", guilds.map((g) => g.guild_code))
     .or("roster_status.eq.active,roster_status.is.null").order("id"))
     .then((members) => members.filter((m) => String(m.community_access_type || "").toLowerCase() !== "community"));
 }
@@ -35,7 +36,8 @@ export async function loadSurveyChoiceRoster(db, organization) {
 export async function loadSurveyChoiceWorkspace(db, actor, organization, season) {
   if (!supportsSurveyObjectives(organization)) return { supported: false };
   await authorizeObjectives(db, actor, organization);
-  if (!season) return { supported: true, schemaReady: true, seasonId: null, members: [], candidates: {}, forecast: null };
+  const lifecycle = await loadForecastPlan(db, actor, organization, season?.id || null);
+  if (!season) return { supported: true, schemaReady: true, seasonId: lifecycle?.plan?.seasonId || null, members: [], candidates: {}, forecast: null, ...lifecycle };
   try {
     const members = await loadSurveyChoiceRoster(db, organization);
     const campaigns = await read(db.from("intersaison_survey_campaigns").select(CAMPAIGN_SELECT)
@@ -68,6 +70,7 @@ export async function loadSurveyChoiceWorkspace(db, actor, organization, season)
       preview: await callChoiceRpc(db, "preview_intersaison_survey_two", { p_org: organization.id, p_season: season.id, p_actor: actor.id }),
       forecast: buildSurveyChoiceForecast({ members: forecastMembers, recipients: recipients.filter((r) => r.survey_campaign_id === choiceCampaign?.id),
         responses, placements, roles, objectives: choiceCampaign?.objective_snapshot || {} }),
+      ...lifecycle,
     };
   } catch (error) {
     if (isMissingSchema(error) || error.statusCode === 428) return { supported: true, schemaReady: false, seasonId: season.id };
@@ -122,13 +125,18 @@ export async function runSurveyChoiceAction(db, actor, organization, season, act
   if (action === "load-survey-forecast-avatars") {
     if (!Array.isArray(body.memberIds) || !body.memberIds.length || body.memberIds.length > 12
       || body.memberIds.some((id) => typeof id !== "string")) throw failure("Lot d'avatars invalide.", 400);
-    const members = await loadSurveyChoiceRoster(db, organization);
+    const lifecycle = await loadForecastPlan(db, actor, organization, season?.id || null);
+    const members = lifecycle?.members || await loadSurveyChoiceRoster(db, organization);
     const allowed = new Set(members.map((member) => member.id));
     if (body.memberIds.some((id) => !allowed.has(id))) throw failure("Joueur hors des effectifs Paladin.", 403);
     return { avatars: await readForecastAvatars(members, body.memberIds, organization.id) };
   }
   if (action === "load-survey-two-workspace") return { workspace: await loadSurveyChoiceWorkspace(db, actor, organization, season) };
   if (!season) throw failure("Aucune inter-saison active.");
+  if (["save-survey-placement", "save-survey-forecast-entry"].includes(action)
+    && await loadForecastPlan(db, actor, organization, season.id)) {
+    throw failure("Utiliser le plan versionné et actualiser avant de modifier un placement.");
+  }
   const context = { p_org: organization.id, p_actor: actor.id };
   if (["preview-survey-two-reminders", "queue-survey-two-reminders"].includes(action)) {
     if (!UUID.test(body.campaignId || "")) throw failure("Campagne de sondage invalide.", 400);
@@ -182,7 +190,9 @@ export function buildSurveyChoiceExportSheets({ campaign, recipients, responses,
   const safeResponses = responses.filter((r) => r.organization_id === org && r.survey_campaign_id === campaign.id && r.poll_number === 2 && r.is_current);
   const forecast = buildSurveyChoiceForecast({ recipients: safeRecipients, responses: safeResponses,
     placements: placements.filter((p) => p.organization_id === org && p.season_id === campaign.season_id) });
-  const label = (code) => PALADIN_GUILD_DISPLAY_NAMES[code] || "";
+  const codes = Object.keys(campaign.objective_snapshot || {});
+  const exportCodes = codes.length ? codes : SURVEY_OBJECTIVE_GUILDS;
+  const label = (code) => campaign.guild_names?.[code] || PALADIN_GUILD_DISPLAY_NAMES[code] || code || "";
   return [
     { name: "Réponses joueurs", rows: [
       ["pseudo", "guild_code", "guild_name", "discord_id", "statut", "date", "premier_choix_code", "premier_choix_nom",
@@ -193,7 +203,7 @@ export function buildSurveyChoiceExportSheets({ campaign, recipients, responses,
         p.answer?.comment_text || "", p.manual?.guild_code || "", p.manual?.actor_name || "", p.manual?.created_at || "", p.hasDifference ? "oui" : "non"]),
     ] },
     { name: "Objectifs guildes", rows: [["guild_code", "guild_name", "objectifs_officiels", "version_id"],
-      ...SURVEY_OBJECTIVE_GUILDS.map((code) => [code, label(code), campaign.objective_snapshot?.[code] || "", campaign.objective_version_id || ""])] },
+      ...exportCodes.map((code) => [code, label(code), campaign.objective_snapshot?.[code] || "", campaign.objective_version_id || ""])] },
     { name: "Campagne", rows: [["champ", "valeur"], ["campaign_id", campaign.id], ["season_id", campaign.season_id],
       ["statut", campaign.status], ["lancement", campaign.launched_at || ""], ["cloture", campaign.closed_at || ""],
       ["destinataires", safeRecipients.length], ["reponses", safeResponses.length], ["test_campaigns_excluded", "true"]] },
@@ -205,6 +215,11 @@ export async function exportSurveyChoices(db, actor, organization, body) {
   const campaign = await read(db.from("intersaison_survey_campaigns").select(CAMPAIGN_SELECT)
     .eq("id", body.campaignId).eq("organization_id", organization.id).eq("is_test", false).eq("poll_number", 2).maybeSingle());
   if (!campaign) throw failure("Campagne officielle introuvable.", 404);
+  try {
+    const metadata = await read(db.from("intersaison_survey_campaigns").select("guild_names")
+      .eq("id", campaign.id).eq("organization_id", organization.id).maybeSingle());
+    campaign.guild_names = metadata?.guild_names || {};
+  } catch (error) { if (!isMissingSchema(error)) throw error; }
   const recipients = await all(() => db.from("intersaison_survey_recipients").select("*")
     .eq("organization_id", organization.id).eq("survey_campaign_id", campaign.id).order("id"));
   const responses = await all(() => db.from("intersaison_survey_responses").select("*")
@@ -221,7 +236,7 @@ export async function exportSurveyChoices(db, actor, organization, body) {
   return { fileName: `intersaison-sondage-2-${campaign.id}.${xlsx ? "xlsx" : "csv"}`,
     contentType: xlsx ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "text/csv;charset=utf-8",
     ...(xlsx ? { encoding: "base64", content: buildSurveyResponsesWorkbook(sheets).toString("base64") }
-      : { content: sheets[0].rows.map((row, index) => [...row, ...SURVEY_OBJECTIVE_GUILDS.map((code) =>
+      : { content: sheets[0].rows.map((row, index) => [...row, ...Object.keys(campaign.objective_snapshot || {}).map((code) =>
         index === 0 ? `objectif_${code}` : campaign.objective_snapshot?.[code] || "")].map(escape).join(",")).join("\n") }),
   };
 }

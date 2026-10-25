@@ -25,10 +25,25 @@ export function parseSurveyChoiceId(customId, prefix = SURVEY_CHOICE_PREFIX) {
   return { recipientId, ownerId };
 }
 
-export function buildSurveyChoiceModal(customId, userId) {
+export function getSurveyChoiceGuildsFromMessage(message) {
+  const fields = (message?.embeds || []).flatMap((embed) => embed.fields || []);
+  if (!fields.length) return null;
+  const guilds = fields.map((field) => {
+    const match = String(field.name || "").match(/^(G(?:[1-9]|1[0-9]|2[0-5])) — (.+)$/);
+    if (!match) throw new Error("Objectifs du message illisibles. Aucun choix envoyé.");
+    return { code: match[1], name: match[2] };
+  });
+  if (guilds.length > 25 || new Set(guilds.map((g) => g.code)).size !== guilds.length) throw new Error("Périmètre du message invalide.");
+  return guilds;
+}
+
+export function buildSurveyChoiceModal(customId, userId, guilds = null) {
   const { recipientId, ownerId } = parseSurveyChoiceId(customId);
   if (String(userId) !== ownerId) throw new Error("Ce sondage est réservé au destinataire du message.");
-  const options = SURVEY_OBJECTIVE_GUILDS.map((code) => ({ label: `${code} — ${PALADIN_GUILD_DISPLAY_NAMES[code]}`, value: code }));
+  const options = (guilds || SURVEY_OBJECTIVE_GUILDS.map((code) => ({ code, name: PALADIN_GUILD_DISPLAY_NAMES[code] })))
+    .map(({ code, name }) => ({ label: `${code} — ${name}`.slice(0, 100), value: code }));
+  if (!options.length || options.length > 25 || new Set(options.map((o) => o.value)).size !== options.length
+    || options.some((o) => !/^G([1-9]|1[0-9]|2[0-5])$/.test(o.value))) throw new Error("Périmètre du message invalide.");
   return {
     type: 9,
     data: {
@@ -39,7 +54,7 @@ export function buildSurveyChoiceModal(customId, userId) {
           type: 3, custom_id: "first_choice", options, required: true, min_values: 1, max_values: 1,
         } },
         { type: 18, label: "Deuxième choix (facultatif)", component: {
-          type: 3, custom_id: "second_choice", options: [{ label: "Pas de deuxième choix", value: "none" }, ...options],
+          type: 3, custom_id: "second_choice", options: options.length < 25 ? [{ label: "Pas de deuxième choix", value: "none" }, ...options] : options,
           required: false, min_values: 0, max_values: 1,
         } },
         { type: 18, label: "Commentaire (facultatif)", component: {
@@ -50,7 +65,7 @@ export function buildSurveyChoiceModal(customId, userId) {
   };
 }
 
-export function readSurveyChoiceFields(components = []) {
+export function readSurveyChoiceFields(components = [], guildCodes = SURVEY_OBJECTIVE_GUILDS) {
   const values = {};
   function visit(component) {
     const id = component?.custom_id || component?.customId;
@@ -63,14 +78,14 @@ export function readSurveyChoiceFields(components = []) {
     for (const child of component?.components || []) visit(child);
   }
   for (const component of components) visit(component);
-  return validateSurveyChoice(values.first_choice, values.second_choice, values.comment_text);
+  return validateSurveyChoice(values.first_choice, values.second_choice, values.comment_text, guildCodes);
 }
 
-export function validateSurveyChoice(firstChoice, secondChoice = "", comment = "") {
+export function validateSurveyChoice(firstChoice, secondChoice = "", comment = "", guildCodes = SURVEY_OBJECTIVE_GUILDS) {
   const first = String(firstChoice || "");
   const second = secondChoice === "none" ? "" : String(secondChoice || "");
-  if (!SURVEY_OBJECTIVE_GUILDS.includes(first)) throw new Error("Sélectionne un premier choix dans les sept guildes Paladin.");
-  if (second && !SURVEY_OBJECTIVE_GUILDS.includes(second)) throw new Error("Deuxième choix hors du cluster Paladin.");
+  if (!guildCodes.includes(first)) throw new Error("Sélectionne un premier choix dans les guildes Paladin proposées.");
+  if (second && !guildCodes.includes(second)) throw new Error("Deuxième choix hors du cluster Paladin.");
   if (first === second) throw new Error("Le deuxième choix doit être différent du premier.");
   if (typeof comment !== "string" || comment.length > 1900) throw new Error("Commentaire limité à 1900 caractères.");
   return { firstChoice: first, secondChoice: second, comment };
@@ -79,7 +94,8 @@ export function validateSurveyChoice(firstChoice, secondChoice = "", comment = "
 export async function saveSurveyChoiceResponse(supabase, { customId, userId, interactionId, components }) {
   const { recipientId, ownerId } = parseSurveyChoiceId(customId, SURVEY_CHOICE_SUBMIT_PREFIX);
   if (String(userId) !== ownerId) throw new Error("Ce sondage est réservé au destinataire du message.");
-  const answer = readSurveyChoiceFields(components);
+  // The SQL RPC checks the frozen campaign scope, owner, status and identity atomically.
+  const answer = readSurveyChoiceFields(components, Array.from({ length: 25 }, (_, i) => `G${i + 1}`));
   const { data, error } = await supabase.rpc("submit_intersaison_survey_choice", {
     p_dm_recipient_id: recipientId, p_discord_user_id: String(userId), p_interaction_id: String(interactionId || ""),
     p_first_choice: answer.firstChoice, p_second_choice: answer.secondChoice, p_comment: answer.comment,
@@ -90,7 +106,7 @@ export async function saveSurveyChoiceResponse(supabase, { customId, userId, int
 }
 
 // The forecast is a projection only: a manual decision never becomes a survey answer.
-export function buildSurveyChoiceForecast({ members = [], recipients = [], responses = [], placements = [], roles = [], objectives = {} } = {}) {
+export function buildSurveyChoiceForecast({ members = [], recipients = [], responses = [], placements = [], roles = [], objectives = {}, guilds = null } = {}) {
   const membersById = new Map(members.map((m) => [m.id, m]));
   const people = new Map(members.map((m) => [m.id, {
     memberKey: m.id, memberId: m.id, name: m.watcher_name, currentGuild: m.guild_code, activeNow: true,
@@ -132,9 +148,10 @@ export function buildSurveyChoiceForecast({ members = [], recipients = [], respo
     };
   }).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "fr"));
   return {
-    guilds: SURVEY_OBJECTIVE_GUILDS.map((code) => {
+    guilds: (guilds || SURVEY_OBJECTIVE_GUILDS.map((code) => ({ code, name: PALADIN_GUILD_DISPLAY_NAMES[code], objective: objectives[code] || "" }))).map((guild) => {
+      const { code } = guild;
       const players = rows.filter((p) => p.targetGuild === code);
-      return { code, name: PALADIN_GUILD_DISPLAY_NAMES[code], objective: objectives[code] || "", players,
+      return { code, name: guild.name, objective: guild.objective || "", players,
         count: players.length, referenceCapacity: 30, overCapacity: players.length > 30 };
     }),
     unassigned: rows.filter((p) => !p.targetGuild),

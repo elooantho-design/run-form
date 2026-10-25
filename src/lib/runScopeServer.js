@@ -1,10 +1,9 @@
+/* global process */
 import {
   getGuildSpaceKey,
   isPaladinGuildCode,
   normalizeGuildCode,
   normalizeGvgGuildCode,
-  normalizeGuildCodeKey,
-  PALADIN_CLUSTER_GUILD_CODES,
   PALADIN_SPACE_KEY,
 } from "./guildScope.js";
 import {
@@ -192,7 +191,7 @@ export function stratMatchesRunScope(strat, scope) {
   const stratGuildCode = normalizeGuildCode(strat?.guild_code);
 
   if (scope?.isPaladin) {
-    return !stratGuildCode || PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(stratGuildCode));
+    return !stratGuildCode || isPaladinGuildCode(stratGuildCode);
   }
 
   return Boolean(stratGuildCode && getGuildSpaceKey(stratGuildCode) === scope?.spaceKey);
@@ -203,13 +202,13 @@ export function stratMatchesRunReadScope(strat, scope) {
 
   if (scope?.isPaladin) {
     if (scope?.isAdmin || scope?.isLeader) return true;
-    return !stratGuildCode || PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(stratGuildCode));
+    return !stratGuildCode || isPaladinGuildCode(stratGuildCode);
   }
 
   if (stratGuildCode && getGuildSpaceKey(stratGuildCode) === scope?.spaceKey) return true;
 
   if (scope?.canAccessPaladinRuns) {
-    return !stratGuildCode || PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(stratGuildCode));
+    return !stratGuildCode || isPaladinGuildCode(stratGuildCode);
   }
 
   return false;
@@ -219,7 +218,7 @@ export function canUseRunTargetGuild(scope, guildCode) {
   const targetGuildCode = normalizeGuildCode(guildCode || scope?.guildCode);
   if (!targetGuildCode) return false;
   if (scope?.isLeader) return true;
-  if (scope?.isPaladin) return PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(targetGuildCode));
+  if (scope?.isPaladin) return isPaladinGuildCode(targetGuildCode);
   return getGuildSpaceKey(targetGuildCode) === scope?.spaceKey;
 }
 

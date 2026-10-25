@@ -2,6 +2,7 @@ import {
   PALADIN_CLUSTER_GUILD_CODES,
   normalizeGuildCode,
   normalizeGuildCodeKey,
+  getPortalGuildCatalog,
 } from "./guildScope.js";
 
 export const PALADIN_GUILD_DISPLAY_NAMES = {
@@ -87,7 +88,7 @@ export function getGuildDisplayName(input = {}) {
 
   const displayName = findGuildDisplayNameInRows(
     guildCode,
-    options.guilds,
+    options.guilds || getPortalGuildCatalog()?.guilds,
     options.organizationKey || options.organization_key,
     options.organizationId || options.organization_id,
   );

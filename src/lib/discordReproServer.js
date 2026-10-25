@@ -1,6 +1,6 @@
 /* global process */
 import { buildSurveyTwoDiscordPayload } from "./intersaisonSurveyObjectives.js";
-import { buildSurveyChoiceModal, saveSurveyChoiceResponse, SURVEY_CHOICE_PREFIX, SURVEY_CHOICE_SUBMIT_PREFIX } from "./intersaisonSurveyChoices.js";
+import { buildSurveyChoiceModal, saveSurveyChoiceResponse, getSurveyChoiceGuildsFromMessage, SURVEY_CHOICE_PREFIX, SURVEY_CHOICE_SUBMIT_PREFIX } from "./intersaisonSurveyChoices.js";
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_REPRO_CHANNEL_IDS = {
   G1: "1501512158637457408",
@@ -132,6 +132,7 @@ export function buildGuildDmInteractionComponents(campaign, recipientId, options
   if (interactionType === "intersaison_choice") {
     return buildSurveyTwoDiscordPayload(campaign?.interaction_payload?.objectives || {}, {
       recipientId, discordUserId: options.discordUserId || "", isTest: Boolean(campaign?.interaction_payload?.isTest),
+      guildCodes: Object.keys(campaign?.interaction_payload?.objectives || {}), guildNames: campaign?.interaction_payload?.guildNames,
     }).components;
   }
   if (interactionType === "none") return [];
@@ -243,7 +244,7 @@ function isLeaderRole(role) {
 }
 
 function isPaladinGuildCode(value) {
-  return /^G[1-7]$/.test(normalizeGuildCode(value));
+  return /^G([1-9]|1[0-9]|2[0-5])$/.test(normalizeGuildCode(value));
 }
 
 function isDiscordReproEligibleDefense(defense) {
@@ -3008,7 +3009,7 @@ export async function handleDiscordReproComponentInteraction(supabase, interacti
   const user = interaction?.member?.user || interaction?.user || null;
 
   if (customId.startsWith(SURVEY_CHOICE_PREFIX)) {
-    try { return buildSurveyChoiceModal(customId, user?.id); }
+    try { return buildSurveyChoiceModal(customId, user?.id, getSurveyChoiceGuildsFromMessage(interaction?.message)); }
     catch (error) { return discordEphemeral(error.message); }
   }
 

@@ -1,5 +1,6 @@
 import { isPortalAdminRole } from "./_portal-auth.js";
-import { normalizeSurveyObjectives, SURVEY_OBJECTIVE_GUILDS } from "../src/lib/intersaisonSurveyObjectives.js";
+import { normalizeSurveyObjectives, buildSurveyTwoDiscordPayload } from "../src/lib/intersaisonSurveyObjectives.js";
+import { PALADIN_GUILD_DISPLAY_NAMES } from "../src/lib/guildDisplay.js";
 
 const VERSIONS_TABLE = "intersaison_survey_objective_versions";
 const VERSION_SELECT = "id, organization_id, season_id, purpose, version_number, status, created_at, created_by_member_id, validated_at, official_at, intersaison_survey_objective_items(guild_code, objective_text)";
@@ -15,7 +16,7 @@ export function supportsSurveyObjectives(organization) {
 }
 
 export async function authorizeObjectives(supabase, actor, organization) {
-  if (!isPortalAdminRole(actor?.role) || !supportsSurveyObjectives(organization) || !SURVEY_OBJECTIVE_GUILDS.includes(actor?.guild_code)) {
+  if (!isPortalAdminRole(actor?.role) || !supportsSurveyObjectives(organization)) {
     throw failure("Préparation réservée aux admins Paladin autorisés.", 403);
   }
   const { data, error } = await supabase.from("portal_guilds").select("id")
@@ -65,7 +66,16 @@ export async function loadSurveyObjectivesPreparation(supabase, actor, organizat
     throw error;
   }
   const versions = (data || []).map(serializeVersion);
-  return { supported: true, schemaReady: true, seasonId: season.id, version: versions[0] || null, history: versions };
+  const { data: guilds, error: guildError } = await supabase.from("portal_guilds").select("guild_code,display_name")
+    .eq("organization_id", organization.id).eq("is_active", true);
+  if (guildError) throw guildError;
+  const { data: plan, error: planError } = await supabase.from("intersaison_plan_cycles").select("guilds")
+    .eq("organization_id", organization.id).eq("season_id", season.id).maybeSingle();
+  if (planError && !missingSchema(planError)) throw planError;
+  const catalog = (guilds || []).map((g) => ({ code: g.guild_code,
+    name: plan?.guilds?.[g.guild_code]?.name || PALADIN_GUILD_DISPLAY_NAMES[g.guild_code] || g.display_name }))
+    .sort((a,b) => Number(a.code.slice(1)) - Number(b.code.slice(1)));
+  return { supported: true, schemaReady: true, seasonId: season.id, version: versions[0] || null, history: versions, guilds: catalog };
 }
 
 export async function saveSurveyObjectivesDraft(supabase, actor, organization, season, body) {
@@ -76,7 +86,7 @@ export async function saveSurveyObjectivesDraft(supabase, actor, organization, s
   if (!Number.isInteger(body.expectedVersion) || body.expectedVersion < 0) throw failure("Version du brouillon manquante.");
   let objectives;
   try {
-    objectives = normalizeSurveyObjectives(body.objectives, preparation.version?.objectives);
+    objectives = normalizeSurveyObjectives(body.objectives, preparation.version?.objectives, preparation.guilds.map((g) => g.code));
   } catch (error) {
     throw failure(error.message);
   }
@@ -92,6 +102,12 @@ export async function validateSurveyObjectivesDraft(supabase, actor, organizatio
   await authorizeObjectives(supabase, actor, organization);
   if (!season || season.status === "finished") throw failure("Aucune inter-saison active.", 409);
   if (typeof body.versionId !== "string" || !/^[0-9a-f-]{36}$/i.test(body.versionId)) throw failure("Version invalide.");
+  const preparation = await loadSurveyObjectivesPreparation(supabase, actor, organization, season);
+  const guildCodes = preparation.guilds.map((g) => g.code);
+  try {
+    buildSurveyTwoDiscordPayload(preparation.version?.objectives || {}, { guildCodes,
+      guildNames: Object.fromEntries(preparation.guilds.map((g) => [g.code, g.name])) });
+  } catch (error) { throw failure(error.message); }
   const { error } = await supabase.rpc("validate_intersaison_survey_objectives_draft", {
     p_organization_id: organization.id, p_season_id: season.id, p_actor_member_id: actor.id, p_version_id: body.versionId,
   });

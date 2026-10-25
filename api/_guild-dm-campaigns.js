@@ -48,7 +48,7 @@ export function isPortalAdminLikeRole(role) {
 }
 
 export function isPaladinGuildCode(value) {
-  return /^G[1-7]$/.test(normalizeGuildCompareKey(value));
+  return /^G([1-9]|1[0-9]|2[0-5])$/.test(normalizeGuildCompareKey(value));
 }
 
 function getGuildSpaceKey(value) {

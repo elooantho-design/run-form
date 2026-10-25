@@ -6,12 +6,13 @@ async function buildChoicePayload(campaign, recipient) {
   const { buildSurveyTwoDiscordPayload } = await import("../shared/intersaisonSurveyObjectives.js");
   const { parseSurveyChoiceId } = await helpers();
   const objectives = campaign?.interaction_payload?.objectives;
-  if (!objectives || Object.keys(objectives).length !== 7 || Object.values(objectives).some((v) => typeof v !== "string" || !v.trim())) {
-    throw new Error("Snapshot des sept objectifs incomplet. Aucun message envoyé.");
+  if (!objectives || !Object.keys(objectives).length || Object.keys(objectives).length > 25 || Object.values(objectives).some((v) => typeof v !== "string" || !v.trim())) {
+    throw new Error("Snapshot des objectifs incomplet. Aucun message envoyé.");
   }
   parseSurveyChoiceId(`interchoice:${recipient.id}:${recipient.discord_user_id}`);
   if (!recipient.member_name_snapshot || !recipient.guild_code) throw new Error("Compte de jeu du destinataire manquant. Aucun message envoyé.");
   return buildSurveyTwoDiscordPayload(objectives, { recipientId: recipient.id, discordUserId: recipient.discord_user_id,
+    guildCodes: Object.keys(objectives), guildNames: campaign.interaction_payload.guildNames,
     isTest: Boolean(campaign.interaction_payload.isTest), account: { name: recipient.member_name_snapshot, guildCode: recipient.guild_code } });
 }
 
@@ -26,10 +27,10 @@ async function handleChoiceInteraction(interaction, { supabase } = {}) {
   const isButton = interaction?.isButton?.() && customId.startsWith("interchoice:");
   const isSubmit = interaction?.isModalSubmit?.() && customId.startsWith("interchoice_submit:");
   if (!isButton && !isSubmit) return false;
-  const { buildSurveyChoiceModal, saveSurveyChoiceResponse } = await helpers();
+  const { buildSurveyChoiceModal, saveSurveyChoiceResponse, getSurveyChoiceGuildsFromMessage } = await helpers();
   if (isButton) {
     // No database/network work before the type 9 modal response.
-    try { await interaction.showModal(buildSurveyChoiceModal(customId, interaction.user?.id).data); }
+    try { await interaction.showModal(buildSurveyChoiceModal(customId, interaction.user?.id, getSurveyChoiceGuildsFromMessage(interaction.message)).data); }
     catch (error) {
       if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: error.message, ephemeral: true, allowedMentions: { parse: [] } });
     }

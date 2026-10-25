@@ -651,6 +651,10 @@ export default function PortalIntersaisonTab({ session }) {
     );
   }
 
+  if (["paladin", "paladin_cluster"].includes(organization?.organization_key || organization?.organizationKey)) {
+    return <PortalIntersaisonSurveyCenter organizationFallback={organization} />;
+  }
+
   return (
     <section className="space-y-5">
       <PortalIntersaisonSurveyCenter organizationFallback={organization} />

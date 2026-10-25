@@ -369,7 +369,7 @@ export default function PortalGuildsTab({ session }) {
           <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
             <div className="text-xs uppercase tracking-wide text-zinc-500">Paladin</div>
             <div className="mt-1 text-2xl font-semibold text-zinc-50">{paladinMemberCount}</div>
-            <div className="text-sm text-zinc-500">membres G1-G7</div>
+            <div className="text-sm text-zinc-500">membres du cluster Paladin</div>
           </div>
           <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
             <div className="text-xs uppercase tracking-wide text-zinc-500">Externes</div>
