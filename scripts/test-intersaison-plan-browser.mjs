@@ -17,8 +17,14 @@ const fixture = `
   import { buildSurveyChoiceForecast } from '/src/lib/intersaisonSurveyChoices.js';
   import '/src/index.css';
   const id = n => '20000000-0000-4000-8000-'+String(n).padStart(12,'0');
-  const guilds = Object.fromEntries(Array.from({length:9},(_,i)=>['G'+(i+1),{name:i===7?'Une guilde additionnelle au nom particulièrement long pour vérifier le retour à la ligne':'Guilde '+(i+1),objective:'Objectifs officiels',existingId:i<7?id(i+100):null}]));
+  const guildNames=['Legend','Imperatores','Loyalty','Collegium','Senatores','Legacy','Magistratus'];
+  const guilds = Object.fromEntries(Array.from({length:9},(_,i)=>['G'+(i+1),{name:i===7?'Une guilde additionnelle au nom particulièrement long pour vérifier le retour à la ligne':guildNames[i]||'Guilde '+(i+1),objective:'Objectifs officiels',existingId:i<7?id(i+100):null}]));
   const members = Array.from({length:30},(_,i)=>({id:id(i+1),watcher_name:i===0?'UnPseudoSansEspacesExtrêmementLongPourVérifierQueLeTexteResteIntégralDansLImage':'Joueur '+String(i+1).padStart(2,'0'),guild_code:'G1',discord_id:'111111111111111111'}));
+  const avatarBase='https://vps-aad12be0.vps.ovh.net/assets/discord-avatars/';
+  members[0].discord_avatar_url=members[1].discord_avatar_url=avatarBase+'a'.repeat(64)+'.webp?v=0123456789abcdef';
+  members[2].discord_avatar_url=avatarBase+'b'.repeat(64)+'.webp?v=0123456789abcdef';
+  members[3].discord_avatar_url='https://cdn.discordapp.com/avatars/private/avatar.png';
+  members[4].discord_avatar_url=avatarBase+'c'.repeat(64)+'.webp?v=0123456789abcdef';
   members.push({id:id(50),watcher_name:'Compte communautaire autorisé',guild_code:null,community_access_type:'community'});
   const placements = members.slice(0,29).map(m=>({id:'placement-'+m.id,member_id:m.id,member_key:m.id,member_name_snapshot:m.watcher_name,action:'set',guild_code:'G1',revision:1,actor_name:'Admin'}));
   const recipients=[{id:'recipient-29',member_id:id(29),member_key:id(29)}];
@@ -78,6 +84,12 @@ try {
   const page=await browser.newPage({viewport:{width:1440,height:1000},acceptDownloads:true});
   page.on("pageerror",e=>errors.push(e.message));
   await page.route("**/*",route=>route.request().url().startsWith(`http://127.0.0.1:${address.port}`) ? route.continue() : route.abort());
+  const avatarBytes=await sharp({create:{width:64,height:64,channels:3,background:{r:30,g:120,b:200}}}).webp().toBuffer();
+  await page.route('https://vps-aad12be0.vps.ovh.net/assets/discord-avatars/**',route=>route.request().url().includes('/'+'a'.repeat(64)+'.webp')
+    ? route.fulfill({status:200,body:avatarBytes,contentType:'image/webp',headers:{'access-control-allow-origin':'*'}})
+    : route.request().url().includes('/'+'c'.repeat(64)+'.webp')
+      ? route.fulfill({status:200,body:avatarBytes,contentType:'image/webp',headers:{'access-control-allow-origin':'https://not-authorized.invalid'}})
+      : route.fulfill({status:404,body:'Unavailable'}));
   await page.goto(`http://127.0.0.1:${address.port}/isolated-plan`);
   await page.getByRole("heading",{name:/Plan prévisionnel · Version/}).waitFor();
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.action==='preview-survey-two-launch').length),0);
@@ -102,7 +114,20 @@ try {
   await page.getByRole("option",{name:/Compte communautaire autorisé/}).waitFor({state:"attached"});
   await page.keyboard.press("Escape");
   const downloadPromise=page.waitForEvent("download");
-  await page.evaluate(()=>{window.renderedText=[];const draw=CanvasRenderingContext2D.prototype.fillText;CanvasRenderingContext2D.prototype.fillText=function(text,...args){window.renderedText.push(text);return draw.call(this,text,...args);};});
+  await page.evaluate(()=>{
+    window.renderedText=[];window.drawnCrests=[];window.drawnAvatars=[];window.publicationImageRequests=[];
+    const src=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');
+    Object.defineProperty(HTMLImageElement.prototype,'src',{...src,set(value){window.publicationImageRequests.push(value);src.set.call(this,value);}});
+    const draw=CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText=function(text,...args){window.renderedText.push(text);return draw.call(this,text,...args);};
+    const drawImage=CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage=function(image,...args){
+      const path=new URL(image.src).pathname;
+      if(path.startsWith('/guild-crests/')){const[x,y,width,height]=args;window.drawnCrests.push({src:path,x,y,width,height,naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight});}
+      else window.drawnAvatars.push({src:path,args});
+      return drawImage.call(this,image,...args);
+    };
+  });
   await page.getByRole("button",{name:"Image G1",exact:true}).click();
   const download=await downloadPromise;
   const png=resolve(output,"plan-G1.png");await download.saveAs(png);
@@ -113,6 +138,42 @@ try {
   const {data,info}=await sharp(png).removeAlpha().raw().toBuffer({resolveWithObject:true});
   let dark=0;for(let y=200;y<info.height-60;y++) for(let x=55;x<950;x++){const p=(y*info.width+x)*info.channels;if(data[p]<100&&data[p+1]<100&&data[p+2]<100) dark++;}
   assert.ok(dark>10000,"Export contains real text, not a blank canvas");
+  const drawnAvatars=await page.evaluate(()=>window.drawnAvatars);
+  assert.equal(drawnAvatars.length,2,"shared avatars remain separate; missing, invalid and CORS-blocked images use a fallback without tainting the PNG");
+  assert.ok(drawnAvatars.every(a=>a.src==='/assets/discord-avatars/'+'a'.repeat(64)+'.webp'));
+  assert.equal(await page.evaluate(()=>window.publicationImageRequests.filter(src=>src.includes('/assets/discord-avatars/'+'a'.repeat(64)+'.webp')).length),1,"shared avatars are loaded only once per export");
+  assert.ok(!(await page.evaluate(()=>window.publicationImageRequests)).some(src=>src.includes('cdn.discordapp.com')));
+  const firstAvatar=drawnAvatars[0].args;
+  const avatarPixel=(Math.round(firstAvatar[5]+20)*info.width+80)*info.channels;
+  assert.ok(data[avatarPixel+2]>160&&data[avatarPixel]<80,"the downloaded PNG contains the cached avatar pixels");
+  const expectedCrests=['legend','imperatores-loyalty','imperatores-loyalty','collegium','senatores-legacy-magistratus','senatores-legacy-magistratus','senatores-legacy-magistratus'];
+  for(let n=2;n<=8;n++) {
+    const nextDownload=page.waitForEvent('download');
+    await page.getByRole('button',{name:'Image G'+n,exact:true}).click();
+    await (await nextDownload).saveAs(resolve(output,'plan-G'+n+'.png'));
+  }
+  const crests=await page.evaluate(()=>window.drawnCrests);
+  assert.equal(crests.length,7,"the eighth guild has no invented or reused crest");
+  for(const [index,crest] of crests.entries()) {
+    assert.equal(crest.src,'/guild-crests/'+expectedCrests[index]+'.png');
+    assert.ok(Math.abs(crest.width/crest.height-crest.naturalWidth/crest.naturalHeight)<0.00001,"crests retain their original aspect ratio");
+    assert.ok(crest.x>=720&&crest.x+crest.width<=940&&crest.y===40);
+    const region=await sharp(await sharp(resolve(output,'plan-G'+(index+1)+'.png')).extract({left:Math.ceil(crest.x)+8,top:48,width:Math.floor(crest.width)-16,height:Math.floor(crest.height)-16}).toBuffer()).stats();
+    assert.ok(region.channels.slice(0,3).some(channel=>channel.mean<210),"the downloaded PNG contains real crest pixels");
+  }
+  let unexpectedDownloads=0;
+  const onUnexpectedDownload=()=>{unexpectedDownloads++;};
+  const failurePage=await browser.newPage({viewport:{width:390,height:844},acceptDownloads:true});
+  failurePage.on('pageerror',e=>errors.push(e.message));
+  failurePage.on('download',onUnexpectedDownload);
+  await failurePage.route('**/*',route=>route.request().url().startsWith(`http://127.0.0.1:${address.port}`)?route.continue():route.abort());
+  const missingCrest=route=>route.fulfill({status:404,body:'Not found'});
+  await failurePage.route('**/guild-crests/imperatores-loyalty.png',missingCrest);
+  await failurePage.goto(`http://127.0.0.1:${address.port}/isolated-plan`);
+  await failurePage.getByRole('button',{name:'Image G2',exact:true}).click();
+  await failurePage.getByRole('alert').filter({hasText:'Blason de Imperatores indisponible'}).waitFor();
+  assert.equal(unexpectedDownloads,0,"a missing crest reports an explicit error, never a silently incomplete image");
+  await failurePage.close();
   // Exclusion is distinct from clearing an override: preserve the answer, role and reminder status.
   await page.getByRole("button",{name:"Ouvrir Joueur 29",exact:true}).click();
   let playerDialog=page.getByRole("dialog",{name:"Joueur 29",exact:true});
