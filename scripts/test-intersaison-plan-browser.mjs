@@ -42,6 +42,7 @@ const fixture = `
       guilds:Object.entries(guilds).map(([code,g])=>({code,name:g.name})),
       version:{id:id(400),versionNumber:1,status:'official',objectives:Object.fromEntries(Object.keys(guilds).map(code=>[code,'Objectifs officiels']))},history:[]}};
     if(body.action==='load-survey-forecast-avatars') return {avatars:{}};
+    if(body.action==='preview-survey-two-launch') throw new Error('canceling statement due to statement timeout');
     if(body.action==='preview-forecast-application') return {preview:{seasonId:plan.seasonId,revision:12,fingerprint:'a'.repeat(32),canApply:true,blockers:[],creations:[{code:'G8',name:guilds.G8.name}],changes:[{member_id:id(1),member_name:members[0].watcher_name,current_guild:'G1',target_guild:'G8'},{member_id:id(30),member_name:'Sans affectation',current_guild:'G1',target_guild:null}]}};
     if(body.action==='apply-forecast-plan') { await new Promise(r=>setTimeout(r,200));return {result:{transferred:1,community:1,createdGuilds:1}}; }
     if(body.action==='save-forecast-member') {
@@ -79,6 +80,7 @@ try {
   await page.route("**/*",route=>route.request().url().startsWith(`http://127.0.0.1:${address.port}`) ? route.continue() : route.abort());
   await page.goto(`http://127.0.0.1:${address.port}/isolated-plan`);
   await page.getByRole("heading",{name:/Plan prévisionnel · Version/}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.action==='preview-survey-two-launch').length),0);
   await page.getByText("Objectifs des guildes",{exact:true}).click();
   assert.equal(await page.locator('section[aria-label="Préparation des objectifs"] textarea').count(),9);
   await page.getByRole("button",{name:"Prévisualiser le sondage n° 2",exact:true}).click();
@@ -148,6 +150,12 @@ try {
     await page.screenshot({path:resolve(output,`removal-dialog-${width}.png`)});
   }
   await page.keyboard.press("Escape");
+  page.once("dialog",d=>d.accept());
+  await page.getByRole("button",{name:"M'envoyer un test",exact:true}).click();
+  await page.getByRole("alert").filter({hasText:'statement timeout'}).waitFor();
+  await page.getByRole("heading",{name:/Plan prévisionnel · Version/}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.action==='preview-survey-two-launch').length),1);
+  assert.equal(await page.getByRole("button",{name:"Ouvrir Joueur 29",exact:true}).count(),1,"explicit launch-preview failure does not remove roster tables");
   await page.getByRole("button",{name:"Valider et appliquer le plan",exact:true}).click();
   await page.getByRole("button",{name:"Confirmer l’application",exact:true}).waitFor();
   assert.ok(await page.getByRole("button",{name:"Confirmer l’application",exact:true}).isDisabled());
@@ -156,7 +164,7 @@ try {
   await page.getByRole("button",{name:"Confirmer l’application",exact:true}).evaluate(button=>{button.click();button.click();});
   await page.getByRole("dialog").waitFor({state:"hidden"});
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.action==='apply-forecast-plan').length),1,"double clicks produce only one explicit request");
-  assert.ok(!(await page.evaluate(()=>window.calls)).some(c=>/launch|queue|remind|close-survey/.test(c.action)),"No campaign action exists in the tested flow");
+  assert.ok(!(await page.evaluate(()=>window.calls)).some(c=>/^(launch|queue)|close-survey/.test(c.action)),"No campaign mutation exists in the tested flow");
   await page.evaluate(()=>window.setClosed(true));
   await page.getByRole("button",{name:"Préparer une nouvelle Inter-saison",exact:true}).waitFor();
   assert.equal(await page.getByRole("button",{name:"Ajouter une guilde",exact:true}).count(),0,"closed cycles are read-only");

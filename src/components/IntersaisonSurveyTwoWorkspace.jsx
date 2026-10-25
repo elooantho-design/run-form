@@ -167,7 +167,8 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
   }
   async function launch(isTest) {
     if (isTest && !window.confirm("Envoyer le sondage n° 2 uniquement sur ton propre compte Discord, hors résultats officiels ?")) return;
-    const preview = isTest ? workspace.preview : launchPreview;
+    const preview = isTest ? (await perform({ action: "preview-survey-two-launch" }))?.preview : launchPreview;
+    if (!preview || (isTest && !preview.canTest)) return;
     const data = await perform({ action: isTest ? "launch-survey-two-test" : "launch-survey-two", confirmed: true,
       versionId: preview.versionId, rosterFingerprint: preview.rosterFingerprint },
     isTest ? "Test personnel ajouté à la file Discord. Aucun objectif officialisé." : "Sondage n° 2 ajouté à la file Discord progressive.");
@@ -230,8 +231,8 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
         <IntersaisonObjectivesPreparation request={request} onStateChange={setEditor} />
       </details>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" disabled={!editable || busy || editor?.dirty || !workspace?.preview?.canLaunch} onClick={previewLaunch} className="bg-sky-500 text-zinc-950 hover:bg-sky-400"><Send className="h-4 w-4" /> Lancer le sondage n° 2</Button>
-        <Button type="button" variant="outline" disabled={!editable || busy || editor?.dirty || !workspace?.preview?.canTest} onClick={() => launch(true)} className={buttonStyle}><Send className="h-4 w-4" /> M'envoyer un test</Button>
+        <Button type="button" disabled={!editable || busy || editor?.dirty || editor?.status !== "validated" || Boolean(workspace?.choiceCampaign)} onClick={previewLaunch} className="bg-sky-500 text-zinc-950 hover:bg-sky-400"><Send className="h-4 w-4" /> Lancer le sondage n° 2</Button>
+        <Button type="button" variant="outline" disabled={!editable || busy || editor?.dirty || !["validated", "official"].includes(editor?.status)} onClick={() => launch(true)} className={buttonStyle}><Send className="h-4 w-4" /> M'envoyer un test</Button>
       </div>
       {!workspace?.choiceCampaign && workspace?.preview?.blockers?.length ? <ul className="space-y-1 text-sm text-amber-200">{workspace.preview.blockers.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}
       <div role="tablist" aria-label="Vue des guildes" className="flex flex-wrap gap-1 border-b border-zinc-800">

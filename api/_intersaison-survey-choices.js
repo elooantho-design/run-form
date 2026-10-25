@@ -67,7 +67,8 @@ export async function loadSurveyChoiceWorkspace(db, actor, organization, season)
     return {
       supported: true, schemaReady: true, forecastRolesReady, seasonId: season.id, members, candidates,
       campaigns, choiceCampaign,
-      preview: await callChoiceRpc(db, "preview_intersaison_survey_two", { p_org: organization.id, p_season: season.id, p_actor: actor.id }),
+      // Launch eligibility is expensive and belongs to an explicit preview, not roster reads.
+      preview: null,
       forecast: buildSurveyChoiceForecast({ members: forecastMembers, recipients: recipients.filter((r) => r.survey_campaign_id === choiceCampaign?.id),
         responses, placements, roles, objectives: choiceCampaign?.objective_snapshot || {} }),
       ...lifecycle,

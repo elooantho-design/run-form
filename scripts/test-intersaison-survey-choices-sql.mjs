@@ -163,6 +163,20 @@ await db.exec("reset role");
 await db.exec(`insert into guild_members(id,watcher_name,role,guild_code,discord_id) values('${id(8)}','Nouveau joueur','member','G3','888888888888888888');`);
 await db.exec("set role service_role");
 let workspace=await loadSurveyChoiceWorkspace(client,actor,organization,seasonRow);
+let launchPreviewCalls=0;
+const timedOutPreviewClient={...client,rpc:async(name,args)=>{
+  if(name==='preview_intersaison_survey_two') {
+    launchPreviewCalls++;
+    return {data:null,error:{code:'57014',message:'canceling statement due to statement timeout'}};
+  }
+  return client.rpc(name,args);
+}};
+const readableWorkspace=await loadSurveyChoiceWorkspace(timedOutPreviewClient,actor,organization,seasonRow);
+assert.deepEqual(readableWorkspace.forecast,workspace.forecast,"forecast remains available when launch preview would time out");
+assert.equal(readableWorkspace.preview,null);
+assert.equal(launchPreviewCalls,0,"opening or refreshing the plan never computes launch eligibility");
+await assert.rejects(runSurveyChoiceAction(timedOutPreviewClient,actor,organization,seasonRow,'preview-survey-two-launch',{}),/statement timeout/);
+assert.equal(launchPreviewCalls,1,"launch checks remain explicit and fail closed, without hiding the plan");
 assert.ok(workspace.candidates[2].some(m=>m.id===id(8)),"new roster accounts are detected without any sending");
 const beforeRecipients=await query("select * from intersaison_survey_recipients where survey_campaign_id=$1 order by id",[official.campaignId]);
 const appendArgs={...context,p_campaign:official.campaignId,p_members:[id(8),id(2)]};
