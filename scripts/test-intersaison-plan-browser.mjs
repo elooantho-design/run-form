@@ -21,8 +21,16 @@ const fixture = `
   const members = Array.from({length:30},(_,i)=>({id:id(i+1),watcher_name:i===0?'UnPseudoSansEspacesExtrêmementLongPourVérifierQueLeTexteResteIntégralDansLImage':'Joueur '+String(i+1).padStart(2,'0'),guild_code:'G1',discord_id:'111111111111111111'}));
   members.push({id:id(50),watcher_name:'Compte communautaire autorisé',guild_code:null,community_access_type:'community'});
   const placements = members.slice(0,29).map(m=>({id:'placement-'+m.id,member_id:m.id,member_key:m.id,member_name_snapshot:m.watcher_name,action:'set',guild_code:'G1',revision:1,actor_name:'Admin'}));
-  const forecast = buildSurveyChoiceForecast({members:members.slice(0,30),placements,guilds:Object.entries(guilds).map(([code,g])=>({code,...g}))});
-  const plan = {seasonId:id(200),revision:12,appliedRevision:11,closedAt:null,guilds};
+  const recipients=[{id:'recipient-29',member_id:id(29),member_key:id(29)}];
+  const responses=[{survey_recipient_id:'recipient-29',poll_number:2,is_current:true,first_choice_guild_code:'G1',second_choice_guild_code:'G2',comment_text:'Réponse conservée après retrait'}];
+  const roles=[{member_key:id(29),forecast_role:'officer',revision:1}];
+  const buildForecast=()=>{
+    const forecast=buildSurveyChoiceForecast({members:members.slice(0,30),placements,recipients,responses,roles,guilds:Object.entries(guilds).map(([code,g])=>({code,...g}))});
+    forecast.players.forEach(p=>{p.canPlace=true;});
+    return forecast;
+  };
+  const forecast = buildForecast();
+  const plan = {seasonId:id(200),revision:12,appliedRevision:11,closedAt:null,guilds,removalReady:true};
   const campaign = {id:id(300),poll_number:2,is_test:false,status:'closed',target_guild_codes:Object.keys(guilds),objective_snapshot:{}};
   const workspace = {supported:true,schemaReady:true,seasonId:plan.seasonId,lifecycleReady:true,forecastRolesReady:true,plan,forecast,members,choiceCampaign:campaign,candidates:{}};
   const center = {organization:{organizationKey:'paladin'},season:{id:plan.seasonId},surveySchemaReady:true,campaigns:[{id:campaign.id,pollNumber:2,status:'closed',isTest:false}]};
@@ -36,7 +44,11 @@ const fixture = `
     if(body.action==='load-survey-forecast-avatars') return {avatars:{}};
     if(body.action==='preview-forecast-application') return {preview:{seasonId:plan.seasonId,revision:12,fingerprint:'a'.repeat(32),canApply:true,blockers:[],creations:[{code:'G8',name:guilds.G8.name}],changes:[{member_id:id(1),member_name:members[0].watcher_name,current_guild:'G1',target_guild:'G8'},{member_id:id(30),member_name:'Sans affectation',current_guild:'G1',target_guild:null}]}};
     if(body.action==='apply-forecast-plan') { await new Promise(r=>setTimeout(r,200));return {result:{transferred:1,community:1,createdGuilds:1}}; }
-    if(body.action==='save-forecast-guild'||body.action==='save-forecast-member') return {};
+    if(body.action==='save-forecast-member') {
+      placements.push({id:'new-'+placements.length,member_key:body.memberId,action:body.placementMode==='unassigned'?'exclude':body.guildCode?'set':'remove',guild_code:body.guildCode,revision:placements.length+1,actor_name:'Admin'});
+      plan.revision++;workspace.forecast=buildForecast();return {};
+    }
+    if(body.action==='save-forecast-guild') return {};
     throw new Error('Unmocked operation '+body.action);
   };
   window.setClosed = value => {plan.closedAt=value?'2026-10-25':null;render();};
@@ -99,6 +111,43 @@ try {
   const {data,info}=await sharp(png).removeAlpha().raw().toBuffer({resolveWithObject:true});
   let dark=0;for(let y=200;y<info.height-60;y++) for(let x=55;x<950;x++){const p=(y*info.width+x)*info.channels;if(data[p]<100&&data[p+1]<100&&data[p+2]<100) dark++;}
   assert.ok(dark>10000,"Export contains real text, not a blank canvas");
+  // Exclusion is distinct from clearing an override: preserve the answer, role and reminder status.
+  await page.getByRole("button",{name:"Ouvrir Joueur 29",exact:true}).click();
+  let playerDialog=page.getByRole("dialog",{name:"Joueur 29",exact:true});
+  page.once("dialog",d=>d.dismiss());
+  await playerDialog.getByRole("button",{name:"Retirer du plan",exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.action==='save-forecast-member').length),0,"cancel has no write");
+  page.once("dialog",d=>d.accept());
+  await playerDialog.getByRole("button",{name:"Retirer du plan",exact:true}).click();
+  await playerDialog.waitFor({state:"hidden"});
+  const unassigned=page.getByRole("region",{name:"Joueurs sans affectation prévisionnelle"});
+  await unassigned.getByRole("button",{name:"Ouvrir Joueur 29",exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.calls.filter(c=>c.action==='save-forecast-member').map(c=>({guildCode:c.guildCode,placementMode:c.placementMode,role:c.forecastRole}))),
+    [{guildCode:null,placementMode:"unassigned",role:"officer"}]);
+  assert.match(await unassigned.innerText(),/Retiré du plan/);
+  for(const code of ['',...Array.from({length:9},(_,i)=>'G'+(i+1))]) {
+    await page.getByRole("combobox",{name:"Guilde actuelle des joueurs sans affectation",exact:true}).selectOption(code);
+    assert.equal(await unassigned.getByRole("button",{name:/^Ouvrir /}).count(),!code||code==='G1'?2:0);
+  }
+  await page.getByRole("combobox",{name:"Guilde actuelle des joueurs sans affectation",exact:true}).selectOption('');
+  await unassigned.getByRole("button",{name:"Ouvrir Joueur 29",exact:true}).click();
+  playerDialog=page.getByRole("dialog",{name:"Joueur 29",exact:true});
+  await playerDialog.getByText("Réponse conservée après retrait",{exact:true}).waitFor();
+  assert.equal(await playerDialog.getByRole("button",{name:"Retirer du plan",exact:true}).count(),0);
+  await playerDialog.getByRole("button",{name:"Modifier le placement",exact:true}).click();
+  assert.equal(await page.getByRole("combobox",{name:"Guilde prévisionnelle",exact:true}).inputValue(),"__unassigned");
+  await page.getByRole("combobox",{name:"Guilde prévisionnelle",exact:true}).selectOption('G3');
+  await page.getByRole("button",{name:"Enregistrer",exact:true}).click();
+  await page.getByRole("dialog").waitFor({state:"hidden"});
+  assert.equal(await unassigned.getByRole("button",{name:"Ouvrir Joueur 29",exact:true}).count(),0,"explicit placement restores the same account");
+  await page.getByRole("button",{name:"Ouvrir Joueur 29",exact:true}).click();
+  playerDialog=page.getByRole("dialog",{name:"Joueur 29",exact:true});
+  for(const [width,height] of [[1440,1000],[390,844],[320,740]]) {
+    await page.setViewportSize({width,height});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    await page.screenshot({path:resolve(output,`removal-dialog-${width}.png`)});
+  }
+  await page.keyboard.press("Escape");
   await page.getByRole("button",{name:"Valider et appliquer le plan",exact:true}).click();
   await page.getByRole("button",{name:"Confirmer l’application",exact:true}).waitFor();
   assert.ok(await page.getByRole("button",{name:"Confirmer l’application",exact:true}).isDisabled());
@@ -112,5 +161,5 @@ try {
   await page.getByRole("button",{name:"Préparer une nouvelle Inter-saison",exact:true}).waitFor();
   assert.equal(await page.getByRole("button",{name:"Ajouter une guilde",exact:true}).count(),0,"closed cycles are read-only");
   assert.deepEqual(errors,[]);
-  console.log("Browser passed: actual forecast components at 1440/1024/390/320px, guild draft, authorized community dropdown, explicit preview, double-click lock, PNG download/pixels. Isolated fixtures only; external requests blocked.");
+  console.log("Browser passed: actual forecast components at 1440/1024/390/320px, explicit removal/cancel/reintegration, all guild filters, preserved answer and role, guild draft, community dropdown, application preview/double-click lock, PNG pixels. Isolated fixtures only; external requests blocked.");
 } finally { await browser?.close();await server.close(); }

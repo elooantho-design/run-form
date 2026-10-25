@@ -7,7 +7,7 @@ import { PALADIN_GUILD_DISPLAY_NAMES, getGuildDisplayName } from "@/lib/guildDis
 import IntersaisonForecastPlayer from "@/components/IntersaisonForecastPlayer";
 import IntersaisonDiscordContact from "@/components/IntersaisonDiscordContact";
 import IntersaisonPlanLifecycle from "@/components/IntersaisonPlanLifecycle";
-import { getSurveyTwoNonRespondents, resolveForecastAvatarUrl, FORECAST_ROLES } from "@/lib/intersaisonForecast";
+import { getUnassignedForecastPlayers, resolveForecastAvatarUrl, FORECAST_ROLES } from "@/lib/intersaisonForecast";
 
 const guildLabel = (code) => code ? `${code} — ${getGuildDisplayName({ guildCode: code, organizationKey: "paladin" })}` : "Non renseigné";
 const dateLabel = (value) => value ? new Date(value).toLocaleString("fr-FR") : "";
@@ -77,8 +77,8 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
     && center?.season?.id === workspace.seasonId && reminderCampaign?.id
     && reminderCampaign.poll_number === 2 && reminderCampaign.is_test === false && reminderCampaign.status === "open"
     && campaign?.id === reminderCampaign.id && campaign.isTest === false && campaign.status === "open");
-  const unassignedPlayers = getSurveyTwoNonRespondents(workspace?.forecast?.unassigned);
-  const filteredUnassignedPlayers = getSurveyTwoNonRespondents(workspace?.forecast?.unassigned, currentGuildFilter);
+  const unassignedPlayers = getUnassignedForecastPlayers(workspace?.forecast?.unassigned);
+  const filteredUnassignedPlayers = getUnassignedForecastPlayers(workspace?.forecast?.unassigned, currentGuildFilter);
   const candidates = workspace?.candidates?.[pollNumber] || [];
   const loadWorkspace = useCallback(async () => {
     try {
@@ -183,25 +183,29 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
       (result) => `${result.result.addedCount} nouveau(x) destinataire(s), ${result.result.queuedCount} MP ajouté(s) à la file.`);
     if (data) { setAddOpen(false); setSelectedIds([]); }
   }
-  async function savePlacement(player, remove = false) {
+  async function savePlacement(player, action = "save") {
+    const remove = action === "follow";
+    const unassigned = action === "unassigned" || (!remove && placementGuild === "__unassigned");
     const memberId = player?.memberKey || placementMemberId;
     const existing = workspace.forecast?.players.find((p) => p.memberKey === memberId);
     if (remove && !window.confirm("Retirer ce placement manuel ? Son historique et la réponse du joueur seront conservés.")) return;
+    if (unassigned && !window.confirm("Retirer ce joueur du plan prévisionnel ? Il apparaîtra sans affectation. Sa réponse et son historique seront conservés, sans transfert réel ni message Discord.")) return;
+    const guildCode = remove || unassigned ? null : placementGuild || null;
     const payload = workspace.lifecycleReady ? {
       action: "save-forecast-member", seasonId: workspace.plan.seasonId, expectedPlanRevision: workspace.plan.revision,
-      memberId, guildCode: remove ? null : placementGuild || null,
-      forecastRole: remove ? player?.forecastRole || "member" : placementRole,
+      memberId, guildCode, placementMode: unassigned ? "unassigned" : guildCode ? "set" : "follow",
+      forecastRole: action !== "save" ? player?.forecastRole || "member" : placementRole,
     } : remove || !workspace.forecastRolesReady
       ? { action: "save-survey-placement", memberId, guildCode: remove ? null : placementGuild || null,
         expectedRevision: remove ? existing?.placementRevision || 0 : placementVersions.placement }
       : { action: "save-survey-forecast-entry", memberId, guildCode: placementGuild || null, forecastRole: placementRole,
         expectedRevision: placementVersions.placement, expectedRoleRevision: placementVersions.role };
-    const data = await perform(payload, remove ? "Placement retiré. Historique conservé." : "Plan prévisionnel enregistré.");
+    const data = await perform(payload, unassigned ? "Joueur retiré du plan. Réponse et historique conservés." : remove ? "Placement manuel retiré. Réponse conservée." : "Plan prévisionnel enregistré.");
     if (data) { setPlacementOpen(false); setSelectedPlayerKey(null); await loadWorkspace(); }
   }
   function selectPlacementMember(memberId) {
     const player = workspace?.forecast?.players.find((p) => p.memberKey === memberId);
-    setPlacementMemberId(memberId); setPlacementGuild(player?.manual?.guild_code || ""); setPlacementRole(player?.forecastRole || "member");
+    setPlacementMemberId(memberId); setPlacementGuild(player?.planExcluded || player?.communityUnassigned ? "__unassigned" : player?.manual?.guild_code || ""); setPlacementRole(player?.forecastRole || "member");
     setPlacementVersions({ placement: player?.placementRevision || 0, role: player?.roleRevision || 0 });
   }
   function openPlacement(player = null) {
@@ -335,6 +339,7 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
         </select></label>
         <label className="text-sm">Guilde prévisionnelle<select aria-label="Guilde prévisionnelle" value={placementGuild} onChange={(e) => setPlacementGuild(e.target.value)} className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 p-2">
           <option value="">Suivre le premier choix</option>
+          {workspace?.plan?.removalReady ? <option value="__unassigned">Sans affectation prévisionnelle</option> : null}
           {Object.keys(planGuilds).map((code) => <option key={code} value={code}>{labelGuild(code)}</option>)}
         </select></label>
         <label className="text-sm">Rôle prévisionnel<select aria-label="Rôle prévisionnel" value={placementRole} onChange={(e) => setPlacementRole(e.target.value)} disabled={!workspace?.forecastRolesReady} className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 p-2 disabled:opacity-50">
@@ -359,12 +364,14 @@ export default function IntersaisonSurveyTwoWorkspace({ request, center, pollNum
           <div className="text-sm text-zinc-300">Rôle prévisionnel : {FORECAST_ROLES[selectedPlayer?.forecastRole] || "Membre"}</div>
           {selectedPlayer?.forecastRoleEvent ? <div className="text-xs text-zinc-400">{selectedPlayer.forecastRoleEvent.actor_name} · {dateLabel(selectedPlayer.forecastRoleEvent.created_at)}</div> : null}
           {selectedPlayer?.manual ? <div className="text-sm">{labelGuild(selectedPlayer.manual.guild_code)}<div className="mt-1 text-xs text-zinc-400">{selectedPlayer.manual.actor_name} · {dateLabel(selectedPlayer.manual.created_at)}</div></div> : <div className="text-sm text-zinc-400">Aucun placement manuel actif.</div>}
+          {selectedPlayer?.planExcluded ? <div className="text-sm text-amber-200">Retiré du plan · réponse conservée</div> : selectedPlayer?.communityUnassigned ? <div className="text-sm text-amber-200">Compte communautaire · sans affectation prévisionnelle</div> : null}
           {selectedPlayer?.hasDifference ? <div className="text-sm text-amber-200">Le choix du joueur diffère du placement administratif.</div> : null}
           <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" className={buttonStyle} disabled={!editable || busy || !selectedPlayer?.activeNow} onClick={() => openPlacement(selectedPlayer)}><ArrowLeftRight className="h-4 w-4" /> Modifier le placement</Button>
             <IntersaisonDiscordContact key={selectedPlayer?.memberKey} member={workspace?.members?.find((member) => member.id === selectedPlayer?.memberKey)} members={workspace?.members} disabled={busy} className={buttonStyle} />
-            {selectedPlayer?.manual ? <Button type="button" variant="outline" className={buttonStyle} disabled={!editable || busy} onClick={() => savePlacement(selectedPlayer, true)}><Trash2 className="h-4 w-4" /> Retirer</Button> : null}</div>
+            {selectedPlayer?.manual ? <Button type="button" variant="outline" className={buttonStyle} disabled={!editable || busy} onClick={() => savePlacement(selectedPlayer, "follow")}><Trash2 className="h-4 w-4" /> Retirer le placement manuel</Button> : null}
+            {workspace?.plan?.removalReady && selectedPlayer?.targetGuild ? <Button type="button" variant="outline" className={buttonStyle} disabled={!editable || busy || !selectedPlayer?.canPlace} onClick={() => savePlacement(selectedPlayer, "unassigned")}><XCircle className="h-4 w-4" /> Retirer du plan</Button> : null}</div>
         </section>
-        {selectedPlayer?.manualHistory?.length ? <details className="border-t border-zinc-800 pt-3"><summary className="cursor-pointer text-sm"><History className="mr-2 inline h-4 w-4" />Historique des placements</summary><ul className="mt-2 space-y-2 text-xs text-zinc-400">{selectedPlayer.manualHistory.map((e) => <li key={e.id}>{e.action === "set" ? labelGuild(e.guild_code) : "Placement retiré"} · {e.actor_name} · {dateLabel(e.created_at)}</li>)}</ul></details> : null}
+        {selectedPlayer?.manualHistory?.length ? <details className="border-t border-zinc-800 pt-3"><summary className="cursor-pointer text-sm"><History className="mr-2 inline h-4 w-4" />Historique des placements</summary><ul className="mt-2 space-y-2 text-xs text-zinc-400">{selectedPlayer.manualHistory.map((e) => <li key={e.id}>{e.action === "exclude" ? "Retiré du plan" : e.action === "set" ? labelGuild(e.guild_code) : "Placement manuel retiré"} · {e.actor_name} · {dateLabel(e.created_at)}</li>)}</ul></details> : null}
         {selectedPlayer?.forecastRoleHistory?.length ? <details className="border-t border-zinc-800 pt-3"><summary className="cursor-pointer text-sm">Historique des rôles prévisionnels</summary><ul className="mt-2 space-y-2 text-xs text-zinc-400">{selectedPlayer.forecastRoleHistory.map((event) => <li key={event.id}>{FORECAST_ROLES[event.forecast_role]} · {event.actor_name} · {dateLabel(event.created_at)}</li>)}</ul></details> : null}
       </DialogContent>
     </Dialog>

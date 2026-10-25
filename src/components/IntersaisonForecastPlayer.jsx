@@ -25,7 +25,7 @@ export default function IntersaisonForecastPlayer({ player, avatarUrl = "", onOp
           {player.currentGuild ? <span className="text-xs text-zinc-400">{player.currentGuild}</span> : null}
           {second ? <span className="text-xs font-normal text-zinc-400">· 2e : {PALADIN_GUILD_DISPLAY_NAMES[second] || second}</span> : null}
         </span>
-        <span className="mt-1 block text-xs text-zinc-400">{player.manual ? "Placement admin" : player.answer ? "Choix du joueur" : "Sans réponse"}{role !== "member" ? ` · ${FORECAST_ROLES[role]} prévisionnel` : ""}{!player.activeNow ? " · Absent des effectifs actuels" : ""}</span>
+        <span className="mt-1 block text-xs text-zinc-400">{player.planExcluded ? "Retiré du plan" : player.communityUnassigned ? "Compte communautaire · Sans affectation" : player.manual ? "Placement admin" : player.answer ? "Choix du joueur" : "Sans réponse"}{role !== "member" ? ` · ${FORECAST_ROLES[role]} prévisionnel` : ""}{!player.activeNow ? " · Absent des effectifs actuels" : ""}</span>
         {player.hasDifference ? <span className="mt-0.5 block text-xs text-amber-200">Choix différent du placement</span> : null}
       </span>
     </button>

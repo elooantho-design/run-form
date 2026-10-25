@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PALADIN_GUILD_DISPLAY_NAMES } from "../src/lib/guildDisplay.js";
 import { buildSurveyChoiceForecast } from "../src/lib/intersaisonSurveyChoices.js";
-import { getSurveyTwoNonRespondents } from "../src/lib/intersaisonForecast.js";
+import { getSurveyTwoNonRespondents, getUnassignedForecastPlayers } from "../src/lib/intersaisonForecast.js";
 
 globalThis.fetch = () => { throw Error("Real network forbidden in nonrespondent tests"); };
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -115,9 +115,29 @@ for (const code of guilds) {
 }
 assert.deepEqual(forecast, baseline, "display filtering and removal simulations leave the original projection intact");
 
+for (const code of guilds) {
+  const input = { members: [{ id: "departed", watcher_name: "Departed", guild_code: code }],
+    recipients: [{ id: "r-departed", member_id: "departed" }],
+    responses: [{ survey_recipient_id: "r-departed", poll_number: 2, is_current: true, first_choice_guild_code: "G1", second_choice_guild_code: "G2", comment_text: "Preserved" }],
+    placements: [{ member_key: "departed", revision: 1, action: "exclude", actor_name: "Admin" }] };
+  const excluded = buildSurveyChoiceForecast(input);
+  assert.equal(getUnassignedForecastPlayers(excluded.players, code).length, 1);
+  assert.equal(getUnassignedForecastPlayers([...excluded.players,...excluded.players]).length, 1);
+  assert.equal(getUnassignedForecastPlayers(excluded.players, code === "G1" ? "G2" : "G1").length, 0);
+  assert.equal(getSurveyTwoNonRespondents(excluded.players).length, 0,"excluded respondent never becomes a nonrespondent");
+  assert.equal(excluded.guilds.reduce((sum,guild)=>sum+guild.count,0),0);
+  assert.equal(excluded.unassigned[0].answer.comment_text,"Preserved");
+  assert.equal(excluded.unassigned[0].answer.second_choice_guild_code,"G2");
+  const restored = buildSurveyChoiceForecast({...input,placements:[...input.placements,{member_key:"departed",revision:2,action:"set",guild_code:"G3"}]});
+  assert.equal(getUnassignedForecastPlayers(restored.players).length,0);
+  assert.equal(restored.guilds.find(g=>g.code==="G3").count,1);
+  assert.equal(restored.players[0].manualHistory.length,2);
+}
+assert.deepEqual(getUnassignedForecastPlayers(),[]);
+
 const componentPath = join(root, "src/components/IntersaisonSurveyTwoWorkspace.jsx");
 const source = await readFile(componentPath, "utf8");
-assert.match(source, /getSurveyTwoNonRespondents\(workspace\?\.forecast\?\.unassigned, currentGuildFilter\)/);
+assert.match(source, /getUnassignedForecastPlayers\(workspace\?\.forecast\?\.unassigned, currentGuildFilter\)/);
 assert.match(source, /workspace\.forecast\.guilds\.map/);
 assert.match(source, /Sans affectation prévisionnelle \(\{unassignedPlayers\.length\}\)/);
 assert.doesNotMatch(source, /unassignedRespondents|filteredNonRespondents|forecast\?\.players, currentGuildFilter/);
@@ -375,7 +395,7 @@ async function testBrowser() {
     const playerModal = removalPage.getByRole("dialog", { name: "Nonrespondent G1", exact: true });
     await playerModal.waitFor();
     removalPage.once("dialog", (dialog) => dialog.accept());
-    await playerModal.getByRole("button", { name: "Retirer", exact: true }).click();
+    await playerModal.getByRole("button", { name: "Retirer le placement manuel", exact: true }).click();
     await playerModal.waitFor({ state: "hidden" });
     await section(removalPage).getByRole("button", { name: "Ouvrir Nonrespondent G1", exact: true }).waitFor();
     assert.deepEqual(await calls(removalPage, "save-survey-placement"), [{ action: "save-survey-placement", memberId: "G1", guildCode: null, expectedRevision: 1 }]);

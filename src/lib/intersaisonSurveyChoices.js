@@ -128,6 +128,7 @@ export function buildSurveyChoiceForecast({ members = [], recipients = [], respo
     const person = people.get(key) || { memberKey: key, memberId: event.member_id, name: event.member_name_snapshot, activeNow: false };
     person.manualHistory = [...(person.manualHistory || []), event];
     person.manual = event.action === "set" ? event : null;
+    person.planExcluded = event.action === "exclude";
     person.placementRevision = event.revision;
     people.set(key, person);
   }
@@ -139,7 +140,7 @@ export function buildSurveyChoiceForecast({ members = [], recipients = [], respo
   }
   const rows = [...people.values()].map((person) => {
     const firstChoice = person.answer?.first_choice_guild_code || "";
-    const targetGuild = person.manual?.guild_code || firstChoice;
+    const targetGuild = person.planExcluded ? "" : person.manual?.guild_code || firstChoice;
     return { ...person, firstChoice, targetGuild, originGuild: person.originGuild || person.currentGuild || "",
       hasDifference: Boolean(person.manual && firstChoice && person.manual.guild_code !== firstChoice),
       placementRevision: person.placementRevision || 0,

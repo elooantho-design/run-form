@@ -32,7 +32,7 @@ export function projectForecastPlan(bundle) {
   const added = (events.length ? events.map((event) => [event.subject, event.after_value, event.revision])
     : Object.entries(entries).map(([key, entry]) => [key, entry, plan.revision])).map(([key, entry, revision]) => ({ id: `plan-${key}-${revision}`, member_key: key, member_id: key,
     member_name_snapshot: bundle.members.find((m) => m.id === key)?.watcher_name || "Compte indisponible",
-    action: entry.guildCode ? "set" : "remove", guild_code: entry.guildCode, revision: baseRevision + revision,
+    action: entry.placementMode === "unassigned" ? "exclude" : entry.guildCode ? "set" : "remove", guild_code: entry.guildCode, revision: baseRevision + revision,
     actor_name: entry.actorName, created_at: entry.at }));
   const included = new Set([...recipients.map((r) => r.member_key || r.member_id), ...legacy.map((p) => p.member_key), ...Object.keys(entries)]);
   const active = (member) => Boolean(member.guild_code && member.community_access_type !== "community" && member.roster_status !== "inactive");
@@ -50,8 +50,18 @@ export function projectForecastPlan(bundle) {
     player.activeNow = Boolean(member);
     player.isCommunity = member ? !active(member) : false;
     player.canPlace = Boolean(member && !plan.closed_at);
+    const entry = entries[player.memberKey];
+    player.communityUnassigned = Boolean(player.isCommunity && !(entry?.guildCode && member.membership_version
+      && entry.communityPlacementVersion === member.membership_version));
+    if (player.communityUnassigned) { player.targetGuild = ""; player.hasDifference = false; }
   }
+  forecast.unassigned = forecast.players.filter((player) => !player.targetGuild);
+  forecast.guilds = forecast.guilds.map((guild) => {
+    const players = forecast.players.filter((player) => player.targetGuild === guild.code);
+    return { ...guild, players, count: players.length, overCapacity: players.length > guild.referenceCapacity };
+  });
   return { forecast, members: bundle.members, plan: { seasonId: plan.season_id, revision: plan.revision,
+    removalReady: bundle.placement_modes_version === 1,
     appliedRevision: plan.applied_revision, closedAt: plan.closed_at, guilds: plan.guilds,
     referenceObjectives: plan.reference_objectives }, lifecycleReady: true };
 }
@@ -73,10 +83,17 @@ export async function runForecastPlanAction(db, actor, organization, action, bod
     if (!Number.isInteger(body.expectedPlanRevision) || body.expectedPlanRevision < 1) throw failure("Version du plan requise.", 400);
     const member = action === "save-forecast-member";
     if (member && !UUID.test(body.memberId || "")) throw failure("Compte invalide.", 400);
+    if (member && body.placementMode !== undefined) {
+      if (!["set", "follow", "unassigned"].includes(body.placementMode)
+        || (body.placementMode === "set") !== Boolean(body.guildCode)) throw failure("Mode de placement invalide.", 400);
+      const current = await rpc(db, "read_intersaison_plan", context);
+      if (current?.placement_modes_version !== 1) throw failure("Complément SQL de retrait du plan requis.", 428);
+    }
     // Explicit whitelist: the browser cannot submit organization, actor, permissions or active-guild IDs.
     result = await rpc(db, "save_intersaison_plan", { ...context, p_revision: body.expectedPlanRevision,
       p_kind: member ? "member" : "guild", p_data: member
-        ? { memberId: body.memberId, guildCode: body.guildCode || null, forecastRole: body.forecastRole || "member" }
+        ? { memberId: body.memberId, guildCode: body.guildCode || null, forecastRole: body.forecastRole || "member",
+          ...(body.placementMode !== undefined ? { placementMode: body.placementMode } : {}) }
         : { code: body.guildCode || null, name: body.name, objective: body.objective } });
   } else if (action === "preview-forecast-application") {
     return { preview: await rpc(db, "preview_intersaison_plan", context) };

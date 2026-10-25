@@ -168,8 +168,8 @@ begin
     and poll_number=2 and not is_test and status<>'cancelled' order by created_at desc limit 1;
   select coalesce(jsonb_agg(jsonb_build_object('id',m.id,'watcher_name',m.watcher_name,'guild_code',m.guild_code,
     'discord_id',m.discord_id,'primary_member_id',m.primary_member_id,'role',m.role,'roster_status',m.roster_status,
-    'community_access_type',m.community_access_type) order by m.id),'[]') into members
-    from public.intersaison_plan_members(p_org,plan.season_id) m;
+    'community_access_type',m.community_access_type,'membership_version',live.xmin::text||':'||live.ctid::text) order by m.id),'[]') into members
+    from public.intersaison_plan_members(p_org,plan.season_id) m join public.guild_members live on live.id=m.id;
   select coalesce(jsonb_agg(to_jsonb(r) order by r.id),'[]') into recipients from public.intersaison_survey_recipients r
     where organization_id=p_org and survey_campaign_id=campaign;
   select coalesce(jsonb_agg(to_jsonb(r) order by r.id),'[]') into responses from public.intersaison_survey_responses r
@@ -178,14 +178,14 @@ begin
     where organization_id=p_org and season_id=plan.season_id;
   select coalesce(jsonb_agg(to_jsonb(r) order by r.member_key,r.revision),'[]') into roles from public.intersaison_survey_forecast_roles r
     where organization_id=p_org and season_id=plan.season_id;
-  return jsonb_build_object('plan',to_jsonb(plan),'members',members,'recipients',recipients,'responses',responses,'placements',placements,'roles',roles,
+  return jsonb_build_object('placement_modes_version',1,'plan',to_jsonb(plan),'members',members,'recipients',recipients,'responses',responses,'placements',placements,'roles',roles,
     'events',(select coalesce(jsonb_agg(to_jsonb(e) order by revision),'[]') from public.intersaison_plan_events e
       where organization_id=p_org and season_id=plan.season_id));
 end $$;
 
 create or replace function public.save_intersaison_plan(p_org uuid,p_actor uuid,p_season uuid,p_revision integer,p_kind text,p_data jsonb)
 returns void language plpgsql security definer set search_path=public,pg_temp as $$
-declare plan public.intersaison_plan_cycles%rowtype; code text; member public.guild_members%rowtype; entry jsonb; previous jsonb; subject text;
+declare plan public.intersaison_plan_cycles%rowtype; code text; member public.guild_members%rowtype; entry jsonb; previous jsonb; subject text; placement_mode text;
 begin
   perform public.assert_intersaison_plan_admin(p_org,p_actor);
   perform 1 from public.intersaison_survey_seasons where id=p_season and organization_id=p_org and status<>'finished' for update;
@@ -208,12 +208,18 @@ begin
     previous:=plan.guilds->code; subject:=code;
     plan.guilds:=jsonb_set(plan.guilds,array[code],entry,true);
   elsif p_kind='member' then
-    select * into member from public.intersaison_plan_members(p_org,p_season) where id=(p_data->>'memberId')::uuid;
+    select live.* into member from public.guild_members live join public.intersaison_plan_members(p_org,p_season) allowed on allowed.id=live.id
+      where live.id=(p_data->>'memberId')::uuid for update of live;
     if member.id is null then raise exception 'Compte hors du périmètre Paladin vérifiable.' using errcode='42501'; end if;
     code:=nullif(p_data->>'guildCode','');
+    placement_mode:=coalesce(p_data->>'placementMode',case when code is null then 'follow' else 'set' end);
+    if placement_mode not in ('set','follow','unassigned') or (placement_mode='set')<>(code is not null) then
+      raise exception 'Mode de placement invalide.'; end if;
     if code is not null and not plan.guilds ? code then raise exception 'Guilde absente du plan.'; end if;
     if coalesce(p_data->>'forecastRole','member') not in ('member','officer','leader') then raise exception 'Rôle prévisionnel invalide.'; end if;
-    entry:=jsonb_build_object('guildCode',code,'forecastRole',coalesce(p_data->>'forecastRole','member'),
+    entry:=jsonb_build_object('guildCode',code,'placementMode',placement_mode,'forecastRole',coalesce(p_data->>'forecastRole','member'),
+      'communityPlacementVersion',case when code is not null and (member.guild_code is null or member.community_access_type='community' or member.role='community_member')
+        then (select xmin::text||':'||ctid::text from public.guild_members where id=member.id) else null end,
       'actorId',p_actor,'actorName',(select watcher_name from public.guild_members where id=p_actor),'at',now());
     previous:=plan.entries->member.id::text; subject:=member.id::text;
     plan.entries:=jsonb_set(plan.entries,array[member.id::text],entry,true);
@@ -235,10 +241,15 @@ language sql stable security definer set search_path=public,pg_temp as $$
   latest as(select distinct on(member_key) member_key,case when action='set' then guild_code end as guild_code
     from public.intersaison_survey_placements where organization_id=p_org and season_id=p_season order by member_key,revision desc)
   select m.id,m.watcher_name,m.guild_code,
-    case when plan.entries ? m.id::text then coalesce(nullif(plan.entries->m.id::text->>'guildCode',''),answer.first_choice_guild_code)
+    case when plan.entries->m.id::text->>'placementMode'='unassigned' then null
+      -- A community account requires a new explicit placement against its current row version.
+      when m.guild_code is null or coalesce(m.community_access_type,'')='community' or coalesce(m.role,'')='community_member' then
+        case when plan.entries->m.id::text->>'communityPlacementVersion'=live.xmin::text||':'||live.ctid::text
+          then nullif(plan.entries->m.id::text->>'guildCode','') end
+      when plan.entries ? m.id::text then coalesce(nullif(plan.entries->m.id::text->>'guildCode',''),answer.first_choice_guild_code)
       else coalesce(latest.guild_code,answer.first_choice_guild_code) end,
     m.role,(m.guild_code is null or coalesce(m.community_access_type,'')='community' or coalesce(m.role,'')='community_member')
-  from plan cross join public.intersaison_plan_members(p_org,p_season) m
+  from plan cross join public.intersaison_plan_members(p_org,p_season) m join public.guild_members live on live.id=m.id
   left join latest on latest.member_key=m.id
   left join public.intersaison_survey_recipients r on r.survey_campaign_id=(select id from campaign)
     and r.organization_id=p_org and coalesce(r.member_key,r.member_id)=m.id

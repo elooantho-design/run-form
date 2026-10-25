@@ -5,6 +5,7 @@ import { projectForecastPlan, runForecastPlanAction } from "../api/_intersaison-
 import { buildRosterPublication } from "../src/lib/intersaisonPlanPublication.js";
 import { buildSurveyTwoDiscordPayload } from "../src/lib/intersaisonSurveyObjectives.js";
 import { buildSurveyChoiceModal, getSurveyChoiceGuildsFromMessage } from "../src/lib/intersaisonSurveyChoices.js";
+import { getUnassignedForecastPlayers, getSurveyTwoNonRespondents } from "../src/lib/intersaisonForecast.js";
 
 if (!process.env.PGLITE_MODULE_PATH) throw new Error("PGLITE_MODULE_PATH required (isolated PostgreSQL only).");
 const { PGlite } = await import(pathToFileURL(process.env.PGLITE_MODULE_PATH).href);
@@ -65,7 +66,22 @@ try {
   await db.exec(migration.replace(/^commit;$/m,"rollback;"));
   assert.equal((await scalar("select to_regclass('public.intersaison_plan_cycles') as name")).name,null,"SQL rehearsal rolls back schema and data");
   assert.deepEqual(await rows("select * from guild_members order by id"),beforeMembers);
-  await db.exec(migration);
+  await db.exec(process.env.PLAN_BASELINE_SQL ? await readFile(process.env.PLAN_BASELINE_SQL,"utf8") : migration);
+  if (process.env.PLAN_BASELINE_SQL) {
+    await db.exec("begin");
+    await db.query("update guild_members set guild_code=null,role='community_member',community_access_type='community',roster_status='inactive' where id=$1",[id(4)]);
+    assert.equal((await scalar("select target_guild from intersaison_plan_targets($1,$2) where member_id=$3",[org,season,id(4)])).target_guild,"G2","deployed baseline reproduces the unsafe old-vote reactivation");
+    await db.exec("rollback");
+  }
+  const removalMigration=await script("intersaison_plan_removals.sql");
+  const beforeDefinition=(await scalar("select pg_get_functiondef('read_intersaison_plan(uuid,uuid,uuid)'::regprocedure) as source")).source;
+  await db.exec(removalMigration.replace(/^commit;$/m,"rollback;"));
+  assert.equal((await scalar("select pg_get_functiondef('read_intersaison_plan(uuid,uuid,uuid)'::regprocedure) as source")).source,beforeDefinition,"supplement rollback restores original functions");
+  await db.exec(removalMigration);
+  const removalVerification=(await db.exec(await script("intersaison_plan_removals_verify.sql")))[0].rows[0].intersaison_plan_removals_verify;
+  assert.equal(removalVerification.all_checks_ok,true,JSON.stringify(removalVerification.checks));
+  assert.equal(removalVerification.checks.length,13);
+  await db.exec(removalMigration); // repeat installation is harmless, with original source rows
   const installation=(await db.exec(await script("intersaison_plan_cycle_verify.sql")))[0].rows[0].intersaison_plan_verify;
   assert.equal(installation.all_checks_ok,true);
   assert.equal(installation.checks.length,24);
@@ -90,6 +106,59 @@ try {
     const plan=(await rpc("read_intersaison_plan",context)).plan;
     return rpc("save_intersaison_plan",{...context,p_revision:revision ?? plan.revision,p_kind:kind,p_data:data});
   };
+  // Departure decisions must override a saved vote, without destroying that vote.
+  await db.exec("begin");
+  const assertTargetsAgree=async()=>{
+    const projected=projectForecastPlan(await rpc("read_intersaison_plan",context));
+    const targets=await rows("select member_id,target_guild from intersaison_plan_targets($1,$2)",[org,season]);
+    assert.deepEqual(Object.fromEntries(projected.forecast.players.map(p=>[p.memberKey,p.targetGuild || null])),
+      Object.fromEntries(targets.map(p=>[p.member_id,p.target_guild])));
+    return projected;
+  };
+  const respondent=plan=>plan.forecast.players.find(p=>p.memberKey===id(4));
+  const nonRespondents=getSurveyTwoNonRespondents((await assertTargetsAgree()).forecast.players).map(p=>p.memberKey);
+  await save("member",{memberId:id(4),guildCode:null,placementMode:"unassigned",forecastRole:"officer"});
+  let removed=await assertTargetsAgree();
+  assert.equal(respondent(removed).targetGuild,"");
+  assert.equal(respondent(removed).planExcluded,true);
+  assert.equal(respondent(removed).forecastRole,"officer");
+  assert.ok(getUnassignedForecastPlayers(removed.forecast.players,"G4").some(p=>p.memberKey===id(4)));
+  assert.ok(!buildRosterPublication(removed.forecast,removed.plan.revision).some(g=>g.names?.includes("Répondant")));
+  assert.deepEqual(getSurveyTwoNonRespondents(removed.forecast.players).map(p=>p.memberKey),nonRespondents,"reminder population never changes when excluding a respondent");
+  await db.exec("savepoint exclusion_apply");
+  await save("member",{memberId:actor,guildCode:"G1"});
+  await db.query("update intersaison_survey_campaigns set status='closed' where id=$1",[id(300)]);
+  const excludedPreview=await rpc("preview_intersaison_plan",context);
+  assert.equal(excludedPreview.canApply,true,JSON.stringify(excludedPreview.blockers));
+  assert.ok(excludedPreview.changes.some(p=>p.member_id===id(4)&&p.target_guild===null));
+  await rpc("apply_intersaison_plan",{...context,p_fingerprint:excludedPreview.fingerprint,p_request:id(499),p_confirmed:true});
+  assert.equal((await scalar("select role from guild_members where id=$1",[id(4)])).role,"community_member");
+  assert.equal(respondent(await assertTargetsAgree()).targetGuild,"");
+  assert.deepEqual(await rows("select * from intersaison_survey_responses order by id"),beforeResponses,"applying an exclusion preserves every saved choice/comment");
+  await db.exec("rollback to savepoint exclusion_apply");
+  await db.exec("savepoint later_answer");
+  await db.query("update intersaison_survey_responses set first_choice_guild_code='G3' where id=$1",[id(302)]);
+  assert.equal(respondent(await assertTargetsAgree()).targetGuild,"","a later player answer cannot silently undo the administrative exclusion");
+  await db.exec("rollback to savepoint later_answer");
+  await save("member",{memberId:id(4),guildCode:null,placementMode:"follow"});
+  assert.equal(respondent(await assertTargetsAgree()).targetGuild,"G2","follow vote remains a separate reversible action");
+  await save("member",{memberId:id(4),guildCode:"G5"});
+  await db.query("update guild_members set guild_code=null,role='community_member',community_access_type='community',roster_status='inactive' where id=$1",[id(4)]);
+  removed=await assertTargetsAgree();
+  assert.equal(respondent(removed).targetGuild,"");
+  assert.equal(respondent(removed).communityUnassigned,true,"stale manual placements cannot resurrect a departed account");
+  await save("member",{memberId:id(4),guildCode:null,placementMode:"follow"});
+  assert.equal(respondent(await assertTargetsAgree()).targetGuild,"");
+  await save("member",{memberId:id(4),guildCode:"G5",communityPlacementVersion:"forged"});
+  assert.equal(respondent(await assertTargetsAgree()).targetGuild,"G5","a fresh explicit community placement permits reintegration");
+  await db.query("update guild_members set guild_code='G5',role='member',community_access_type=null,roster_status='active' where id=$1",[id(4)]);
+  await db.query("update guild_members set guild_code=null,role='community_member',community_access_type='community',roster_status='inactive' where id=$1",[id(4)]);
+  assert.equal(respondent(await assertTargetsAgree()).targetGuild,"","a subsequent departure invalidates even a previous reintegration");
+  assert.deepEqual(await rows("select * from intersaison_survey_responses order by id"),beforeResponses);
+  assert.deepEqual(await rows("select * from intersaison_survey_recipients order by id"),beforeRecipients);
+  await db.exec("rollback");
+  await assert.rejects(save("member",{memberId:id(4),guildCode:"G5",placementMode:"unassigned"}),/Mode de placement/);
+  await assert.rejects(save("member",{memberId:id(4),placementMode:"invalid"}),/Mode de placement/);
   await save("guild",{name:"Huitième",objective:"Nouveaux objectifs"});
   await save("guild",{name:"Neuvième",objective:"Autres objectifs"});
   assert.equal((await scalar("select count(*)::int n from portal_guilds where organization_id=$1",[org])).n,7,"draft guilds are not active guilds");
@@ -181,6 +250,13 @@ try {
   await runForecastPlanAction(mock,{id:actor},{id:org},"save-forecast-guild",{seasonId:season,expectedPlanRevision:1,name:"Nom",objective:"Objectif",organizationId:other,actorId:id(6),existingId:id(8)});
   assert.equal(calls[0].args.p_org,org);assert.equal(calls[0].args.p_actor,actor);assert.equal(calls[0].args.p_data.existingId,undefined);
   assert.equal(forwarded.name,"read_intersaison_plan");
+  await assert.rejects(runForecastPlanAction(mock,{id:actor},{id:org},"save-forecast-member",{seasonId:season,memberId:id(4),expectedPlanRevision:1,placementMode:"unassigned"}),/Complément SQL/);
+  assert.equal(calls.filter(c=>c.name==='save_intersaison_plan'&&c.args.p_kind==='member').length,0,"missing migration cannot silently follow the original answer");
+  mock.rpc=async(name,args)=>{calls.push({name,args});return {data:name==='read_intersaison_plan'?{placement_modes_version:1}:null,error:null};};
+  await runForecastPlanAction(mock,{id:actor},{id:org},"save-forecast-member",{seasonId:season,memberId:id(4),expectedPlanRevision:1,placementMode:"unassigned",communityPlacementVersion:"forged"});
+  const forwardedMember=calls.findLast(c=>c.name==='save_intersaison_plan');
+  assert.equal(forwardedMember.args.p_data.placementMode,"unassigned");
+  assert.equal(forwardedMember.args.p_data.communityPlacementVersion,undefined,"community confirmation is owned only by SQL");
   // Exercise the following season with nine real guilds, using only the isolated database.
   const nine=Object.fromEntries(Array.from({length:9},(_,i)=>[`G${i+1}`,`Objectif officiel ${i+1}`]));
   const version=await rpc("save_intersaison_survey_objectives_draft",{p_organization_id:org,p_season_id:next,p_actor_member_id:actor,p_objectives:nine,p_expected_version:0});

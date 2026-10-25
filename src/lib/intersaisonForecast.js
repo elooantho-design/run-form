@@ -11,6 +11,16 @@ export function getSurveyTwoNonRespondents(players = [], currentGuild = "") {
   });
 }
 
+export function getUnassignedForecastPlayers(players = [], currentGuild = "") {
+  const seen = new Set();
+  return players.filter((player) => {
+    if (player.targetGuild || (player.answer && !player.planExcluded && !player.communityUnassigned)
+      || (currentGuild && player.currentGuild !== currentGuild) || seen.has(player.memberKey)) return false;
+    seen.add(player.memberKey);
+    return true;
+  });
+}
+
 export function resolveForecastAvatarUrl(value, options = {}) {
   try {
     const url = new URL(value);
