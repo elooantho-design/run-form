@@ -1,0 +1,39 @@
+{
+  "scope": "Dashboard map crops, not VPS full-screenshot recognition offsets",
+  "maps": [
+    {
+      "mode": "tour",
+      "rows": 7,
+      "cols": 10,
+      "sourceFile": "Screenshot_22.png",
+      "sourceWidth": 2559,
+      "sourceHeight": 1438,
+      "sourceSha256": "b59110c370937e5b32a0a1dbc55de8af966473e64cd8a3d36da1c1e4c661b4ea",
+      "crop": {
+        "left": 778,
+        "top": 352,
+        "width": 1010,
+        "height": 723
+      },
+      "asset": "public/maps-actuelles/tour-10x7-20261025.png",
+      "assetSha256": "46de9d7c16014b06f442f8ec6020f77b458b19f82a2a3b1521b1f087a59a6b80"
+    },
+    {
+      "mode": "bastion",
+      "rows": 8,
+      "cols": 11,
+      "sourceFile": "Screenshot_23.png",
+      "sourceWidth": 2559,
+      "sourceHeight": 1439,
+      "sourceSha256": "45a093fa99cd6f8aad41a9d1481fbd2cd186155ad4fd99986dc530de0951ed59",
+      "crop": {
+        "left": 779,
+        "top": 330,
+        "width": 1006,
+        "height": 735
+      },
+      "asset": "public/maps-actuelles/bastion-11x8-20261025.png",
+      "assetSha256": "8a57a3ed3b9acbd73243bf648b796bba0a466ddc1c2ad167dee1242b88419a9a"
+    }
+  ]
+}

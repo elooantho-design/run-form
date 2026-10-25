@@ -1,5 +1,5 @@
-export const BASTION_BG_URL = "/maps-actuelles/bastion-11x8-current.png";
-export const TOUR_BG_URL = "/maps-actuelles/tour-10x7-current.png";
+export const BASTION_BG_URL = "/maps-actuelles/bastion-11x8-20261025.png";
+export const TOUR_BG_URL = "/maps-actuelles/tour-10x7-20261025.png";
 
 export const RUN_GRID_CONFIG = {
   tour: {
@@ -8,12 +8,8 @@ export const RUN_GRID_CONFIG = {
     rows: 7,
     cols: 10,
     bgUrl: TOUR_BG_URL,
-    gridBounds: {
-      left: 0.109802,
-      top: 0.04,
-      width: 0.785217,
-      height: 0.91,
-    },
+    // Backgrounds are cropped to the playable grid; retain their pixel ratio.
+    cellAspectRatio: "707 / 723",
     bgObjectFit: "fill",
     bgObjectPosition: "center",
   },
@@ -23,6 +19,7 @@ export const RUN_GRID_CONFIG = {
     rows: 8,
     cols: 11,
     bgUrl: BASTION_BG_URL,
+    cellAspectRatio: "8048 / 8085",
     bgObjectFit: "fill",
     bgObjectPosition: "center",
   },

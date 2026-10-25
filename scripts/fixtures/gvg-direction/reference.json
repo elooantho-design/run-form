@@ -1,0 +1,10 @@
+{
+  "scope": "Arrows visually read on the supplied screenshots; no production data",
+  "captures": [
+    {"file": "Screenshot_27.png", "mode": "tower", "directions": {"A5": "N", "B3": "E", "B4": "E", "B5": "E", "C3": "E"}},
+    {"file": "Screenshot_28.png", "mode": "fortress", "directions": {"D3": "E", "D5": "E", "D6": "E", "E2": "E", "E5": "E"}},
+    {"file": "Screenshot_29.png", "mode": "tower", "directions": {"B1": "E", "B3": "S", "B4": "E", "B6": "S", "C3": "E"}},
+    {"file": "Screenshot_30.png", "mode": "fortress", "directions": {"D3": "E", "D5": "N", "D6": "S", "E2": "E", "E5": "S"}},
+    {"file": "Screenshot_31.png", "mode": "tower", "directions": {"B3": "S", "B4": "E", "B6": "S", "C3": "O", "C5": "E"}}
+  ]
+}
