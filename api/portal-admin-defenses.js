@@ -1,6 +1,7 @@
 /* global Buffer, process */
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { defenseMatchesGuildScope, resolvePortalGuildScope } from "./_portal-guild-access.js";
 import {
   applyPortalCorsHeaders,
   readJsonBody,
@@ -36,7 +37,6 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
   auth: { persistSession: false },
 });
 
-const PALADIN_CLUSTER_GUILD_CODES = ["G1", "G2", "G3", "G4", "G5", "G6", "G7"];
 const EMPTY_DEFENSE_SLOT = "--";
 const MAX_DEFENSE_ROWS = 1200;
 const MAX_BLOCK_ROWS = 200;
@@ -188,14 +188,6 @@ function normalizeGuildCode(value) {
   return cleanText(value).toUpperCase().replace(/\s+/g, "_");
 }
 
-function normalizePortalGuildCodeValue(value) {
-  return cleanText(value).replace(/\s+/g, " ");
-}
-
-function isPaladinGuildCode(value) {
-  return PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCode(value));
-}
-
 function isCommunityRole(role) {
   return ["community_member", "content_creator", "vip"].includes(normalizeText(role));
 }
@@ -270,109 +262,11 @@ function logPortalAdminActionError(prefix, error, context = {}) {
   });
 }
 
-function getGuildSpaceKey(value) {
-  const code = normalizeGuildCode(value);
-  if (!code) return "";
-  if (isPaladinGuildCode(code)) return "PALADIN";
-
-  const match = code.match(/^(.+?)(?:_?G\d+)$/i);
-  return (match?.[1] || code).replace(/_+$/g, "") || code;
-}
-
-function sameGuildSpace(left, right) {
-  const leftSpace = getGuildSpaceKey(left);
-  const rightSpace = getGuildSpaceKey(right);
-  return Boolean(leftSpace && rightSpace && leftSpace === rightSpace);
-}
-
-function normalizeAllowedGuildCodes(guildCodes = []) {
-  const byKey = new Map();
-
-  guildCodes.forEach((guildCode) => {
-    const value = normalizePortalGuildCodeValue(guildCode);
-    const key = normalizeGuildCode(value || guildCode);
-    if (key && !byKey.has(key)) byKey.set(key, value || key);
-  });
-
-  return [...byKey.values()];
-}
-
-function findPortalGuildByCode(guildRows = [], guildCode) {
-  const requested = normalizeGuildCode(guildCode);
-  if (!requested) return null;
-  return (guildRows || []).find((row) => normalizeGuildCode(row?.guild_code) === requested) || null;
-}
-
 async function resolveDefenseLibraryScope(actor, requestedGuildCode) {
-  const fallbackGuildCodes = normalizeAllowedGuildCodes(
-    isPaladinGuildCode(actor?.guild_code) ? PALADIN_CLUSTER_GUILD_CODES : [actor?.guild_code],
-  );
-  const requested = normalizeGuildCode(requestedGuildCode || actor?.guild_code || fallbackGuildCodes[0]);
-  const fallback = {
-    organizationId: "",
-    organizationKey: "",
-    activeGuildCode: requested,
-    allowedGuildCodes: fallbackGuildCodes,
-    manageableGuildCodes: fallbackGuildCodes,
-    librarySchemaReady: false,
-    migrationRequired: true,
-    migrationMessage:
-      "Migration bibliotheque defenses non confirmee : execute scripts/guild_defense_library.sql avant d'utiliser les imports.",
-  };
-
-  if (!actor || isCommunityAccount(actor)) return fallback;
-
-  const { data: portalGuildRows, error: portalGuildRowsError } = await supabase
-    .from("portal_guilds")
-    .select("guild_code, organization_id, is_active")
-    .eq("is_active", true)
-    .order("guild_code", { ascending: true });
-
-  if (portalGuildRowsError) return fallback;
-
-  const actorGuild = findPortalGuildByCode(portalGuildRows || [], actor.guild_code);
-  if (!actorGuild?.organization_id) return fallback;
-
-  const targetGuild = findPortalGuildByCode(
-    (portalGuildRows || []).filter((row) => row.organization_id === actorGuild.organization_id),
-    requested,
-  );
-  if (!targetGuild?.organization_id || targetGuild.organization_id !== actorGuild.organization_id) {
-    const error = new Error("Acces guilde refuse.");
-    error.statusCode = 403;
-    throw error;
-  }
-
-  const { data: organization, error: organizationError } = await supabase
-    .from("portal_organizations")
-    .select("id, organization_key, is_active")
-    .eq("id", actorGuild.organization_id)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (organizationError || !organization?.id) {
-    const error = new Error("Organisation introuvable.");
-    error.statusCode = 403;
-    throw error;
-  }
-
-  const { data: guildRows, error: guildRowsError } = await supabase
-    .from("portal_guilds")
-    .select("guild_code")
-    .eq("organization_id", organization.id)
-    .eq("is_active", true)
-    .order("guild_code", { ascending: true });
-
-  if (guildRowsError) throw guildRowsError;
-
-  const allowedGuildCodes = normalizeAllowedGuildCodes((guildRows || []).map((row) => row.guild_code));
-
+  if (isCommunityAccount(actor)) throw Object.assign(new Error("Acces guilde refuse."), { statusCode: 403 });
+  const scope = await resolvePortalGuildScope(supabase, actor, requestedGuildCode);
   return {
-    organizationId: organization.id,
-    organizationKey: organization.organization_key || "",
-    activeGuildCode: targetGuild.guild_code || requested,
-    allowedGuildCodes,
-    manageableGuildCodes: allowedGuildCodes,
+    ...scope,
     librarySchemaReady: true,
     migrationRequired: false,
     migrationMessage: "",
@@ -384,34 +278,14 @@ function isGuildInScope(scope, guildCode) {
   return Boolean(key && (scope?.allowedGuildCodes || []).some((allowed) => normalizeGuildCode(allowed) === key));
 }
 
-function canViewGuildCode(actor, guildCode, { leaderSeesAll = false } = {}) {
-  if (!actor || isCommunityAccount(actor)) return false;
-  void leaderSeesAll;
-
-  const actorGuild = normalizeGuildCode(actor.guild_code);
-  const targetGuild = normalizeGuildCode(guildCode);
-  if (!actorGuild || !targetGuild) return false;
-
-  if (isPaladinGuildCode(actorGuild)) return isPaladinGuildCode(targetGuild);
-  return sameGuildSpace(actorGuild, targetGuild);
+async function canViewDefense(actor, defense, targetGuildCode, resolvedScope = null) {
+  const scope = resolvedScope || await resolveDefenseLibraryScope(actor, targetGuildCode);
+  return defenseMatchesGuildScope(defense, scope);
 }
 
-function canViewDefense(actor, defense, targetGuildCode) {
-  if (!canViewGuildCode(actor, targetGuildCode, { leaderSeesAll: true })) return false;
-  if (defense?.is_hidden) return false;
-
-  const targetGuild = normalizeGuildCode(targetGuildCode);
-  const defenseGuild = normalizeGuildCode(defense?.guild_code);
-  return Boolean(targetGuild && defenseGuild && targetGuild === defenseGuild);
-}
-
-function canManageDefense(actor, defense, targetGuildCode) {
-  if (!canViewGuildCode(actor, targetGuildCode, { leaderSeesAll: true })) return false;
-
-  const targetGuild = normalizeGuildCode(targetGuildCode);
-  const defenseGuild = normalizeGuildCode(defense?.guild_code);
-  if (!targetGuild || !defenseGuild) return false;
-  return targetGuild === defenseGuild;
+async function canManageDefense(actor, defense, targetGuildCode, resolvedScope = null) {
+  const scope = resolvedScope || await resolveDefenseLibraryScope(actor, targetGuildCode);
+  return defenseMatchesGuildScope(defense, scope, { includeHidden: true });
 }
 
 function getDefenseRootId(defense) {
@@ -689,7 +563,8 @@ async function hasGuildDefenseLibrarySchema() {
 
 async function loadMappedDefenseRowsInScope(scope) {
   const { rows, schemaReady, enemyLinksSchemaReady } = await loadDefenseRows();
-  const scopedRows = rows.filter((row) => isGuildInScope(scope, row.guild_code));
+  const scopedRows = rows.filter((row) => isGuildInScope(scope, row.guild_code)
+    && (!row.organization_id || row.organization_id === scope.organizationId));
   const blocksByDefenseId = await loadBlocksByDefenseIds(scopedRows.map((row) => row.id).filter(Boolean));
 
   return {
@@ -1099,7 +974,7 @@ async function copyDefenseChildren(sourceDefense, targetDefenseId, champions = [
 async function ensureEditableDefense(actor, defenseId, guildCode, { hidden = false } = {}) {
   const { row } = await loadDefenseRow(defenseId);
   if (!row) throw new Error("Defense introuvable.");
-  if (!canManageDefense(actor, row, guildCode)) throw new Error("Acces defense refuse.");
+  if (!await canManageDefense(actor, row, guildCode)) throw new Error("Acces defense refuse.");
 
   const blocksByDefenseId = await loadBlocksByDefenseIds([row.id]);
   const sourceDefense = mapDefenseRow(row, blocksByDefenseId);
@@ -1237,7 +1112,7 @@ async function handleLoad(body, req, res) {
   }
 
   const guildCode = scope.activeGuildCode;
-  if (!canViewGuildCode(actor, guildCode, { leaderSeesAll: true })) {
+  if (!isGuildInScope(scope, guildCode)) {
     sendJson(res, 403, { error: "Acces guilde refuse." });
     return;
   }
@@ -1287,7 +1162,7 @@ async function handleEnemyHistory(body, req, res) {
     sendJson(res, 428, { error: "Migration liaisons defenses adverses requise." });
     return;
   }
-  if (!defense || !canViewDefense(actor, defense, scope.activeGuildCode)) {
+  if (!defense || !await canViewDefense(actor, defense, scope.activeGuildCode, scope)) {
     sendJson(res, 404, { error: "Defense locale introuvable." });
     return;
   }
@@ -1847,7 +1722,7 @@ async function handleSave(body, req, res) {
     existing = existingResult.row;
     existingLinksSchemaReady = Boolean(existingResult.enemyLinksSchemaReady);
     if (!existing) throw new Error("Defense introuvable.");
-    if (!canManageDefense(actor, existing, guildCode)) throw new Error("Acces defense refuse.");
+    if (!await canManageDefense(actor, existing, guildCode, scope)) throw new Error("Acces defense refuse.");
   }
 
   const defensePayload = {
@@ -2096,7 +1971,7 @@ async function handleDelete(body, req, res) {
   const { row } = await loadDefenseRow(defenseId);
 
   if (!row) throw new Error("Defense introuvable.");
-  if (!canManageDefense(actor, row, guildCode)) throw new Error("Acces defense refuse.");
+  if (!await canManageDefense(actor, row, guildCode)) throw new Error("Acces defense refuse.");
 
   const mappedDefense = mapDefenseRow(row, await loadBlocksByDefenseIds([row.id]));
   const isImportedCopy = Boolean(mappedDefense.sourceDefenseId);
@@ -2143,7 +2018,7 @@ async function handleBlocksLoad(body, req, res) {
   const guildCode = normalizeGuildCode(validatePortalInput(body.guildCode, 40) || actor.guild_code);
   const defenseId = validatePortalInput(body.defenseId, 80);
   const { row: defense } = await loadDefenseRow(defenseId);
-  if (!defense || !canViewDefense(actor, defense, guildCode)) throw new Error("Acces defense refuse.");
+  if (!defense || !await canViewDefense(actor, defense, guildCode)) throw new Error("Acces defense refuse.");
 
   const blocks = await loadBlocksArray(defenseId);
   sendJson(res, 200, { ok: true, blocks });
@@ -2302,6 +2177,6 @@ export default async function handler(req, res) {
 
     sendJson(res, 400, { error: "Action inconnue." });
   } catch (error) {
-    sendJson(res, 500, { error: error?.message || "Erreur gestion defenses." });
+    sendJson(res, error?.statusCode || 500, { error: error?.message || "Erreur gestion defenses." });
   }
 }

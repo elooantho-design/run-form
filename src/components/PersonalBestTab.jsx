@@ -11,11 +11,12 @@ import { buildChampionDisplayMap, getChampionDisplayName, getChampionEnglishName
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { formatPbAverage, formatPbInputValue, normalizePbRawInput, normalizeStoredPbRaw } from "@/lib/personalBestValues";
 import {
-  PALADIN_CLUSTER_GUILD_CODES,
+  getVisibleGvgGuildCodes,
   isPaladinSession,
   normalizeGuildCodeKey,
 } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { MEMBER_IDENTITY_ERROR, assertPersonalDataActor } from "@/lib/memberDataSelection";
 
 const PB_SORT_OPTIONS = [
   { id: "top1", label: "Top 1" },
@@ -283,6 +284,7 @@ export default function PersonalBestTab({ session }) {
   const guildCode = getSessionGuildCode(session);
   const isPaladinScope = isPaladinSession(session);
   const sessionMemberId = session?.memberId || session?.id || "";
+  const availableGuildCodes = getVisibleGvgGuildCodes(session);
 
   const isAdmin = useMemo(() => {
     const role = getSessionRole(session);
@@ -298,13 +300,8 @@ export default function PersonalBestTab({ session }) {
   const championDisplayMap = useMemo(() => buildChampionDisplayMap(allHeroesData), [allHeroesData]);
 
   useEffect(() => {
-    setActiveGuildCode((current) => {
-      if (!isPaladinScope) return guildCode;
-      if (PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(current))) return current;
-      if (PALADIN_CLUSTER_GUILD_CODES.includes(normalizeGuildCodeKey(guildCode))) return guildCode;
-      return "G1";
-    });
-  }, [guildCode, isPaladinScope]);
+    setActiveGuildCode(guildCode);
+  }, [guildCode, sessionMemberId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -312,6 +309,7 @@ export default function PersonalBestTab({ session }) {
     async function loadMembersAndHeroes() {
       setLoading(true);
       setErrorMessage("");
+      setMembers([]); setPbEntries([]); setPbSelectedMember(null);
 
       try {
         const data = await callPortalPlayerData({
@@ -320,6 +318,9 @@ export default function PersonalBestTab({ session }) {
         });
 
         if (cancelled) return;
+        assertPersonalDataActor(data, sessionMemberId);
+        if (normalizeGuildCodeKey(activeGuildCode) === normalizeGuildCodeKey(guildCode)
+          && !(data.members || []).some((member) => String(member.id) === String(sessionMemberId))) throw new Error(MEMBER_IDENTITY_ERROR);
 
         setMembers(
           (data.members || []).map((row) => ({
@@ -380,7 +381,7 @@ export default function PersonalBestTab({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [activeGuildCode, guildCode]);
+  }, [activeGuildCode, guildCode, sessionMemberId]);
 
   const pbRows = useMemo(() => {
     const grouped = new Map();
@@ -476,10 +477,8 @@ export default function PersonalBestTab({ session }) {
   const summary = useMemo(() => {
     const rowsWithPb = pbRows.filter((row) => row.top1 > 0);
     const bestRow = rowsWithPb[0] || null;
-    const connectedName = normalizeText(session?.watcherName || session?.memberName || session?.name);
     const connectedRow =
       pbRows.find((row) => sessionMemberId && String(row.memberId) === String(sessionMemberId)) ||
-      pbRows.find((row) => connectedName && normalizeText(row.memberName) === connectedName) ||
       null;
     const averageTop3 =
       rowsWithPb.length > 0
@@ -492,7 +491,7 @@ export default function PersonalBestTab({ session }) {
       connectedTop1: connectedRow?.top1 || 0,
       averageTop3,
     };
-  }, [pbRows, sessionMemberId, session?.memberName, session?.name, session?.watcherName]);
+  }, [pbRows, sessionMemberId]);
 
   const selectedPbMember =
     (pbSelectedMember?.id
@@ -725,7 +724,7 @@ export default function PersonalBestTab({ session }) {
             <div className="flex flex-wrap items-center gap-2">
               {isPaladinScope ? (
                 <div className="mr-2 flex flex-wrap gap-2">
-                  {PALADIN_CLUSTER_GUILD_CODES.map((code) => (
+                  {availableGuildCodes.map((code) => (
                     <Button
                       key={code}
                       type="button"

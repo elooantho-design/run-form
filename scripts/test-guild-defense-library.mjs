@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { defenseMatchesGuildScope } from "../api/_portal-guild-access.js";
 
 import {
   buildDefenseLibraryEntries,
@@ -222,7 +223,13 @@ function countSqlMatches(sql, pattern) {
 
 assert.match(adminApi, /action === "import"/, "admin API exposes explicit import action");
 assert.match(adminApi, /import_guild_defense_snapshot/, "admin API imports through transactional RPC");
-assert.match(adminApi, /targetGuild === defenseGuild/, "admin API manages defenses only in the selected guild");
+assert.match(adminApi, /defenseMatchesGuildScope\(defense, scope/, "admin API delegates exact guild and organization ownership checks");
+const checkedScope = { organizationId: "paladin", activeGuildCode: "G8", allowedGuildCodes: ["G1", "G8", "G9"] };
+assert.equal(defenseMatchesGuildScope({ guild_code: "G8", organization_id: "paladin" }, checkedScope), true);
+assert.equal(defenseMatchesGuildScope({ guild_code: "G9", organization_id: "paladin" }, checkedScope), false, "another guild's defense cannot be edited through G8");
+assert.equal(defenseMatchesGuildScope({ guild_code: "G8", organization_id: "foreign" }, checkedScope), false, "another organization's defense cannot be edited through G8");
+assert.equal(defenseMatchesGuildScope({ guild_code: "G8", is_hidden: true }, checkedScope), false);
+assert.equal(defenseMatchesGuildScope({ guild_code: "G8", is_hidden: true }, checkedScope, { includeHidden: true }), true);
 assert.match(adminApi, /normalizeGuildCode\(defense\.guildCode\) === activeGuildKey/, "admin API library import status is scoped to the active guild");
 assert.doesNotMatch(
   adminApi.match(/const DEFENSE_SELECT_BASE = `[\s\S]*?`;/)?.[0] || "",

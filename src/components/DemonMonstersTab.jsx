@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { MEMBER_IDENTITY_ERROR, assertPersonalDataActor, resolvePersonalMemberId } from "@/lib/memberDataSelection";
 
 const DEMON_RARITY_FILTERS = [
   { id: "Tous", label: "Tous", labelKey: "common.all", tone: "border-zinc-600 bg-zinc-900 text-zinc-100" },
@@ -81,7 +82,7 @@ async function callPortalPlayerData(payload) {
 export default function DemonMonstersTab({ session }) {
   const { t } = usePortalLanguage();
   const [members, setMembers] = useState([]);
-  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState(session?.memberId || session?.id || "");
   const [memberQuery, setMemberQuery] = useState("");
   const [demonicMonsters, setDemonicMonsters] = useState([]);
   const [memberDemonicEntries, setMemberDemonicEntries] = useState([]);
@@ -106,12 +107,8 @@ export default function DemonMonstersTab({ session }) {
   const sessionOrganizationKey = session?.organizationKey || session?.organization_key || "";
 
   const selectedMember = useMemo(() => {
-    return (
-      members.find((member) => String(member.id) === String(selectedMemberId)) ||
-      members.find((member) => sessionMemberId && String(member.id) === String(sessionMemberId)) ||
-      members[0] ||
-      null
-    );
+    const selectedId = resolvePersonalMemberId(members, sessionMemberId, selectedMemberId);
+    return members.find((member) => String(member.id) === selectedId) || null;
   }, [members, selectedMemberId, sessionMemberId]);
 
   const memberSuggestions = useMemo(() => {
@@ -161,6 +158,7 @@ export default function DemonMonstersTab({ session }) {
   }, [selectedOwnerSearchMonster, t]);
 
   const canEditDemonicMonsters = useMemo(() => {
+    if (!selectedMember || !sessionMemberId) return false;
     if (typeof selectedMember?.permissions?.canEdit === "boolean") {
       return selectedMember.permissions.canEdit;
     }
@@ -175,7 +173,7 @@ export default function DemonMonstersTab({ session }) {
     const isOwnProfile =
       selectedMember?.id && sessionMemberId
         ? String(selectedMember.id) === String(sessionMemberId)
-        : true;
+        : false;
 
     return isAdmin || isOwnProfile;
   }, [selectedMember, session, sessionMemberId]);
@@ -199,13 +197,16 @@ export default function DemonMonstersTab({ session }) {
       setLoading(true);
       setEntriesLoading(true);
       setErrorMessage("");
+      setMemberDemonicEntries([]);
 
       try {
+        if (!sessionMemberId) throw new Error(MEMBER_IDENTITY_ERROR);
         const data = await callPortalPlayerData({
           action: "demonicMonsters",
           memberId: selectedMemberId,
         });
         if (cancelled) return;
+        assertPersonalDataActor(data, sessionMemberId);
 
         const mappedMembers = (data.members || []).map((row) => ({
           id: row.id,
@@ -215,19 +216,9 @@ export default function DemonMonstersTab({ session }) {
           primaryMemberId: row.primary_member_id || row.primaryMemberId || null,
           permissions: row.permissions || null,
         }));
+        const nextSelectedMemberId = resolvePersonalMemberId(mappedMembers, sessionMemberId, selectedMemberId);
+        if (!nextSelectedMemberId || String(data.selectedMemberId || "") !== nextSelectedMemberId) throw new Error(MEMBER_IDENTITY_ERROR);
         setMembers(mappedMembers);
-        let nextSelectedMemberId = data.selectedMemberId || "";
-        if (!nextSelectedMemberId && selectedMemberId) {
-          const currentMember = mappedMembers.find((member) => String(member.id) === String(selectedMemberId));
-          if (currentMember) nextSelectedMemberId = currentMember.id;
-        }
-        if (!nextSelectedMemberId && sessionMemberId) {
-          const sessionMember = mappedMembers.find((member) => String(member.id) === String(sessionMemberId));
-          if (sessionMember) nextSelectedMemberId = sessionMember.id;
-        }
-        if (!nextSelectedMemberId) {
-          nextSelectedMemberId = mappedMembers[0]?.id || "";
-        }
         if (String(nextSelectedMemberId) !== String(selectedMemberId)) {
           setSelectedMemberId(nextSelectedMemberId);
         }
@@ -245,6 +236,7 @@ export default function DemonMonstersTab({ session }) {
         );
       } catch (error) {
         if (!cancelled) {
+          setMembers([]); setMemberDemonicEntries([]);
           console.error("Erreur chargement monstres demoniaques:", error);
           setErrorMessage(error?.message || "Impossible de charger les monstres demoniaques.");
         }

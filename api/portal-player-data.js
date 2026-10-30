@@ -20,6 +20,7 @@ import {
   serializeMemberDataPermissions,
 } from "./_member-data-permissions.js";
 import { touchPortalMemberActivityState } from "./_portal-member-activity.js";
+import { MEMBER_IDENTITY_ERROR, resolvePersonalMemberId } from "../src/lib/memberDataSelection.js";
 
 const SAFE_MEMBER_SELECT =
   "id, role, discord_id, watcher_name, guild_code, assignment, community_access_type, community_status, preferred_language, primary_member_id";
@@ -298,19 +299,9 @@ export async function fetchMemberAwakeningsPageByPage(supabase, memberIds, optio
 }
 
 function pickSelectedMemberForActor(members, actor, requestedId) {
-  const requestedKey = String(requestedId || "");
-  if (requestedKey) {
-    const requestedMember = members.find((member) => String(member.id) === requestedKey);
-    if (requestedMember) return requestedMember;
-  }
-
-  const actorKey = String(actor?.id || "");
-  if (actorKey) {
-    const actorMember = members.find((member) => String(member.id) === actorKey);
-    if (actorMember) return actorMember;
-  }
-
-  return members[0] || null;
+  const selectedId = resolvePersonalMemberId(members, actor?.id, requestedId);
+  if (!selectedId) throw createPortalPlayerDataError(requestedId ? 403 : 409, MEMBER_IDENTITY_ERROR);
+  return members.find((member) => String(member.id) === selectedId);
 }
 
 async function handleHeroBoxBase(req, res, supabase, actor) {
@@ -320,7 +311,8 @@ async function handleHeroBoxBase(req, res, supabase, actor) {
   ]);
 
   if (championsResult.error) throw championsResult.error;
-  return sendJson(req, res, 200, { ok: true, members, champions: championsResult.data || [] });
+  if (!resolvePersonalMemberId(members, actor.id)) throw createPortalPlayerDataError(409, MEMBER_IDENTITY_ERROR);
+  return sendJson(req, res, 200, { ok: true, actorMemberId: actor.id, members, champions: championsResult.data || [] });
 }
 
 async function handleHeroAwakenings(req, res, supabase, actor, body) {
@@ -339,6 +331,8 @@ async function handleHeroAwakenings(req, res, supabase, actor, body) {
   if (error) throw error;
   return sendJson(req, res, 200, {
     ok: true,
+    actorMemberId: actor.id,
+    memberId: target.id,
     awakenings: data || [],
     permissions: serializeMemberDataPermissions(actor, target),
   });
@@ -407,10 +401,14 @@ async function handlePersonalBest(req, res, supabase, actor, body) {
   ]);
 
   if (championsResult.error) throw championsResult.error;
+  if ((!guildCode || guildCode === normalizeGuildCode(actor.guild_code)) && !resolvePersonalMemberId(members, actor.id)) {
+    throw createPortalPlayerDataError(409, MEMBER_IDENTITY_ERROR);
+  }
   const memberIds = members.map((member) => member.id);
   if (!memberIds.length) {
     return sendJson(req, res, 200, {
       ok: true,
+      actorMemberId: actor.id,
       members,
       champions: championsResult.data || [],
       entries: [],
@@ -452,6 +450,7 @@ async function handlePersonalBest(req, res, supabase, actor, body) {
   if (error) throw error;
   return sendJson(req, res, 200, {
     ok: true,
+    actorMemberId: actor.id,
     members: enrichedMembers,
     champions: championsResult.data || [],
     entries: data || [],
@@ -522,6 +521,7 @@ async function handleUpdatePersonalBestValue(req, res, supabase, actor, body) {
 async function handleDemonicMonsters(req, res, supabase, actor, body) {
   const members = await getScopedMembers(supabase, actor);
   const requestedId = validateUuid(body.memberId || body.member_id);
+  if ((body.memberId || body.member_id) && !requestedId) throw createPortalPlayerDataError(400, "Compte joueur invalide.");
   const selectedMember = pickSelectedMemberForActor(members, actor, requestedId);
 
   const [monstersResult, entriesResult] = await Promise.all([
@@ -557,6 +557,7 @@ async function handleDemonicMonsters(req, res, supabase, actor, body) {
   if (entriesResult.error) throw entriesResult.error;
   return sendJson(req, res, 200, {
     ok: true,
+    actorMemberId: actor.id,
     members,
     selectedMemberId: selectedMember?.id || null,
     selectedMemberPermissions: selectedMember ? serializeMemberDataPermissions(actor, selectedMember) : null,
@@ -706,6 +707,7 @@ async function handleSetDemonicMonsterLevel(req, res, supabase, actor, body) {
 async function handleSoulStones(req, res, supabase, actor, body) {
   const members = await getScopedMembers(supabase, actor);
   const requestedId = validateUuid(body.memberId || body.member_id);
+  if ((body.memberId || body.member_id) && !requestedId) throw createPortalPlayerDataError(400, "Compte joueur invalide.");
   const selectedMember = pickSelectedMemberForActor(members, actor, requestedId);
   const visibleMemberIds = new Set(members.map((member) => String(member.id)));
 
@@ -731,6 +733,7 @@ async function handleSoulStones(req, res, supabase, actor, body) {
 
   return sendJson(req, res, 200, {
     ok: true,
+    actorMemberId: actor.id,
     members,
     selectedMemberId: selectedMember?.id || null,
     selectedMemberPermissions: selectedMember ? serializeMemberDataPermissions(actor, selectedMember) : null,
@@ -827,6 +830,6 @@ export default async function handler(req, res) {
     return await handlerFn(req, res, supabase, sessionResult.member, body);
   } catch (error) {
     console.error("[portal-player-data]", error);
-    return sendJson(req, res, 500, { ok: false, error: error.message || "Erreur serveur Portal." });
+    return sendJson(req, res, error.statusCode || 500, { ok: false, error: error.message || "Erreur serveur Portal." });
   }
 }

@@ -71,6 +71,8 @@ import {
   touchPortalPresence,
 } from "@/lib/portalActivity";
 import { getChampionEnglishName } from "@/lib/championDisplay";
+import { MEMBER_IDENTITY_ERROR, assertPersonalDataActor, resolvePersonalMemberId } from "@/lib/memberDataSelection";
+import { getInitialPortalTab } from "@/lib/gvgLauncher";
 import {
   SUMMON_FAMILY_VALUES,
   getChampionSummonFamily,
@@ -86,8 +88,8 @@ import {
   getControlBrand,
   getGvgGuildLabel,
   getGuildScopeDescription,
+  normalizeGvgGuildCode,
   getSessionGuildSpaceKey,
-  getVisibleGvgGuildCodes,
   isPaladinSession,
   normalizeGuildCode,
   normalizeGuildCodeKey,
@@ -2111,7 +2113,7 @@ function PortalRolePreviewSelector({ mode, onChange }) {
 
 function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogout }) {
   const { t } = usePortalLanguage();
-  const [active, setActive] = useState("home");
+  const [active, setActive] = useState(() => getInitialPortalTab(window.location.search));
   const [adminNavOpen, setAdminNavOpen] = useState(false);
   const [pveNavOpen, setPveNavOpen] = useState(false);
   const [pveCategoryNavOpen, setPveCategoryNavOpen] = useState(() => ({ "gear-raid": false }));
@@ -3067,10 +3069,10 @@ function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogo
               onCosmeticsChanged={handleProfileCosmeticsChanged}
             />
           ) : null}
-          {active === "hero-box" ? <HeroBoxView session={effectiveSession} /> : null}
-          {active === "soul-stones" ? <SoulStonesTab session={effectiveSession} /> : null}
-          {active === "demon-monsters" ? <DemonMonstersTab session={effectiveSession} /> : null}
-          {active === "personal-best" ? <PersonalBestTab session={effectiveSession} /> : null}
+          {active === "hero-box" ? <HeroBoxView key={getPortalSessionMemberId(effectiveSession) || "unresolved"} session={effectiveSession} /> : null}
+          {active === "soul-stones" ? <SoulStonesTab key={getPortalSessionMemberId(effectiveSession) || "unresolved"} session={effectiveSession} /> : null}
+          {active === "demon-monsters" ? <DemonMonstersTab key={getPortalSessionMemberId(effectiveSession) || "unresolved"} session={effectiveSession} /> : null}
+          {active === "personal-best" ? <PersonalBestTab key={getPortalSessionMemberId(effectiveSession) || "unresolved"} session={effectiveSession} /> : null}
           {active === "defenses" ? <MyDefensesTab session={effectiveSession} /> : null}
           {active === "gvg" ? <GvgView session={effectiveSession} onEditRun={openRunEditor} /> : null}
           {active === "run-search" ? <RunSearchGrid session={effectiveSession} /> : null}
@@ -3561,7 +3563,7 @@ function HomeView({ session, setActive }) {
   );
 }
 
-function HeroBoxView({ session }) {
+export function HeroBoxView({ session }) {
   const { language, t } = usePortalLanguage();
   const [query, setQuery] = useState("");
   const [playerQuery, setPlayerQuery] = useState("");
@@ -3663,8 +3665,8 @@ function HeroBoxView({ session }) {
     [members, selectedPlayerKey],
   );
   const canEdit = Boolean(
-    selectedPlayer?.permissions?.canEdit ??
-      (isAdminUser || (selectedPlayerKey && selectedPlayerKey === connectedPlayerKey)),
+    selectedPlayer && (selectedPlayer.permissions?.canEdit ??
+      (isAdminUser || (selectedPlayerKey && selectedPlayerKey === connectedPlayerKey))),
   );
   const canBulkAwaken =
     canEdit &&
@@ -3717,25 +3719,23 @@ function HeroBoxView({ session }) {
       try {
         const data = await callPortalPlayerData({ action: "heroBoxBase" });
         if (cancelled) return;
+        assertPersonalDataActor(data, connectedPlayerKey);
 
         const nextMembers = data.members || [];
+        if (!resolvePersonalMemberId(nextMembers, connectedPlayerKey)) throw new Error(MEMBER_IDENTITY_ERROR);
         const nextHeroCards = buildPortalHeroCards(data.champions || []);
         setMembers(nextMembers);
         setHeroCards(nextHeroCards);
         setHeroStates(createEmptyHeroStateMap(nextHeroCards));
         setLoadedPriorityHeroImages(new Set());
         setSelectedPlayerId((current) => {
-          const currentKey = String(current || "");
-          if (currentKey && nextMembers.some((member) => String(member.id) === currentKey)) {
-            return currentKey;
-          }
-          if (connectedPlayerKey && nextMembers.some((member) => String(member.id) === connectedPlayerKey)) {
-            return connectedPlayerKey;
-          }
-          return String(nextMembers[0]?.id || "");
+          return resolvePersonalMemberId(nextMembers, connectedPlayerKey, current);
         });
       } catch (error) {
-        if (!cancelled) setHeroBoxError(error?.message || "Impossible de charger les joueurs et champions.");
+        if (!cancelled) {
+          setMembers([]); setHeroStates({}); setSelectedPlayerId("");
+          setHeroBoxError(error?.message || "Impossible de charger les joueurs et champions.");
+        }
       } finally {
         if (!cancelled) setHeroBoxLoading(false);
       }
@@ -3770,6 +3770,7 @@ function HeroBoxView({ session }) {
 
       setHeroBoxLoading(true);
       setHeroBoxError("");
+      setHeroStates(createEmptyHeroStateMap(heroCards));
 
       try {
         const data = await callPortalPlayerData({
@@ -3778,6 +3779,8 @@ function HeroBoxView({ session }) {
           championIds,
         });
         if (cancelled) return;
+        assertPersonalDataActor(data, connectedPlayerKey);
+        if (String(data.memberId || "") !== selectedPlayerKey) throw new Error(MEMBER_IDENTITY_ERROR);
 
         const awakeningByChampionId = new Map(
           (data.awakenings || []).map((row) => [String(row.champion_id), clampAwakeningLevel(row.awakening_level)]),
@@ -3810,7 +3813,7 @@ function HeroBoxView({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [championIdByHeroId, heroCards, selectedPlayerKey]);
+  }, [championIdByHeroId, heroCards, selectedPlayerKey, connectedPlayerKey]);
 
   const visibleHeroes = useMemo(() => {
     const normalizedQuery = normalizeHeroKey(query);
@@ -4627,14 +4630,16 @@ function launcherEventLabel(event) {
   return labels[event] || event;
 }
 
-function LauncherView({ session: portalSession }) {
+export function LauncherView({ session: portalSession }) {
   const { t } = usePortalLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const pollRef = useRef(null);
   const detectionDeadlineRef = useRef(0);
-  const visibleGvgGuilds = useMemo(() => getVisibleGvgGuildCodes(portalSession), [portalSession]);
+  const [authorizedGuilds, setAuthorizedGuilds] = useState([]);
+  const [guildsLoading, setGuildsLoading] = useState(true);
+  const visibleGvgGuilds = authorizedGuilds.map(item => item.code);
 
-  const [guild, setGuild] = useState("G1");
+  const [guild, setGuild] = useState("");
   const [side, setSide] = useState("enemy");
   const [sessionId, setSessionId] = useState("");
   const [launcherSession, setLauncherSession] = useState(null);
@@ -4654,9 +4659,30 @@ function LauncherView({ session: portalSession }) {
   }, []);
 
   useEffect(() => {
-    if (visibleGvgGuilds.length === 0) return;
-    setGuild((current) => (visibleGvgGuilds.includes(current) ? current : visibleGvgGuilds[0]));
-  }, [visibleGvgGuilds]);
+    let cancelled = false;
+    setGuildsLoading(true);
+    setAuthorizedGuilds([]);
+    setGuild("");
+    const loadGuilds = async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/gvg-server?action=launcher-guilds`, { credentials: "include", cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data?.error || "Chargement des guildes autorisees impossible.");
+        if (cancelled) return;
+        const guilds = Array.isArray(data.guilds) ? data.guilds : [];
+        setAuthorizedGuilds(guilds);
+        const ownGuild = normalizeGvgGuildCode(portalSession?.guildCode || portalSession?.guild_code);
+        setGuild(guilds.some(item => item.code === ownGuild) ? ownGuild : guilds[0]?.code || "");
+        if (!guilds.length) setMessage("Aucune guilde autorisee pour cette session.");
+      } catch (error) {
+        if (!cancelled) setMessage(error.message || "Chargement des guildes autorisees impossible.");
+      } finally {
+        if (!cancelled) setGuildsLoading(false);
+      }
+    };
+    void loadGuilds();
+    return () => { cancelled = true; };
+  }, [apiBase, portalSession]);
 
   async function readJson(response, label) {
     const text = await response.text();
@@ -4715,7 +4741,7 @@ function LauncherView({ session: portalSession }) {
   }
 
   async function launchCapture() {
-    if (!visibleGvgGuilds.includes(guild)) {
+    if (launching || guildsLoading || !visibleGvgGuilds.includes(guild)) {
       setMessage(t("launcher.guildDenied", "Guilde non autorisee pour cette session."));
       return;
     }
@@ -4790,7 +4816,7 @@ function LauncherView({ session: portalSession }) {
             <Button
               type="button"
               className="rounded-2xl bg-emerald-600 px-5 py-6 text-base text-white hover:bg-emerald-500"
-              disabled={launching}
+              disabled={launching || guildsLoading || !visibleGvgGuilds.includes(guild)}
               onClick={launchCapture}
             >
               <Play className="mr-2 h-5 w-5" />
@@ -4810,18 +4836,20 @@ function LauncherView({ session: portalSession }) {
           <div className="rounded-2xl border border-zinc-700/70 bg-zinc-950/55 p-4">
             <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">{t("home.guild", "Guilde")}</div>
             <div className="mt-3 flex flex-wrap gap-2">
-              {visibleGvgGuilds.map((item) => (
+              {authorizedGuilds.map(({ code: item, name }) => (
                 <button
                   key={item}
                   type="button"
                   onClick={() => setGuild(item)}
+                  disabled={launching}
+                  aria-pressed={guild === item}
                   className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
                     guild === item
                       ? "border-cyan-300/70 bg-cyan-400/15 text-cyan-100"
                       : "border-zinc-700 bg-zinc-900/70 text-zinc-300 hover:border-zinc-500"
                   }`}
                 >
-                  {getGvgGuildLabel(item)}
+                  {name && name !== item ? `${getGvgGuildLabel(item)} — ${name}` : getGvgGuildLabel(item)}
                 </button>
               ))}
             </div>

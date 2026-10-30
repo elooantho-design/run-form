@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { logPortalActivity } from "@/lib/portalActivity";
 import { usePortalLanguage } from "@/lib/portalLanguage";
+import { MEMBER_IDENTITY_ERROR, assertPersonalDataActor, resolvePersonalMemberId } from "@/lib/memberDataSelection";
 
 const SOUL_STONE_TABS = [
   { id: "mes-pierres", label: "Mes pierres", labelKey: "soul.tabs.stones", icon: Gem },
@@ -128,7 +129,7 @@ function SoulStoneCounterCard({
 export default function SoulStonesTab({ session }) {
   const { t } = usePortalLanguage();
   const [members, setMembers] = useState([]);
-  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState(session?.memberId || session?.id || "");
   const [memberQuery, setMemberQuery] = useState("");
   const [soulStones, setSoulStones] = useState([]);
   const [soulStonesLoading, setSoulStonesLoading] = useState(false);
@@ -139,12 +140,8 @@ export default function SoulStonesTab({ session }) {
   const sessionMemberId = session?.memberId || session?.id || "";
 
   const selectedMember = useMemo(() => {
-    return (
-      members.find((member) => String(member.id) === String(selectedMemberId)) ||
-      members.find((member) => sessionMemberId && String(member.id) === String(sessionMemberId)) ||
-      members[0] ||
-      null
-    );
+    const selectedId = resolvePersonalMemberId(members, sessionMemberId, selectedMemberId);
+    return members.find((member) => String(member.id) === selectedId) || null;
   }, [members, selectedMemberId, sessionMemberId]);
 
   const memberSuggestions = useMemo(() => {
@@ -159,6 +156,7 @@ export default function SoulStonesTab({ session }) {
   }, [memberQuery, members]);
 
   const canEditSoulStones = useMemo(() => {
+    if (!selectedMember || !sessionMemberId) return false;
     if (typeof selectedMember?.permissions?.canEdit === "boolean") {
       return selectedMember.permissions.canEdit;
     }
@@ -173,7 +171,7 @@ export default function SoulStonesTab({ session }) {
     const isOwnProfile =
       selectedMember?.id && sessionMemberId
         ? String(selectedMember.id) === String(sessionMemberId)
-        : true;
+        : false;
 
     return isAdmin || isOwnProfile;
   }, [selectedMember, session, sessionMemberId]);
@@ -185,14 +183,17 @@ export default function SoulStonesTab({ session }) {
       setSoulStonesLoading(true);
       setClusterSoulStonesLoading(true);
       setErrorMessage("");
+      setSoulStones([]); setClusterSoulStoneRows([]);
 
       try {
+        if (!sessionMemberId) throw new Error(MEMBER_IDENTITY_ERROR);
         const data = await callPortalPlayerData({
           action: "soulStones",
           memberId: selectedMemberId,
         });
 
         if (cancelled) return;
+        assertPersonalDataActor(data, sessionMemberId);
 
         const mappedMembers = (data.members || []).map((row) => ({
           id: row.id,
@@ -203,16 +204,10 @@ export default function SoulStonesTab({ session }) {
           permissions: row.permissions || null,
         }));
 
+        const nextSelectedMemberId = resolvePersonalMemberId(mappedMembers, sessionMemberId, selectedMemberId);
+        if (!nextSelectedMemberId || String(data.selectedMemberId || "") !== nextSelectedMemberId) throw new Error(MEMBER_IDENTITY_ERROR);
         setMembers(mappedMembers);
-        setSelectedMemberId((current) => {
-          if (current && mappedMembers.some((member) => String(member.id) === String(current))) {
-            return current;
-          }
-          if (data.selectedMemberId) return data.selectedMemberId;
-          const bySessionId = mappedMembers.find((member) => String(member.id) === String(sessionMemberId));
-          if (bySessionId) return bySessionId.id;
-          return mappedMembers[0]?.id || "";
-        });
+        setSelectedMemberId(nextSelectedMemberId);
 
         setSoulStones(
           (data.stones || []).map((row) => ({

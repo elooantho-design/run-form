@@ -13,6 +13,8 @@ import {
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
 import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
+import { loadAuthorizedPortalGuilds } from "./_portal-guild-access.js";
+import { normalizeGvgGuildCode } from "../src/lib/guildScope.js";
 import {
   annotateJobsWithActiveGvgLocks,
   findActiveGvgJobReferences,
@@ -946,6 +948,21 @@ async function handleCalque(req, res) {
   return res.status(200).send(fileResponse.buffer);
 }
 
+async function getAuthorizedLauncherGuilds(context) {
+  const catalog = await loadAuthorizedPortalGuilds(context.supabase, context.sessionCheck.member);
+  return catalog.guilds
+    .filter(guild => canUseRunTargetGuild(context.runScope, guild.guild_code))
+    .map(guild => ({ code: normalizeGvgGuildCode(guild.guild_code), name: guild.display_name || guild.guild_code }))
+    .sort((left, right) => left.code.localeCompare(right.code, "fr", { numeric: true }));
+}
+
+async function handleLauncherGuilds(req, res) {
+  const context = await requireGvgServerAdminContext(req, res);
+  if (!context) return;
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(200).json({ ok: true, guilds: await getAuthorizedLauncherGuilds(context) });
+}
+
 async function handleLauncherCreate(req, res) {
   const context = await requireGvgServerAdminContext(req, res);
   if (!context) return;
@@ -965,6 +982,10 @@ async function handleLauncherCreate(req, res) {
   }
 
   if (!assertGvgServerGuildAccess(res, context, guild)) return;
+  // Re-read ownership at launch time: a stale selector must not authorize an inactive or foreign guild.
+  if (!(await getAuthorizedLauncherGuilds(context)).some(item => item.code === guild)) {
+    return res.status(403).json({ error: "Guilde non autorisee pour cette session." });
+  }
 
   const data = await requestVpsJson("/api/v1/launcher/sessions", {
     method: "POST",
@@ -994,6 +1015,9 @@ async function handleLauncherStatus(req, res) {
     { timeoutMs: 5000 }
   );
 
+  if (!(await getAuthorizedLauncherGuilds(context)).some(item => item.code === normalizeGvgGuildCode(data?.session?.guild))) {
+    return res.status(403).json({ error: "Session launcher non autorisee." });
+  }
   return res.status(200).json(data);
 }
 
@@ -1279,6 +1303,7 @@ export default async function handler(req, res) {
       if (action === "preview") return await handlePreview(req, res);
       if (action === "calque") return await handleCalque(req, res);
       if (action === "launcher-status") return await handleLauncherStatus(req, res);
+      if (action === "launcher-guilds") return await handleLauncherGuilds(req, res);
       if (action === "launcher-download") return await handleLauncherDownload(req, res);
       if (action === "record-launcher-download") return await handleRecordLauncherDownload(req, res);
 

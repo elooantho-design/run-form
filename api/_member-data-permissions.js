@@ -5,7 +5,6 @@ import {
 } from "./_portal-auth.js";
 import {
   COMMUNITY_SPACE_KEY,
-  PALADIN_CLUSTER_GUILD_CODES,
   PALADIN_SPACE_KEY,
   getGuildSpaceKey,
   isPaladinGuildCode,
@@ -33,12 +32,13 @@ export function isCommunityMemberDataScope(member) {
 }
 
 export function getMemberDataGuildCode(member) {
-  return isCommunityMemberDataScope(member) ? COMMUNITY_SPACE_KEY : normalizeGuildCode(member?.guild_code || "G1");
+  return isCommunityMemberDataScope(member) ? COMMUNITY_SPACE_KEY : normalizeGuildCode(member?.guild_code);
 }
 
 export function getMemberDataSpaceKey(member) {
   if (isCommunityMemberDataScope(member)) return COMMUNITY_SPACE_KEY;
-  return getGuildSpaceKey(getMemberDataGuildCode(member));
+  const guildCode = getMemberDataGuildCode(member);
+  return guildCode ? getGuildSpaceKey(guildCode) : "";
 }
 
 export function isDirectLinkedSecondaryTarget(actor, target) {
@@ -47,27 +47,27 @@ export function isDirectLinkedSecondaryTarget(actor, target) {
 }
 
 export function resolveMemberDataViewPermission(actor, target) {
-  if (!actor || !target) return { canView: false, reason: "denied" };
+  if (!actor?.id || !target?.id) return { canView: false, reason: "denied" };
   if (isActorLeader(actor)) return { canView: true, reason: "leader" };
   if (sameId(actor.id, target.id)) return { canView: true, reason: "self" };
   if (isDirectLinkedSecondaryTarget(actor, target)) return { canView: true, reason: "linked_secondary" };
   if (isCommunityMemberDataScope(actor) || isCommunityMemberDataScope(target)) {
     return { canView: false, reason: "denied" };
   }
-  return getMemberDataSpaceKey(actor) === getMemberDataSpaceKey(target)
+  return getMemberDataSpaceKey(actor) && getMemberDataSpaceKey(actor) === getMemberDataSpaceKey(target)
     ? { canView: true, reason: "same_scope" }
     : { canView: false, reason: "denied" };
 }
 
 export function resolveMemberDataEditPermission(actor, target) {
-  if (!actor || !target) return { canEdit: false, reason: "denied" };
+  if (!actor?.id || !target?.id) return { canEdit: false, reason: "denied" };
   if (isActorLeader(actor)) return { canEdit: true, reason: "leader" };
   if (sameId(actor.id, target.id)) return { canEdit: true, reason: "self" };
   if (isDirectLinkedSecondaryTarget(actor, target)) return { canEdit: true, reason: "linked_secondary" };
   if (isCommunityMemberDataScope(actor) || isCommunityMemberDataScope(target)) {
     return { canEdit: false, reason: "denied" };
   }
-  return isActorAdmin(actor) && getMemberDataSpaceKey(actor) === getMemberDataSpaceKey(target)
+  return isActorAdmin(actor) && getMemberDataSpaceKey(actor) && getMemberDataSpaceKey(actor) === getMemberDataSpaceKey(target)
     ? { canEdit: true, reason: "admin" }
     : { canEdit: false, reason: "denied" };
 }
@@ -92,6 +92,7 @@ export function serializeMemberDataPermissions(actor, target) {
 }
 
 export function filterMembersForMemberDataActor(members, actor, options = {}) {
+  if (!actor?.id) return [];
   const targetGuildCode = normalizeGuildCodeKey(options.guildCode);
   const canIncludeLinkedSecondary = (member) => {
     if (!isDirectLinkedSecondaryTarget(actor, member)) return false;
@@ -119,11 +120,13 @@ export function filterMembersForMemberDataActor(members, actor, options = {}) {
   }
 
   return members.filter((member) => {
+    if (!targetGuildCode && sameId(member.id, actor.id)) return true;
     if (canIncludeLinkedSecondary(member)) return true;
     if (isCommunityMemberDataScope(member)) return false;
     const rowGuildCode = normalizeGuildCodeKey(member.guild_code);
-    if (!rowGuildCode) return actorSpaceKey === PALADIN_SPACE_KEY;
-    if (actorSpaceKey === PALADIN_SPACE_KEY) return PALADIN_CLUSTER_GUILD_CODES.includes(rowGuildCode);
+    if (!rowGuildCode || !actorSpaceKey) return false;
+    // Serverless instances do not receive the browser's dynamic guild catalog.
+    if (actorSpaceKey === PALADIN_SPACE_KEY) return isPaladinGuildCode(rowGuildCode);
     return getGuildSpaceKey(rowGuildCode) === actorSpaceKey && (!targetGuildCode || rowGuildCode === targetGuildCode);
   });
 }
