@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, ExternalLink, Link2, MessageSquare, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, Unlink, UserCog, UserPlus, Users, X } from "lucide-react";
+import { ArrowRightLeft, BarChart3, ClipboardList, ExternalLink, Link2, MessageSquare, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Trash2, Unlink, UserCog, UserPlus, Users, X } from "lucide-react";
 import GestionDefenseTab from "@/components/GestionDefenseTab";
 import GuildDmCampaignModal from "@/components/GuildDmCampaignModal";
+import GuildSurveyWorkspace from "@/components/GuildSurveyWorkspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -659,6 +660,7 @@ export default function PortalGuildManagementTab({ session }) {
   const [discordCapabilities, setDiscordCapabilities] = useState({});
   const [discordCapabilitiesReady, setDiscordCapabilitiesReady] = useState(true);
   const [guildDmCampaignOpen, setGuildDmCampaignOpen] = useState(false);
+  const [guildSurveyMode, setGuildSurveyMode] = useState("");
   const [adminVisionEnabled, setAdminVisionEnabled] = useState(false);
   const [adminVisionMembers, setAdminVisionMembers] = useState([]);
   const [adminVisionLoading, setAdminVisionLoading] = useState(false);
@@ -2231,6 +2233,14 @@ export default function PortalGuildManagementTab({ session }) {
               <MessageSquare className="mr-2 h-4 w-4" />
               {t("guildManagement.guildDmButton", "Envoyer un MP")}
             </Button>
+            {isAdmin ? <>
+              <Button type="button" variant="outline" className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100" disabled={loading} onClick={() => setGuildSurveyMode("create")}>
+                <BarChart3 className="mr-2 h-4 w-4" />Cr&eacute;er un sondage
+              </Button>
+              <Button type="button" variant="outline" className="rounded-lg border-zinc-700 bg-zinc-900 text-zinc-100" disabled={loading} onClick={() => setGuildSurveyMode("list")}>
+                <ClipboardList className="mr-2 h-4 w-4" />Sondages
+              </Button>
+            </> : null}
             <Button
               type="button"
               className="rounded-lg bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
@@ -2442,6 +2452,7 @@ export default function PortalGuildManagementTab({ session }) {
         </div>
       ) : null}
 
+      {guildSurveyMode ? <GuildSurveyWorkspace activeGuildCode={activeGuildCode} initialCreate={guildSurveyMode === "create"} onClose={() => setGuildSurveyMode("")} /> : null}
       {guildDmCampaignOpen ? (
         <GuildDmCampaignModal
           activeGuildCode={activeGuildCode}

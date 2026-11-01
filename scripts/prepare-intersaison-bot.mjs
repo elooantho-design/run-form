@@ -14,6 +14,7 @@ export async function prepareIntersaisonBot(destination) {
   await copyFile(join(root, "ops/intersaison-bot/Dockerfile"), join(output, "Dockerfile"));
   await copyFile(join(root, "ops/intersaison-bot/services/guildDmCampaigns.cjs"), join(output, "services/guildDmCampaigns.js"));
   await copyFile(join(root, "ops/intersaison-bot/services/intersaisonChoice.cjs"), join(output, "services/intersaisonChoice.cjs"));
+  await copyFile(join(root, "ops/intersaison-bot/services/guildSurvey.cjs"), join(output, "services/guildSurvey.cjs"));
   for (const name of ["intersaisonSurveyChoices.js", "intersaisonSurveyObjectives.js", "guildDisplay.js", "guildScope.js"]) {
     await copyFile(join(root, "src/lib", name), join(output, "shared", name));
   }

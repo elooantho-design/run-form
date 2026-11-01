@@ -7,6 +7,7 @@ const {
   TextInputStyle,
 } = require("discord.js");
 const { buildChoicePayload, handleChoiceInteraction, authorizeChoiceDelivery } = require("./intersaisonChoice.cjs");
+const { isGuildSurveyCampaign, authorizeGuildSurveyDelivery, buildGuildSurveyPayload } = require("./guildSurvey.cjs");
 
 const CAMPAIGNS_TABLE = "guild_dm_campaigns";
 const RECIPIENTS_TABLE = "guild_dm_recipients";
@@ -139,6 +140,7 @@ function buildGuildDmContent(campaign) {
 }
 
 function buildGuildDmPayload(campaign, recipient) {
+  if (isGuildSurveyCampaign(campaign)) return buildGuildSurveyPayload(campaign, recipient);
   const interactionRow = buildGuildDmInteractionRow(campaign, recipient.id);
   return {
     content: buildGuildDmContent(campaign),
@@ -263,7 +265,7 @@ async function markRecipientSending(supabase, recipient) {
     })
     .eq("id", recipient.id)
     .eq("status", "queued");
-  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") {
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice" || isGuildSurveyCampaign(recipient.guild_dm_campaigns)) {
     query = query.eq("reminder_count", Number(recipient.reminder_count || 0))
       .eq("send_attempts", Number(recipient.send_attempts || 0));
   }
@@ -322,7 +324,7 @@ async function markRecipientSent(supabase, recipient, sentMessage) {
       last_error: null,
     })
     .eq("id", recipient.id);
-  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") {
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice" || isGuildSurveyCampaign(recipient.guild_dm_campaigns)) {
     const { data, error } = await query.eq("status", "sending").select("id").maybeSingle();
     if (error) throw error;
     if (!data) {
@@ -349,7 +351,7 @@ async function markRecipientQueuedAfterRateLimit(supabase, recipient, error) {
       updated_at: now,
     })
     .eq("id", recipient.id);
-  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice") query = query.eq("status", "sending");
+  if (recipient.guild_dm_campaigns?.interaction_type === "intersaison_choice" || isGuildSurveyCampaign(recipient.guild_dm_campaigns)) query = query.eq("status", "sending");
   const { error: updateError } = await query;
 
   if (updateError) throw updateError;
@@ -486,7 +488,9 @@ async function saveIntersaisonObjectivesResponse(supabase, interaction, dmRecipi
 async function deliverGuildDmRecipient({ client, supabase, recipient }) {
   let sendingRecipient = null, sentMessage = null;
   const isChoice = recipient.guild_dm_campaigns.interaction_type === "intersaison_choice";
+  const isSurvey = isGuildSurveyCampaign(recipient.guild_dm_campaigns);
   try {
+    if (isSurvey) await authorizeGuildSurveyDelivery(supabase, recipient);
     sendingRecipient = await markRecipientSending(supabase, recipient);
     if (!sendingRecipient) return;
     await markCampaignSending(supabase, sendingRecipient.campaign_id);
@@ -505,6 +509,7 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
       : buildGuildDmPayload(sendingRecipient.guild_dm_campaigns, sendingRecipient);
     // Recheck after the potentially slow Discord lookup, immediately before sending.
     if (isChoice) await authorizeChoiceDelivery(supabase, sendingRecipient);
+    if (isSurvey) await authorizeGuildSurveyDelivery(supabase, sendingRecipient);
     sentMessage = await user.send(payload);
     await markRecipientSent(supabase, sendingRecipient, sentMessage);
     console.log("[guild-dm] sent", {
@@ -514,8 +519,8 @@ async function deliverGuildDmRecipient({ client, supabase, recipient }) {
     });
   } catch (error) {
     const attemptedRecipient = sendingRecipient || recipient;
-    const failure = isChoice && sentMessage ? new Error("DELIVERY_UNCERTAIN : message transmis à Discord, confirmation en base impossible. Ne pas renvoyer.") : error;
-    let canRetryRateLimit = !isChoice || attemptedRecipient.send_attempts < 5;
+    const failure = (isChoice || isSurvey) && sentMessage ? new Error("DELIVERY_UNCERTAIN : message transmis à Discord, confirmation en base impossible. Ne pas renvoyer.") : error;
+    let canRetryRateLimit = !(isChoice || isSurvey) || attemptedRecipient.send_attempts < 5;
     if (sendingRecipient && isChoice && sendingRecipient.reminder_count > 0 && isRateLimitError(failure)) {
       const { data: attempts, error: attemptError } = await supabase.rpc("intersaison_choice_delivery_attempts", {
         p_dm_recipient: sendingRecipient.id, p_reminder: sendingRecipient.reminder_count,

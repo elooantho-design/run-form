@@ -47,6 +47,7 @@ import SoulStonesTab from "@/components/SoulStonesTab";
 import PersonalBestTab from "@/components/PersonalBestTab";
 import MyDefensesTab from "@/components/MyDefensesTab";
 import PortalGuildManagementTab from "@/components/PortalGuildManagementTab";
+import GuildSurveyInbox from "@/components/GuildSurveyInbox";
 import GvgCurrentTab from "@/components/GvgCurrentTab";
 import GvgPanelTab from "@/components/GvgPanelTab";
 import GvgAdminTab from "@/components/GvgAdminTab";
@@ -3059,6 +3060,7 @@ function PortalShell({ session, sessionNotice = "", onClearSessionNotice, onLogo
               </button>
             </div>
           ) : null}
+          <GuildSurveyInbox key={getPortalSessionMemberId(session) || "unresolved-survey-session"} />
           {active === "home" ? <HomeView session={effectiveSession} setActive={setActive} /> : null}
           {active === "profile" ? (
             <ProfileCosmeticsTab

@@ -192,3 +192,192 @@ arreter les actions administratives et auditer avant tout retour de version.
 Validation isolee supplementaire : `node scripts/test-intersaison-survey-accounts.mjs`
 (meme `PGLITE_MODULE_PATH` que ci-dessus). Aucune migration de production n'est
 executee par les tests et tous les envois du worker sont mockes.
+
+## Sondages de guilde autonomes (preparation locale, non deployee)
+
+Le module Gestion des guildes propose **Creer un sondage** et **Sondages**.
+Les membres repondent dans **Mes sondages**, ou depuis le lien authentifie
+`/portal?guildSurvey=<uuid>` de l'invitation Discord. L'UUID n'est pas un jeton
+d'acces : la session et l'identite du participant sont toujours verifiees.
+
+Les tables `guild_surveys` et `guild_survey_*` sont independantes de l'Inter-saison.
+Aucune fonction du nouveau module ne modifie une table Inter-saison, un effectif,
+un objectif, un placement, un role reel ou une donnee personnelle.
+Les sept tables nouvelles sont sous RLS et sans acces direct pour anon,
+authenticated ou service_role ; les deux RPC publiques sont reservees au service.
+Les fonctions privees et triggers ont un search_path fixe et ne sont pas appelables
+par les clients. La session serveur fournit l'acteur, jamais le corps de requete.
+
+Leader et Admin gerent les guildes actives de leur organisation, comme pour les MP
+de guilde. Un Admin peut consulter mais pas administrer un sondage cree par un
+Leader. Toute action d'administration revalide le role et l'organisation en SQL.
+Les guildes viennent de `portal_guilds`, sans limite G1-G7/G9 dans ce module.
+Un code de guilde ambigu entre organisations bloque la previsualisation et les
+envois. L'inactivite de l'organisation ou du compte bloque aussi la livraison.
+
+Un participant correspond au compte principal stable. Ses comptes secondaires
+explicitement lies sont regroupes : une invitation et une reponse commune, avec
+le nombre de comptes affiche avant confirmation. Un Discord partage sans lien
+explicite ou une association contradictoire est exclu des MP et signale pour
+verification ; les reponses ne sont jamais fusionnees sur le seul Discord ID.
+Les comptes sans Discord conservent leur acces nominatif depuis le portail.
+La guilde au lancement reste un snapshot ; un transfert ne reassocie pas la reponse
+a un autre joueur. Une sortie de l'organisation bloque les envois suivants.
+
+Les brouillons et previsualisations n'ajoutent aucune campagne MP. A la publication,
+une RPC verrouille le sondage, revalide l'empreinte du roster et cree les participants
+et une vague technique dans la file MP existante, atomiquement. Chaque confirmation
+a un UUID idempotent. Une relance cree une nouvelle vague technique du MEME sondage,
+sans reinitialiser ni ecraser la livraison initiale. Son historique est conserve
+dans `guild_survey_waves`, `guild_survey_deliveries` et les evenements de livraison.
+Le filtre de consultation ne limite pas l'envoi confirme aux guildes selectionnees
+lors de la creation du sondage. Les erreurs permanentes/incertaines, comptes modifies,
+repondants, destinataires deja en attente et invitations de moins d'une heure sont
+exclus. Une erreur HTTP 429 peut etre reprise par une nouvelle confirmation apres
+ce delai ; aucune reprise automatique d'une erreur permanente n'est prevue.
+
+Le worker n'emprunte la nouvelle branche que pour `interaction_payload.kind =
+guild_survey_v1`, avec `interaction_type = none`. Les interactions Inter-saison,
+les boutons de reponse Discord et les MP classiques gardent leur parcours actuel.
+Le nouvel adaptateur `services/guildSurvey.cjs` construit une invitation avec lien,
+sans bouton d'acquittement pouvant etre confondu avec une reponse au sondage.
+L'identite, la cloture et l'absence de reponse sont revalidees avant la prise en
+charge puis apres la recherche Discord, juste avant l'envoi. La prise en charge
+SQL exige une autorisation recente de l'adaptateur : un ancien worker ne peut pas
+envoyer les nouveaux sondages. Cinq tentatives maximum, y compris sur HTTP 429.
+Une transmission Discord acceptee mais non confirmee en base est marquee
+DELIVERY_UNCERTAIN et n'est pas renvoyee automatiquement.
+
+La modification des reponses utilise un numero de version pour eviter les ecrasements.
+Questions et destinataires sont figes apres publication. Une date limite depassee
+bloque reponses et envois sans necessiter de cron. La cloture conserve toutes les
+reponses et annule les transmissions encore en attente. Aucune garantie d'annulation
+retroactive d'une requete deja acceptee par Discord n'est possible.
+
+### Ordre de mise en production, apres une nouvelle autorisation
+
+1. Executer `scripts/guild_surveys_preflight.sql` (un seul JSON, lecture seule).
+   Comparer le schema avec le miroir teste et conserver les empreintes. Verifier
+   qu'aucun traitement MP n'est actif avant toute intervention sur le worker.
+2. Installer `scripts/guild_surveys.sql`, puis executer `guild_surveys_verify.sql`.
+   A ce stade `delivery_enabled=false` est NORMAL. Aucune campagne n'est creee.
+3. Sauvegarder le bot actif et son image. Preparer le paquet HORS depot avec
+   `node scripts/prepare-intersaison-bot.mjs <dossier-de-preparation>`.
+   Les seuls changements worker sont le fichier guildDmCampaigns et l'ajout de
+   guildSurvey.cjs. Aucun changement de dependance, du moteur GvG ou des templates.
+   Comparer avec les sources VPS actives, tester le paquet, puis seulement apres
+   autorisation deployer/redemarrer le service MP concerne. Ne pas purger la file.
+4. Publier les seuls fichiers du nouveau module/API apres autorisation, verifier
+   Vercel READY et la session autorisee. Relancer les tests de non-regression.
+5. Une fois le worker adapte confirme actif, executer SEULEMENT sur autorisation
+   `scripts/guild_surveys_enable_delivery.sql`. Cette activation ne cree pas de vague.
+6. Creer le premier brouillon en choisissant le modele Paladin x DEUS ; verifier
+   les questions et les destinataires reels. La premiere publication/confirmation
+   et tout test personnel reel restent des actions manuelles distinctes a autoriser.
+
+Retour arriere : desactiver d'abord `delivery_enabled`, ne pas supprimer les tables,
+reponses ou historiques. Garder les garde-fous SQL. Attendre l'inactivite de la file
+avant de retablir une version sauvegardee du worker ; ne jamais rendre une ligne
+incertaine ou annulee eligible automatiquement. Le flag ne rappelle pas un MP deja
+accepte par Discord. Les anciens sondages et les autres services ne sont pas touches.
+
+### Tests isoles
+
+- `node scripts/test-guild-surveys.mjs` : API, identite serveur, methodes, CSV et modele.
+- `node scripts/test-guild-surveys-sql.mjs` : PostgreSQL reel isole via PGLITE_MODULE_PATH.
+- `node scripts/test-guild-survey-worker.mjs` : worker/Discord strictement mockes,
+  avec DISCORD_TEST_NODE_MODULES pointant vers un runtime de test discord.js.
+- `node scripts/test-guild-surveys-browser.mjs` : Playwright local via
+  PLAYWRIGHT_MODULE_PATH, captures desktop/mobile ; tous les envois sont fictifs.
+- `node scripts/guild-survey-preview.mjs` : interface locale sur le port 5192,
+  route `/__guild-surveys-preview` ; toutes les routes API reelles y sont bloquees.
+
+Verifier aussi test-guild-dm-campaigns, test-intersaison-surveys et
+test-intersaison-survey-choice-worker. Aucun de ces tests n'exige une migration
+de production, un compte Discord reel, une capture GvG ni un envoi de MP.
+
+### Inventaire du lot local
+
+Fichiers crees :
+
+- `api/portal-guild-surveys.js`
+- `src/lib/guildSurveys.js`
+- `src/lib/guildSurveyApi.js`
+- `src/components/GuildSurveyQuestions.jsx`
+- `src/components/GuildSurveyWorkspace.jsx`
+- `src/components/GuildSurveyInbox.jsx`
+- `scripts/guild_surveys.sql`
+- `scripts/guild_surveys_preflight.sql`
+- `scripts/guild_surveys_verify.sql`
+- `scripts/guild_surveys_enable_delivery.sql`
+- `scripts/guild-survey-preview.mjs`
+- `scripts/test-guild-surveys.mjs`
+- `scripts/test-guild-surveys-sql.mjs`
+- `scripts/test-guild-surveys-browser.mjs`
+- `scripts/test-guild-survey-worker.mjs`
+- `ops/intersaison-bot/services/guildSurvey.cjs`
+
+Fichiers existants modifies :
+
+- `src/components/PortalGuildManagementTab.jsx` : acces creation et liste.
+- `src/SaasPortal.jsx` : boite personnelle des sondages authentifies.
+- `ops/intersaison-bot/services/guildDmCampaigns.cjs` : branche opt-in de livraison.
+- `scripts/prepare-intersaison-bot.mjs` : inclusion de l'adaptateur dans le paquet.
+- `ops/intersaison-bot/README.md` : procedure et limites.
+
+Validation locale initiale (avant le correctif d'eligibilite) : 97 assertions PostgreSQL isolees, tests API/worker, tests
+navigateur 1440/768/390/320 px et non-regressions des MP/sondages Inter-saison.
+ESLint cible sans erreur (quatre avertissements preexistants dans SaasPortal),
+build et git diff --check conformes. Les envois et publications des tests sont
+uniquement simules. Le verrouillage SQL et l'idempotence sont exerces dans une
+instance isolee ; ce n'est pas un test de charge PostgreSQL multi-processus.
+La compatibilite du schema reel et du bot VPS actif devra encore etre confirmee
+par le preflight et la comparaison des sources avant un deploiement autorise.
+
+### Correctif d'eligibilite apres le controle reel du 1er novembre 2026
+
+Le premier controle reel a revele que `community_status=inactive` est aussi une
+valeur normale pour un membre actif rattache a une guilde. Il ne faut jamais
+modifier ces comptes pour contourner un refus du nouveau module. Le controle API
+existant est correct : seuls les comptes de type community, ou de role
+community_member/content_creator/vip, sont bloques par leur statut communautaire.
+
+Le correctif local couvre cinq fonctions du module : acteur, roster, etat d'un
+destinataire, requete publique (compteurs) et autorisation de livraison. Pour les
+comptes de guilde, les controles roster_status, guilde/organisation actives et
+identite restent applicables. Les comptes communautaires ne sont pas inclus dans
+un roster de guilde, meme si un ancien rattachement de guilde subsiste.
+
+Nouveaux fichiers :
+
+- `scripts/guild_surveys_eligibility_fix.sql` : correctif transactionnel cible.
+- `scripts/guild_surveys_eligibility_verify.sql` : dix controles et diagnostic
+  dynamique, strictement en lecture seule, avec empreintes des donnees existantes.
+- `scripts/test-guild-survey-eligibility.mjs` : 355 assertions, reproduction anonyme du roster
+  observe (231 comptes, dont 114 affectes, 3 Leaders et 11 Admins) et vrai parcours
+  API/SQL dans PostgreSQL isole. G8=21, G9=13, G1-G7 verifies, comptes lies,
+  comptes inactifs, separation des organisations et autorisation avant envoi.
+
+`guild_surveys.sql` est aussi corrige pour les futures installations neuves.
+Il ne doit PAS etre rejoue sur l'installation de production existante.
+Le patch conserve le texte non concerne, les signatures, proprietaires, grants
+et search_path des fonctions. Aucune table, aucun trigger et aucune donnee ne sont
+modifies. Il refuse une definition inattendue ou un flag d'envoi deja active ;
+il n'active ni ne desactive ce flag lui-meme. Les tests de livraison positive
+utilisent une transaction jetable, annulee ensuite, sans client Discord reel.
+
+Reprise minimale, SEULEMENT apres autorisation :
+
+1. Executer le correctif cible `guild_surveys_eligibility_fix.sql`.
+2. Executer `guild_surveys_eligibility_verify.sql`, transmettre le JSON et verifier
+   les dix controles OK, les compteurs dynamiques, les empreintes comparees au
+   releve precedent et `delivery_enabled=false`. Ne pas forcer en cas d'erreur.
+3. Reprendre les controles du worker et de la file, sa sauvegarde puis le
+   deploiement cible autorise ; deployer ensuite le dashboard/API sur Vercel.
+4. Garder les envois desactives et ne creer aucun sondage de test en production.
+   Ne PAS executer `guild_surveys_enable_delivery.sql` a ce stade.
+
+Tests locaux : `node scripts/test-guild-survey-eligibility.mjs` avec
+PGLITE_MODULE_PATH. GUILD_SURVEY_ELIGIBILITY_REPORT peut designer un fichier JSON
+de resultat hors depot. Relancer aussi test-guild-surveys-sql (99 assertions),
+test-guild-surveys, test-guild-survey-worker et les non-regressions Inter-saison.
