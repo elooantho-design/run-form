@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import PortalIntersaisonSurveyCenter from "@/components/PortalIntersaisonSurveyCenter";
+import RosterSimulationWorkspace from "@/components/RosterSimulationWorkspace";
 
 function getApiBase() {
   const configured = import.meta.env.VITE_API_BASE_URL;
@@ -142,6 +143,7 @@ export default function PortalIntersaisonTab({ session }) {
   const { t } = usePortalLanguage();
   const canManage = canManageIntersaison(session);
   const rowRefs = useRef(new Map());
+  const [workspace, setWorkspace] = useState("surveys");
 
   const [campaign, setCampaign] = useState(null);
   const [organization, setOrganization] = useState(null);
@@ -652,7 +654,14 @@ export default function PortalIntersaisonTab({ session }) {
   }
 
   if (["paladin", "paladin_cluster"].includes(organization?.organization_key || organization?.organizationKey)) {
-    return <PortalIntersaisonSurveyCenter organizationFallback={organization} />;
+    return <section className="min-w-0 space-y-5">
+      <div role="tablist" aria-label="Inter-saison" className="flex flex-wrap gap-1 border-b border-zinc-800">
+        {[['surveys', 'Sondages et plans'], ['simulation', 'Simulation des effectifs']].map(([id, label]) =>
+          <button type="button" role="tab" aria-selected={workspace === id} key={id} onClick={() => setWorkspace(id)}
+            className={`border-b-2 px-3 py-3 text-sm ${workspace === id ? 'border-emerald-400 text-zinc-100' : 'border-transparent text-zinc-400 hover:text-zinc-100'}`}>{label}</button>)}
+      </div>
+      {workspace === "simulation" ? <RosterSimulationWorkspace /> : <PortalIntersaisonSurveyCenter organizationFallback={organization} />}
+    </section>;
   }
 
   return (
