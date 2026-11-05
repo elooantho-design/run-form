@@ -19,11 +19,23 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 });
 
 async function requestGvgVps(pathname, options = {}) {
-  const serverUrl = String(process.env.GVG_SERVER_URL || process.env.GVG_VPS_URL || "http://152.228.128.157").replace(/\/$/, "");
+  let base;
+  let target;
+  try {
+    base = new URL(process.env.GVG_SERVER_URL || process.env.GVG_VPS_URL || "");
+    target = new URL(pathname, base);
+  } catch {
+    // Invalid configuration must not fall back to a public HTTP endpoint.
+  }
+  if (base?.protocol !== "https:" || !target || target.origin !== base.origin
+    || base.username || base.password || target.username || target.password) {
+    throw Object.assign(new Error("Le reset GvG exige une URL VPS HTTPS configuree. Aucun reset lance."), { statusCode: 428 });
+  }
   const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
   if (!token) throw Object.assign(new Error("GVG_API_TOKEN manquant cote serveur"), { statusCode: 500 });
-  const response = await fetch(new URL(pathname, serverUrl + "/"), {
+  const response = await fetch(target, {
     method: options.method || "GET",
+    redirect: "error",
     headers: { "X-GVG-Token": token, "Content-Type": "application/json" },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
@@ -87,6 +99,7 @@ export function createGvgResetHandler(overrides = {}) {
       return sendPortalJson(res, error.statusCode || 500, {
         error: error.message || "Reset impossible.",
         reset_committed: error.resetCommitted === true,
+        reset_state: error.resetState,
         operation_id: error.operationId || null,
       }, req);
     }

@@ -123,6 +123,7 @@ export default function GvgAdminTab({ session } = {}) {
   const [loadingImport, setLoadingImport] = useState(false);
   const [loadingReset, setLoadingReset] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
+  const [unconfirmedResets, setUnconfirmedResets] = useState({});
   const [resetError, setResetError] = useState("");
   const resetInFlight = useRef(false);
   const [message, setMessage] = useState("");
@@ -231,13 +232,18 @@ export default function GvgAdminTab({ session } = {}) {
   }
 
   function handleReset() {
-    if (!selectedGuildAllowed || resetInFlight.current) return;
+    if (!selectedGuildAllowed || resetInFlight.current || unconfirmedResets[guild]) return;
     setResetError("");
     setResetTarget({ guild, name: getGuildDisplayName({ guildCode: guild }), requestId: crypto.randomUUID(), choice: null });
   }
 
   async function handleResumeCleanup() {
     if (!selectedGuildAllowed || resetInFlight.current) return;
+    if (unconfirmedResets[guild]) {
+      setResetError("");
+      setResetTarget(unconfirmedResets[guild]);
+      return;
+    }
     resetInFlight.current = true;
     setLoadingReset(true);
     try {
@@ -246,8 +252,10 @@ export default function GvgAdminTab({ session } = {}) {
       if (!response.ok) throw new Error(data?.error || "Reprise indisponible.");
       if (!data.operation) { setMessage("Aucun nettoyage GvG en attente pour cette guilde."); return; }
       setResetError("");
-      setResetTarget({ guild, name: getGuildDisplayName({ guildCode: guild }), kind: "resume",
-        operationId: data.operation.operationId, choice: data.operation.saveEnemyDefenses });
+      const pending = { guild, name: getGuildDisplayName({ guildCode: guild }), kind: "resume",
+        operationId: data.operation.operationId, choice: data.operation.saveEnemyDefenses };
+      setUnconfirmedResets(previous => ({ ...previous, [guild]: pending }));
+      setResetTarget(pending);
     } catch (error) { setMessage(error.message || "Reprise indisponible."); }
     finally { resetInFlight.current = false; setLoadingReset(false); }
   }
@@ -256,8 +264,20 @@ export default function GvgAdminTab({ session } = {}) {
     if (!resetTarget || resetInFlight.current || typeof saveEnemyDefenses !== "boolean") return;
     if (resetTarget.choice !== null && resetTarget.choice !== saveEnemyDefenses) return;
     resetInFlight.current = true;
-    const target = resetTarget;
-    setResetTarget((previous) => ({ ...previous, choice: saveEnemyDefenses }));
+    const wasUnconfirmed = Boolean(unconfirmedResets[resetTarget.guild]);
+    const target = { ...resetTarget, choice: saveEnemyDefenses };
+    setResetTarget(target);
+    setUnconfirmedResets(previous => ({ ...previous, [target.guild]: target }));
+    const clearUnconfirmed = () => setUnconfirmedResets(previous => {
+      const next = { ...previous };
+      delete next[target.guild];
+      return next;
+    });
+    const reportUnconfirmed = (reason) => {
+      const warning = "Fin du reset non confirmee. Ne lancez pas de nouvelle capture ; reprenez la meme operation.";
+      setResetError(`${reason} ${warning}`);
+      setMessage(`${target.name} (${target.guild}) : ${warning}`);
+    };
 
     try {
       setLoadingReset(true);
@@ -282,23 +302,33 @@ export default function GvgAdminTab({ session } = {}) {
       const data = await readJsonResponse(response, "reset");
 
       if (!response.ok) {
-        setResetError(data?.error || "Reset impossible. Reessayez la meme operation.");
-        if (data?.operation_id && data?.reset_committed !== true && target.kind !== "resume") {
-          setResetTarget((previous) => previous ? { ...previous, requestId: crypto.randomUUID(), choice: null } : previous);
+        const reason = data?.error || "Reset impossible.";
+        if (target.kind !== "resume" && data?.reset_committed !== true
+          && (data?.reset_state === "failed" || (!wasUnconfirmed && data?.reset_state === "not_started"))) {
+          clearUnconfirmed();
+          setResetTarget({ ...target, requestId: crypto.randomUUID(), choice: null });
+          setResetError(reason);
+        } else {
+          reportUnconfirmed(reason);
         }
         return;
       }
+      if (data?.success !== true || !data?.operation_id) {
+        reportUnconfirmed("Le serveur n'a pas confirme le resultat.");
+        return;
+      }
 
-      const preserved = data?.record_server_reset?.preserved?.length
+      const preserved = data.retained_images > 0 || data?.record_server_reset?.preserved?.length
         || data?.record_server_reset?.reason === "legacy_no_manifest_preserved";
       const outcome = target.kind === "resume"
         ? `Nettoyage termine : ${target.name} (${target.guild}). Aucun nouveau reset.`
         : `Reset OK : ${target.name} (${target.guild}). ${saveEnemyDefenses ? "Defenses adverses sauvegardees." : "Sans sauvegarde ni nouveaux compteurs adverses."}`;
       setMessage(outcome + (preserved ? " Des ressources ont ete conservees par securite." : ""));
+      clearUnconfirmed();
       setResetTarget(null);
     } catch (error) {
       console.error("handleReset error:", error);
-      setResetError(`Erreur reset : ${error?.message || "erreur inconnue"}. Reessayez la meme operation.`);
+      reportUnconfirmed(`Erreur reset : ${error?.message || "erreur inconnue"}.`);
     } finally {
       setLoadingReset(false);
       resetInFlight.current = false;
@@ -567,10 +597,11 @@ export default function GvgAdminTab({ session } = {}) {
                 type="button"
                 variant="destructive"
                 className="rounded-2xl"
-                disabled={loadingImport || loadingReset || !selectedGuildAllowed}
+                disabled={loadingImport || loadingReset || Boolean(unconfirmedResets[guild]) || !selectedGuildAllowed}
                 onClick={handleReset}
               >
-                {loadingReset ? t("gvgAdmin.resetting", "Reset...") : `${t("gvgAdmin.reset", "Reset")} ${getGvgGuildLabel(guild)}`}
+                {loadingReset ? t("gvgAdmin.resetting", "Reset...") : unconfirmedResets[guild] ? "Nettoyage non confirme"
+                  : `${t("gvgAdmin.reset", "Reset")} ${getGvgGuildLabel(guild)}`}
               </Button>
               <Button type="button" variant="outline" className="h-auto whitespace-normal rounded-md"
                 disabled={loadingImport || loadingReset || !selectedGuildAllowed} onClick={handleResumeCleanup}>

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export default function GvgResetDialog({ guildName, busy, error, choice = null, resume = false, onCancel, onConfirm }) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(choice === null ? 1 : 2);
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !busy) onCancel(); }}>
@@ -37,7 +37,7 @@ export default function GvgResetDialog({ guildName, busy, error, choice = null, 
         ) : null}
         {error ? <p role="alert" className="break-words text-sm text-red-300">{error}</p> : null}
         <div className="flex flex-wrap justify-end gap-2">
-          <Button type="button" variant="outline" className="rounded-md" disabled={busy} onClick={onCancel}>Annuler</Button>
+          <Button type="button" variant="outline" className="rounded-md" disabled={busy} onClick={onCancel}>{!resume && choice !== null ? "Fermer" : "Annuler"}</Button>
           {resume ? (
             <Button type="button" className="rounded-md" disabled={busy} onClick={() => onConfirm(choice)}>Reprendre le nettoyage</Button>
           ) : step === 1 ? (

@@ -109,6 +109,7 @@ function responseFor(operation, receipt, { guild, saveEnemyDefenses }, cleanup, 
     saveEnemyDefenses,
     deleted_defenses: receipt?.deleted_defenses || 0,
     deleted_images: cleanup?.storage?.removed || 0,
+    retained_images: cleanup?.storage?.retained || 0,
     enemy_defense_archive: saveEnemyDefenses ? archive || receipt?.archive_result || null : { skipped: true, reason: "technical_reset" },
     enemy_strat_availability: cleanup?.availability || null,
     discord_repro_cleanup: cleanup?.discord || null,
@@ -122,7 +123,12 @@ export async function executeGvgReset({
   db, input, portalGuild, actor,
   archiveEnemyDefenses, refreshAvailability, purgeDiscord, requestVps,
 }) {
-  await requireCleanupCapabilities(db, requestVps);
+  try {
+    await requireCleanupCapabilities(db, requestVps);
+  } catch (error) {
+    // This attempt did not start or resume any operation.
+    throw Object.assign(error, { resetState: "not_started" });
+  }
   let initialSnapshot = null;
   if (input.action !== "resume") {
     initialSnapshot = await requestVps("/api/v1/reset-cleanups/snapshot", {
@@ -153,7 +159,8 @@ export async function executeGvgReset({
     || operation.organization_id !== portalGuild.organization_id) throw resetError("Perimetre de reprise invalide.", 403);
   input = { ...input, saveEnemyDefenses: operation.save_enemy_defenses };
   if (operation.state === "failed") {
-    throw Object.assign(resetError("Cette operation a echoue avant le reset. Confirmez une nouvelle tentative."), { operationId: operation.operation_id });
+    throw Object.assign(resetError("Cette operation a echoue avant le reset. Confirmez une nouvelle tentative."),
+      { operationId: operation.operation_id, resetState: "failed" });
   }
   let receipt = operation.result || null;
   const cleanup = { ...(operation.cleanup_result || {}) };
@@ -237,17 +244,20 @@ export async function executeGvgReset({
     });
     return responseFor(operation, receipt, input, cleanup, archive);
   } catch (error) {
+    let finished;
     try {
-      await rpc(db, "finish_gvg_reset", {
+      finished = await rpc(db, "finish_gvg_reset", {
         p_operation_id: operation.operation_id, p_lease_token: leaseToken,
         p_success: false, p_cleanup_result: { ...cleanup, error: error?.message || "Reset interrompu." },
       });
     } catch (releaseError) {
       console.error("[gvg-reset] operation release failed:", releaseError.code || "unknown");
     }
+    const commitConfirmed = committed || finished?.state === "committed" || finished?.state === "completed";
     throw Object.assign(error, {
-      statusCode: committed ? 503 : error.statusCode || 500,
-      resetCommitted: committed,
+      statusCode: commitConfirmed ? 503 : error.statusCode || 500,
+      resetCommitted: commitConfirmed,
+      resetState: finished?.state === "failed" ? "failed" : undefined,
       operationId: operation.operation_id,
     });
   }
