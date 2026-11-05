@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Ban, CheckCircle2, Download, Link2, Maximize2, Minus, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Swords, X, XCircle } from "lucide-react";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { resolveVpsAssetUrlForRuntime } from "@/lib/vpsAssets";
@@ -173,7 +173,7 @@ function getYoutubeEmbedUrl(url) {
   }
 }
 
-export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataChanged = null }) {
+export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataChanged = null, onSimilaritiesSaved = null }) {
   const { t } = usePortalLanguage();
   const [items, setItems] = useState([]);
   const [guilds, setGuilds] = useState([]);
@@ -191,6 +191,23 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
   const [importModal, setImportModal] = useState(null);
   const [importLoading, setImportLoading] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
+  const similaritySaving = useRef(false);
+  const similarityGeneration = useRef(0);
+
+  useEffect(() => {
+    similarityGeneration.current += 1;
+    setSimilarityModal(null);
+  }, [activeGuildCode]);
+
+  const similarityDecisions = similarityModal?.decisions || {};
+  const similarityDecisionCount = Object.keys(similarityDecisions).length;
+  const similarityConflict = (similarityModal?.candidates || []).some((candidate) =>
+    similarityDecisions[candidate.review.id] === "identical"
+      && (similarityModal?.candidates || []).some((other) =>
+        similarityDecisions[other.review.id] === "different"
+          && (candidate.propagationIds || []).includes((other.localDefense || other.local_defense)?.id),
+      ),
+  );
 
   function notifyDataChanged() {
     setRefreshTick((value) => value + 1);
@@ -357,7 +374,8 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
 
   async function openSimilarities(item) {
     if (!linksInitialized) return;
-    setSimilarityModal({ item, enemyDefense: item, candidates: [], error: "" });
+    const generation = ++similarityGeneration.current;
+    setSimilarityModal({ item, enemyDefense: item, candidates: [], decisions: {}, error: "" });
     setSimilarityLoading(true);
 
     try {
@@ -368,21 +386,47 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
 
       const response = await fetch(url.toString(), { credentials: "include" });
       const data = await readJsonResponse(response, "Lecture similarites impossible.");
+      if (generation !== similarityGeneration.current) return;
       setSimilarityModal({
         item,
         enemyDefense: data.enemyDefense || data.enemy_defense || item,
         candidates: data.candidates || [],
+        decisions: {},
+        batchVersion: data.batchVersion,
+        requestId: window.crypto.randomUUID(),
         error: "",
       });
     } catch (error) {
+      if (generation !== similarityGeneration.current) return;
       setSimilarityModal({ item, enemyDefense: item, candidates: [], error: error?.message || "Lecture similarites impossible." });
     } finally {
-      setSimilarityLoading(false);
+      if (generation === similarityGeneration.current) setSimilarityLoading(false);
     }
   }
 
-  async function reviewSimilarity(candidate, status) {
-    if (!candidate?.review?.id) return;
+  function selectSimilarityDecision(candidate, status) {
+    if (similaritySaving.current) return;
+    setSimilarityModal((previous) => {
+      if (!previous) return previous;
+      const decisions = { ...previous.decisions };
+      if (status) decisions[candidate.review.id] = status;
+      else delete decisions[candidate.review.id];
+      return { ...previous, decisions, requestId: window.crypto.randomUUID(), error: "" };
+    });
+  }
+
+  function closeSimilarities() {
+    if (similaritySaving.current) return;
+    similarityGeneration.current += 1;
+    setSimilarityModal(null);
+  }
+
+  async function saveSimilarityDecisions() {
+    if (similaritySaving.current || similarityLoading || !similarityDecisionCount || similarityConflict
+      || !similarityModal?.batchVersion || similarityModal.requiresRefresh) return;
+    similaritySaving.current = true;
+    const snapshot = similarityModal;
+    const generation = similarityGeneration.current;
     setSimilarityLoading(true);
 
     try {
@@ -391,27 +435,36 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "review-similarity",
+          action: "review-similarities",
           guild: activeGuildCode,
-          reviewId: candidate.review.id,
-          status,
+          defenseId: snapshot.item.id,
+          requestId: snapshot.requestId,
+          version: snapshot.batchVersion,
+          decisions: Object.entries(snapshot.decisions).map(([reviewId, status]) => ({ reviewId, status })),
         }),
       });
-      await readJsonResponse(response, "Validation similarite impossible.");
-      setSimilarityModal((previous) =>
-        previous
-          ? {
-              ...previous,
-              candidates: previous.candidates.filter((item) => item.review?.id !== candidate.review.id),
-              error: "",
-            }
-          : previous,
-      );
-      notifyDataChanged();
+      const result = await readJsonResponse(response, "Enregistrement des decisions impossible.");
+      if (generation !== similarityGeneration.current) return;
+      // Refresh only the enemy bank: the parent loader unmounts the tab and loses its navigation state.
+      setRefreshTick((value) => value + 1);
+      let refreshWarning = "";
+      try { await onSimilaritiesSaved?.(); }
+      catch { refreshWarning = "Decisions enregistrees, mais les listes locales n'ont pas pu etre actualisees."; }
+      if (generation !== similarityGeneration.current) return;
+      await openSimilarities(snapshot.item);
+      if (similarityGeneration.current !== generation + 1) return;
+      setSimilarityModal((previous) => previous?.item.id === snapshot.item.id
+        ? { ...previous, success: `${result.saved} decision(s) enregistree(s).`, error: previous.error || refreshWarning } : previous);
     } catch (error) {
-      setSimilarityModal((previous) => previous ? { ...previous, error: error?.message || "Validation similarite impossible." } : previous);
+      if (generation !== similarityGeneration.current) return;
+      setSimilarityModal((previous) => previous ? {
+        ...previous,
+        error: error?.message || "Enregistrement non confirme. Tu peux reessayer le meme lot sans double execution.",
+        requiresRefresh: [409, 404].includes(error?.status),
+      } : previous);
     } finally {
-      setSimilarityLoading(false);
+      similaritySaving.current = false;
+      if (generation === similarityGeneration.current) setSimilarityLoading(false);
     }
   }
 
@@ -877,15 +930,16 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
 
       {similarityModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="flex max-h-[92vh] w-full max-w-6xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white shadow-2xl">
+          <div role="dialog" aria-modal="true" aria-labelledby="gvg-enemy-similarity-title" className="flex max-h-[92vh] w-full max-w-6xl flex-col rounded-2xl border border-zinc-800 bg-zinc-950 p-5 text-white shadow-2xl">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <div className="text-lg font-bold">Similarites detectees</div>
-                <div className="text-sm text-zinc-400">Validation visuelle, une candidate a la fois.</div>
+                <div id="gvg-enemy-similarity-title" className="text-lg font-bold">Similarites detectees</div>
+                <div aria-live="polite" className="text-sm text-zinc-400">{similarityDecisionCount} decisions renseignees sur {similarityModal.candidates.length}</div>
               </div>
               <button
                 type="button"
-                onClick={() => setSimilarityModal(null)}
+                onClick={closeSimilarities}
+                disabled={similarityLoading}
                 className="rounded-xl border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800"
               >
                 {t("common.close", "Fermer")}
@@ -896,6 +950,10 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
               <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                 {similarityModal.error}
               </div>
+            ) : null}
+            {similarityModal.success ? <div role="status" className="mb-3 text-sm text-emerald-300">{similarityModal.success}</div> : null}
+            {similarityConflict ? (
+              <div role="alert" className="mb-3 text-sm text-red-300">Conflit : une meme lignee est declaree identique et differente.</div>
             ) : null}
 
             <div className="grid min-h-0 gap-4 overflow-y-auto lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
@@ -992,19 +1050,28 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
                             </div>
                           ) : null}
                         </div>
-                        <div className="flex flex-col gap-2">
+                        <div role="group" aria-label={`Decision pour ${localDefense.name}`} className="flex flex-col gap-2">
+                          <button type="button" disabled={similarityLoading} aria-pressed={!similarityDecisions[candidate.review.id]}
+                            onClick={() => selectSimilarityDecision(candidate, null)}
+                            className="rounded-lg border border-zinc-600 px-3 py-2 text-xs aria-pressed:bg-zinc-700">
+                            Non renseigne
+                          </button>
                           <button
                             type="button"
-                            onClick={() => reviewSimilarity(candidate, "identical")}
-                            className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/50 bg-emerald-500/15 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/25"
+                            disabled={similarityLoading}
+                            aria-pressed={similarityDecisions[candidate.review.id] === "identical"}
+                            onClick={() => selectSimilarityDecision(candidate, "identical")}
+                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/50 px-3 py-2 text-xs font-semibold text-emerald-100 aria-pressed:bg-emerald-500/40 hover:bg-emerald-500/25"
                           >
                             <CheckCircle2 className="h-4 w-4" />
                             Identique
                           </button>
                           <button
                             type="button"
-                            onClick={() => reviewSimilarity(candidate, "different")}
-                            className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-500/50 bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/25"
+                            disabled={similarityLoading}
+                            aria-pressed={similarityDecisions[candidate.review.id] === "different"}
+                            onClick={() => selectSimilarityDecision(candidate, "different")}
+                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-500/50 px-3 py-2 text-xs font-semibold text-red-100 aria-pressed:bg-red-500/40 hover:bg-red-500/25"
                           >
                             <XCircle className="h-4 w-4" />
                             Differente
@@ -1015,6 +1082,21 @@ export default function GvgEnemyDefenseBankTab({ activeGuildCode = "", onDataCha
                   })
                 )}
               </div>
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-3 border-t border-zinc-800 pt-4">
+              {similarityModal.requiresRefresh ? (
+                <button type="button" disabled={similarityLoading} onClick={() => openSimilarities(similarityModal.item)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-zinc-600 px-3 py-2 text-sm">
+                  <RefreshCw className="h-4 w-4" /> Recharger les candidates
+                </button>
+              ) : null}
+              <button type="button" disabled={similarityLoading} onClick={closeSimilarities}
+                className="rounded-lg border border-zinc-600 px-3 py-2 text-sm">Annuler</button>
+              <button type="button" onClick={saveSimilarityDecisions}
+                disabled={similarityLoading || !similarityDecisionCount || similarityConflict || similarityModal.requiresRefresh || !similarityModal.batchVersion}
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-500 px-3 py-2 text-sm disabled:opacity-40">
+                <CheckCircle2 className="h-4 w-4" /> Enregistrer les decisions
+              </button>
             </div>
           </div>
         </div>

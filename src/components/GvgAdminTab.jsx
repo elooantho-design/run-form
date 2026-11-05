@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { RotateCcw, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
-import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
+import { getGuildDisplayName } from "@/lib/guildDisplay";
+import GvgResetDialog from "@/components/GvgResetDialog";
 
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
 
@@ -121,6 +122,9 @@ export default function GvgAdminTab({ session } = {}) {
   const [jsonInputAlly, setJsonInputAlly] = useState("");
   const [loadingImport, setLoadingImport] = useState(false);
   const [loadingReset, setLoadingReset] = useState(false);
+  const [resetTarget, setResetTarget] = useState(null);
+  const [resetError, setResetError] = useState("");
+  const resetInFlight = useRef(false);
   const [message, setMessage] = useState("");
   const [uploadingImages, setUploadingImages] = useState(false);
   const [uploadResult, setUploadResult] = useState(null);
@@ -226,16 +230,39 @@ export default function GvgAdminTab({ session } = {}) {
     }
   }
 
-  async function handleReset() {
-    if (!selectedGuildAllowed) return;
+  function handleReset() {
+    if (!selectedGuildAllowed || resetInFlight.current) return;
+    setResetError("");
+    setResetTarget({ guild, name: getGuildDisplayName({ guildCode: guild }), requestId: crypto.randomUUID(), choice: null });
+  }
 
-    const confirmed = window.confirm(`Reinitialiser entierement la GVG ${getGvgGuildLabel(guild)} ?`);
+  async function handleResumeCleanup() {
+    if (!selectedGuildAllowed || resetInFlight.current) return;
+    resetInFlight.current = true;
+    setLoadingReset(true);
+    try {
+      const response = await fetch(`${apiBase}/api/gvg-reset?guild=${encodeURIComponent(guild)}`, { credentials: "include" });
+      const data = await readJsonResponse(response, "reprise du nettoyage");
+      if (!response.ok) throw new Error(data?.error || "Reprise indisponible.");
+      if (!data.operation) { setMessage("Aucun nettoyage GvG en attente pour cette guilde."); return; }
+      setResetError("");
+      setResetTarget({ guild, name: getGuildDisplayName({ guildCode: guild }), kind: "resume",
+        operationId: data.operation.operationId, choice: data.operation.saveEnemyDefenses });
+    } catch (error) { setMessage(error.message || "Reprise indisponible."); }
+    finally { resetInFlight.current = false; setLoadingReset(false); }
+  }
 
-    if (!confirmed) return;
+  async function confirmReset(saveEnemyDefenses) {
+    if (!resetTarget || resetInFlight.current || typeof saveEnemyDefenses !== "boolean") return;
+    if (resetTarget.choice !== null && resetTarget.choice !== saveEnemyDefenses) return;
+    resetInFlight.current = true;
+    const target = resetTarget;
+    setResetTarget((previous) => ({ ...previous, choice: saveEnemyDefenses }));
 
     try {
       setLoadingReset(true);
       setMessage("");
+      setResetError("");
 
       const response = await fetch(`${apiBase}/api/gvg-reset`, {
         method: "POST",
@@ -243,30 +270,38 @@ export default function GvgAdminTab({ session } = {}) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          guild,
-          actor: {
-            memberId: session?.memberId || session?.id || null,
-            name: session?.watcherName || session?.memberName || session?.name || session?.discordId || "Inconnu",
-            role: getPortalSessionServerRole(session) || null,
-            guildCode: session?.guildCode || session?.guild_code || null,
-          },
+        body: JSON.stringify(target.kind === "resume" ? {
+          action: "resume", guild: target.guild, operationId: target.operationId,
+        } : {
+          guild: target.guild,
+          saveEnemyDefenses,
+          requestId: target.requestId,
         }),
       });
 
       const data = await readJsonResponse(response, "reset");
 
       if (!response.ok) {
-        setMessage(`Erreur reset : ${data?.error || "erreur inconnue"}`);
+        setResetError(data?.error || "Reset impossible. Reessayez la meme operation.");
+        if (data?.operation_id && data?.reset_committed !== true && target.kind !== "resume") {
+          setResetTarget((previous) => previous ? { ...previous, requestId: crypto.randomUUID(), choice: null } : previous);
+        }
         return;
       }
 
-      setMessage(`Reset OK : ${data?.guild} vide.`);
+      const preserved = data?.record_server_reset?.preserved?.length
+        || data?.record_server_reset?.reason === "legacy_no_manifest_preserved";
+      const outcome = target.kind === "resume"
+        ? `Nettoyage termine : ${target.name} (${target.guild}). Aucun nouveau reset.`
+        : `Reset OK : ${target.name} (${target.guild}). ${saveEnemyDefenses ? "Defenses adverses sauvegardees." : "Sans sauvegarde ni nouveaux compteurs adverses."}`;
+      setMessage(outcome + (preserved ? " Des ressources ont ete conservees par securite." : ""));
+      setResetTarget(null);
     } catch (error) {
       console.error("handleReset error:", error);
-      setMessage(`Erreur reset : ${error?.message || "erreur inconnue"}`);
+      setResetError(`Erreur reset : ${error?.message || "erreur inconnue"}. Reessayez la meme operation.`);
     } finally {
       setLoadingReset(false);
+      resetInFlight.current = false;
     }
   }
 
@@ -495,6 +530,17 @@ export default function GvgAdminTab({ session } = {}) {
 
   return (
     <div className="space-y-6">
+      {resetTarget ? (
+        <GvgResetDialog
+          guildName={`${resetTarget.name} (${resetTarget.guild})`}
+          busy={loadingReset}
+          error={resetError}
+          choice={resetTarget.choice}
+          resume={resetTarget.kind === "resume"}
+          onCancel={() => { if (!resetInFlight.current) { setResetTarget(null); setResetError(""); } }}
+          onConfirm={confirmReset}
+        />
+      ) : null}
       <Card className="rounded-3xl border-zinc-800 bg-zinc-900/70 shadow-2xl">
         <CardHeader className="border-b border-zinc-800">
           <CardTitle className="text-lg text-zinc-100">{t("gvgAdmin.title", "Admin GVG")}</CardTitle>
@@ -525,6 +571,10 @@ export default function GvgAdminTab({ session } = {}) {
                 onClick={handleReset}
               >
                 {loadingReset ? t("gvgAdmin.resetting", "Reset...") : `${t("gvgAdmin.reset", "Reset")} ${getGvgGuildLabel(guild)}`}
+              </Button>
+              <Button type="button" variant="outline" className="h-auto whitespace-normal rounded-md"
+                disabled={loadingImport || loadingReset || !selectedGuildAllowed} onClick={handleResumeCleanup}>
+                <RotateCcw className="size-4 shrink-0" /> Reprendre le nettoyage
               </Button>
             </div>
           </div>

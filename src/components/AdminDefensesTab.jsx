@@ -7,6 +7,8 @@ import { usePortalLanguage } from "@/lib/portalLanguage";
 import { normalizeGuildCodeKey } from "@/lib/guildScope";
 import { resolvePublicAssetProxyUrl } from "@/lib/vpsAssets";
 
+const EMPTY_DEFENSES = Object.freeze([]);
+
 function getApiBase() {
   if (typeof window === "undefined") return "";
   const configured = import.meta.env.VITE_API_BASE_URL;
@@ -119,8 +121,8 @@ function formatEnemyHeroLine(hero, index) {
 }
 
 export default function AdminDefensesTab({
-  defenses = [],
-  libraryDefenses = [],
+  defenses: sourceDefenses = EMPTY_DEFENSES,
+  libraryDefenses: sourceLibraryDefenses = EMPTY_DEFENSES,
   activeGuildCode = "",
   manageableGuildCodes = [],
   migrationRequired = false,
@@ -137,6 +139,19 @@ export default function AdminDefensesTab({
   onLibraryMergeRequestConsumed = null,
 }) {
   const { t } = usePortalLanguage();
+  const [enemyRefresh, setEnemyRefresh] = useState(null);
+  const useEnemyRefresh = enemyRefresh?.guildCode === activeGuildCode
+    && enemyRefresh.sourceDefenses === sourceDefenses && enemyRefresh.sourceLibraryDefenses === sourceLibraryDefenses;
+  const defenses = useEnemyRefresh ? enemyRefresh.defenses : sourceDefenses;
+  const libraryDefenses = useEnemyRefresh ? enemyRefresh.libraryDefenses : sourceLibraryDefenses;
+
+  async function refreshEnemyKnowledge() {
+    const data = await callPortalAdminDefenses({ action: "load", guildCode: activeGuildCode });
+    setEnemyRefresh({
+      guildCode: activeGuildCode, sourceDefenses, sourceLibraryDefenses,
+      defenses: data.defenses || [], libraryDefenses: data.libraryDefenses || [],
+    });
+  }
   const [typeFilter, setTypeFilter] = useState("all");
 const [query, setQuery] = useState("");
 const [viewMode, setViewMode] = useState("local");
@@ -1341,7 +1356,7 @@ const renderLibraryMergePlan = (candidate) => {
       ) : null}
 
       {showEnemyBank ? (
-        <GvgEnemyDefenseBankTab activeGuildCode={activeGuildCode} onDataChanged={onDataChanged} />
+        <GvgEnemyDefenseBankTab activeGuildCode={activeGuildCode} onDataChanged={onDataChanged} onSimilaritiesSaved={refreshEnemyKnowledge} />
       ) : (
       <div className="grid gap-3">
         {displayedDefenses.length === 0 ? (

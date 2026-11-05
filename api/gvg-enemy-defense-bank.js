@@ -1,5 +1,7 @@
 /* global process */
 import { createClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
+import { resolvePortalGuildScope } from "./_portal-guild-access.js";
 import {
   applyPortalCorsHeaders,
   applyPortalSecurityHeaders,
@@ -24,7 +26,6 @@ import {
   createLocalDefenseSimilaritySignature,
   createLocalDefenseReviewSignature,
   detectEnemyDefenseSimilaritiesForArchive,
-  enrichEnemyDefenseCompatibleLineage,
   getEnemyDefenseRateTone,
   getEnemyDefenseSuccessRate,
   isEnemyDefenseBankSchemaMissing,
@@ -765,6 +766,7 @@ async function loadStrats(req, res, sessionMember) {
 
 async function loadSimilarities(req, res, sessionMember) {
   const { portalGuild } = await resolveBankScope(req, sessionMember);
+  const scope = await resolvePortalGuildScope(supabase, sessionMember, portalGuild.guild_code);
   const defenseId = String(req.query?.defenseId || req.body?.defenseId || "").trim();
   if (!defenseId) return sendPortalJson(res, 400, { error: "defenseId manquant" }, req);
 
@@ -772,7 +774,7 @@ async function loadSimilarities(req, res, sessionMember) {
 
   const { data: reviewRows, error: reviewError } = await supabase
     .from("gvg_enemy_defense_similarity_reviews")
-    .select("id, enemy_defense_id, local_defense_id, local_portal_guild_id, local_guild_code, status, reviewed_by_name, reviewed_at, created_at")
+    .select("id, enemy_defense_id, local_defense_id, local_portal_guild_id, local_guild_code, status, reviewed_by_name, reviewed_at, created_at, updated_at")
     .eq("organization_id", portalGuild.organization_id)
     .eq("enemy_defense_id", defenseId)
     .eq("status", "pending")
@@ -790,7 +792,8 @@ async function loadSimilarities(req, res, sessionMember) {
   const candidates = (reviewRows || [])
     .map((review) => {
       const localRow = localRowsById.get(String(review.local_defense_id));
-      if (!localRow || localRow.is_hidden) return null;
+      if (!localRow || localRow.is_hidden || String(localRow.organization_id) !== String(portalGuild.organization_id)
+        || !scope.allowedGuildCodes.some((code) => normalizeGuild(code) === normalizeGuild(localRow.guild_code))) return null;
       return {
         review,
         localDefense: mapLocalDefenseRow(localRow, review),
@@ -798,16 +801,81 @@ async function loadSimilarities(req, res, sessionMember) {
     })
     .filter(Boolean);
 
+  const { data: batch, error: batchError } = await supabase.rpc("preview_gvg_enemy_similarity_batch", {
+    p_actor: sessionMember.id,
+    p_guild: portalGuild.id,
+    p_enemy: defenseId,
+  });
+  if (batchError) throw similarityBatchError(batchError);
+  const versions = new Map((batch?.candidates || []).map((row) => [String(row.review_id), row]));
+  for (const candidate of candidates) {
+    const version = versions.get(String(candidate.review.id));
+    const localRow = localRowsById.get(String(candidate.review.local_defense_id));
+    if (!version || version.local_signature !== createLocalDefenseReviewSignature(localRow)
+      || new Date(version.updated_at).getTime() !== new Date(candidate.review.updated_at).getTime()) {
+      return sendPortalJson(res, 409, { error: "Les candidates ont change pendant leur chargement. Recharge les similarites." }, req);
+    }
+    candidate.propagationIds = version.propagation_ids || [];
+  }
   return sendPortalJson(res, 200, {
     ok: true,
     enemyDefense: mapCanonicalDefenseRow(enemyDefense),
     enemy_defense: mapCanonicalDefenseRow(enemyDefense),
     candidates,
+    batchVersion: batch.version,
   }, req);
 }
 
-async function markSimilarityReview(req, res, sessionMember) {
+function similarityBatchError(error) {
+  const wrapped = new Error(error?.message || "Enregistrement des similarites impossible.");
+  wrapped.statusCode = ["PGRST202", "42883", "42P01"].includes(error?.code) ? 428
+    : ["40001", "40P01", "55P03", "23505"].includes(error?.code) ? 409
+      : error?.code === "42501" ? 403 : error?.code === "P0002" ? 404
+        : ["22023", "22P02"].includes(error?.code) ? 400 : 500;
+  if (wrapped.statusCode === 428) wrapped.message = "Installation SQL des decisions groupees requise.";
+  if (["55P03", "40P01"].includes(error?.code)) wrapped.message = "Un traitement GvG modifie ces donnees. Recharge les similarites puis reessaie.";
+  return wrapped;
+}
+
+async function saveSimilarityBatch(req, res, sessionMember, { portalGuild, enemyDefenseId, requestId, version, decisions }) {
+  await resolvePortalGuildScope(supabase, sessionMember, portalGuild.guild_code);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(String(enemyDefenseId || "")) || !uuid.test(String(requestId || ""))
+    || !/^[0-9a-f]{32}$/i.test(String(version || "")) || !Array.isArray(decisions)
+    || decisions.length < 1 || decisions.length > 100
+    || decisions.some((row) => !uuid.test(String(row?.reviewId || "")) || !["identical", "different"].includes(row?.status))
+    || new Set(decisions.map((row) => row.reviewId.toLowerCase())).size !== decisions.length) {
+    return sendPortalJson(res, 400, { error: "Lot de decisions invalide ou duplique." }, req);
+  }
+  const { data, error } = await supabase.rpc("review_gvg_enemy_similarity_batch", {
+    p_actor: sessionMember.id,
+    p_guild: portalGuild.id,
+    p_enemy: enemyDefenseId,
+    p_request: requestId,
+    p_version: version,
+    p_decisions: decisions.map(({ reviewId, status }) => ({ reviewId: reviewId.toLowerCase(), status }))
+      .sort((left, right) => left.reviewId.localeCompare(right.reviewId)),
+  });
+  if (error) throw similarityBatchError(error);
+  return sendPortalJson(res, 200, data, req);
+}
+
+async function markSimilarityBatch(req, res, sessionMember) {
+  if (req.method !== "POST") return sendPortalJson(res, 405, { error: "method not allowed" }, req);
   const { portalGuild } = await resolveBankScope(req, sessionMember);
+  return saveSimilarityBatch(req, res, sessionMember, {
+    portalGuild,
+    enemyDefenseId: req.body?.defenseId,
+    requestId: req.body?.requestId,
+    version: req.body?.version,
+    decisions: req.body?.decisions,
+  });
+}
+
+async function markSimilarityReview(req, res, sessionMember) {
+  if (req.method !== "POST") return sendPortalJson(res, 405, { error: "method not allowed" }, req);
+  const { portalGuild } = await resolveBankScope(req, sessionMember);
+  await resolvePortalGuildScope(supabase, sessionMember, portalGuild.guild_code);
   const reviewId = String(req.body?.reviewId || req.body?.review_id || "").trim();
   const status = String(req.body?.status || "").trim().toLowerCase();
 
@@ -819,6 +887,7 @@ async function markSimilarityReview(req, res, sessionMember) {
     .from("gvg_enemy_defense_similarity_reviews")
     .select("id, enemy_defense_id, local_defense_id, organization_id, local_guild_code, status")
     .eq("id", reviewId)
+    .eq("organization_id", portalGuild.organization_id)
     .maybeSingle();
 
   if (reviewError) {
@@ -830,61 +899,15 @@ async function markSimilarityReview(req, res, sessionMember) {
     return sendPortalJson(res, 404, { error: "Review introuvable." }, req);
   }
 
-  const enemyDefense = await loadEnemyDefenseInOrganization(review.enemy_defense_id, portalGuild.organization_id);
-  let propagation = null;
-
-  if (status === "identical") {
-    propagation = await enrichEnemyDefenseCompatibleLineage(supabase, {
-      organizationId: portalGuild.organization_id,
-      localDefenseId: review.local_defense_id,
-      enemyDefense,
-      sourcePortalGuild: portalGuild,
-      reviewer: {
-        memberId: sessionMember.id || null,
-        name: sessionMember.watcher_name || sessionMember.display_name || sessionMember.name || "",
-      },
-    });
-    console.info("[gvg-enemy-defense-bank] identical lineage propagated", {
-      reviewer: sessionMember.watcher_name || sessionMember.display_name || sessionMember.name || "",
-      enemyDefenseId: enemyDefense.id,
-      localDefenseId: review.local_defense_id,
-      rootDefenseId: propagation.rootDefenseId,
-      updatedIds: propagation.updatedIds,
-      skipped: propagation.skipped,
-    });
-
-    try {
-      const libraryPropagation = await propagateLibraryEquivalenceKnowledge(supabase, {
-        organizationId: portalGuild.organization_id,
-        seedDefenseIds: [propagation.rootDefenseId || review.local_defense_id],
-      });
-      console.info("[gvg-enemy-defense-bank] library equivalence knowledge propagated", {
-        rootDefenseId: propagation.rootDefenseId,
-        result: libraryPropagation,
-      });
-    } catch (libraryError) {
-      if (!isLibraryEquivalenceSchemaMissing(libraryError)) throw libraryError;
-      console.info("[gvg-enemy-defense-bank] library equivalence propagation skipped: schema missing");
-    }
-  }
-
-  const { error: updateError } = await supabase
-    .from("gvg_enemy_defense_similarity_reviews")
-    .update({
-      status,
-      reviewed_by_member_id: sessionMember.id || null,
-      reviewed_by_name: sessionMember.watcher_name || sessionMember.display_name || sessionMember.name || "",
-      reviewed_at: new Date().toISOString(),
-    })
-    .eq("id", reviewId);
-
-  if (updateError) throw updateError;
-
-  return sendPortalJson(res, 200, {
-    ok: true,
-    status,
-    propagation,
-  }, req);
+  const { data: preview, error } = await supabase.rpc("preview_gvg_enemy_similarity_batch", {
+    p_actor: sessionMember.id, p_guild: portalGuild.id, p_enemy: review.enemy_defense_id,
+  });
+  if (error) throw similarityBatchError(error);
+  return saveSimilarityBatch(req, res, sessionMember, {
+    portalGuild, enemyDefenseId: review.enemy_defense_id,
+    requestId: req.body?.requestId || randomUUID(), version: preview.version,
+    decisions: [{ reviewId, status }],
+  });
 }
 
 async function ensureFreshSimilarityCandidates(enemyDefense, organizationId, sourcePortalGuild = null) {
@@ -937,12 +960,17 @@ async function recalculateSimilarities(req, res, sessionMember) {
   } catch (error) {
     const serialized = serializeEnemySimilarityError(error);
     const schemaMissing = isEnemyDefenseLinksSchemaMissing(error);
+    const conditionalWriteError = ["40001", "40P01", "55P03", "42501", "PGRST202", "42883"].includes(error?.code)
+      ? similarityBatchError(error) : null;
+    if (["PGRST202", "42883"].includes(error?.code) && conditionalWriteError) {
+      conditionalWriteError.message = "Installation SQL corrective des similarites requise (gvg_enemy_similarity_safety_fix.sql).";
+    }
     console.error("[gvg-enemy-defense-bank] recalculate similarities failed", serialized);
 
-    return sendPortalJson(res, schemaMissing ? 428 : error?.statusCode || 500, {
+    return sendPortalJson(res, schemaMissing ? 428 : conditionalWriteError?.statusCode || error?.statusCode || 500, {
       ok: false,
       action: "recalculate-similarities",
-      error: schemaMissing ? "Migration liaisons defenses adverses requise." : serialized.message,
+      error: schemaMissing ? "Migration liaisons defenses adverses requise." : conditionalWriteError?.message || serialized.message,
       stage: serialized.stage,
       supabaseError: {
         code: serialized.code,
@@ -1246,6 +1274,7 @@ export default async function handler(req, res) {
     if (action === "strats") return await loadStrats(req, res, sessionCheck.member);
     if (action === "similarities") return await loadSimilarities(req, res, sessionCheck.member);
     if (action === "review-similarity") return await markSimilarityReview(req, res, sessionCheck.member);
+    if (action === "review-similarities") return await markSimilarityBatch(req, res, sessionCheck.member);
     if (action === "recalculate-similarities") return await recalculateSimilarities(req, res, sessionCheck.member);
     if (action === "import") return await importEnemyDefense(req, res, sessionCheck.member);
     if (action === "remove-local") return await removeLinkedLocalDefense(req, res, sessionCheck.member);
@@ -1258,6 +1287,13 @@ export default async function handler(req, res) {
       return sendPortalJson(res, error?.statusCode || 428, { error: error?.message || "Migration liaisons defenses adverses requise." }, req);
     }
 
+    if (["40001", "40P01", "55P03", "42501"].includes(error?.code)) {
+      const conflict = similarityBatchError(error);
+      return sendPortalJson(res, conflict.statusCode, { error: conflict.message }, req);
+    }
+    if (["PGRST202", "42883"].includes(error?.code)) {
+      return sendPortalJson(res, 428, { error: "Installation SQL corrective des similarites requise." }, req);
+    }
     console.error("[gvg-enemy-defense-bank]", error);
     return sendPortalJson(res, error?.statusCode || 500, { error: error?.message || "Erreur banque defenses adverses." }, req);
   }

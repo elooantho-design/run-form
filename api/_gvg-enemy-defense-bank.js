@@ -908,222 +908,23 @@ async function loadLocalDefenseSimilarityRows(supabase, organizationId) {
   return rows;
 }
 
-function getDefenseSourceId(defense) {
-  return defense?.source_defense_id || defense?.sourceDefenseId || null;
-}
-
-function getDefenseId(defense) {
-  return defense?.id ? String(defense.id) : "";
-}
-
-function resolveRootDefenseId(defenseId, defensesById) {
-  let currentId = String(defenseId || "");
-  const visited = new Set();
-
-  while (currentId && !visited.has(currentId)) {
-    visited.add(currentId);
-    const current = defensesById.get(currentId);
-    const sourceId = current ? getDefenseSourceId(current) : null;
-    if (!sourceId) return currentId;
-    currentId = String(sourceId);
-  }
-
-  return String(defenseId || "");
-}
-
-function getLineageDefenseIds(rootDefenseId, localRows = []) {
-  const rowsById = new Map(localRows.map((row) => [getDefenseId(row), row]).filter(([id]) => id));
-  return localRows
-    .filter((row) => resolveRootDefenseId(row.id, rowsById) === String(rootDefenseId))
-    .map((row) => String(row.id))
-    .filter(Boolean);
-}
-
-function getPortalGuildIdForDefense(defense, portalGuildByKey = new Map()) {
-  const guild = portalGuildByKey.get(normalizePortalGuildLookupKey(defense?.guild_code));
-  return guild?.id || null;
-}
-
-function buildEnemyLinkPayload(enemyDefense, sourcePortalGuild) {
-  const sourceGuildCode = sourcePortalGuild?.guild_code || sourcePortalGuild?.technical_guild || "";
-  return {
-    source_enemy_defense_id: enemyDefense.id,
-    source_enemy_defense_fingerprint: enemyDefense.defense_fingerprint || "",
-    source_enemy_portal_guild_id: sourcePortalGuild?.id || null,
-    source_enemy_label: `Defense adverse ${sourceGuildCode}`.trim(),
-    source_enemy_imported_at: new Date().toISOString(),
-  };
-}
-
-function buildSlotLayoutUpdatesForDefense(localDefense, enemyDefense) {
-  const mapType = normalizeGvgMapType(localDefense?.type || localDefense?.map_type || localDefense?.mapType);
-  const layoutByChampion = getEnemyDefenseHeroLayoutByChampion(enemyDefense);
-
-  return (localDefense?.guild_defense_slots || [])
-    .map((slot) => {
-      const championKey = normalizeGvgChampionSimilarityKey(readLocalDefenseSlotChampion(slot));
-      const layout = championKey ? layoutByChampion.get(championKey) : null;
-      if (!layout) return null;
-
-      const nextPosition = normalizeGvgPosition(layout.position, mapType);
-      const nextDirection = normalizeGvgDirection(layout.direction);
-      if (!nextPosition || !nextDirection) return null;
-
-      return {
-        slotIndex: slot.slot_index,
-        position: nextPosition,
-        direction: nextDirection,
-      };
-    })
-    .filter((slot) => slot?.slotIndex !== null && slot?.slotIndex !== undefined);
-}
-
-function buildLocalDefenseWithEnemyLayout(localDefense, enemyDefense) {
-  const updatesBySlot = new Map(
-    buildSlotLayoutUpdatesForDefense(localDefense, enemyDefense).map((slot) => [slot.slotIndex, slot]),
-  );
-
-  return {
-    ...localDefense,
-    guild_defense_slots: (localDefense?.guild_defense_slots || []).map((slot) => {
-      const update = updatesBySlot.get(slot.slot_index);
-      if (!update) return slot;
-      return {
-        ...slot,
-        position: update.position,
-        direction: update.direction,
-      };
-    }),
-  };
-}
-
-async function applyEnemyLayoutToDefenseRows(supabase, defenseRows = [], enemyDefense, sourcePortalGuild) {
-  const updatedIds = [];
-  const skipped = [];
-  const enemySignature = createEnemyDefenseSimilaritySignature(enemyDefense);
-  const linkPayload = buildEnemyLinkPayload(enemyDefense, sourcePortalGuild);
-
-  for (const defense of defenseRows) {
-    const localSignature = createLocalDefenseSimilaritySignature(defense);
-    if (!localSignature || localSignature !== enemySignature) {
-      skipped.push({ id: defense.id, name: defense.name || "", reason: "diverged" });
-      continue;
-    }
-
-    const slotUpdates = buildSlotLayoutUpdatesForDefense(defense, enemyDefense);
-    if (slotUpdates.length !== SIMILARITY_HERO_COUNT) {
-      skipped.push({ id: defense.id, name: defense.name || "", reason: "incomplete_layout_target" });
-      continue;
-    }
-
-    const updateResults = await Promise.all(
-      slotUpdates.map((slot) =>
-        supabase
-          .from("guild_defense_slots")
-          .update({
-            position: slot.position,
-            direction: slot.direction,
-          })
-          .eq("defense_id", defense.id)
-          .eq("slot_index", slot.slotIndex),
-      ),
-    );
-
-    const slotError = updateResults.find((result) => result.error)?.error;
-    if (slotError) throw slotError;
-    updatedIds.push(String(defense.id));
-  }
-
-  if (updatedIds.length) {
-    const { error } = await supabase
-      .from("guild_defenses")
-      .update(linkPayload)
-      .in("id", updatedIds);
-    if (error) throw error;
-  }
-
-  return { updatedIds, skipped };
-}
-
-async function upsertIdenticalReviewsForDefenses(supabase, defenseRows = [], enemyDefense, organizationId, portalGuildByKey, reviewer = {}) {
-  if (!defenseRows.length) return { upserted: 0 };
-
-  const enemySignature = createEnemyDefenseSimilaritySignature(enemyDefense);
-  const rows = defenseRows
-    .map((defense) => {
-      const localSignature = createLocalDefenseReviewSignature(defense) || createLocalDefenseSimilaritySignature(defense);
-      if (!localSignature) return null;
-
-      return {
-        enemy_defense_id: enemyDefense.id,
-        local_defense_id: defense.id,
-        organization_id: organizationId,
-        local_portal_guild_id: getPortalGuildIdForDefense(defense, portalGuildByKey),
-        local_guild_code: defense.guild_code || "",
-        status: "identical",
-        reviewed_by_member_id: reviewer.memberId || null,
-        reviewed_by_name: reviewer.name || "Auto-match layout complet",
-        reviewed_at: new Date().toISOString(),
-        enemy_identity_signature: enemySignature,
-        local_identity_signature: localSignature,
-        updated_at: new Date().toISOString(),
-      };
-    })
-    .filter(Boolean);
-
-  if (!rows.length) return { upserted: 0 };
-
-  const { error } = await supabase
-    .from("gvg_enemy_defense_similarity_reviews")
-    .upsert(rows, { onConflict: "enemy_defense_id,local_defense_id" });
-  if (error) throw error;
-
-  return { upserted: rows.length };
-}
-
+// Automatic writes are SQL compare-and-set operations. There is deliberately no
+// REST fallback: an older/missing migration must never restore stale upserts.
 export async function enrichEnemyDefenseCompatibleLineage(
   supabase,
-  { organizationId, localDefenseId, enemyDefense, sourcePortalGuild = null, reviewer = {} } = {},
+  { organizationId, localDefenseId, enemyDefense, sourcePortalGuild = null } = {},
 ) {
   if (!organizationId || !localDefenseId || !enemyDefense?.id) {
     return { updatedIds: [], skipped: [], rootDefenseId: null, identicalReviewsUpserted: 0 };
   }
-
-  const [portalGuildRows, localRows] = await Promise.all([
-    loadPortalGuildsByOrganization(supabase, organizationId),
-    loadLocalDefenseSimilarityRows(supabase, organizationId),
-  ]);
-  const localRowsById = new Map(localRows.map((row) => [String(row.id), row]));
-  const localDefense = localRowsById.get(String(localDefenseId));
-  if (!localDefense) {
-    return { updatedIds: [], skipped: [{ id: localDefenseId, reason: "local_missing" }], rootDefenseId: null, identicalReviewsUpserted: 0 };
-  }
-
-  const rootDefenseId = resolveRootDefenseId(localDefense.id, localRowsById);
-  const lineageIds = new Set(getLineageDefenseIds(rootDefenseId, localRows));
-  const lineageRows = localRows.filter((row) => lineageIds.has(String(row.id)));
-  const { updatedIds, skipped } = await applyEnemyLayoutToDefenseRows(supabase, lineageRows, enemyDefense, sourcePortalGuild);
-  const updatedRows = lineageRows
-    .filter((row) => updatedIds.includes(String(row.id)))
-    .map((row) => buildLocalDefenseWithEnemyLayout(row, enemyDefense));
-  const portalGuildByKey = new Map(
-    portalGuildRows.map((guild) => [normalizePortalGuildLookupKey(guild.guild_code), guild]),
-  );
-  const reviewResult = await upsertIdenticalReviewsForDefenses(
-    supabase,
-    updatedRows,
-    enemyDefense,
-    organizationId,
-    portalGuildByKey,
-    reviewer,
-  );
-
-  return {
-    updatedIds,
-    skipped,
-    rootDefenseId,
-    identicalReviewsUpserted: reviewResult.upserted,
-  };
+  const { data, error } = await supabase.rpc("enrich_gvg_enemy_similarity_auto", {
+    p_organization: organizationId,
+    p_local: localDefenseId,
+    p_enemy: enemyDefense.id,
+    p_source_guild: sourcePortalGuild?.id || null,
+  });
+  if (error) throw error;
+  return data;
 }
 
 export async function detectEnemyDefenseSimilaritiesForArchive(
@@ -1256,7 +1057,7 @@ export async function detectEnemyDefenseSimilaritiesForArchive(
 
   const { data: existingRows, error: existingError } = await supabase
     .from("gvg_enemy_defense_similarity_reviews")
-    .select("id, enemy_defense_id, local_defense_id, organization_id, local_portal_guild_id, local_guild_code, status, enemy_identity_signature, local_identity_signature")
+    .select("id, enemy_defense_id, local_defense_id, organization_id, local_portal_guild_id, local_guild_code, status, enemy_identity_signature, local_identity_signature, reviewed_by_member_id, reviewed_by_name, reviewed_at")
     .in("enemy_defense_id", enemyIds)
     .in("local_defense_id", localIds);
 
@@ -1297,6 +1098,10 @@ export async function detectEnemyDefenseSimilaritiesForArchive(
     for (const enemy of matchingEnemies) {
       const pairKey = `${enemy.id}:${localDefense.id}`;
       const existing = existingByPair.get(pairKey);
+      // Never reinterpret a human validation merely because its layout changed.
+      if (existing && ["identical", "different"].includes(existing.status)
+        && (existing.status === "different" || existing.reviewed_by_member_id
+          || existing.reviewed_by_name !== "Auto-match layout complet")) continue;
       const shouldAutoIdentify = localDefenseLayoutMatchesEnemy(localDefense, enemy);
       const nextStatus = shouldAutoIdentify ? "identical" : "pending";
       if (existing?.local_identity_signature === localReviewSignature) {
@@ -1382,9 +1187,10 @@ export async function detectEnemyDefenseSimilaritiesForArchive(
       upsert_rows: traceSample(rowsToUpsert, summarizeReviewForTrace, 20),
     });
 
-    const { error: upsertError } = await supabase
-      .from("gvg_enemy_defense_similarity_reviews")
-      .upsert(rowsToUpsert, { onConflict: "enemy_defense_id,local_defense_id" });
+    const { data: autoResult, error: upsertError } = await supabase.rpc("upsert_gvg_enemy_similarity_auto", {
+      p_organization: organizationId,
+      p_rows: rowsToUpsert,
+    });
 
     if (upsertError) {
       traceEnemySimilarityError("detect_upsert_error", upsertError, {
@@ -1399,9 +1205,23 @@ export async function detectEnemyDefenseSimilaritiesForArchive(
       });
     }
 
+    // A human may have validated between SELECT and this RPC. Only successfully
+    // persisted pairs are eligible for automatic lineage propagation.
+    const persisted = new Set((autoResult?.rows || []).map((row) => `${row.enemy_defense_id}:${row.local_defense_id}`));
+    for (let index = autoIdenticalPairs.length - 1; index >= 0; index -= 1) {
+      const pair = autoIdenticalPairs[index];
+      if (!persisted.has(`${pair.enemy.id}:${pair.localDefense.id}`)) autoIdenticalPairs.splice(index, 1);
+    }
+    pendingCreated = 0; pendingUpdated = 0; autoIdenticalCreated = 0; autoIdenticalUpdated = 0;
+    for (const row of autoResult?.rows || []) {
+      const existed = existingByPair.has(`${row.enemy_defense_id}:${row.local_defense_id}`);
+      if (row.status === "identical") {
+        if (existed) autoIdenticalUpdated += 1; else autoIdenticalCreated += 1;
+      } else if (existed) pendingUpdated += 1; else pendingCreated += 1;
+    }
     traceEnemySimilarity("detect_upsert_done", {
       organization_id: organizationId || null,
-      rows_upserted: rowsToUpsert.length,
+      rows_upserted: autoResult?.written || 0,
     });
   } else {
     traceEnemySimilarity("detect_upsert_skipped", {
@@ -1670,7 +1490,12 @@ function getEnemyArchiveSourceCandidates(entry) {
     .filter((candidate) => candidate.sourcePath);
 }
 
-export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defenses = [], archiveImageOnVps = archiveEnemyDefenseImageOnVps } = {}) {
+export async function archiveEnemyDefensesBeforeGvgReset(supabase, {
+  guild,
+  defenses = [],
+  archiveImageOnVps = archiveEnemyDefenseImageOnVps,
+  persistArchive = null,
+} = {}) {
   const enemyDefenses = (defenses || []).filter((defense) => defense?.is_ally !== true);
 
   traceEnemySimilarity("archive_start", {
@@ -1916,12 +1741,14 @@ export async function archiveEnemyDefensesBeforeGvgReset(supabase, { guild, defe
     payload_rows: archivePayload.length,
   });
 
-  const { data, error } = await supabase.rpc("archive_gvg_enemy_defense_bank", {
-    p_portal_guild_id: portalGuild.id,
-    p_source_gvg_key: sourceGvgKey,
-    p_technical_guild: portalGuild.technical_guild,
-    p_defenses: archivePayload,
-  });
+  const { data, error } = persistArchive
+    ? { data: await persistArchive({ portalGuild, sourceGvgKey, defenses: archivePayload }), error: null }
+    : await supabase.rpc("archive_gvg_enemy_defense_bank", {
+        p_portal_guild_id: portalGuild.id,
+        p_source_gvg_key: sourceGvgKey,
+        p_technical_guild: portalGuild.technical_guild,
+        p_defenses: archivePayload,
+      });
 
   if (error) {
     traceEnemySimilarityError("archive_rpc_error", error, {

@@ -1,6 +1,6 @@
 /* global process */
 import { createClient } from "@supabase/supabase-js";
-import { purgeDiscordReproChannelForGuild } from "../src/lib/discordReproServer.js";
+import { cleanupDiscordReproRequestsForDefenseIds } from "../src/lib/discordReproServer.js";
 import {
   applyPortalCorsHeaders,
   applyPortalSecurityHeaders,
@@ -9,399 +9,88 @@ import {
   verifyPortalRequestOrigin,
 } from "./_portal-auth.js";
 import { canUseRunTargetGuild, resolveRunScope } from "../src/lib/runScopeServer.js";
+import { loadPortalGuildCatalog } from "./_portal-guild-catalog.js";
 import { archiveEnemyDefensesBeforeGvgReset } from "./_gvg-enemy-defense-bank.js";
 import { refreshEnemyDefenseStratAvailabilityForGuild } from "./gvg-enemy-defense-bank.js";
+import { executeGvgReset, getPendingGvgReset, parseGvgResetInput } from "./_gvg-reset.js";
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } }
-);
-
-const DEFAULT_GVG_SERVER_URL = "http://152.228.128.157";
-const GVG_RESET_SIMILARITY_TRACE_PREFIX = "[gvg-reset-similarity-trace]";
-
-function normalizeGuildCode(value) {
-  const code = String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
-  return /^[A-Z0-9_-]{2,24}$/.test(code) ? code : null;
-}
-
-function isValidGuild(value) {
-  return normalizeGuildCode(value) !== null;
-}
-
-function traceGvgResetSimilarity(event, details = {}) {
-  try {
-    console.info(`${GVG_RESET_SIMILARITY_TRACE_PREFIX} ${event} ${JSON.stringify(details)}`);
-  } catch {
-    console.info(GVG_RESET_SIMILARITY_TRACE_PREFIX, event, details);
-  }
-}
-
-function traceGvgResetSimilarityError(event, error, details = {}) {
-  const payload = {
-    ...details,
-    code: error?.code || null,
-    message: error?.message || String(error || ""),
-    details: error?.details || null,
-    hint: error?.hint || null,
-  };
-
-  try {
-    console.error(`${GVG_RESET_SIMILARITY_TRACE_PREFIX} ${event} ${JSON.stringify(payload)}`);
-  } catch {
-    console.error(GVG_RESET_SIMILARITY_TRACE_PREFIX, event, payload);
-  }
-}
-
-function summarizeResetDefenseForTrace(defense) {
-  return {
-    id: defense?.id || null,
-    guild: defense?.guild || null,
-    bastion: defense?.bastion ?? null,
-    type: defense?.type || null,
-    tower: defense?.tower ?? null,
-    team: defense?.team ?? null,
-    defense_key: defense?.defense_key || null,
-    raw_name: defense?.raw_name || null,
-    is_ally: defense?.is_ally === true,
-    record_status: defense?.record_status || null,
-    heroes: (Array.isArray(defense?.heroes) ? defense.heroes : [])
-      .map((hero) => hero?.champion || hero?.name || hero?.hero || hero)
-      .filter(Boolean),
-  };
-}
-
-async function logGvgReset({
-  guild,
-  actor,
-  defenseIds,
-  storagePaths,
-  discordReproCleanup,
-  recordServerReset,
-  enemyDefenseArchive,
-  enemyStratAvailability,
-}) {
-  const { error } = await supabase.from("portal_activity_logs").insert({
-    actor_member_id: actor.memberId,
-    actor_name: actor.name,
-    action_type: "gvg_reset",
-    entity_type: "gvg",
-    entity_id: guild,
-    summary: `${actor.name} a reset la GVG ${guild}`,
-    metadata: {
-      guild,
-      actorRole: actor.role,
-      actorGuildCode: actor.guildCode,
-      deletedDefenses: defenseIds.length,
-      deletedImages: storagePaths.length,
-      discordReproCleanup,
-      recordServerReset,
-      enemyDefenseArchive,
-      enemyStratAvailability,
-    },
-  });
-
-  if (error) throw error;
-}
-
-function getGvgServerConfig() {
-  const serverUrl = String(
-    process.env.GVG_SERVER_URL ||
-      process.env.GVG_VPS_URL ||
-      DEFAULT_GVG_SERVER_URL
-  ).replace(/\/$/, "");
-  const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
-
-  return { serverUrl, token };
-}
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
 
 async function requestGvgVps(pathname, options = {}) {
-  const { serverUrl, token } = getGvgServerConfig();
-
-  if (!token) {
-    const error = new Error("GVG_API_TOKEN manquant cote serveur");
-    error.statusCode = 500;
-    throw error;
-  }
-
-  const response = await fetch(new URL(pathname, `${serverUrl}/`).toString(), {
+  const serverUrl = String(process.env.GVG_SERVER_URL || process.env.GVG_VPS_URL || "http://152.228.128.157").replace(/\/$/, "");
+  const token = process.env.GVG_API_TOKEN || process.env.GVG_SERVER_TOKEN || "";
+  if (!token) throw Object.assign(new Error("GVG_API_TOKEN manquant cote serveur"), { statusCode: 500 });
+  const response = await fetch(new URL(pathname, serverUrl + "/"), {
     method: options.method || "GET",
-    headers: {
-      "X-GVG-Token": token,
-      "Content-Type": "application/json",
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    headers: { "X-GVG-Token": token, "Content-Type": "application/json" },
+    ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });
-
-  const text = await response.text();
-  let data = null;
-
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = { raw: text };
-  }
-
-  if (!response.ok) {
-    const error = new Error(data?.detail || data?.error || `Erreur VPS ${response.status}`);
-    error.statusCode = response.status;
-    error.data = data;
-    throw error;
-  }
-
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw Object.assign(new Error(data?.detail || data?.error || "Erreur VPS " + response.status), { statusCode: response.status });
   return data;
 }
 
-function extractStoragePathFromPublicUrl(url) {
-  if (!url) return null;
-
-  const marker = "/storage/v1/object/public/gvg-images/";
-  const index = String(url).indexOf(marker);
-
-  if (index === -1) return null;
-
-  return String(url).slice(index + marker.length);
-}
-
-export default async function handler(req, res) {
-  applyPortalCorsHeaders(req, res);
-  applyPortalSecurityHeaders(res);
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  if (req.method !== "POST") {
-    return sendPortalJson(res, 405, { error: "method not allowed" }, req);
-  }
-
-  if (!verifyPortalRequestOrigin(req)) {
-    return sendPortalJson(res, 403, { error: "origine invalide" }, req);
-  }
-
-  try {
-    const guild = normalizeGuildCode(req.body?.guild);
-
-    if (!isValidGuild(guild)) {
-      return sendPortalJson(res, 400, { error: "guild manquante ou invalide" }, req);
-    }
-
-    const sessionCheck = await requirePortalAdminSession(req, supabase);
-    if (sessionCheck.error) {
-      return sendPortalJson(res, sessionCheck.status || 401, { error: sessionCheck.error }, req);
-    }
-
-    const runScope = await resolveRunScope(supabase, req, sessionCheck.member);
-    if (!runScope.canUseGvg || !canUseRunTargetGuild(runScope, guild)) {
-      return sendPortalJson(res, 403, { error: "acces gvg refuse" }, req);
-    }
-
-    traceGvgResetSimilarity("reset_start", {
-      guild,
-      actor_member_id: sessionCheck.member.id,
-      actor_role: sessionCheck.member.role || null,
-      actor_guild_code: sessionCheck.member.guild_code || null,
-      organization_id: runScope.organizationId || null,
-    });
-
-    const actor = {
-      memberId: sessionCheck.member.id,
-      name: sessionCheck.member.watcher_name || sessionCheck.member.discord_id || "Inconnu",
-      role: sessionCheck.member.role || null,
-      guildCode: sessionCheck.member.guild_code || null,
-    };
-
-    // 1) Lire les défenses AVANT suppression
-    const { data: defenses, error: readError } = await supabase
-      .from("gvg_defense")
-      .select(`
-        id,
-        guild,
-        bastion,
-        type,
-        tower,
-        team,
-        defense_key,
-        raw_name,
-        heroes,
-        image_url,
-        status,
-        repro_by,
-        is_ally,
-        record_status,
-        created_at,
-        updated_at
-      `)
-      .eq("guild", guild);
-
-    if (readError) {
-      traceGvgResetSimilarityError("reset_defenses_read_error", readError, { guild });
-      console.error("[gvg-reset] read error:", readError);
-      return sendPortalJson(res, 500, { error: "erreur lecture gvg" }, req);
-    }
-
-    traceGvgResetSimilarity("reset_defenses_read_done", {
-      guild,
-      defenses: defenses?.length || 0,
-      ally_defenses: (defenses || []).filter((row) => row.is_ally === true).length,
-      enemy_defenses: (defenses || []).filter((row) => row.is_ally !== true).length,
-      sample: (defenses || []).slice(0, 16).map(summarizeResetDefenseForTrace),
-    });
-
-    const defenseIds = (defenses || []).map((row) => row.id).filter(Boolean);
-    let discordReproCleanup = null;
+export function createGvgResetHandler(overrides = {}) {
+  const deps = {
+    db: supabase, requireSession: requirePortalAdminSession, resolveScope: resolveRunScope,
+    loadCatalog: loadPortalGuildCatalog, execute: executeGvgReset,
+    archiveEnemyDefenses: archiveEnemyDefensesBeforeGvgReset,
+    refreshAvailability: refreshEnemyDefenseStratAvailabilityForGuild,
+    async purgeDiscord(db, _guild, options) {
+      const result = await cleanupDiscordReproRequestsForDefenseIds(db, options.defenseIds);
+      return { ...result, scoped_cleanup_confirmed: result.enabled !== false
+        && (result.items || []).every(item => !item.errors?.length) };
+    },
+    requestVps: requestGvgVps, getPending: getPendingGvgReset,
+    ...overrides,
+  };
+  return async function handler(req, res) {
+    applyPortalCorsHeaders(req, res);
+    applyPortalSecurityHeaders(res);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    if (req.method === "OPTIONS") return res.status(200).end();
+    if (!["GET", "POST"].includes(req.method)) return sendPortalJson(res, 405, { error: "method not allowed" }, req);
+    if (!verifyPortalRequestOrigin(req)) return sendPortalJson(res, 403, { error: "origine invalide" }, req);
     try {
-      discordReproCleanup = await purgeDiscordReproChannelForGuild(supabase, guild, {
-        reason: "gvg_reset",
-        source: "gvg-reset",
+      const input = req.method === "GET"
+        ? { guild: String(req.query?.guild || "").trim().toUpperCase().replace(/\s+/g, "_") }
+        : parseGvgResetInput(req.body);
+      const sessionCheck = await deps.requireSession(req, deps.db);
+      if (sessionCheck.error) return sendPortalJson(res, sessionCheck.status || 401, { error: sessionCheck.error }, req);
+      const actor = sessionCheck.member;
+      const scope = await deps.resolveScope(deps.db, req, actor);
+      const catalog = await deps.loadCatalog(deps.db, actor);
+      const portalGuild = (catalog.guilds || []).find(row =>
+        String(row.guild_code || "").trim().toUpperCase().replace(/\s+/g, "_") === input.guild
+        && row.organization_id === catalog.organizationId);
+      if (!scope.canUseGvg || !canUseRunTargetGuild(scope, input.guild) || !portalGuild) {
+        return sendPortalJson(res, 403, { error: "Acces GvG refuse pour cette organisation." }, req);
+      }
+      if (req.method === "GET") {
+        const operation = await deps.getPending({ db: deps.db, portalGuild, actor });
+        return sendPortalJson(res, 200, { operation: operation ? {
+          operationId: operation.operation_id, guild: operation.technical_guild,
+          saveEnemyDefenses: operation.save_enemy_defenses, state: operation.state,
+        } : null }, req);
+      }
+      const result = await deps.execute({
+        db: deps.db, input, portalGuild, actor,
+        archiveEnemyDefenses: deps.archiveEnemyDefenses,
+        refreshAvailability: () => deps.refreshAvailability({ scope: { ...scope, organizationId: catalog.organizationId }, targetGuildCode: input.guild }),
+        purgeDiscord: deps.purgeDiscord, requestVps: deps.requestVps,
       });
-    } catch (cleanupError) {
-      console.error("[gvg-reset] discord repro cleanup error:", cleanupError);
-      return sendPortalJson(res, 500, {
-        error: cleanupError?.message || "nettoyage Discord repro impossible",
+      return sendPortalJson(res, 200, result, req);
+    } catch (error) {
+      console.error("[gvg-reset]", error.code || "reset_failed", error.message);
+      return sendPortalJson(res, error.statusCode || 500, {
+        error: error.message || "Reset impossible.",
+        reset_committed: error.resetCommitted === true,
+        operation_id: error.operationId || null,
       }, req);
     }
-
-    if (
-      discordReproCleanup?.enabled === false ||
-      (!discordReproCleanup?.skipped && discordReproCleanup?.channel_empty_confirmed !== true)
-    ) {
-      traceGvgResetSimilarity("reset_discord_purge_incomplete", {
-        guild,
-        remaining_messages: discordReproCleanup?.remaining_messages ?? null,
-        remaining_message_ids: discordReproCleanup?.remaining_message_ids || [],
-        channel_empty_confirmed: discordReproCleanup?.channel_empty_confirmed ?? null,
-        errors: discordReproCleanup?.errors || [],
-        fatal_errors: discordReproCleanup?.fatal_errors || [],
-        verification_attempts: discordReproCleanup?.verification_attempts ?? null,
-      });
-      return sendPortalJson(res, 500, {
-        error: "nettoyage Discord repro incomplet",
-        discord_repro_cleanup: discordReproCleanup,
-      }, req);
-    }
-
-    let enemyDefenseArchive = null;
-    try {
-      traceGvgResetSimilarity("reset_archive_start", {
-        guild,
-        defense_ids: defenseIds.length,
-        enemy_defenses: (defenses || []).filter((row) => row.is_ally !== true).length,
-      });
-      enemyDefenseArchive = await archiveEnemyDefensesBeforeGvgReset(supabase, {
-        guild,
-        defenses: defenses || [],
-      });
-      traceGvgResetSimilarity("reset_archive_done", {
-        guild,
-        result: enemyDefenseArchive,
-      });
-    } catch (archiveError) {
-      traceGvgResetSimilarityError("reset_archive_error", archiveError, { guild });
-      throw archiveError;
-    }
-    let enemyStratAvailability = null;
-    let enemyStratAvailabilityWarning = null;
-
-    try {
-      enemyStratAvailability = await refreshEnemyDefenseStratAvailabilityForGuild({
-        scope: runScope,
-        targetGuildCode: guild,
-      });
-    } catch (availabilityError) {
-      console.error("[gvg-reset] enemy strat availability refresh error:", availabilityError);
-      enemyStratAvailabilityWarning =
-        availabilityError?.message || "mise a jour availability strats adverses impossible";
-    }
-
-    // 2) Supprimer les fichiers liés
-    const storagePaths = (defenses || [])
-      .map((row) => extractStoragePathFromPublicUrl(row.image_url))
-      .filter(Boolean);
-
-    if (storagePaths.length > 0) {
-      const { error: storageError } = await supabase.storage
-        .from("gvg-images")
-        .remove(storagePaths);
-
-      if (storageError) {
-        console.error("[gvg-reset] storage remove error:", storageError);
-        return sendPortalJson(res, 500, { error: "suppression storage impossible" }, req);
-      }
-    }
-
-    // 3) Supprimer les repro liées
-    if (defenseIds.length > 0) {
-      const { error: reproError } = await supabase
-        .from("gvg_repro")
-        .delete()
-        .in("gvg_defense_id", defenseIds);
-
-      if (reproError) {
-        console.error("[gvg-reset] repro delete error:", reproError);
-        return sendPortalJson(res, 500, { error: "suppression repro impossible" }, req);
-      }
-    }
-
-    // 4) Supprimer les défenses
-    const { error: deleteError } = await supabase
-      .from("gvg_defense")
-      .delete()
-      .eq("guild", guild);
-
-    if (deleteError) {
-      console.error("[gvg-reset] defense delete error:", deleteError);
-      return sendPortalJson(res, 500, { error: "suppression gvg impossible" }, req);
-    }
-
-    let recordServerReset = null;
-    let recordServerWarning = null;
-    let activityLogWarning = null;
-
-    try {
-      recordServerReset = await requestGvgVps(
-        `/api/v1/record/sessions/${encodeURIComponent(guild)}`,
-        { method: "DELETE" }
-      );
-    } catch (recordResetError) {
-      console.error("[gvg-reset] record server reset error:", recordResetError);
-      recordServerWarning =
-        recordResetError?.message || "nettoyage records VPS impossible";
-    }
-
-    try {
-      await logGvgReset({
-        guild,
-        actor,
-        defenseIds,
-        storagePaths,
-        discordReproCleanup,
-        recordServerReset,
-        enemyDefenseArchive,
-        enemyStratAvailability,
-      });
-    } catch (activityError) {
-      console.error("[gvg-reset] activity log error:", activityError);
-      activityLogWarning = activityError?.message || "log reset impossible";
-    }
-
-    return sendPortalJson(res, 200, {
-      success: true,
-      guild,
-      deleted_defenses: defenseIds.length,
-      deleted_images: storagePaths.length,
-      enemy_defense_archive: enemyDefenseArchive,
-      enemy_strat_availability: enemyStratAvailability,
-      enemy_strat_availability_warning: enemyStratAvailabilityWarning,
-      discord_repro_cleanup: discordReproCleanup,
-      record_server_reset: recordServerReset,
-      record_server_warning: recordServerWarning,
-      activity_log_warning: activityLogWarning,
-    }, req);
-  } catch (err) {
-    console.error("[gvg-reset] server error:", err);
-    return sendPortalJson(res, err?.statusCode || 500, { error: err?.message || "server error" }, req);
-  }
+  };
 }
+
+export default createGvgResetHandler();
