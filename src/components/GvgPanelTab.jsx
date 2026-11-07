@@ -14,7 +14,7 @@ import { usePortalLanguage } from "@/lib/portalLanguage";
 import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
 import { buildPublicDownloadUrl } from "@/lib/vpsAssets";
 import { buildAllyGroups } from "@/lib/gvgAllyFollowup";
-import { GvgAllyFollowupRow, GvgAllyFollowupToolbar } from "@/components/GvgAllyFollowup";
+import { GvgAllyFollowupRow, GvgAllyFollowupToolbar, GvgAllyOpenedStamp } from "@/components/GvgAllyFollowup";
 import { useGvgAllyFollowup } from "@/lib/useGvgAllyFollowup";
 
 function normalizeGuildInput(value) {
@@ -1444,6 +1444,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                     ) : null}
                   </button>
 
+                  <GvgAllyOpenedStamp defense={defense} controller={allyFollowup}/>
                   <div className="flex items-center gap-1 shrink-0">
                     {!defense ? (
                       <span className="text-xs text-zinc-600">—</span>

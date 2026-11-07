@@ -6,6 +6,7 @@ import { getGvgGuildLabel, getVisibleGvgGuildCodes } from "@/lib/guildScope";
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { getGuildDisplayName } from "@/lib/guildDisplay";
 import GvgResetDialog from "@/components/GvgResetDialog";
+import { useGvgAllyFollowup } from "@/lib/useGvgAllyFollowup";
 
 const JOB_STALE_MS = 48 * 60 * 60 * 1000;
 
@@ -140,6 +141,9 @@ export default function GvgAdminTab({ session } = {}) {
   );
   const hiddenServerJobsCount = serverJobs.length - visibleServerJobs.length;
   const selectedGuildAllowed = visibleGuilds.includes(guild);
+  const resetFeedback = useGvgAllyFollowup({ guild: resetTarget?.guild || guild, apiBase,
+    canEdit: Boolean(resetTarget && resetTarget.choice === null && resetTarget.kind !== "resume"),
+    refreshKey: resetTarget?.requestId });
 
   useEffect(() => {
     if (visibleGuilds.length === 0) return;
@@ -260,12 +264,12 @@ export default function GvgAdminTab({ session } = {}) {
     finally { resetInFlight.current = false; setLoadingReset(false); }
   }
 
-  async function confirmReset(saveEnemyDefenses) {
+  async function confirmReset(saveEnemyDefenses, feedbackReport = null) {
     if (!resetTarget || resetInFlight.current || typeof saveEnemyDefenses !== "boolean") return;
     if (resetTarget.choice !== null && resetTarget.choice !== saveEnemyDefenses) return;
     resetInFlight.current = true;
     const wasUnconfirmed = Boolean(unconfirmedResets[resetTarget.guild]);
-    const target = { ...resetTarget, choice: saveEnemyDefenses };
+    const target = { ...resetTarget, choice: saveEnemyDefenses, feedbackReport: feedbackReport || resetTarget.feedbackReport };
     setResetTarget(target);
     setUnconfirmedResets(previous => ({ ...previous, [target.guild]: target }));
     const clearUnconfirmed = () => setUnconfirmedResets(previous => {
@@ -323,7 +327,9 @@ export default function GvgAdminTab({ session } = {}) {
       const outcome = target.kind === "resume"
         ? `Nettoyage termine : ${target.name} (${target.guild}). Aucun nouveau reset.`
         : `Reset OK : ${target.name} (${target.guild}). ${saveEnemyDefenses ? "Defenses adverses sauvegardees." : "Sans sauvegarde ni nouveaux compteurs adverses."}`;
-      setMessage(outcome + (preserved ? " Des ressources ont ete conservees par securite." : ""));
+      const feedbackOutcome = target.feedbackReport ? ` Retours allies : ${target.feedbackReport.sent} envoyes, ${target.feedbackReport.failed} echecs, ${target.feedbackReport.uncertain} incertains.`
+        + (target.feedbackReport.errors.length ? ` ${target.feedbackReport.errors.join(" ")}` : "") : "";
+      setMessage(outcome + feedbackOutcome + (preserved ? " Des ressources ont ete conservees par securite." : ""));
       clearUnconfirmed();
       setResetTarget(null);
     } catch (error) {
@@ -562,11 +568,13 @@ export default function GvgAdminTab({ session } = {}) {
     <div className="space-y-6">
       {resetTarget ? (
         <GvgResetDialog
+          key={`${resetTarget.guild}:${resetTarget.requestId || resetTarget.operationId}:${resetTarget.choice === null ? "new" : "engaged"}`}
           guildName={`${resetTarget.name} (${resetTarget.guild})`}
           busy={loadingReset}
           error={resetError}
           choice={resetTarget.choice}
           resume={resetTarget.kind === "resume"}
+          feedback={resetTarget.choice === null && resetTarget.kind !== "resume" ? resetFeedback : null}
           onCancel={() => { if (!resetInFlight.current) { setResetTarget(null); setResetError(""); } }}
           onConfirm={confirmReset}
         />

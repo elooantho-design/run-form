@@ -5,6 +5,7 @@ import { canUseRunTargetGuild, getRunScopeForGvgGuild, resolveRunScope, stratMat
 import { loadPortalGuildCatalog } from "./_portal-guild-catalog.js";
 import { searchDefenceStrict } from "./gvg-strat-search.js";
 import { allySignature, buildAllyFollowupPreview, buildAllyGroups, renderAllyFeedbackMessage, youtubeReference } from "../src/lib/gvgAllyFollowup.js";
+import { allyDeliveryConfigured, attachAllyDeliveries, deliverAllyFeedback, sendAllyThreadMessage } from "./_gvg-ally-delivery.js";
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -60,7 +61,8 @@ export async function loadGvgAllyHistory(db, data, { search = searchDefenceStric
 
 export function createGvgAllyFollowupHandler(overrides = {}) {
   const deps = { db: supabase, requireSession: requirePortalAdminSession, resolveScope: resolveRunScope,
-    loadCatalog: loadPortalGuildCatalog, loadHistory: loadGvgAllyHistory, ...overrides };
+    loadCatalog: loadPortalGuildCatalog, loadHistory: loadGvgAllyHistory,
+    deliveryConfigured: allyDeliveryConfigured, send: sendAllyThreadMessage, ...overrides };
   return async function handler(req, res) {
     applyPortalCorsHeaders(req, res);
     applyPortalSecurityHeaders(res);
@@ -81,8 +83,13 @@ export function createGvgAllyFollowupHandler(overrides = {}) {
         && String(item.guild_code).trim().toUpperCase().replace(/\s+/g, "_") === guild);
       if (!scope.canUseGvg || !canUseRunTargetGuild(scope, guild) || !portalGuild) throw failure("Guilde hors perimetre autorise.", 403);
       const context = { p_portal_guild_id: portalGuild.id, p_actor_member_id: session.member.id };
-      let data = await callRpc(deps.db, "read_gvg_ally_followup", context);
-      if (req.method === "POST" && body.action !== "preview") {
+      let data;
+      try { data = await callRpc(deps.db, "read_gvg_ally_delivery", context); }
+      catch (error) {
+        if (error.statusCode !== 428 || body.action === "send") throw error;
+        data = await callRpc(deps.db, "read_gvg_ally_followup", context);
+      }
+      if (req.method === "POST" && !["preview", "send"].includes(body.action)) {
         if (!["opened", "owner", "video"].includes(body.action) || !UUID.test(body.defense_id || "")
           || !Number.isSafeInteger(body.revision) || body.revision < 0 || !/^[0-9a-f]{32}$/.test(body.roster_version || "")) throw failure("Modification alliee invalide.", 400);
         const target = data.defenses.find(defense => defense.id === body.defense_id);
@@ -102,14 +109,31 @@ export function createGvgAllyFollowupHandler(overrides = {}) {
         }
         data = await callRpc(deps.db, "save_gvg_ally_followup", { ...context, p_defense_id: body.defense_id,
           p_action: body.action, p_value: value, p_expected_revision: body.revision, p_roster_version: body.roster_version });
+        try { data = await callRpc(deps.db, "read_gvg_ally_delivery", context); }
+        catch (error) { if (error.statusCode !== 428) throw error; }
       }
-      const history = body.action === "preview" ? await deps.loadHistory(deps.db, data) : { historicalRuns: [], history_warnings: [] };
-      const preview = buildAllyFollowupPreview({ ...data, historicalRuns: history.historicalRuns });
-      if (body.action === "preview") {
+      const history = ["preview", "send"].includes(body.action) ? await deps.loadHistory(deps.db, data) : { historicalRuns: [], history_warnings: [] };
+      let preview = buildAllyFollowupPreview({ ...data, historicalRuns: history.historicalRuns });
+      if (["preview", "send"].includes(body.action)) {
         for (const row of preview.rows) if (row.opened) row.message = renderAllyFeedbackMessage(row);
       }
+      preview = attachAllyDeliveries(preview, data.deliveries);
+      const enabled = data.delivery_enabled === true && data.delivery_version === 1 && deps.deliveryConfigured();
+      let deliveryResult;
+      if (req.method === "POST" && body.action === "send") {
+        if (!enabled) throw failure("Envois allies non actives ou bot non configure.", 428);
+        if (body.confirm !== true || !UUID.test(body.defense_id || "")) throw failure("Confirmation d'envoi requise.", 400);
+        const row = preview.rows.find(item => item.defense_id === body.defense_id);
+        if (!row || body.snapshot_version !== data.snapshot_version || body.message_version !== row.message_version) {
+          throw failure("Les retours ont change. Actualisez avant envoi.", 409);
+        }
+        deliveryResult = await deliverAllyFeedback({ db: deps.db, context, data, row, rpc: callRpc, send: deps.send });
+        data = await callRpc(deps.db, "read_gvg_ally_delivery", context);
+        preview = attachAllyDeliveries(buildAllyFollowupPreview({ ...data, historicalRuns: history.historicalRuns }), data.deliveries);
+      }
       return sendPortalJson(res, 200, { ...data, guild, ally_groups: buildAllyGroups(data.defenses), preview,
-        history_warnings: history.history_warnings, mode: "preview_only", delivery_enabled: false, sent: 0 }, req);
+        history_warnings: history.history_warnings, mode: enabled ? "manual_delivery" : "preview_only",
+        delivery_enabled: enabled, sent: preview.sent, ...(deliveryResult ? { delivery_result: deliveryResult } : {}) }, req);
     } catch (error) {
       return sendPortalJson(res, error.statusCode || 500, { error: error.message || "Operation impossible." }, req);
     }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ClipboardCheck, RefreshCw, X } from "lucide-react";
+import { ClipboardCheck, RefreshCw, Send, X } from "lucide-react";
 import { normalizeAllyAssignment } from "@/lib/gvgAllyFollowup";
 
 function Modal({ title, onClose, children }) {
@@ -66,23 +66,54 @@ export function GvgAllyFollowupRow({ defense, controller }) {
   </div>;
 }
 
+export function GvgAllyOpenedStamp({ defense, controller }) {
+  const opened = defense?.is_ally === true && controller.data?.preview.rows.some(row => row.defense_id === defense.id && row.opened);
+  return opened ? <span data-ally-opened={defense.id} className="pointer-events-none inline-flex shrink-0 -rotate-6 items-center justify-center rounded-sm border-2 border-red-400 bg-red-950/70 px-2 py-0.5 text-xs font-extrabold text-red-200" style={{ letterSpacing: 0 }}>OUVERTE</span> : null;
+}
+
+export function GvgAllyFeedbackSummary({ controller }) {
+  const { data, error, busy, load, sendReport } = controller;
+  if (!data) return <p role="status" className="text-sm text-amber-300">{error || "Chargement des retours allies..."}</p>;
+  const remaining = data.preview.rows.filter(row => row.opened && row.delivery?.status !== "sent");
+  return <>
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm"><span>{data.preview.opened} ouvertes / {data.preview.ready} pretes / {data.sent || 0} envoyees</span>
+      {!data.delivery_enabled ? <span className="text-amber-300">Envois desactives</span> : null}
+      <button type="button" disabled={busy} onClick={() => void load(true)} title="Actualiser l'apercu" aria-label="Actualiser l'apercu" className="flex h-8 w-8 items-center justify-center rounded border border-zinc-700"><RefreshCw size={16}/></button></div>
+    {error ? <p role="alert" className="mb-3 text-sm text-red-300">{error}</p> : null}
+    {sendReport ? <div role="status" className="mb-3 text-sm text-zinc-200">
+      <p>{sendReport.sent} envoyes, {sendReport.failed} echecs, {sendReport.uncertain} incertains, {sendReport.already} deja traites.</p>
+      {sendReport.errors.map((reason, index) => <p key={index} className="mt-1 text-amber-300">{reason}</p>)}
+    </div> : null}
+    {data.history_warnings?.map((warning, index) => <p key={index} role="alert" className="mb-3 text-sm text-amber-300">{warning}</p>)}
+    <div className="divide-y divide-zinc-800">{remaining.map(row => <section key={row.defense_id} className="py-3">
+      <h3 className="text-sm font-semibold">{row.owner?.watcher_name || "Joueur non identifie"} - {row.label}</h3>
+      {row.delivery?.status === "failed" ? <p className="my-2 text-xs text-red-300">Echec : {row.delivery.error_reason}</p> : null}
+      {["sending", "uncertain"].includes(row.delivery?.status) ? <p className="my-2 text-xs text-amber-300">{row.delivery.status === "sending" ? "Envoi engage ou resultat en attente." : row.delivery.error_reason} Aucun renvoi automatique ; verifier le fil personnel.</p> : null}
+      {row.reasons.length ? <ul className="my-2 list-inside list-disc text-xs text-amber-300">{row.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul> : row.sendable ? <p className="my-2 text-xs text-emerald-300">Pret</p> : null}
+      {row.message ? <p className="whitespace-pre-wrap break-words text-sm text-zinc-300">{row.message}</p> : null}
+      {row.video ? <a href={row.video.url} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-cyan-300 underline">Voir le replay</a> : null}
+    </section>)}</div>
+    {!remaining.length ? <p className="text-sm text-zinc-400">Aucun retour restant a envoyer.</p> : null}
+  </>;
+}
+
 export function GvgAllyFollowupToolbar({ controller }) {
   const { data, error, busy, load, previewOpen, setPreviewOpen } = controller;
+  const [confirmSend, setConfirmSend] = useState(false);
   return <>
-    <button type="button" disabled={!data || busy} onClick={() => { setPreviewOpen(true); void load(true); }}
+    <button type="button" disabled={!data || busy} onClick={() => { setConfirmSend(false); setPreviewOpen(true); void load(true); }}
       className="inline-flex items-center gap-2 rounded border border-rose-700 px-3 py-1 text-sm text-rose-100 disabled:opacity-50"><ClipboardCheck size={15}/>Retours allies</button>
     {error ? <span role="alert" className="text-sm text-red-300">{error}</span> : null}
-    {previewOpen && data ? <Modal title="Retours allies - previsualisation" onClose={() => setPreviewOpen(false)}>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm"><span>{data.preview.opened} ouvertes / {data.preview.ready} pretes</span>
-        <span className="text-amber-300">Envois desactives</span><button type="button" onClick={() => void load(true)} title="Actualiser l'apercu" aria-label="Actualiser l'apercu" className="flex h-8 w-8 items-center justify-center rounded border border-zinc-700"><RefreshCw size={16}/></button></div>
-      {data.history_warnings?.map((warning, index) => <p key={index} role="alert" className="mb-3 text-sm text-amber-300">{warning}</p>)}
-      <div className="divide-y divide-zinc-800">{data.preview.rows.filter(row => row.opened).map(row => <section key={row.defense_id} className="py-3">
-        <h3 className="text-sm font-semibold">{row.owner?.watcher_name || "Joueur non identifie"} - {row.label}</h3>
-        {row.reasons.length ? <ul className="my-2 list-inside list-disc text-xs text-amber-300">{row.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul> : <p className="my-2 text-xs text-emerald-300">Pret</p>}
-        {row.message ? <p className="whitespace-pre-wrap break-words text-sm text-zinc-300">{row.message}</p> : null}
-        {row.video ? <a href={row.video.url} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm text-cyan-300 underline">Voir le replay</a> : null}
-      </section>)}</div>
-      {!data.preview.opened ? <p className="text-sm text-zinc-400">Aucune defense signalee ouverte.</p> : null}
+    {previewOpen && data ? <Modal title="Retours allies - previsualisation" onClose={() => { if (!busy) setPreviewOpen(false); }}>
+      <GvgAllyFeedbackSummary controller={controller}/>
+      {data.delivery_enabled ? <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-zinc-800 pt-3">
+        {confirmSend ? <><span className="text-sm">Envoyer {data.preview.ready} retours dans les espaces personnels ?</span>
+          <button type="button" disabled={busy} onClick={() => setConfirmSend(false)} className="rounded border border-zinc-600 px-3 py-2 text-sm">Annuler</button></> : null}
+        <button type="button" disabled={busy || !data.preview.ready} onClick={() => {
+          if (!confirmSend) { setConfirmSend(true); return; }
+          void controller.sendReady().finally(() => setConfirmSend(false));
+        }} className="inline-flex items-center gap-2 rounded bg-emerald-700 px-3 py-2 text-sm disabled:opacity-50"><Send size={15}/>{busy ? "Envoi en cours..." : confirmSend ? "Confirmer l'envoi" : "Envoyer les retours prets"}</button>
+      </div> : null}
     </Modal> : null}
   </>;
 }
