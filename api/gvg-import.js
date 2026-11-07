@@ -1,3 +1,4 @@
+/* global process */
 import { createClient } from "@supabase/supabase-js";
 import {
   applyPortalCorsHeaders,
@@ -325,7 +326,7 @@ export async function importGvgItems({ guild, items, is_ally = false }) {
       status: stratFound ? "strat" : "def",
       repro_by: null,
       is_ally: isAlly,
-      record_status: isAlly ? "open" : null,
+      record_status: isAlly ? "pas_record" : null,
     });
   }
 
@@ -426,7 +427,7 @@ export default async function handler(req, res) {
         status: stratFound ? "strat" : "def",
         repro_by: null,
         is_ally: isAlly,
-        record_status: isAlly ? "open" : null,
+        record_status: isAlly ? "pas_record" : null,
       });
     }
 

@@ -13,6 +13,9 @@ import {
 import { usePortalLanguage } from "@/lib/portalLanguage";
 import { getPortalSessionServerRole } from "@/lib/portalRolePreview";
 import { buildPublicDownloadUrl } from "@/lib/vpsAssets";
+import { buildAllyGroups } from "@/lib/gvgAllyFollowup";
+import { GvgAllyFollowupRow, GvgAllyFollowupToolbar } from "@/components/GvgAllyFollowup";
+import { useGvgAllyFollowup } from "@/lib/useGvgAllyFollowup";
 
 function normalizeGuildInput(value) {
   return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "").slice(0, 24);
@@ -153,6 +156,7 @@ const [groupCalc, setGroupCalc] = useState(null);
 const [groupCalculating, setGroupCalculating] = useState(false);
 
 const [items, setItems] = useState([]);
+const allyFollowup = useGvgAllyFollowup({ guild, apiBase, canEdit: canUsePanelActions, refreshKey: items });
 const [recordTogglingIds, setRecordTogglingIds] = useState(() => new Set());
 const enemyItems = useMemo(
   () => items.filter((d) => d.is_ally !== true),
@@ -416,12 +420,14 @@ async function calculateGroups() {
 
     setGroupCalc(data);
     await load();
+    await allyFollowup.load();
 
     const enemyCount = Number(data?.updated_enemy_groups || 0);
     const mirrorCount = Number(data?.matched_mirror_groups || 0);
+    const allyCount = buildAllyGroups(allyItems).length;
     const warning = data?.schema_warning ? ` ${data.schema_warning}` : "";
     setMessage(
-      `Calcul groupes termine : ${enemyCount} groupe(s) ennemi(s), ${mirrorCount} correspondance(s) ennemi/allie.${warning}`
+      `Calcul groupes termine : ${enemyCount} groupe(s) ennemi(s), ${mirrorCount} correspondance(s) ennemi/allie, ${allyCount} groupe(s) allie(s).${warning}`
     );
   } catch (error) {
     console.error("calculateGroups error:", error);
@@ -1394,7 +1400,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
               return (
                 <div
                   key={`${panelKey}-${bastion}-${slot.type}-${slot.tower ?? "F"}-${slot.team}-${index}`}
-                  className={`flex items-center justify-between rounded-xl border px-3 py-2 transition ${
+                  className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 transition ${
                     recordState?.cardClass || "border-zinc-800 bg-zinc-950/60"
                   }`}
                 >
@@ -1524,6 +1530,9 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
                       </>
                     )}
                   </div>
+                  {defense?.is_ally === true && canUsePanelActions ? (
+                    <div className="basis-full min-w-0"><GvgAllyFollowupRow key={defense.id} defense={defense} controller={allyFollowup}/></div>
+                  ) : null}
                 </div>
               );
             })}
@@ -1597,6 +1606,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 >
   {groupCalculating ? t("gvgPanel.calculating", "Calcul...") : t("gvgPanel.calculateGroups", "Calcul groupes")}
 </button>
+{canUsePanelActions ? <GvgAllyFollowupToolbar controller={allyFollowup}/> : null}
 
 <button
   onClick={markRecordOk}
@@ -1681,7 +1691,7 @@ function renderPanelGrid(sourceItems, panelKey, wrapperClass, titleClass) {
 
       </div>
 
-{!loading && !message && (
+{!loading && (
   <>
     <div className="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-400">
       {t("gvgPanel.enemyDefenses", "Defenses adverses")}
