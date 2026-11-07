@@ -142,7 +142,8 @@ export function renderAllyFeedbackMessage(row) {
   const parts = [`Retour GvG - ${row.label}`];
   if (row.video?.source === "own") parts.push("Ta defense a ete ouverte pendant cette GvG. Voici la video de l'attaque. Regarde si tu peux ajuster ta defense pour mieux contrer cette strategie.");
   else if (row.video) parts.push("Ta defense a ete signalee ouverte. Voici un replay de cette GvG sur une defense identique a la tienne : il sert de reference, pas de preuve de l'attaque exacte subie.");
-  else parts.push("Ta defense a ete signalee ouverte. Nous n'avons pas de replay attribue pour cette GvG ; voici des exemples deja disponibles.");
+  else if (row.history.length) parts.push("Ta defense a ete signalee ouverte. Nous n'avons pas de replay attribue pour cette GvG ; voici des exemples deja disponibles.");
+  else parts.push("Ta defense a ete signalee ouverte. Aucune video n'est disponible pour le moment.");
   if (row.video) parts.push(row.video.url);
   if (row.history.length) parts.push("Autres manieres de passer cette defense, issues des GvG precedentes. Verifie si tes ajustements couvrent aussi ces strategies.", ...row.history.map(video => video.url));
   return parts.join("\n\n");
